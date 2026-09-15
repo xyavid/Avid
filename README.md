@@ -4,7 +4,7 @@
 
 **当前进度**：阶段 0 —— 工程基线与最小模型调用。还没有工具调用，agent 循环从阶段 1 开始。
 
-需求与阶段路线见 `docs/requirements.md` 与 `docs/roadmap.md`；协作约定见 `AGENTS.md`。
+正式文档在 `docs/`，收录标准见 `docs/README.md`；开发过程文档在 `dev/`，只留本地、不入库。协作约定见 `AGENTS.md`。
 
 ## 安装
 
