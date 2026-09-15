@@ -27,11 +27,21 @@ cp .env.example .env
 
 ## 运行
 
+单轮问答：
+
 ```bash
 uv run --env-file .env avid "用一句话说明你是谁"
 ```
 
-stdout 打印模型回复，stderr 打印本轮 token 用量。
+agent 循环（模型可自主调用工具）：
+
+```bash
+uv run --env-file .env avid --agent "读 pyproject.toml，告诉我项目名"
+```
+
+`bash` / `write_file` / `edit_file` 在执行前会请求确认，提示写在 stderr。非交互场景加 `--yes` 跳过审批——**硬拒绝闸门仍然生效**，黑名单里的命令一律不执行。`read_file` / `glob` 是只读的，不弹确认。
+
+stdout 打印模型回复，stderr 打印逐轮 trace 与 token 用量。
 
 ## 开发
 
