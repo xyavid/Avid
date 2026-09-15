@@ -36,7 +36,7 @@ DENIED_CONTENT = "Permission denied."
 
 
 class RoundLimitExceeded(RuntimeError):
-    """连续多轮都在调用工具，未收敛。阶段 2 会把它改成可分类的终止原因。"""
+    """连续多轮都在调用工具，未收敛。后续会把它改成可分类的终止原因。"""
 
 
 def _as_text(value: Any) -> str:
