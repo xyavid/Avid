@@ -460,3 +460,51 @@ def test_stop_receives_run_statistics(no_hooks):
     agent_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a: "x"})
 
     assert seen == [(1, 0)]
+
+
+# ---------- 拒绝信息回传给模型 ----------
+
+
+def test_hard_deny_message_reaches_the_model(no_hooks):
+    hooks.register_hook("PreToolUse", hooks.permission_hook)
+    executed = []
+    chat = FakeChat(
+        make_turn("", [tool_call("bash", '{"command": "rm -rf /"}')]),
+        make_turn("好的"),
+    )
+    messages = [{"role": "user", "content": "清理一下"}]
+
+    agent_loop(
+        messages,
+        config=CONFIG,
+        chat=chat,
+        registry={"bash": lambda a: executed.append(a) or "不该执行"},
+    )
+
+    assert executed == []
+    assert "Permission denied." in messages[2]["content"]
+    assert "永久禁止" in messages[2]["content"]
+
+
+def test_hook_supplied_denied_content_is_used(no_hooks):
+    def blocker(ctx):
+        ctx["denied_content"] = "自定义拒绝文案"
+        return hooks.BLOCK
+
+    hooks.register_hook("PreToolUse", blocker)
+    chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
+    messages = [{"role": "user", "content": "读"}]
+
+    agent_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a: "x"})
+
+    assert messages[2]["content"] == "自定义拒绝文案"
+
+
+def test_block_without_denied_content_falls_back_to_the_default(no_hooks):
+    hooks.register_hook("PreToolUse", lambda ctx: hooks.BLOCK)
+    chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
+    messages = [{"role": "user", "content": "读"}]
+
+    agent_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a: "x"})
+
+    assert messages[2]["content"] == "Permission denied."

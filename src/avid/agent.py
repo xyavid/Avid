@@ -32,6 +32,8 @@ MAX_ROUNDS = 8
 # Stop 被拦截后最多再补几轮。防止写坏的回调把循环拖成死循环。
 MAX_STOP_BLOCKS = 1
 
+# 拦截时回传给模型的兜底文案。回调可以把 context["denied_content"] 设成
+# 更有用的内容（permission_hook 就会），这里只在回调没设时使用。
 DENIED_CONTENT = "Permission denied."
 
 
@@ -89,7 +91,8 @@ def _execute_one(
     if trigger_hooks("PreToolUse", before) == BLOCK:
         stats["denials"] += 1
         logger.info("  ✗ 已拦截 %s", name)
-        return DENIED_CONTENT
+        # 文案由拦截它的回调决定；回调没说就用兜底值。
+        return str(before.get("denied_content") or DENIED_CONTENT)
 
     try:
         content = _as_text(impl(arguments))

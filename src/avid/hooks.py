@@ -106,9 +106,24 @@ def context_inject_hook(context: dict[str, Any]) -> str | None:
 
 
 def permission_hook(context: dict[str, Any]) -> str | None:
-    """PreToolUse：走权限三闸门；拒绝时写明原因并拦截。"""
+    """PreToolUse：走权限三闸门；拒绝时写明原因，并给出可执行的下一步。
+
+    硬拒绝与用户拒绝对模型意味着完全不同的事——一个是"永远不许，换做法"，
+    另一个是"这次不行，别重复提交"。只回一句 "Permission denied." 会让模型
+    分不清两者，于是反复重试同一条命令直到烧穿轮数上限。
+    """
     name = context.get("tool", "")
     arguments = context.get("arguments") or {}
+
+    hard = hard_deny(name, arguments)
+    if hard:
+        context["denied_kind"] = "hard"
+        context["denied_reason"] = f"{name}：{hard}"
+        context["denied_content"] = (
+            f"Permission denied. 原因：硬拒绝（{hard}）。"
+            "这条命令被永久禁止，不要重试、也不要改写绕过，请改用别的方式完成任务。"
+        )
+        return BLOCK
 
     if context.get("auto_approve"):
         allowed = _auto_approve(name, arguments)
@@ -118,8 +133,12 @@ def permission_hook(context: dict[str, Any]) -> str | None:
     if allowed:
         return None
 
-    reason = hard_deny(name, arguments) or "未获批准"
-    context["denied_reason"] = f"{name}：{reason}"
+    context["denied_kind"] = "user"
+    context["denied_reason"] = f"{name}：未获批准"
+    context["denied_content"] = (
+        "Permission denied. 原因：本次未获用户批准。"
+        "不要重复提交同一条调用；请说明你需要它做什么，或改用其它工具。"
+    )
     return BLOCK
 
 

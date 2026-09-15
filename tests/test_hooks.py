@@ -137,7 +137,9 @@ def test_permission_hook_blocks_and_records_reason(clean, monkeypatch):
     context = {"tool": "bash", "arguments": {"command": "ls"}}
 
     assert hooks.permission_hook(context) == BLOCK
+    assert context["denied_kind"] == "user"
     assert context["denied_reason"].startswith("bash：")
+    assert "本次未获用户批准" in context["denied_content"]
 
 
 def test_permission_hook_allows_and_stays_quiet(clean, monkeypatch):
@@ -146,13 +148,31 @@ def test_permission_hook_allows_and_stays_quiet(clean, monkeypatch):
 
     assert hooks.permission_hook(context) is None
     assert "denied_reason" not in context
+    assert "denied_content" not in context
 
 
 def test_permission_hook_reports_hard_deny_reason(clean):
     context = {"tool": "bash", "arguments": {"command": "rm -rf /"}}
 
     assert hooks.permission_hook(context) == BLOCK
+    assert context["denied_kind"] == "hard"
     assert "删除根目录或家目录" in context["denied_reason"]
+    assert "永久禁止" in context["denied_content"]
+
+
+def test_hard_deny_and_user_refusal_give_different_guidance(clean, monkeypatch):
+    """两种拒绝必须让模型看到不同的话，否则它分不清"永远不许"和"这次不行"。"""
+    monkeypatch.setattr(hooks, "check_permission", lambda name, arguments: False)
+
+    hard = {"tool": "bash", "arguments": {"command": "rm -rf /"}}
+    user = {"tool": "bash", "arguments": {"command": "ls"}}
+
+    hooks.permission_hook(hard)
+    hooks.permission_hook(user)
+
+    assert hard["denied_kind"] == "hard"
+    assert user["denied_kind"] == "user"
+    assert hard["denied_content"] != user["denied_content"]
 
 
 def test_permission_hook_routes_to_auto_approve(clean, monkeypatch):
