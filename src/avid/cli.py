@@ -20,7 +20,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--agent",
         action="store_true",
-        help="走 agent 循环；本轮未注册工具，等价于单轮问答",
+        help="走 agent 循环，模型可调用已注册的工具（当前：read_file）",
     )
     args = parser.parse_args(argv)
 

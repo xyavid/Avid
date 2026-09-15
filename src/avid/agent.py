@@ -1,8 +1,7 @@
-"""Agent 循环骨架。
+"""Agent 循环。
 
-阶段 1a 不注册任何工具：TOOLS 与 TOOL_IMPLS 都是空的，所以首轮响应不可能
-出现 tool_calls，循环一轮即走到「无工具调用 → 返回」。工具分支的结构已就位，
-由 tests/test_agent.py 里的假工具覆盖；真实工具在 1b 接入 read_file 时注册。
+阶段 1b 已注册第一个真实工具 read_file（见 tools.py），「模型 → 工具 → 模型」
+的往返真正跑通。
 
 协议映射（Anthropic 语义 → OpenAI 兼容）：
   content 里的 tool_use 块        → message.tool_calls[]
@@ -18,6 +17,7 @@ from typing import Any
 
 from .config import Config, load_config
 from .llm import DEFAULT_MAX_TOKENS, Turn, chat_completion
+from .tools import TOOL_IMPLS, TOOLS, ToolImpl
 
 logger = logging.getLogger("avid.agent")
 
@@ -25,14 +25,6 @@ SYSTEM = (
     "你是 Avid，一个能自主调用工具完成任务的 agent。"
     "需要外部信息或动作时调用工具；信息足够时直接给出答案。"
 )
-
-# 本轮不注册任何工具。1b 接入 read_file 时在此追加定义。
-TOOLS: list[dict[str, Any]] = []
-
-ToolImpl = Callable[[dict[str, Any]], Any]
-
-# 工具名 → 执行函数。本轮为空，任何工具调用都会回传「未知工具」。
-TOOL_IMPLS: dict[str, ToolImpl] = {}
 
 MAX_ROUNDS = 8
 
@@ -62,6 +54,7 @@ def execute_tool_calls(
         function = call.get("function") or {}
         name = str(function.get("name", ""))
         raw_arguments = function.get("arguments") or "{}"
+        logger.info("  → %s %s", name, raw_arguments)
 
         try:
             arguments = json.loads(raw_arguments)
@@ -77,6 +70,7 @@ def execute_tool_calls(
                 except Exception as exc:  # 工具失败回传模型，循环不中断
                     content = f"工具 {name} 执行失败：{exc}"
 
+        logger.info("  ← %s 字符", len(content))
         results.append(
             {"role": "tool", "tool_call_id": call.get("id", ""), "content": content}
         )
@@ -121,4 +115,4 @@ def agent_loop(
 
         messages.extend(execute_tool_calls(turn.tool_calls, registry))
 
-    raise RoundLimitExceeded(f"连续 {max_rounds} 轮都在调用工具，未收敛")
+    raise RoundLimitExceeded(f"达到轮数上限 {max_rounds}，模型仍在请求工具，未收敛")

@@ -3,6 +3,7 @@ import pytest
 from avid.agent import SYSTEM, RoundLimitExceeded, agent_loop
 from avid.config import Config
 from avid.llm import Turn, Usage
+from avid.tools import TOOLS
 
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
 
@@ -51,7 +52,7 @@ def test_returns_text_and_appends_assistant_when_no_tool_calls():
         {"role": "assistant", "content": "你好"},
     ]
     assert chat.requests[0]["system"] == SYSTEM
-    assert chat.requests[0]["tools"] == []
+    assert chat.requests[0]["tools"] == TOOLS
     assert all(m["role"] != "system" for m in messages)
 
 
