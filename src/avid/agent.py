@@ -17,6 +17,7 @@ from typing import Any
 
 from .config import Config, load_config
 from .llm import DEFAULT_MAX_TOKENS, Turn, chat_completion
+from .permission import check_permission
 from .tools import TOOL_IMPLS, TOOLS, ToolImpl
 
 logger = logging.getLogger("avid.agent")
@@ -27,6 +28,11 @@ SYSTEM = (
 )
 
 MAX_ROUNDS = 8
+
+# 工具调用通过权限校验与否，由这个签名决定。
+CheckPermission = Callable[[str, dict[str, Any]], bool]
+
+DENIED_CONTENT = "Permission denied."
 
 
 class RoundLimitExceeded(RuntimeError):
@@ -39,15 +45,50 @@ def _as_text(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str)
 
 
+def _execute_one(
+    name: str,
+    raw_arguments: str,
+    registry: dict[str, ToolImpl],
+    check: CheckPermission,
+) -> str:
+    """解析参数 → 查 handler → 权限校验 → 执行。
+
+    顺序是有意的：参数解析失败、工具不存在、参数不是对象，都不该弹审批——
+    那不是权限问题，用户没理由被拉进来。
+    """
+    try:
+        arguments = json.loads(raw_arguments)
+    except json.JSONDecodeError as exc:
+        return f"参数不是合法 JSON：{exc}"
+
+    if not isinstance(arguments, dict):
+        return "错误：参数必须是 JSON 对象"
+
+    impl = registry.get(name)
+    if impl is None:
+        return f"未知工具：{name}"
+
+    if not check(name, arguments):
+        logger.info("  ✗ 权限拒绝 %s", name)
+        return DENIED_CONTENT
+
+    try:
+        return _as_text(impl(arguments))
+    except Exception as exc:  # 工具失败回传模型，循环不中断
+        return f"工具 {name} 执行失败：{exc}"
+
+
 def execute_tool_calls(
     tool_calls: list[dict[str, Any]],
     registry: dict[str, ToolImpl],
+    check: CheckPermission | None = None,
 ) -> list[dict[str, Any]]:
     """逐个执行工具调用，汇总为可直接追加进 messages 的 tool 消息。
 
-    工具不存在、抛异常、参数不是合法 JSON，都变成回传给模型的文本，
+    工具不存在、抛异常、参数非法、权限被拒，都变成回传给模型的文本，
     而不是中断循环。
     """
+    check = check_permission if check is None else check
     results: list[dict[str, Any]] = []
 
     for call in tool_calls:
@@ -56,19 +97,7 @@ def execute_tool_calls(
         raw_arguments = function.get("arguments") or "{}"
         logger.info("  → %s %s", name, raw_arguments)
 
-        try:
-            arguments = json.loads(raw_arguments)
-        except json.JSONDecodeError as exc:
-            content = f"参数不是合法 JSON：{exc}"
-        else:
-            impl = registry.get(name)
-            if impl is None:
-                content = f"未知工具：{name}"
-            else:
-                try:
-                    content = _as_text(impl(arguments))
-                except Exception as exc:  # 工具失败回传模型，循环不中断
-                    content = f"工具 {name} 执行失败：{exc}"
+        content = _execute_one(name, raw_arguments, registry, check)
 
         logger.info("  ← %s 字符", len(content))
         results.append(
@@ -86,12 +115,14 @@ def agent_loop(
     registry: dict[str, ToolImpl] | None = None,
     config: Config | None = None,
     chat: Callable[..., Turn] = chat_completion,
+    check: CheckPermission | None = None,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     max_rounds: int = MAX_ROUNDS,
 ) -> str:
     """跑到模型不再要工具为止，返回最后一轮的 assistant 文本。
 
     messages 原地追加：每轮的 assistant 消息，以及工具结果。system 不写进 messages。
+    check 为 None 时用默认的 check_permission（三闸门）。
     """
     config = config or load_config()
     tools = TOOLS if tools is None else tools
@@ -113,6 +144,6 @@ def agent_loop(
         if not turn.tool_calls:
             return turn.text
 
-        messages.extend(execute_tool_calls(turn.tool_calls, registry))
+        messages.extend(execute_tool_calls(turn.tool_calls, registry, check))
 
     raise RoundLimitExceeded(f"达到轮数上限 {max_rounds}，模型仍在请求工具，未收敛")

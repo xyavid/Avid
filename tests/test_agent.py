@@ -160,3 +160,145 @@ def test_round_limit_raises_instead_of_returning_partial_text():
             registry={"read_file": lambda a: "内容"},
             max_rounds=3,
         )
+
+
+# ---------- 权限校验接入 ----------
+
+
+def test_denied_tool_is_reported_and_not_executed():
+    executed = []
+
+    def read_file(args):
+        executed.append(args)
+        return "内容"
+
+    chat = FakeChat(
+        make_turn("", [tool_call("read_file", '{"path": "a.txt"}')]),
+        make_turn("好的"),
+    )
+    messages = [{"role": "user", "content": "读"}]
+
+    agent_loop(
+        messages,
+        config=CONFIG,
+        chat=chat,
+        registry={"read_file": read_file},
+        check=lambda name, arguments: False,
+    )
+
+    assert executed == []
+    assert messages[2] == {
+        "role": "tool",
+        "tool_call_id": "call_1",
+        "content": "Permission denied.",
+    }
+
+
+def test_denied_tool_does_not_stop_the_loop():
+    chat = FakeChat(
+        make_turn("", [tool_call("read_file")]),
+        make_turn("那我换个说法"),
+    )
+    messages = [{"role": "user", "content": "读"}]
+
+    result = agent_loop(
+        messages,
+        config=CONFIG,
+        chat=chat,
+        registry={"read_file": lambda a: "内容"},
+        check=lambda name, arguments: False,
+    )
+
+    assert result == "那我换个说法"
+    assert len(chat.requests) == 2
+
+
+def test_check_receives_tool_name_and_parsed_arguments():
+    seen = []
+
+    def check(name, arguments):
+        seen.append((name, arguments))
+        return True
+
+    chat = FakeChat(
+        make_turn("", [tool_call("read_file", '{"path": "a.txt"}')]),
+        make_turn("好的"),
+    )
+    messages = [{"role": "user", "content": "读"}]
+
+    agent_loop(
+        messages,
+        config=CONFIG,
+        chat=chat,
+        registry={"read_file": lambda a: "x"},
+        check=check,
+    )
+
+    assert seen == [("read_file", {"path": "a.txt"})]
+
+
+def test_unknown_tool_never_reaches_permission():
+    def check(name, arguments):
+        raise AssertionError("未知工具不应进入权限校验")
+
+    chat = FakeChat(make_turn("", [tool_call("nope")]), make_turn("好的"))
+    messages = [{"role": "user", "content": "x"}]
+
+    agent_loop(messages, config=CONFIG, chat=chat, registry={}, check=check)
+
+    assert messages[2]["content"] == "未知工具：nope"
+
+
+def test_unparsable_arguments_never_reach_permission():
+    def check(name, arguments):
+        raise AssertionError("JSON 解析失败不应进入权限校验")
+
+    chat = FakeChat(
+        make_turn("", [tool_call("read_file", "{坏 json")]), make_turn("好的")
+    )
+    messages = [{"role": "user", "content": "x"}]
+
+    agent_loop(
+        messages,
+        config=CONFIG,
+        chat=chat,
+        registry={"read_file": lambda a: "x"},
+        check=check,
+    )
+
+    assert "不是合法 JSON" in messages[2]["content"]
+
+
+def test_non_object_arguments_are_rejected_before_permission():
+    def check(name, arguments):
+        raise AssertionError("非对象参数不应进入权限校验")
+
+    chat = FakeChat(
+        make_turn("", [tool_call("read_file", "[1, 2]")]), make_turn("好的")
+    )
+    messages = [{"role": "user", "content": "x"}]
+
+    agent_loop(
+        messages,
+        config=CONFIG,
+        chat=chat,
+        registry={"read_file": lambda a: "x"},
+        check=check,
+    )
+
+    assert "JSON 对象" in messages[2]["content"]
+
+
+def test_denials_still_count_towards_the_round_limit():
+    chat = FakeChat(*[make_turn("", [tool_call("read_file")]) for _ in range(3)])
+    messages = [{"role": "user", "content": "读"}]
+
+    with pytest.raises(RoundLimitExceeded):
+        agent_loop(
+            messages,
+            config=CONFIG,
+            chat=chat,
+            registry={"read_file": lambda a: "内容"},
+            check=lambda name, arguments: False,
+            max_rounds=3,
+        )
