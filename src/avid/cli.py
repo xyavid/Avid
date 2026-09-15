@@ -9,7 +9,6 @@ import sys
 from .agent import RoundLimitExceeded, agent_loop
 from .config import ConfigError, load_config
 from .llm import LLMError, ask
-from .permission import auto_approve
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -45,7 +44,7 @@ def main(argv: list[str] | None = None) -> int:
                 agent_loop(
                     [{"role": "user", "content": args.prompt}],
                     config=config,
-                    check=auto_approve if args.yes else None,
+                    auto_approve=args.yes,
                 )
             )
         except (LLMError, RoundLimitExceeded) as exc:

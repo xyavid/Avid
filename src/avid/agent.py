@@ -1,7 +1,7 @@
 """Agent 循环。
 
-阶段 1b 已注册第一个真实工具 read_file（见 tools.py），「模型 → 工具 → 模型」
-的往返真正跑通。
+扩展点全部走 hooks.py 的事件机制——循环本身不认识权限、日志、截断这些策略，
+它只知道四个事件名和 context 字典的约定。
 
 协议映射（Anthropic 语义 → OpenAI 兼容）：
   content 里的 tool_use 块        → message.tool_calls[]
@@ -16,8 +16,8 @@ from collections.abc import Callable
 from typing import Any
 
 from .config import Config, load_config
+from .hooks import ALLOW, BLOCK, trigger_hooks
 from .llm import DEFAULT_MAX_TOKENS, Turn, chat_completion
-from .permission import check_permission
 from .tools import TOOL_IMPLS, TOOLS, ToolImpl
 
 logger = logging.getLogger("avid.agent")
@@ -29,8 +29,8 @@ SYSTEM = (
 
 MAX_ROUNDS = 8
 
-# 工具调用通过权限校验与否，由这个签名决定。
-CheckPermission = Callable[[str, dict[str, Any]], bool]
+# Stop 被拦截后最多再补几轮。防止写坏的回调把循环拖成死循环。
+MAX_STOP_BLOCKS = 1
 
 DENIED_CONTENT = "Permission denied."
 
@@ -45,16 +45,26 @@ def _as_text(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str)
 
 
+def _last_user_message(messages: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for message in reversed(messages):
+        if message.get("role") == "user":
+            return message
+    return None
+
+
 def _execute_one(
     name: str,
     raw_arguments: str,
     registry: dict[str, ToolImpl],
-    check: CheckPermission,
+    *,
+    round_index: int,
+    auto_approve: bool,
+    stats: dict[str, int],
 ) -> str:
-    """解析参数 → 查 handler → 权限校验 → 执行。
+    """解析参数 → 查 handler → PreToolUse → 执行 → PostToolUse。
 
-    顺序是有意的：参数解析失败、工具不存在、参数不是对象，都不该弹审批——
-    那不是权限问题，用户没理由被拉进来。
+    前两步失败（参数不是合法 JSON、参数不是对象、工具不存在）都不触发事件——
+    那是协议错误，不是策略问题。
     """
     try:
         arguments = json.loads(raw_arguments)
@@ -68,27 +78,49 @@ def _execute_one(
     if impl is None:
         return f"未知工具：{name}"
 
-    if not check(name, arguments):
-        logger.info("  ✗ 权限拒绝 %s", name)
+    stats["tool_calls"] += 1
+
+    before: dict[str, Any] = {
+        "tool": name,
+        "arguments": arguments,
+        "round": round_index,
+        "auto_approve": auto_approve,
+    }
+    if trigger_hooks("PreToolUse", before) == BLOCK:
+        stats["denials"] += 1
+        logger.info("  ✗ 已拦截 %s", name)
         return DENIED_CONTENT
 
     try:
-        return _as_text(impl(arguments))
+        content = _as_text(impl(arguments))
     except Exception as exc:  # 工具失败回传模型，循环不中断
-        return f"工具 {name} 执行失败：{exc}"
+        content = f"工具 {name} 执行失败：{exc}"
+
+    after: dict[str, Any] = {
+        "tool": name,
+        "arguments": arguments,
+        "round": round_index,
+        "content": content,
+        "truncated": False,
+    }
+    trigger_hooks("PostToolUse", after)
+    return str(after["content"])
 
 
 def execute_tool_calls(
     tool_calls: list[dict[str, Any]],
     registry: dict[str, ToolImpl],
-    check: CheckPermission | None = None,
+    *,
+    round_index: int = 0,
+    auto_approve: bool = False,
+    stats: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
     """逐个执行工具调用，汇总为可直接追加进 messages 的 tool 消息。
 
-    工具不存在、抛异常、参数非法、权限被拒，都变成回传给模型的文本，
+    工具不存在、抛异常、参数非法、被 hook 拦截，都变成回传给模型的文本，
     而不是中断循环。
     """
-    check = check_permission if check is None else check
+    stats = {"tool_calls": 0, "denials": 0} if stats is None else stats
     results: list[dict[str, Any]] = []
 
     for call in tool_calls:
@@ -97,7 +129,14 @@ def execute_tool_calls(
         raw_arguments = function.get("arguments") or "{}"
         logger.info("  → %s %s", name, raw_arguments)
 
-        content = _execute_one(name, raw_arguments, registry, check)
+        content = _execute_one(
+            name,
+            raw_arguments,
+            registry,
+            round_index=round_index,
+            auto_approve=auto_approve,
+            stats=stats,
+        )
 
         logger.info("  ← %s 字符", len(content))
         results.append(
@@ -115,19 +154,39 @@ def agent_loop(
     registry: dict[str, ToolImpl] | None = None,
     config: Config | None = None,
     chat: Callable[..., Turn] = chat_completion,
-    check: CheckPermission | None = None,
+    auto_approve: bool = False,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     max_rounds: int = MAX_ROUNDS,
+    max_stop_blocks: int = MAX_STOP_BLOCKS,
 ) -> str:
     """跑到模型不再要工具为止，返回最后一轮的 assistant 文本。
 
     messages 原地追加：每轮的 assistant 消息，以及工具结果。system 不写进 messages。
-    check 为 None 时用默认的 check_permission（三闸门）。
     """
     config = config or load_config()
     tools = TOOLS if tools is None else tools
     registry = TOOL_IMPLS if registry is None else registry
+    stats = {"tool_calls": 0, "denials": 0}
 
+    # ① UserPromptSubmit：可注入上下文，也可拦截整个输入
+    submit_message = _last_user_message(messages)
+    if submit_message is not None:
+        submit: dict[str, Any] = {
+            "prompt": str(submit_message.get("content", "")),
+            "messages": messages,
+            "injected": [],
+        }
+        if trigger_hooks("UserPromptSubmit", submit) == BLOCK:
+            logger.warning("UserPromptSubmit 被拦截，未调用模型")
+            return ""
+        if submit["injected"]:
+            submit_message["content"] = (
+                "\n".join(str(item) for item in submit["injected"])
+                + "\n\n"
+                + submit["prompt"]
+            )
+
+    stop_blocks = 0
     for round_index in range(1, max_rounds + 1):
         turn = chat(
             config, messages, system=system, tools=tools, max_tokens=max_tokens
@@ -142,8 +201,37 @@ def agent_loop(
         )
 
         if not turn.tool_calls:
+            # ④ Stop：回调可以要求"先别退出"
+            stop: dict[str, Any] = {
+                "final_text": turn.text,
+                "rounds": round_index,
+                "messages": messages,
+                "summary": None,
+                "nudge": None,
+                "tool_calls": stats["tool_calls"],
+                "denials": stats["denials"],
+            }
+            blocked = trigger_hooks("Stop", stop) == BLOCK
+            if blocked and stop_blocks < max_stop_blocks:
+                stop_blocks += 1
+                nudge = stop.get("nudge")
+                if nudge:
+                    messages.append({"role": "user", "content": str(nudge)})
+                logger.info("Stop 被拦截（第 %d 次），继续循环", stop_blocks)
+                continue
+            if blocked:
+                logger.warning("Stop 拦截次数已达上限 %d，照常退出", max_stop_blocks)
             return turn.text
 
-        messages.extend(execute_tool_calls(turn.tool_calls, registry, check))
+        # ② PreToolUse / ③ PostToolUse 在 execute_tool_calls 里触发
+        messages.extend(
+            execute_tool_calls(
+                turn.tool_calls,
+                registry,
+                round_index=round_index,
+                auto_approve=auto_approve,
+                stats=stats,
+            )
+        )
 
     raise RoundLimitExceeded(f"达到轮数上限 {max_rounds}，模型仍在请求工具，未收敛")
