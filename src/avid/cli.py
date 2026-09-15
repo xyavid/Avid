@@ -9,6 +9,7 @@ import sys
 from .agent import RoundLimitExceeded, agent_loop
 from .config import ConfigError, load_config
 from .llm import LLMError, ask
+from .permission import auto_approve
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -20,7 +21,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--agent",
         action="store_true",
-        help="走 agent 循环，模型可调用已注册的工具（当前：read_file）",
+        help="走 agent 循环，模型可调用已注册的工具"
+        "（bash / read_file / write_file / edit_file / glob）",
+    )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="跳过审批闸门（硬拒绝仍然生效），非交互场景需显式指定",
     )
     args = parser.parse_args(argv)
 
@@ -34,7 +41,13 @@ def main(argv: list[str] | None = None) -> int:
         logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(message)s")
         logging.getLogger("httpx").setLevel(logging.WARNING)  # 只留自己的 trace 行
         try:
-            print(agent_loop([{"role": "user", "content": args.prompt}], config=config))
+            print(
+                agent_loop(
+                    [{"role": "user", "content": args.prompt}],
+                    config=config,
+                    check=auto_approve if args.yes else None,
+                )
+            )
         except (LLMError, RoundLimitExceeded) as exc:
             print(f"循环中止：{exc}", file=sys.stderr)
             return 1
