@@ -1,18 +1,20 @@
-"""最小可用的 OpenAI 兼容模型调用。
+"""模型调用层：OpenAI 兼容的 /chat/completions。
 
-直接用 HTTP 打 /chat/completions，不套 SDK：请求体与响应字段保持可见，
-阶段 1 加工具调用时只是往 payload 里多塞几个字段。
+直接用 HTTP 不套 SDK：请求体与响应字段保持可见，阶段 4 的 trace 与评测依赖这一点。
+协议选择见 dev/drafts/requirements.md 的 D-03 / D-08。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 
 from .config import Config
 
 TIMEOUT_SECONDS = 60.0
+DEFAULT_MAX_TOKENS = 8000
 
 
 class LLMError(Exception):
@@ -33,31 +35,84 @@ class Reply:
     model: str
 
 
-def build_payload(config: Config, prompt: str) -> dict:
+@dataclass(frozen=True)
+class Turn:
+    """一轮模型响应。message 是清洗过的 assistant 消息，可直接追加进 messages。"""
+
+    message: dict[str, Any]
+    text: str
+    tool_calls: list[dict[str, Any]]
+    usage: Usage
+    model: str
+    finish_reason: str
+
+
+def build_payload(config: Config, prompt: str) -> dict[str, Any]:
     return {
         "model": config.model,
         "messages": [{"role": "user", "content": prompt}],
     }
 
 
-def parse_reply(data: dict) -> Reply:
-    try:
-        text = data["choices"][0]["message"]["content"] or ""
-    except (KeyError, IndexError, TypeError) as exc:
-        raise LLMError(f"响应缺少 choices[0].message.content：{data!r}") from exc
+def build_request(
+    config: Config,
+    messages: list[dict[str, Any]],
+    *,
+    system: str | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+) -> dict[str, Any]:
+    """system 走 messages 首条，不写回调用方的 messages。"""
+    request: dict[str, Any] = {
+        "model": config.model,
+        "max_tokens": max_tokens,
+        "messages": ([{"role": "system", "content": system}] if system else []) + list(messages),
+    }
+    if tools:
+        request["tools"] = list(tools)
+    return request
 
+
+def _usage_of(data: dict[str, Any]) -> Usage:
     raw = data.get("usage") or {}
-    usage = Usage(
+    return Usage(
         prompt_tokens=int(raw.get("prompt_tokens", 0)),
         completion_tokens=int(raw.get("completion_tokens", 0)),
         total_tokens=int(raw.get("total_tokens", 0)),
     )
-    return Reply(text=text, usage=usage, model=str(data.get("model", "")))
 
 
-def ask(config: Config, prompt: str, *, client: httpx.Client | None = None) -> Reply:
-    """发一次提问。传入 client 可复用连接或注入测试 transport。"""
-    payload = build_payload(config, prompt)
+def parse_turn(data: dict[str, Any]) -> Turn:
+    try:
+        choice = data["choices"][0]
+        raw = choice["message"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise LLMError(f"响应缺少 choices[0].message：{data!r}") from exc
+
+    tool_calls = list(raw.get("tool_calls") or [])
+
+    # 只保留协议字段：服务商可能附带的额外字段（如 reasoning_content）
+    # 原样回传会污染下一轮请求。
+    message: dict[str, Any] = {"role": "assistant", "content": raw.get("content", "")}
+    if tool_calls:
+        message["tool_calls"] = tool_calls
+
+    return Turn(
+        message=message,
+        text=raw.get("content") or "",
+        tool_calls=tool_calls,
+        usage=_usage_of(data),
+        model=str(data.get("model", "")),
+        finish_reason=str(choice.get("finish_reason", "")),
+    )
+
+
+def parse_reply(data: dict[str, Any]) -> Reply:
+    turn = parse_turn(data)
+    return Reply(text=turn.text, usage=turn.usage, model=turn.model)
+
+
+def post(config: Config, request: dict[str, Any], *, client: httpx.Client | None = None) -> dict:
     headers = {
         "Authorization": f"Bearer {config.api_key}",
         "Content-Type": "application/json",
@@ -66,7 +121,7 @@ def ask(config: Config, prompt: str, *, client: httpx.Client | None = None) -> R
     owns_client = client is None
     http = client or httpx.Client(timeout=TIMEOUT_SECONDS)
     try:
-        response = http.post(config.chat_completions_url, json=payload, headers=headers)
+        response = http.post(config.chat_completions_url, json=request, headers=headers)
     except httpx.HTTPError as exc:
         raise LLMError(f"请求 {config.chat_completions_url} 失败：{exc}") from exc
     finally:
@@ -76,4 +131,26 @@ def ask(config: Config, prompt: str, *, client: httpx.Client | None = None) -> R
     if response.status_code != 200:
         raise LLMError(f"HTTP {response.status_code} — {response.text[:500]}")
 
-    return parse_reply(response.json())
+    return response.json()
+
+
+def chat_completion(
+    config: Config,
+    messages: list[dict[str, Any]],
+    *,
+    system: str | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    client: httpx.Client | None = None,
+) -> Turn:
+    request = build_request(
+        config, messages, system=system, tools=tools, max_tokens=max_tokens
+    )
+    return parse_turn(post(config, request, client=client))
+
+
+def ask(config: Config, prompt: str, *, client: httpx.Client | None = None) -> Reply:
+    turn = chat_completion(
+        config, [{"role": "user", "content": prompt}], client=client
+    )
+    return Reply(text=turn.text, usage=turn.usage, model=turn.model)
