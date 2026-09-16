@@ -21,7 +21,7 @@ def main(argv: list[str] | None = None) -> int:
         "--agent",
         action="store_true",
         help="走 agent 循环，模型可调用已注册的工具"
-        "（bash / read_file / write_file / edit_file / glob）",
+        "（bash / read_file / write_file / edit_file / glob / todo_write）",
     )
     parser.add_argument(
         "--yes",

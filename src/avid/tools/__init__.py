@@ -9,12 +9,20 @@ from collections.abc import Callable
 from typing import Any
 
 from .files import edit_file, glob_files, read_file, write_file
-from .schemas import BASH, EDIT_FILE, GLOB, READ_FILE, WRITE_FILE
+from .schemas import BASH, EDIT_FILE, GLOB, READ_FILE, TODO_WRITE, WRITE_FILE
 from .shell import bash
+from .todo import todo_write
 
 ToolImpl = Callable[[dict[str, Any]], Any]
 
-TOOLS: list[dict[str, Any]] = [BASH, READ_FILE, WRITE_FILE, EDIT_FILE, GLOB]
+TOOLS: list[dict[str, Any]] = [
+    BASH,
+    READ_FILE,
+    WRITE_FILE,
+    EDIT_FILE,
+    GLOB,
+    TODO_WRITE,
+]
 
 TOOL_IMPLS: dict[str, ToolImpl] = {
     "bash": bash,
@@ -22,4 +30,5 @@ TOOL_IMPLS: dict[str, ToolImpl] = {
     "write_file": write_file,
     "edit_file": edit_file,
     "glob": glob_files,
+    "todo_write": todo_write,
 }

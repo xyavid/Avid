@@ -131,3 +131,34 @@ GLOB = tool(
     },
     ("pattern",),
 )
+
+TODO_WRITE = tool(
+    "todo_write",
+    "整份替换当前任务的 TODO 列表，用来把多步任务显式计划出来并跟踪进度。"
+    "每次调用都要提交【完整】列表，不是增量；开始多步任务前先调用一次，"
+    "之后每完成一步就更新对应项的状态并重新提交整份列表。"
+    "只有一步、或不需要跟踪进度时不必调用。",
+    {
+        "todos": {
+            "type": "array",
+            "description": "完整 TODO 列表，按执行顺序排列；空数组表示清空。",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "这一步要做什么，一句话。",
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["pending", "in_progress", "completed"],
+                        "description": "该步状态：未开始 / 进行中 / 已完成。",
+                    },
+                },
+                "required": ["content", "status"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    ("todos",),
+)

@@ -508,3 +508,166 @@ def test_block_without_denied_content_falls_back_to_the_default(no_hooks):
     agent_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a: "x"})
 
     assert messages[2]["content"] == "Permission denied."
+
+
+# ---------- todo_write 与 reminder ----------
+
+
+def test_system_prompt_asks_for_a_plan_first():
+    assert "todo_write" in SYSTEM
+
+
+def test_todo_write_result_is_returned_to_the_model(no_hooks):
+    chat = FakeChat(
+        make_turn(
+            "",
+            [
+                tool_call(
+                    "todo_write",
+                    '{"todos": [{"content": "第一步", "status": "in_progress"}]}',
+                )
+            ],
+        ),
+        make_turn("好了"),
+    )
+    messages = [{"role": "user", "content": "x"}]
+
+    agent_loop(messages, config=CONFIG, chat=chat)
+
+    assert "已更新 TODO" in messages[2]["content"]
+    assert "第一步" in messages[2]["content"]
+
+
+def test_todo_state_does_not_leak_between_runs(no_hooks):
+    first = FakeChat(
+        make_turn(
+            "",
+            [
+                tool_call(
+                    "todo_write",
+                    '{"todos": [{"content": "任务A", "status": "pending"}]}',
+                )
+            ],
+        ),
+        make_turn("好了"),
+    )
+    agent_loop([{"role": "user", "content": "x"}], config=CONFIG, chat=first)
+
+    messages = [{"role": "user", "content": "x"}]
+    second = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好了"))
+    agent_loop(
+        messages,
+        config=CONFIG,
+        chat=second,
+        registry={"read_file": lambda a: "x"},
+        todo_reminder_after=1,
+    )
+
+    reminder = next(
+        m["content"]
+        for m in messages
+        if str(m.get("content", "")).startswith("[提醒]")
+    )
+
+    assert "列表为空" in reminder  # 上一次运行的"任务A"没有泄漏过来
+
+
+def test_todo_write_resets_the_silence_counter(no_hooks):
+    chat = FakeChat(
+        *[
+            make_turn("", [tool_call("todo_write", '{"todos": []}', f"c{i}")])
+            for i in range(4)
+        ],
+        make_turn("好了"),
+    )
+    messages = [{"role": "user", "content": "x"}]
+
+    agent_loop(messages, config=CONFIG, chat=chat, todo_reminder_after=2)
+
+    assert not [m for m in messages if str(m.get("content", "")).startswith("[提醒]")]
+
+
+def test_reminder_is_injected_before_the_next_model_call(no_hooks):
+    chat = FakeChat(
+        make_turn("", [tool_call("read_file")]),
+        make_turn("", [tool_call("read_file", "{}", "c2")]),
+        make_turn("好了"),
+    )
+    messages = [{"role": "user", "content": "x"}]
+
+    agent_loop(
+        messages,
+        config=CONFIG,
+        chat=chat,
+        registry={"read_file": lambda a: "x"},
+        todo_reminder_after=2,
+    )
+
+    reminders = [m for m in messages if str(m.get("content", "")).startswith("[提醒]")]
+
+    assert len(reminders) == 1
+    # 注入发生在第 3 次请求之前，所以第 3 次请求看得到它
+    assert any(
+        str(m.get("content", "")).startswith("[提醒]")
+        for m in chat.requests[2]["messages"]
+    )
+
+
+def test_reminder_fires_once_per_silent_streak(no_hooks):
+    chat = FakeChat(
+        *[make_turn("", [tool_call("read_file", "{}", f"c{i}")]) for i in range(6)],
+        make_turn("好了"),
+    )
+    messages = [{"role": "user", "content": "x"}]
+
+    agent_loop(
+        messages,
+        config=CONFIG,
+        chat=chat,
+        registry={"read_file": lambda a: "x"},
+        todo_reminder_after=1,
+        max_rounds=7,
+    )
+
+    assert (
+        sum(1 for m in messages if str(m.get("content", "")).startswith("[提醒]")) == 1
+    )
+
+
+def test_reminder_rearms_after_a_todo_write(no_hooks):
+    chat = FakeChat(
+        make_turn("", [tool_call("read_file")]),
+        make_turn(
+            "",
+            [
+                tool_call(
+                    "todo_write",
+                    '{"todos": [{"content": "a", "status": "pending"}]}',
+                )
+            ],
+        ),
+        make_turn("", [tool_call("read_file", "{}", "c3")]),
+        make_turn("好了"),
+    )
+    messages = [{"role": "user", "content": "x"}]
+
+    agent_loop(
+        messages,
+        config=CONFIG,
+        chat=chat,
+        registry={"read_file": lambda a: "x"},
+        todo_reminder_after=1,
+    )
+
+    assert (
+        sum(1 for m in messages if str(m.get("content", "")).startswith("[提醒]")) == 2
+    )
+
+
+def test_default_threshold_does_not_fire_on_short_runs(no_hooks):
+    chat = FakeChat(make_turn("直接答"))
+    messages = [{"role": "user", "content": "x"}]
+
+    agent_loop(messages, config=CONFIG, chat=chat)
+
+    assert not [m for m in messages if str(m.get("content", "")).startswith("[提醒]")]

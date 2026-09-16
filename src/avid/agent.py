@@ -3,6 +3,9 @@
 扩展点全部走 hooks.py 的事件机制——循环本身不认识权限、日志、截断这些策略，
 它只知道四个事件名和 context 字典的约定。
 
+唯一的例外是 TODO 提醒：计数与注入按需求放在循环里（"第几轮"是循环自身的事实），
+但提醒文案与状态模型都在 tools/todo.py，改文案不用碰循环。
+
 协议映射（Anthropic 语义 → OpenAI 兼容）：
   content 里的 tool_use 块        → message.tool_calls[]
   tool_result 的一条 user 消息    → 每次调用一条 {"role": "tool", ...}
@@ -16,15 +19,18 @@ from collections.abc import Callable
 from typing import Any
 
 from .config import Config, load_config
-from .hooks import ALLOW, BLOCK, trigger_hooks
+from .hooks import BLOCK, trigger_hooks
 from .llm import DEFAULT_MAX_TOKENS, Turn, chat_completion
 from .tools import TOOL_IMPLS, TOOLS, ToolImpl
+from .tools.todo import TODO_REMINDER_AFTER_ROUNDS, TodoList, bind, build_reminder
 
 logger = logging.getLogger("avid.agent")
 
 SYSTEM = (
     "你是 Avid，一个能自主调用工具完成任务的 agent。"
     "需要外部信息或动作时调用工具；信息足够时直接给出答案。"
+    "任务需要三步以上时，先用 todo_write 列出计划再逐步执行，"
+    "每完成一步就重新提交整份列表并更新状态。"
 )
 
 MAX_ROUNDS = 8
@@ -52,6 +58,13 @@ def _last_user_message(messages: list[dict[str, Any]]) -> dict[str, Any] | None:
         if message.get("role") == "user":
             return message
     return None
+
+
+def _calls_todo_write(tool_calls: list[dict[str, Any]]) -> bool:
+    """本轮是否更新过 TODO —— 用来决定提醒计数是归零还是累加。"""
+    return any(
+        (call.get("function") or {}).get("name") == "todo_write" for call in tool_calls
+    )
 
 
 def _execute_one(
@@ -161,6 +174,7 @@ def agent_loop(
     max_tokens: int = DEFAULT_MAX_TOKENS,
     max_rounds: int = MAX_ROUNDS,
     max_stop_blocks: int = MAX_STOP_BLOCKS,
+    todo_reminder_after: int = TODO_REMINDER_AFTER_ROUNDS,
 ) -> str:
     """跑到模型不再要工具为止，返回最后一轮的 assistant 文本。
 
@@ -189,52 +203,68 @@ def agent_loop(
                 + submit["prompt"]
             )
 
-    stop_blocks = 0
-    for round_index in range(1, max_rounds + 1):
-        turn = chat(
-            config, messages, system=system, tools=tools, max_tokens=max_tokens
-        )
-        messages.append(turn.message)
-        logger.info(
-            "round=%d finish=%s tool_calls=%d tokens=%d",
-            round_index,
-            turn.finish_reason or "-",
-            len(turn.tool_calls),
-            turn.usage.total_tokens,
-        )
+    todo = TodoList()
+    rounds_since_todo = 0
 
-        if not turn.tool_calls:
-            # ④ Stop：回调可以要求"先别退出"
-            stop: dict[str, Any] = {
-                "final_text": turn.text,
-                "rounds": round_index,
-                "messages": messages,
-                "summary": None,
-                "nudge": None,
-                "tool_calls": stats["tool_calls"],
-                "denials": stats["denials"],
-            }
-            blocked = trigger_hooks("Stop", stop) == BLOCK
-            if blocked and stop_blocks < max_stop_blocks:
-                stop_blocks += 1
-                nudge = stop.get("nudge")
-                if nudge:
-                    messages.append({"role": "user", "content": str(nudge)})
-                logger.info("Stop 被拦截（第 %d 次），继续循环", stop_blocks)
-                continue
-            if blocked:
-                logger.warning("Stop 拦截次数已达上限 %d，照常退出", max_stop_blocks)
-            return turn.text
+    with bind(todo):
+        stop_blocks = 0
+        for round_index in range(1, max_rounds + 1):
+            if rounds_since_todo == todo_reminder_after:
+                messages.append(
+                    {"role": "user", "content": build_reminder(todo, rounds_since_todo)}
+                )
+                logger.info("注入 TODO 提醒（连续 %d 轮未更新）", rounds_since_todo)
 
-        # ② PreToolUse / ③ PostToolUse 在 execute_tool_calls 里触发
-        messages.extend(
-            execute_tool_calls(
-                turn.tool_calls,
-                registry,
-                round_index=round_index,
-                auto_approve=auto_approve,
-                stats=stats,
+            turn = chat(
+                config, messages, system=system, tools=tools, max_tokens=max_tokens
             )
-        )
+            messages.append(turn.message)
+            logger.info(
+                "round=%d finish=%s tool_calls=%d tokens=%d",
+                round_index,
+                turn.finish_reason or "-",
+                len(turn.tool_calls),
+                turn.usage.total_tokens,
+            )
 
-    raise RoundLimitExceeded(f"达到轮数上限 {max_rounds}，模型仍在请求工具，未收敛")
+            rounds_since_todo = (
+                0 if _calls_todo_write(turn.tool_calls) else rounds_since_todo + 1
+            )
+
+            if not turn.tool_calls:
+                # ④ Stop：回调可以要求"先别退出"
+                stop: dict[str, Any] = {
+                    "final_text": turn.text,
+                    "rounds": round_index,
+                    "messages": messages,
+                    "summary": None,
+                    "nudge": None,
+                    "tool_calls": stats["tool_calls"],
+                    "denials": stats["denials"],
+                }
+                blocked = trigger_hooks("Stop", stop) == BLOCK
+                if blocked and stop_blocks < max_stop_blocks:
+                    stop_blocks += 1
+                    nudge = stop.get("nudge")
+                    if nudge:
+                        messages.append({"role": "user", "content": str(nudge)})
+                    logger.info("Stop 被拦截（第 %d 次），继续循环", stop_blocks)
+                    continue
+                if blocked:
+                    logger.warning("Stop 拦截次数已达上限 %d，照常退出", max_stop_blocks)
+                return turn.text
+
+            # ② PreToolUse / ③ PostToolUse 在 execute_tool_calls 里触发
+            messages.extend(
+                execute_tool_calls(
+                    turn.tool_calls,
+                    registry,
+                    round_index=round_index,
+                    auto_approve=auto_approve,
+                    stats=stats,
+                )
+            )
+
+        raise RoundLimitExceeded(
+            f"达到轮数上限 {max_rounds}，模型仍在请求工具，未收敛"
+        )

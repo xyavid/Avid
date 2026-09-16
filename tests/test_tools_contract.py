@@ -12,7 +12,14 @@ def test_definitions_and_implementations_match():
 
 
 def test_expected_tools_are_registered():
-    assert sorted(NAMES) == ["bash", "edit_file", "glob", "read_file", "write_file"]
+    assert sorted(NAMES) == [
+        "bash",
+        "edit_file",
+        "glob",
+        "read_file",
+        "todo_write",
+        "write_file",
+    ]
 
 
 def test_names_are_unique():
@@ -45,6 +52,18 @@ def test_every_parameter_documents_type_and_meaning(item):
     for name, spec in item["function"]["parameters"]["properties"].items():
         assert spec["type"] in VALID_TYPES, name
         assert spec["description"].strip(), name
+
+
+@pytest.mark.parametrize("item", TOOLS, ids=NAMES)
+def test_array_parameters_declare_their_items(item):
+    """数组参数必须写清元素结构，否则模型只能猜。"""
+    for name, spec in item["function"]["parameters"]["properties"].items():
+        if spec["type"] != "array":
+            continue
+        assert spec["items"]["type"], name
+        if spec["items"]["type"] == "object":
+            assert spec["items"]["required"], name
+            assert spec["items"]["additionalProperties"] is False, name
 
 
 def test_builder_defaults_required_to_empty():
