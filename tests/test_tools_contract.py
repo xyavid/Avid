@@ -17,6 +17,7 @@ def test_expected_tools_are_registered():
         "edit_file",
         "glob",
         "read_file",
+        "subagent",
         "todo_write",
         "write_file",
     ]

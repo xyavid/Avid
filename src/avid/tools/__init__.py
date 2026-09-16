@@ -9,8 +9,17 @@ from collections.abc import Callable
 from typing import Any
 
 from .files import edit_file, glob_files, read_file, write_file
-from .schemas import BASH, EDIT_FILE, GLOB, READ_FILE, TODO_WRITE, WRITE_FILE
+from .schemas import (
+    BASH,
+    EDIT_FILE,
+    GLOB,
+    READ_FILE,
+    SUBAGENT,
+    TODO_WRITE,
+    WRITE_FILE,
+)
 from .shell import bash
+from .subagent import subagent
 from .todo import todo_write
 
 ToolImpl = Callable[[dict[str, Any]], Any]
@@ -22,6 +31,7 @@ TOOLS: list[dict[str, Any]] = [
     EDIT_FILE,
     GLOB,
     TODO_WRITE,
+    SUBAGENT,
 ]
 
 TOOL_IMPLS: dict[str, ToolImpl] = {
@@ -31,4 +41,13 @@ TOOL_IMPLS: dict[str, ToolImpl] = {
     "edit_file": edit_file,
     "glob": glob_files,
     "todo_write": todo_write,
+    "subagent": subagent,
+}
+
+# 子 agent 的工具集：去掉 subagent 本身，结构上不可能递归派生。
+SUB_TOOLS: list[dict[str, Any]] = [
+    item for item in TOOLS if item["function"]["name"] != "subagent"
+]
+SUB_HANDLERS: dict[str, ToolImpl] = {
+    name: impl for name, impl in TOOL_IMPLS.items() if name != "subagent"
 }

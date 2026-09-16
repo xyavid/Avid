@@ -162,3 +162,35 @@ TODO_WRITE = tool(
     },
     ("todos",),
 )
+
+SUBAGENT = tool(
+    "subagent",
+    "把互不依赖的子任务派给多个 subagent 并行处理，全部结束后汇总各自的结果。"
+    "【只在任务可拆分、且子任务之间没有共享状态与先后依赖时使用】："
+    "存在强依赖、需要共享同一份上下文、或一步就能做完的，不要用，直接自己做。"
+    "subagent 看不到你和用户的对话，只会收到你在 prompt 里写的那段说明——"
+    "所以每条任务都要自包含：写清背景、要做什么、期望的输出格式。"
+    "一次最多 4 个。",
+    {
+        "tasks": {
+            "type": "array",
+            "description": "要并行处理的子任务，每项互相独立、没有先后顺序。",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "description": {
+                        "type": "string",
+                        "description": "一句话说明这个子任务干什么，用于在汇总结果里标注归属。",
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "发给该 subagent 的完整指令，自包含：背景、要做什么、期望输出。",
+                    },
+                },
+                "required": ["description", "prompt"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    ("tasks",),
+)
