@@ -13,12 +13,14 @@ from .schemas import (
     BASH,
     EDIT_FILE,
     GLOB,
+    LOAD_SKILL,
     READ_FILE,
     SUBAGENT,
     TODO_WRITE,
     WRITE_FILE,
 )
 from .shell import bash
+from .skill import load_skill
 from .subagent import subagent
 from .todo import todo_write
 
@@ -32,6 +34,7 @@ TOOLS: list[dict[str, Any]] = [
     GLOB,
     TODO_WRITE,
     SUBAGENT,
+    LOAD_SKILL,
 ]
 
 TOOL_IMPLS: dict[str, ToolImpl] = {
@@ -42,6 +45,7 @@ TOOL_IMPLS: dict[str, ToolImpl] = {
     "glob": glob_files,
     "todo_write": todo_write,
     "subagent": subagent,
+    "load_skill": load_skill,
 }
 
 # 子 agent 的工具集：去掉 subagent 本身，结构上不可能递归派生。

@@ -22,17 +22,11 @@ from .config import Config, load_config
 from .hooks import BLOCK, trigger_hooks
 from .llm import DEFAULT_MAX_TOKENS, Turn, chat_completion
 from .permission import bind_auto_approve
+from .skill_loader import AGENT_INSTRUCTIONS, SkillLoader, bind_skills
 from .tools import TOOL_IMPLS, TOOLS, ToolImpl
 from .tools.todo import TODO_REMINDER_AFTER_ROUNDS, TodoList, bind, build_reminder
 
 logger = logging.getLogger("avid.agent")
-
-SYSTEM = (
-    "你是 Avid，一个能自主调用工具完成任务的 agent。"
-    "需要外部信息或动作时调用工具；信息足够时直接给出答案。"
-    "任务需要三步以上时，先用 todo_write 列出计划再逐步执行，"
-    "每完成一步就重新提交整份列表并更新状态。"
-)
 
 MAX_ROUNDS = 8
 
@@ -162,7 +156,7 @@ def execute_tool_calls(
 def agent_loop(
     messages: list[dict[str, Any]],
     *,
-    system: str = SYSTEM,
+    system: str | None = None,
     tools: list[dict[str, Any]] | None = None,
     registry: dict[str, ToolImpl] | None = None,
     config: Config | None = None,
@@ -203,8 +197,12 @@ def agent_loop(
     todo = TodoList()
     rounds_since_todo = 0
 
+    # 每次运行重新扫描技能目录：磁盘变了，下一次运行的 system prompt 就是新的。
+    loader = SkillLoader().scan()
+    system_prompt = loader.build_system_prompt(system or AGENT_INSTRUCTIONS)
+
     # auto_approve 是整次运行的性质，用 ContextVar 传递而不是逐个调用塞字段。
-    with bind_auto_approve(auto_approve), bind(todo):
+    with bind_auto_approve(auto_approve), bind(todo), bind_skills(loader):
         stop_blocks = 0
         for round_index in range(1, max_rounds + 1):
             if rounds_since_todo == todo_reminder_after:
@@ -214,7 +212,11 @@ def agent_loop(
                 logger.info("注入 TODO 提醒（连续 %d 轮未更新）", rounds_since_todo)
 
             turn = chat(
-                config, messages, system=system, tools=tools, max_tokens=max_tokens
+                config,
+                messages,
+                system=system_prompt,
+                tools=tools,
+                max_tokens=max_tokens,
             )
             messages.append(turn.message)
             logger.info(

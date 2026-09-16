@@ -1,7 +1,7 @@
 import pytest
 
 from avid import hooks
-from avid.agent import SYSTEM, RoundLimitExceeded, agent_loop
+from avid.agent import RoundLimitExceeded, agent_loop
 from avid.config import Config
 from avid.llm import Turn, Usage
 from avid.tools import TOOLS
@@ -61,7 +61,11 @@ def test_returns_text_and_appends_assistant_when_no_tool_calls(no_hooks):
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "你好"},
     ]
-    assert chat.requests[0]["system"] == SYSTEM
+    assert "Act, don't explain." in chat.requests[0]["system"]
+    assert (
+        "Use load_skill to read the full instructions when a skill applies."
+        in chat.requests[0]["system"]
+    )
     assert chat.requests[0]["tools"] == TOOLS
     assert all(m["role"] != "system" for m in messages)
 
@@ -513,8 +517,12 @@ def test_block_without_denied_content_falls_back_to_the_default(no_hooks):
 # ---------- todo_write 与 reminder ----------
 
 
-def test_system_prompt_asks_for_a_plan_first():
-    assert "todo_write" in SYSTEM
+def test_system_prompt_asks_for_a_plan_first(no_hooks):
+    chat = FakeChat(make_turn("好的"))
+
+    agent_loop([{"role": "user", "content": "x"}], config=CONFIG, chat=chat)
+
+    assert "todo_write" in chat.requests[0]["system"]
 
 
 def test_todo_write_result_is_returned_to_the_model(no_hooks):
@@ -671,3 +679,81 @@ def test_default_threshold_does_not_fire_on_short_runs(no_hooks):
     agent_loop(messages, config=CONFIG, chat=chat)
 
     assert not [m for m in messages if str(m.get("content", "")).startswith("[提醒]")]
+
+
+# ---------- 技能系统接入 ----------
+
+
+def point_skills_at(tmp_path, monkeypatch):
+    from avid import skill_loader
+
+    monkeypatch.setattr(skill_loader, "SKILLS_DIR", tmp_path)
+    return tmp_path
+
+
+def write_skill(root, directory, text):
+    path = root / directory
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "SKILL.md").write_text(text, encoding="utf-8")
+
+
+def test_skill_catalog_reaches_the_model(no_hooks, tmp_path, monkeypatch):
+    root = point_skills_at(tmp_path, monkeypatch)
+    write_skill(root, "demo", "---\ndescription: 演示技能\n---\n正文")
+
+    chat = FakeChat(make_turn("好的"))
+    agent_loop([{"role": "user", "content": "x"}], config=CONFIG, chat=chat)
+
+    assert "- demo: 演示技能" in chat.requests[0]["system"]
+
+
+def test_catalog_changes_are_picked_up_on_the_next_run(no_hooks, tmp_path, monkeypatch):
+    root = point_skills_at(tmp_path, monkeypatch)
+
+    first = FakeChat(make_turn("好的"))
+    agent_loop([{"role": "user", "content": "x"}], config=CONFIG, chat=first)
+    assert "demo" not in first.requests[0]["system"]
+
+    write_skill(root, "demo", "---\ndescription: 新加的\n---\n正文")
+
+    second = FakeChat(make_turn("好的"))
+    agent_loop([{"role": "user", "content": "x"}], config=CONFIG, chat=second)
+    assert "- demo: 新加的" in second.requests[0]["system"]
+
+
+def test_load_skill_returns_the_full_text_as_tool_result(no_hooks, tmp_path, monkeypatch):
+    root = point_skills_at(tmp_path, monkeypatch)
+    write_skill(root, "demo", "---\ndescription: 演示\n---\n这是技能的全文。")
+
+    chat = FakeChat(
+        make_turn("", [tool_call("load_skill", '{"name": "demo"}')]),
+        make_turn("好的"),
+    )
+    messages = [{"role": "user", "content": "x"}]
+
+    agent_loop(messages, config=CONFIG, chat=chat)
+
+    assert messages[2]["role"] == "tool"
+    assert "这是技能的全文。" in messages[2]["content"]
+
+
+def test_load_skill_is_not_in_the_permission_gate(no_hooks, tmp_path, monkeypatch):
+    from avid.permission import APPROVAL_RULES
+
+    assert "load_skill" not in APPROVAL_RULES
+
+
+def test_unknown_skill_returns_error_text_without_raising(no_hooks, tmp_path, monkeypatch):
+    """验收项：未知技能名返回错误文本且不抛出异常。"""
+    point_skills_at(tmp_path, monkeypatch)
+
+    chat = FakeChat(
+        make_turn("", [tool_call("load_skill", '{"name": "nope"}')]),
+        make_turn("好的"),
+    )
+    messages = [{"role": "user", "content": "x"}]
+
+    result = agent_loop(messages, config=CONFIG, chat=chat)
+
+    assert messages[2]["content"] == "Error: Unknown skill 'nope'. Available: none"
+    assert result == "好的"

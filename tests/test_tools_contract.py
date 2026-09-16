@@ -16,6 +16,7 @@ def test_expected_tools_are_registered():
         "bash",
         "edit_file",
         "glob",
+        "load_skill",
         "read_file",
         "subagent",
         "todo_write",
