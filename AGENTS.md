@@ -10,7 +10,7 @@ Avid 是一个自建的 agent 运行时（harness）：模型调用、工具执�
 - **目标**：改动任一模块（模型 / 工具 / 记忆 / 上下文策略）不需要动其它部分，且改动前后有可对比的评测数字。
 - **验收基准**：参考场景 **R**（读取本地文件 + 计算）——首个工具与后续评测集都从它长出来。
 - **技术栈**：内核 Python 3.12，环境与依赖管理用 `uv`；TypeScript 前端留到后期。
-- **当前状态**：最小模型调用、Agent 循环、8 个工具（`bash` / `read_file` / `write_file` / `edit_file` / `glob` / `todo_write` / `subagent` / `load_skill`）、技能系统、权限三闸门与 hook 扩展点均已跑通。项目目标见 `dev/plan/roadmap.md`。
+- **当前状态**：最小模型调用、Agent 循环、8 个工具（`bash` / `read_file` / `write_file` / `edit_file` / `glob` / `todo_write` / `subagent` / `load_skill`）、技能系统、上下文压缩管线、权限三闸门与 hook 扩展点均已跑通。项目目标见 `dev/plan/roadmap.md`。
 
 ## 2. 提交规范
 
