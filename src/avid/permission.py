@@ -16,7 +16,10 @@ import json
 import logging
 import re
 import sys
-from collections.abc import Callable
+import threading
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 logger = logging.getLogger("avid.permission")
@@ -47,9 +50,28 @@ APPROVAL_RULES: dict[str, str] = {
     "bash": "执行 shell 命令",
     "write_file": "写入文件（已有内容会被覆盖）",
     "edit_file": "修改文件内容",
+    "subagent": "并行派发 subagent（会额外消耗多次模型调用）",
 }
 
 AskUser = Callable[[str, dict[str, Any], str], bool]
+
+# ``--yes`` 是整次运行的性质，不是单次工具调用的性质——所以放 ContextVar，
+# 而不是塞进每个工具的调用上下文。子 agent 在别的线程里跑，而 contextvars
+# 不跨线程继承：由主线程取值后显式传给子运行，--yes 才能穿透到子 agent。
+RUN_AUTO_APPROVE: ContextVar[bool] = ContextVar("avid_run_auto_approve", default=False)
+
+# 多个 subagent 并行时可能同时来要审批，而终端只有一个。
+_ASK_LOCK = threading.Lock()
+
+
+@contextmanager
+def bind_auto_approve(enabled: bool) -> Iterator[bool]:
+    """把整次运行标记为免审批；硬拒绝闸门不受影响。"""
+    token = RUN_AUTO_APPROVE.set(enabled)
+    try:
+        yield enabled
+    finally:
+        RUN_AUTO_APPROVE.reset(token)
 
 
 def hard_deny(name: str, arguments: Any) -> str | None:
@@ -81,16 +103,18 @@ def ask_user(name: str, arguments: dict[str, Any], reason: str) -> bool:
     提示写 stderr，避免污染 stdout 上给用户看的最终答复。
     """
     detail = json.dumps(arguments, ensure_ascii=False, default=str)
-    print(
-        f"\n⚠ 需要确认：{reason}\n  工具 {name} {detail}\n  允许执行？[y/N] ",
-        file=sys.stderr,
-        end="",
-        flush=True,
-    )
-    try:
-        answer = sys.stdin.readline()
-    except (OSError, KeyboardInterrupt):
-        return False
+    # 并行 subagent 会同时来问，终端只有一个——串行化，否则提示会互相穿插。
+    with _ASK_LOCK:
+        print(
+            f"\n⚠ 需要确认：{reason}\n  工具 {name} {detail}\n  允许执行？[y/N] ",
+            file=sys.stderr,
+            end="",
+            flush=True,
+        )
+        try:
+            answer = sys.stdin.readline()
+        except (OSError, KeyboardInterrupt):
+            return False
 
     if not answer:
         print("（读不到输入，视为拒绝）", file=sys.stderr)

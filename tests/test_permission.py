@@ -1,4 +1,6 @@
 import io
+import threading
+import time
 
 import pytest
 
@@ -75,7 +77,7 @@ def test_read_only_tools_need_no_approval():
 
 
 def test_mutating_tools_match_a_rule():
-    assert set(APPROVAL_RULES) == {"bash", "write_file", "edit_file"}
+    assert set(APPROVAL_RULES) == {"bash", "write_file", "edit_file", "subagent"}
 
 
 # ---------- 闸门 3：用户审批 ----------
@@ -139,3 +141,44 @@ def test_auto_approve_skips_approval_for_mutating_tools():
 
 def test_auto_approve_still_honours_hard_deny():
     assert auto_approve("bash", {"command": "rm -rf /"}) is False
+
+
+# ---------- 运行级 --yes ----------
+
+
+def test_bind_auto_approve_sets_and_restores_the_flag():
+    assert permission.RUN_AUTO_APPROVE.get() is False
+
+    with permission.bind_auto_approve(True):
+        assert permission.RUN_AUTO_APPROVE.get() is True
+
+    assert permission.RUN_AUTO_APPROVE.get() is False
+
+
+def test_concurrent_approval_prompts_are_serialised(monkeypatch):
+    """并行 subagent 会同时来要审批，而终端只有一个——提示不能互相穿插。"""
+    events = []
+
+    class SlowStdin:
+        def readline(self):
+            events.append("start")
+            time.sleep(0.05)
+            events.append("end")
+            return "y\n"
+
+    monkeypatch.setattr("sys.stdin", SlowStdin())
+    monkeypatch.setattr("sys.stderr", io.StringIO())
+
+    threads = [
+        threading.Thread(
+            target=permission.ask_user,
+            args=("bash", {"command": "ls"}, "执行 shell 命令"),
+        )
+        for _ in range(2)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert events == ["start", "end", "start", "end"]

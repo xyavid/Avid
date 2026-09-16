@@ -2,6 +2,7 @@ import pytest
 
 from avid import hooks
 from avid.hooks import ALLOW, BLOCK, register_hook, trigger_hooks
+from avid.permission import bind_auto_approve
 
 
 @pytest.fixture
@@ -184,9 +185,24 @@ def test_permission_hook_routes_to_auto_approve(clean, monkeypatch):
         hooks, "_auto_approve", lambda n, a: calls.append("auto") or True
     )
 
-    hooks.permission_hook({"tool": "bash", "arguments": {}, "auto_approve": True})
+    with bind_auto_approve(True):
+        hooks.permission_hook({"tool": "bash", "arguments": {}})
 
     assert calls == ["auto"]
+
+
+def test_permission_hook_goes_interactive_without_the_run_flag(clean, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        hooks, "check_permission", lambda n, a: calls.append("interactive") or True
+    )
+    monkeypatch.setattr(
+        hooks, "_auto_approve", lambda n, a: calls.append("auto") or True
+    )
+
+    hooks.permission_hook({"tool": "bash", "arguments": {}})
+
+    assert calls == ["interactive"]
 
 
 def test_log_hook_never_blocks(clean):

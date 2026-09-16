@@ -21,6 +21,7 @@ from typing import Any
 from .config import Config, load_config
 from .hooks import BLOCK, trigger_hooks
 from .llm import DEFAULT_MAX_TOKENS, Turn, chat_completion
+from .permission import bind_auto_approve
 from .tools import TOOL_IMPLS, TOOLS, ToolImpl
 from .tools.todo import TODO_REMINDER_AFTER_ROUNDS, TodoList, bind, build_reminder
 
@@ -73,7 +74,6 @@ def _execute_one(
     registry: dict[str, ToolImpl],
     *,
     round_index: int,
-    auto_approve: bool,
     stats: dict[str, int],
 ) -> str:
     """解析参数 → 查 handler → PreToolUse → 执行 → PostToolUse。
@@ -99,7 +99,6 @@ def _execute_one(
         "tool": name,
         "arguments": arguments,
         "round": round_index,
-        "auto_approve": auto_approve,
     }
     if trigger_hooks("PreToolUse", before) == BLOCK:
         stats["denials"] += 1
@@ -128,7 +127,6 @@ def execute_tool_calls(
     registry: dict[str, ToolImpl],
     *,
     round_index: int = 0,
-    auto_approve: bool = False,
     stats: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
     """逐个执行工具调用，汇总为可直接追加进 messages 的 tool 消息。
@@ -150,7 +148,6 @@ def execute_tool_calls(
             raw_arguments,
             registry,
             round_index=round_index,
-            auto_approve=auto_approve,
             stats=stats,
         )
 
@@ -206,7 +203,8 @@ def agent_loop(
     todo = TodoList()
     rounds_since_todo = 0
 
-    with bind(todo):
+    # auto_approve 是整次运行的性质，用 ContextVar 传递而不是逐个调用塞字段。
+    with bind_auto_approve(auto_approve), bind(todo):
         stop_blocks = 0
         for round_index in range(1, max_rounds + 1):
             if rounds_since_todo == todo_reminder_after:
@@ -260,7 +258,6 @@ def agent_loop(
                     turn.tool_calls,
                     registry,
                     round_index=round_index,
-                    auto_approve=auto_approve,
                     stats=stats,
                 )
             )
