@@ -21,6 +21,31 @@ class LLMError(Exception):
     """调用失败。信息包含状态码与响应正文片段，便于定位。"""
 
 
+class PromptTooLongError(LLMError):
+    """请求超出模型上下文长度。循环据此做一次兜底压缩后重试。"""
+
+
+# 各家措辞不同，命中任一即可判定为上下文超限。
+_PROMPT_TOO_LONG_SIGNS = (
+    "prompt is too long",
+    "prompt_too_long",
+    "context length",
+    "context_length_exceeded",
+    "maximum context",
+    "too many tokens",
+    "request too large",
+    "reduce the length",
+    "input is too long",
+)
+
+
+def _prompt_too_long(response: httpx.Response) -> bool:
+    if response.status_code not in (400, 413, 422):
+        return False
+    body = response.text.lower()
+    return any(sign in body for sign in _PROMPT_TOO_LONG_SIGNS)
+
+
 @dataclass(frozen=True)
 class Usage:
     prompt_tokens: int
@@ -129,6 +154,10 @@ def post(config: Config, request: dict[str, Any], *, client: httpx.Client | None
             http.close()
 
     if response.status_code != 200:
+        if _prompt_too_long(response):
+            raise PromptTooLongError(
+                f"HTTP {response.status_code} — 上下文超限：{response.text[:300]}"
+            )
         raise LLMError(f"HTTP {response.status_code} — {response.text[:500]}")
 
     return response.json()
