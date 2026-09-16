@@ -6,6 +6,9 @@
 唯一的例外是 TODO 提醒：计数与注入按需求放在循环里（"第几轮"是循环自身的事实），
 但提醒文案与状态模型都在 tools/todo.py，改文案不用碰循环。
 
+上下文压缩管线（compact.py）按代价从低到高接在每轮开头：①② 每轮无条件跑且不调模型，
+③④ 只在超限时跑，⑤ 在模型报超限时兜底并重试一次。
+
 协议映射（Anthropic 语义 → OpenAI 兼容）：
   content 里的 tool_use 块        → message.tool_calls[]
   tool_result 的一条 user 消息    → 每次调用一条 {"role": "tool", ...}
@@ -18,9 +21,19 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
+from .compact import (
+    CONTEXT_CHAR_LIMIT,
+    CompactReport,
+    compact_history,
+    estimate_chars,
+    micro_compact,
+    reactive_compact,
+    snip_compact,
+    tool_result_budget,
+)
 from .config import Config, load_config
 from .hooks import BLOCK, trigger_hooks
-from .llm import DEFAULT_MAX_TOKENS, Turn, chat_completion
+from .llm import DEFAULT_MAX_TOKENS, PromptTooLongError, Turn, chat_completion
 from .permission import bind_auto_approve
 from .skill_loader import AGENT_INSTRUCTIONS, SkillLoader, bind_skills
 from .tools import TOOL_IMPLS, TOOLS, ToolImpl
@@ -60,6 +73,14 @@ def _calls_todo_write(tool_calls: list[dict[str, Any]]) -> bool:
     return any(
         (call.get("function") or {}).get("name") == "todo_write" for call in tool_calls
     )
+
+
+def _report(report: CompactReport | None, stats: dict[str, int]) -> None:
+    """压缩发生时留下可观察的记录：一条日志 + 一个计数。"""
+    if report is None:
+        return
+    logger.info("compact: %s", report.describe())
+    stats["compactions"] += 1
 
 
 def _execute_one(
@@ -174,7 +195,7 @@ def agent_loop(
     config = config or load_config()
     tools = TOOLS if tools is None else tools
     registry = TOOL_IMPLS if registry is None else registry
-    stats = {"tool_calls": 0, "denials": 0}
+    stats = {"tool_calls": 0, "denials": 0, "compactions": 0}
 
     # ① UserPromptSubmit：可注入上下文，也可拦截整个输入
     submit_message = _last_user_message(messages)
@@ -200,6 +221,8 @@ def agent_loop(
     # 每次运行重新扫描技能目录：磁盘变了，下一次运行的 system prompt 就是新的。
     loader = SkillLoader().scan()
     system_prompt = loader.build_system_prompt(system or AGENT_INSTRUCTIONS)
+    compacted = False  # ④ 自动压缩：整个运行最多一次
+    retried = False  # ⑤ 兜底重试：整个运行最多一次
 
     # auto_approve 是整次运行的性质，用 ContextVar 传递而不是逐个调用塞字段。
     with bind_auto_approve(auto_approve), bind(todo), bind_skills(loader):
@@ -211,13 +234,44 @@ def agent_loop(
                 )
                 logger.info("注入 TODO 提醒（连续 %d 轮未更新）", rounds_since_todo)
 
-            turn = chat(
-                config,
-                messages,
-                system=system_prompt,
-                tools=tools,
-                max_tokens=max_tokens,
-            )
+            # ①② 每轮都跑，不花模型调用
+            _report(tool_result_budget(messages), stats)
+            _report(snip_compact(messages), stats)
+
+            # ③④ 只在超限时。③ 免费，先做；做完仍超限才付一次摘要调用。
+            if estimate_chars(messages) > CONTEXT_CHAR_LIMIT:
+                _report(micro_compact(messages), stats)
+            if estimate_chars(messages) > CONTEXT_CHAR_LIMIT:
+                if compacted:
+                    logger.info("compact: 自动压缩本运行已用过一次，跳过")
+                else:
+                    report = compact_history(messages, config=config, chat=chat)
+                    if report is not None:
+                        compacted = True
+                    _report(report, stats)
+
+            # ⑤ 兜底：模型已明确报超限时整理更早历史，然后重试一次
+            try:
+                turn = chat(
+                    config,
+                    messages,
+                    system=system_prompt,
+                    tools=tools,
+                    max_tokens=max_tokens,
+                )
+            except PromptTooLongError:
+                if retried:
+                    raise
+                retried = True
+                logger.warning("compact: 模型报上下文超限，兜底压缩后重试一次")
+                _report(reactive_compact(messages, config=config, chat=chat), stats)
+                turn = chat(
+                    config,
+                    messages,
+                    system=system_prompt,
+                    tools=tools,
+                    max_tokens=max_tokens,
+                )
             messages.append(turn.message)
             logger.info(
                 "round=%d finish=%s tool_calls=%d tokens=%d",
@@ -241,6 +295,7 @@ def agent_loop(
                     "nudge": None,
                     "tool_calls": stats["tool_calls"],
                     "denials": stats["denials"],
+                    "compactions": stats["compactions"],
                 }
                 blocked = trigger_hooks("Stop", stop) == BLOCK
                 if blocked and stop_blocks < max_stop_blocks:

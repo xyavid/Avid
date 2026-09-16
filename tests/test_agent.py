@@ -1,7 +1,9 @@
 import pytest
 
+from avid import agent as agent_module
 from avid import hooks
 from avid.agent import RoundLimitExceeded, agent_loop
+from avid.compact import CompactReport
 from avid.config import Config
 from avid.llm import Turn, Usage
 from avid.tools import TOOLS
@@ -757,3 +759,167 @@ def test_unknown_skill_returns_error_text_without_raising(no_hooks, tmp_path, mo
 
     assert messages[2]["content"] == "Error: Unknown skill 'nope'. Available: none"
     assert result == "好的"
+
+
+# ---------- 上下文压缩管线接入 ----------
+
+
+def test_cheap_steps_run_before_every_model_call(no_hooks, monkeypatch):
+    order = []
+    monkeypatch.setattr(
+        agent_module, "tool_result_budget", lambda messages: order.append("budget")
+    )
+    monkeypatch.setattr(
+        agent_module, "snip_compact", lambda messages: order.append("snip")
+    )
+
+    chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
+    agent_loop(
+        [{"role": "user", "content": "x"}],
+        config=CONFIG,
+        chat=chat,
+        registry={"read_file": lambda a: "x"},
+    )
+
+    assert order == ["budget", "snip", "budget", "snip"]
+
+
+def test_free_step_success_skips_the_summary(no_hooks, monkeypatch):
+    micro_calls = []
+    estimates = iter([500, 100])
+
+    def fake_micro(messages):
+        micro_calls.append(1)
+        return CompactReport("micro_compact", "落盘 1 项", 500, 100)
+
+    monkeypatch.setattr(agent_module, "CONTEXT_CHAR_LIMIT", 100)
+    monkeypatch.setattr(agent_module, "micro_compact", fake_micro)
+    monkeypatch.setattr(
+        agent_module,
+        "compact_history",
+        lambda messages, **kwargs: pytest.fail("微压缩够用时不该生成摘要"),
+    )
+    monkeypatch.setattr(
+        agent_module, "estimate_chars", lambda messages: next(estimates, 100)
+    )
+
+    agent_loop(
+        [{"role": "user", "content": "x"}],
+        config=CONFIG,
+        chat=FakeChat(make_turn("好的")),
+    )
+
+    assert micro_calls == [1]
+
+
+def test_auto_compaction_happens_at_most_once(no_hooks, monkeypatch):
+    history_calls = []
+
+    monkeypatch.setattr(agent_module, "estimate_chars", lambda messages: 999_999)
+    monkeypatch.setattr(agent_module, "micro_compact", lambda messages: None)
+
+    def fake_history(messages, **kwargs):
+        history_calls.append(1)
+        return CompactReport("compact_history", "摘要替换", 999_999, 10)
+
+    monkeypatch.setattr(agent_module, "compact_history", fake_history)
+
+    chat = FakeChat(
+        make_turn("", [tool_call("read_file")]),
+        make_turn("", [tool_call("read_file", "{}", "c2")]),
+        make_turn("好的"),
+    )
+    agent_loop(
+        [{"role": "user", "content": "x"}],
+        config=CONFIG,
+        chat=chat,
+        registry={"read_file": lambda a: "x"},
+    )
+
+    assert history_calls == [1]
+
+
+def test_prompt_too_long_triggers_one_reactive_retry(no_hooks, monkeypatch):
+    from avid.llm import PromptTooLongError
+
+    calls = {"chat": 0, "reactive": 0}
+
+    def fake_chat(config, messages, **kwargs):
+        calls["chat"] += 1
+        if calls["chat"] == 1:
+            raise PromptTooLongError("超了")
+        return make_turn("好的")
+
+    def fake_reactive(messages, **kwargs):
+        calls["reactive"] += 1
+        messages[:] = [{"role": "user", "content": "[历史摘要] 压缩过了"}]
+        return CompactReport("reactive_compact", "摘要更早的 3 条", 999, 10)
+
+    monkeypatch.setattr(agent_module, "reactive_compact", fake_reactive)
+    messages = [{"role": "user", "content": "x"}]
+
+    result = agent_loop(messages, config=CONFIG, chat=fake_chat)
+
+    assert result == "好的"
+    assert calls == {"chat": 2, "reactive": 1}
+    assert "历史摘要" in messages[0]["content"]
+
+
+def test_reactive_is_not_retried_twice(no_hooks, monkeypatch):
+    from avid.llm import PromptTooLongError
+
+    calls = {"chat": 0, "reactive": 0}
+
+    def always_too_long(config, messages, **kwargs):
+        calls["chat"] += 1
+        raise PromptTooLongError("还是超")
+
+    def fake_reactive(messages, **kwargs):
+        calls["reactive"] += 1
+        return CompactReport("reactive_compact", "摘要", 999, 10)
+
+    monkeypatch.setattr(agent_module, "reactive_compact", fake_reactive)
+
+    with pytest.raises(PromptTooLongError):
+        agent_loop(
+            [{"role": "user", "content": "x"}], config=CONFIG, chat=always_too_long
+        )
+
+    assert calls == {"chat": 2, "reactive": 1}
+
+
+def test_compaction_is_logged(no_hooks, monkeypatch, caplog):
+    monkeypatch.setattr(
+        agent_module,
+        "tool_result_budget",
+        lambda messages: CompactReport("tool_result_budget", "落盘 2 项", 300, 100),
+    )
+
+    with caplog.at_level("INFO", logger="avid.agent"):
+        agent_loop(
+            [{"role": "user", "content": "x"}],
+            config=CONFIG,
+            chat=FakeChat(make_turn("好的")),
+        )
+
+    assert any(
+        "compact: tool_result_budget" in record.getMessage() for record in caplog.records
+    )
+
+
+def test_compaction_count_reaches_the_stop_hook(no_hooks, monkeypatch):
+    monkeypatch.setattr(
+        agent_module,
+        "snip_compact",
+        lambda messages: CompactReport("snip_compact", "裁掉中间 10 条", 60, 30),
+    )
+    seen = []
+    hooks.register_hook("Stop", lambda ctx: seen.append(ctx["compactions"]))
+
+    agent_loop(
+        [{"role": "user", "content": "x"}],
+        config=CONFIG,
+        chat=FakeChat(make_turn("好的")),
+    )
+
+    assert seen == [1]
