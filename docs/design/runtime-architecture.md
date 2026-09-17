@@ -135,7 +135,9 @@ class RunState:
 1. `run_subagent` 在子线程里自建 `RunState`（现在也是自建 context；改成显式后代码更直白）。
 2. `ToolImpl` 签名不变，改为在 `execution.execute_batch` 里把 `RunState` 放进工具调用上下文，由 `execution` 负责传参——即工具的 handler 多一个可选参数。
 
-**选定方案 2，但只给需要的两个工具**：`todo_write` 与 `load_skill` 的签名改为 `(args, *, state: RunState)`；其余 6 个工具仍是 `(args)`。这样"需要运行状态的工具"是一个显式、可枚举的集合（判据 §4：谁拥有状态要能指名），代价是 `ToolImpl` 变成 `Callable[..., Any]` 且 `execute_batch` 要按名称判断是否传 state。
+**选定方案 2，但只给需要的三个工具**：`todo_write`、`load_skill`、`subagent` 的签名改为 `(args, *, state: RunState)`；其余 5 个工具仍是 `(args)`。这样"需要运行状态的工具"是一个显式、可枚举的集合（判据 §4：谁拥有状态要能指名），代价是 `ToolImpl` 变成 `Callable[..., Any]` 且 `execute_batch` 要按名称判断是否传 state。
+
+> 落地时的修正：初稿只列了两个工具，漏了 `subagent`——它也要读 `RunState.auto_approve`（原来是 `RUN_AUTO_APPROVE` 这个 ContextVar）。实际是 **3 / 8**，仍低于"超过一半就该统一传 state"的阈值。该集合落在 `execution.STATEFUL_TOOLS`，由契约测试保证不漏不错。
 
 **这个代价值不值**：值得，因为它是唯一能在不引入依赖注入框架的前提下消除 contextvars 的办法；不值的信号是"需要的工具超过一半"——那时应该给所有工具统一传 state。
 
@@ -274,7 +276,7 @@ agent_loop(messages, ...)
 | 工具轮 | — | 追加 tool 结果 | `append_many` |
 | Stop | — | 追加 nudge | `append` |
 
-九处读写全部经过 4 个方法。**没有任何一处再直接操作 list**。
+九处读写全部经过 5 个写入方法（`append` / `append_many` / `set_content` / `replace_all` / `splice`）。**没有任何一处再直接操作 list**。
 
 ### 5.3 subagent 的位置
 
@@ -376,7 +378,7 @@ D1–D8 里，D3/D5/D6/D7 是**能力差异**（我们没做），D1/D2/D4 是**
 
 ### 10.1 三个方案
 
-| 维度 | A 全量分包 | B 原地抽取 | C 不动 |
+| 维度 | 方案一 全量分包 | 方案二 原地抽取 | 方案三 不动 |
 |---|---|---|---|
 | 逻辑隔离（压缩/工具/状态不再与循环纠缠） | 完整 | **完整** | 无 |
 | 目录即边界的可见性 | 有 | 无 | 无 |
@@ -386,7 +388,7 @@ D1–D8 里，D3/D5/D6/D7 是**能力差异**（我们没做），D1/D2/D4 是**
 | 回滚难度 | 中等（多文件路径） | **易**（逐文件还原） | — |
 | 收益 | B 的全部 + 目录可见性 | 逻辑分层 | 无 |
 
-### 10.2 决策：先 B 后 A，分两步
+### 10.2 决策：先原地抽取，再分包（§9 的阶段 A → 阶段 B）
 
 - **解决了什么**：循环不再认识策略值（阈值、文案、规则）与压缩编排；messages 有了唯一所有者；三个 contextvars 与四个局部标志变成显式状态。
 - **牺牲了什么**：多一层间接（读代码要跳 5 个文件）；`ToolImpl` 从 `Callable[[dict], Any]` 放宽为 `Callable[..., Any]`（为让两个有状态工具拿到 `RunState`）。
@@ -395,7 +397,7 @@ D1–D8 里，D3/D5/D6/D7 是**能力差异**（我们没做），D1/D2/D4 是**
 - **什么条件下失效**：需要并行执行同一 `Transcript`（并发写）、需要跨进程恢复（`RunState` 不可序列化）、需要按轮次动态改变压缩步骤顺序（`prepare` 的固定顺序会不够）。
 - **出现什么信号时重新考虑**：① `prepare` 里出现第一个"按轮次分支"；② 有工具需要在 `execute_batch` 之外访问 `Transcript`；③ 会话持久化立项（那时 `Transcript` 要加版本与迁移，`RunState` 要拆分持久/易失部分）。
 
-**为什么先 B 后 A**（判据 §11 可逆性）：原地抽取是**易撤销**（逐文件 git checkout 即可），分包是**中等**（20+ import 路径 + 文档同步）。按"按撤销难度分配论证成本"，先用最小可逆的一步拿到全部逻辑收益并在真实运行中验证，再决定是否付搬家的代价。
+**为什么先原地抽取、后分包**（判据 §11 可逆性）：原地抽取是**易撤销**（逐文件 git checkout 即可），分包是**中等**（20+ import 路径 + 文档同步）。按"按撤销难度分配论证成本"，先用最小可逆的一步拿到全部逻辑收益并在真实运行中验证，再决定是否付搬家的代价。
 
 ### 10.3 反事实测试（判据 §10）
 
@@ -438,7 +440,7 @@ D1–D8 里，D3/D5/D6/D7 是**能力差异**（我们没做），D1/D2/D4 是**
 | 6 | **结构不变量由所有者保证**：非法的 `replace_all` / `splice` 抛错且不改状态 | 新增测试：构造会产生孤立 tool 结果的候选 → 断言抛 `TranscriptError` 且 `transcript.validate() == []` |
 | 7 | **一次性标志各只有一个写入点** | `grep -rn "compacted = True" src/avid` → 1 处；`grep -rn "retried = True" src/avid` → 1 处 |
 | 8 | **①②③ 在类型上无法调用模型** | `inspect.signature(prepare)` 有 `summarize`，且 `policy/compaction.py` 的 `tool_result_budget` / `snip_compact` / `micro_compact` 三个函数签名中无 `chat` |
-| 9 | **依赖方向单向**：`runtime/` 不 import `policy/` 的具体实现 | `grep -rn "from .*policy" src/avid/runtime/*.py` → 只允许出现在 `context.py`（调 compaction）与 `state.py`（持有 todo/skills 实例）；其它文件无匹配 |
+| 9 | **依赖方向单向**：`runtime/` 不 import `policy/` 的具体实现 | 阶段 A 是原地抽取，没有 `runtime/` 目录，该条**尚不可验证**；阶段 B 分包后才检查 `grep -rn "from .*policy" src/avid/runtime/*.py`，只允许出现在 `context.py`（调 compaction）与 `state.py`（持有 todo / skills 实例） |
 | 10 | **压缩日志与计数不减少** | 现有 `test_compaction_is_logged` / `test_compaction_count_reaches_the_stop_hook` 通过 |
 | 11 | **端到端不变**：同一脚本化对话在重构前后产出相同 messages 序列 | 录制-回放测试：固定 `chat` 返回值序列，断言最终 `transcript.as_messages()` 与快照一致 |
 | 12 | 测试总数不减 | `uv run pytest -q` 的 passed 数 ≥ 295 |
@@ -449,3 +451,34 @@ D1–D8 里，D3/D5/D6/D7 是**能力差异**（我们没做），D1/D2/D4 是**
 - **不成立条件**：需要跨进程恢复；需要并发写同一 `Transcript`；需要按轮次动态改变压缩策略组合。
 - **下一次变化最可能落在哪**：按可能性排序——① 新增策略值（阈值/文案），落在 `policy/`，成本最低；② 会话持久化，落在 `Transcript` 的序列化点，需要版本与迁移设计；③ 并行工具执行，落在 `execution.execute_batch` 的实现，签名不变；④ 换 provider 或加 provider，落在 `ai/`。
 - **重新评估的信号**（与 §10.2 一致）：`prepare` 出现按轮次的分支；工具需要直接访问 `Transcript`；会话持久化立项。
+
+## 14. 落地记录（阶段 A）
+
+阶段 A 已实施，一个提交：`refactor(runtime): 解耦 agent loop，抽出消息所有者、运行状态、上下文编排与工具执行`。
+
+| # | 验收标准 | 结果 |
+|---|---|---|
+| 1 | 公开签名不变 | `inspect.signature` 逐参数比对通过（11 个参数、keyword-only 一致） |
+| 2 | 调用点不改即全过 | **326 passed**（原 295），`agent_loop` 调用点零改动 |
+| 3 | 循环不认识策略值 | `grep` 阈值常量与 `APPROVAL_RULES` / `SUMMARY_SYSTEM` / `DENIED_CONTENT` → `agent.py` 无匹配 |
+| 4 | 压缩顺序只在一处 | 五个步骤名只出现在 `compact.py` 与 `context.py` |
+| 5 | messages 只有一个所有者 | `messages.append` / `extend` / `[:]` 只在 `transcript.py` |
+| 6 | 非法结构改动被拒且不改现状 | `test_replace_all_rejects_and_leaves_state_untouched`、`test_splice_rejects_a_cut_that_orphans_a_result` |
+| 7 | 一次性标志各一个赋值点 | `compacted = True` 在 `context.py`、`retried = True` 在 `agent.py`，各 1 处 |
+| 8 | ①②③ 类型上碰不到模型 | 三个函数签名无 `chat`（原有测试继续通过） |
+| 9 | 依赖方向单向 | **阶段 B 分包后才可验证** |
+| 10 | 日志与计数不减 | 原有相关测试全部通过 |
+| 11 | 行为不变 | 同一脚本化对话在 `HEAD~1` 与 `HEAD` 上产出的 messages 序列与返回值**逐字节一致**（`dev/tmp/golden_scenario.py`） |
+| 12 | 测试数不减 | 295 → **326** |
+
+**与设计的偏差**（落地时才发现，已回写上文对应小节）：
+
+1. `STATEFUL_TOOLS` 是 **3 个**不是 2 个——补上 `subagent`（它要读 `RunState.auto_approve`）。
+2. 写入方法是 **5 个**不是 4 个——`append_many` 与 `set_content` 分开。
+3. **删掉了 `permission.RUN_AUTO_APPROVE` / `bind_auto_approve`**：`auto_approve` 由 `execution` 从 `RunState` 放进 PreToolUse 事件 context，跨线程传播结构上自然成立，不再需要运行级 ContextVar 做中转。
+4. 原 `test_snip_gives_up_when_no_safe_cut_exists` 用的是**非法** messages（孤立的 tool 结果），`Transcript` 现在会直接拒绝——改用合法的"头尾保留量之和超过消息数"触发同一条分支。
+5. 编排测试从 `test_agent.py` 移到新的 `tests/test_context.py`：编排住在 `context.prepare`，在这一层测不需要伪造整个循环。
+
+**回滚方式**：`git revert <commit>`，或逐文件 `git checkout HEAD~1 -- <file>`。阶段 A 不动文件位置、不改公开签名，因此回滚不存在中间态。
+
+**阶段 B 未做**：文件分包（`ai/` / `runtime/` / `policy/`）尚未进行——按 §10.2 的分步决策，等阶段 A 在真实使用中稳定后再评估。
