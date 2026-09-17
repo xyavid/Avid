@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # 运行时导入会成环（state.py 要 import skill_loader）
-    from ..state import RunState
+    from ..runtime.state import RunState
 
 
 def load_skill(args: dict[str, Any], *, state: "RunState") -> str:

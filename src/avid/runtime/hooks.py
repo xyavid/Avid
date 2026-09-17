@@ -26,10 +26,10 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from .permission import check_permission, hard_deny
-from .permission import auto_approve as _auto_approve
+from ..policy.permission import check_permission, hard_deny
+from ..policy.permission import auto_approve as _auto_approve
 
-logger = logging.getLogger("avid.hooks")
+logger = logging.getLogger("avid.runtime.hooks")
 
 # 事件名白名单。register_hook 对表外的事件名直接报错——事件名拼错会让权限
 # 校验静默消失，这类错误必须炸出来。
@@ -96,7 +96,7 @@ def trigger_hooks(event: str, context: dict[str, Any]) -> str:
 
 def context_inject_hook(context: dict[str, Any]) -> str | None:
     """UserPromptSubmit：注入工作区路径与可用工具，省掉模型猜环境的往返。"""
-    from .tools import TOOLS, workspace
+    from ..tools import TOOLS, workspace
 
     names = "、".join(item["function"]["name"] for item in TOOLS)
     context.setdefault("injected", []).append(

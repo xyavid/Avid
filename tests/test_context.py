@@ -7,10 +7,11 @@
 
 import pytest
 
-from avid import compact, context
-from avid.config import Config
-from avid.state import RunState
-from avid.transcript import Transcript
+from avid.policy import compaction as compact
+from avid.runtime import context
+from avid.ai.config import Config
+from avid.runtime.state import RunState
+from avid.ai.transcript import Transcript
 
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
 
@@ -120,7 +121,7 @@ def test_each_step_is_announced_and_counted(monkeypatch, caplog):
     monkeypatch.setattr(compact, "snip_compact", lambda t, **k: None)
 
     state = RunState()
-    with caplog.at_level("INFO", logger="avid.context"):
+    with caplog.at_level("INFO", logger="avid.runtime.context"):
         context.prepare(
             Transcript([user()]), state, config=CONFIG, summarize=summarize
         )

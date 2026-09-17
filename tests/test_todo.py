@@ -2,9 +2,8 @@ import inspect
 
 import pytest
 
-from avid.state import RunState
-from avid.tools.todo import (
-    TODO_REMINDER_AFTER_ROUNDS,
+from avid.runtime.state import RunState
+from avid.policy.todo import (
     TodoList,
     build_reminder,
     todo_write,
@@ -164,9 +163,13 @@ def test_reminder_mentions_the_count_and_current_list(state):
     assert "剩下的活" in reminder
 
 
-def test_reminder_works_with_an_empty_list(state):
-    assert "列表为空" in build_reminder(state.todo, TODO_REMINDER_AFTER_ROUNDS)
+def test_reminder_threshold_lives_in_run_state():
+    from avid.runtime.state import TODO_REMINDER_AFTER_ROUNDS
 
-
-def test_threshold_is_a_single_constant():
     assert TODO_REMINDER_AFTER_ROUNDS == 3
+
+
+def test_reminder_works_with_an_empty_list(state):
+    assert "列表为空" in build_reminder(state.todo, 3)
+
+

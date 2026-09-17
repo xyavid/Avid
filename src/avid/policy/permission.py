@@ -20,7 +20,7 @@ import threading
 from collections.abc import Callable
 from typing import Any
 
-logger = logging.getLogger("avid.permission")
+logger = logging.getLogger("avid.policy.permission")
 
 # 命令起始位置：行首，或 ; & | 之后；跳过程序路径前缀与常见包装命令。
 # 用它锚定，避免 `grep halt file` 这类把关键字当参数的误伤。

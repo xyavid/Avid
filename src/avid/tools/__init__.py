@@ -22,7 +22,7 @@ from .schemas import (
 from .shell import bash
 from .skill import load_skill
 from .subagent import subagent
-from .todo import todo_write
+from ..policy.todo import todo_write
 
 # 参数放宽为 ...：多数工具是 (args)，需要运行状态的少数几个是 (args, *, state)。
 # 后者由 execution.STATEFUL_TOOLS 显式列出，契约测试校验它不漏不错。

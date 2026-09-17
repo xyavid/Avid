@@ -12,13 +12,13 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from . import compact
-from .compact import CompactReport
-from .config import Config
+from ..policy import compaction as compact
+from ..policy.compaction import CompactReport
+from ..ai.config import Config
 from .state import RunState
-from .transcript import Transcript
+from ..ai.transcript import Transcript
 
-logger = logging.getLogger("avid.context")
+logger = logging.getLogger("avid.runtime.context")
 
 
 @dataclass(frozen=True)

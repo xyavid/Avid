@@ -3,8 +3,8 @@ import time
 
 import pytest
 
-from avid.config import Config
-from avid.state import RunState
+from avid.ai.config import Config
+from avid.runtime.state import RunState
 from avid.tools import SUB_HANDLERS, SUB_TOOLS, TOOLS
 from avid.tools.subagent import (
     MAX_PARALLEL,
@@ -217,7 +217,7 @@ def test_auto_approve_defaults_to_false(monkeypatch):
 
 
 def test_run_subagent_initialises_messages_with_the_prompt(monkeypatch):
-    from avid import agent as agent_module
+    from avid.runtime import loop as agent_module
 
     seen = {}
 
@@ -237,7 +237,7 @@ def test_run_subagent_initialises_messages_with_the_prompt(monkeypatch):
 
 
 def test_run_subagent_maps_turn_limit_to_the_required_message(monkeypatch):
-    from avid import agent as agent_module
+    from avid.runtime import loop as agent_module
 
     def fake_loop(*args, **kwargs):
         raise agent_module.RoundLimitExceeded("超了")
@@ -251,7 +251,7 @@ def test_run_subagent_maps_turn_limit_to_the_required_message(monkeypatch):
 
 
 def test_run_subagent_returns_no_summary_for_empty_text(monkeypatch):
-    from avid import agent as agent_module
+    from avid.runtime import loop as agent_module
 
     monkeypatch.setattr(agent_module, "agent_loop", lambda *a, **k: "   ")
 

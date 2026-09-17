@@ -6,9 +6,9 @@ import argparse
 import logging
 import sys
 
-from .agent import RoundLimitExceeded, agent_loop
-from .config import ConfigError, load_config
-from .llm import LLMError, ask
+from .runtime.loop import RoundLimitExceeded, agent_loop
+from .ai.config import ConfigError, load_config
+from .ai.client import LLMError, ask
 
 
 def main(argv: list[str] | None = None) -> int:

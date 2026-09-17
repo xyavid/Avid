@@ -29,11 +29,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .config import Config
-from .llm import chat_completion
-from .transcript import Transcript
+from ..ai.config import Config
+from ..ai.client import chat_completion
+from ..ai.transcript import Transcript
 
-logger = logging.getLogger("avid.compact")
+logger = logging.getLogger("avid.policy.compaction")
 
 # 阈值集中在这里，按实测调整只改这些数。
 TOOL_RESULT_CHAR_BUDGET = 200_000
@@ -80,7 +80,7 @@ class CompactReport:
 
 def _spill_root() -> Path:
     # 延迟导入：agent 侧要 import 本模块，顶部导入会成环。
-    from .tools import workspace
+    from ..tools import workspace
 
     return Path(workspace.WORKSPACE_ROOT) / SPILL_DIR
 

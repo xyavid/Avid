@@ -1,8 +1,8 @@
 import httpx
 import pytest
 
-from avid.config import Config
-from avid.llm import LLMError, PromptTooLongError, ask, build_payload, parse_reply
+from avid.ai.config import Config
+from avid.ai.client import LLMError, PromptTooLongError, ask, build_payload, parse_reply
 
 CONFIG = Config(api_key="test-key", base_url="https://api.test/v1", model="test-model")
 

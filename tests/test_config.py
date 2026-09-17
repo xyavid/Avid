@@ -1,6 +1,6 @@
 import pytest
 
-from avid.config import DEFAULT_BASE_URL, ConfigError, load_config
+from avid.ai.config import DEFAULT_BASE_URL, ConfigError, load_config
 
 
 def test_missing_variables_are_named_with_a_fix():

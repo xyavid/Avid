@@ -2,7 +2,7 @@ import inspect
 
 import pytest
 
-from avid.compact import (
+from avid.policy.compaction import (
     SPILL_PREFIX,
     compact_history,
     micro_compact,
@@ -10,9 +10,9 @@ from avid.compact import (
     snip_compact,
     tool_result_budget,
 )
-from avid.config import Config
-from avid.llm import Turn, Usage
-from avid.transcript import Transcript, estimate_chars, validate
+from avid.ai.config import Config
+from avid.ai.client import Turn, Usage
+from avid.ai.transcript import Transcript, estimate_chars, validate
 
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
 
@@ -367,7 +367,7 @@ def test_compact_history_saves_the_full_transcript(spill_root):
 
 
 def test_compact_history_keeps_history_when_the_summary_fails(spill_root):
-    from avid.llm import LLMError
+    from avid.ai.client import LLMError
 
     def broken_chat(*args, **kwargs):
         raise LLMError("摘要服务挂了")

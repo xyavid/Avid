@@ -15,9 +15,9 @@ from typing import Any
 
 from .hooks import BLOCK, trigger_hooks
 from .state import RunState
-from .tools import ToolImpl
+from ..tools import ToolImpl
 
-logger = logging.getLogger("avid.execution")
+logger = logging.getLogger("avid.runtime.execution")
 
 # 拦截时回传给模型的兜底文案。回调可以把 context["denied_content"] 设成
 # 更有用的内容（permission_hook 就会），这里只在回调没设时使用。

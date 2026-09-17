@@ -1,10 +1,10 @@
 import pytest
 
-from avid import hooks
-from avid.agent import RoundLimitExceeded, agent_loop
-from avid.compact import CompactReport
-from avid.config import Config
-from avid.llm import Turn, Usage
+from avid.runtime import hooks
+from avid.runtime.loop import RoundLimitExceeded, agent_loop
+from avid.policy.compaction import CompactReport
+from avid.ai.config import Config
+from avid.ai.client import Turn, Usage
 from avid.tools import TOOLS
 
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
@@ -686,7 +686,7 @@ def test_default_threshold_does_not_fire_on_short_runs(no_hooks):
 
 
 def point_skills_at(tmp_path, monkeypatch):
-    from avid import skill_loader
+    from avid.policy import skills as skill_loader
 
     monkeypatch.setattr(skill_loader, "SKILLS_DIR", tmp_path)
     return tmp_path
@@ -739,7 +739,7 @@ def test_load_skill_returns_the_full_text_as_tool_result(no_hooks, tmp_path, mon
 
 
 def test_load_skill_is_not_in_the_permission_gate(no_hooks, tmp_path, monkeypatch):
-    from avid.permission import APPROVAL_RULES
+    from avid.policy.permission import APPROVAL_RULES
 
     assert "load_skill" not in APPROVAL_RULES
 
@@ -769,7 +769,7 @@ def test_unknown_skill_returns_error_text_without_raising(no_hooks, tmp_path, mo
 def test_context_pipeline_runs_before_every_model_call(no_hooks, monkeypatch):
     rounds = []
     monkeypatch.setattr(
-        "avid.context.prepare",
+        "avid.runtime.context.prepare",
         lambda transcript, state, **kwargs: rounds.append(state.round),
     )
 
@@ -785,7 +785,7 @@ def test_context_pipeline_runs_before_every_model_call(no_hooks, monkeypatch):
 
 
 def test_prompt_too_long_triggers_one_reactive_retry(no_hooks, monkeypatch):
-    from avid.llm import PromptTooLongError
+    from avid.ai.client import PromptTooLongError
 
     calls = {"chat": 0, "reactive": 0}
 
@@ -800,7 +800,7 @@ def test_prompt_too_long_triggers_one_reactive_retry(no_hooks, monkeypatch):
         transcript.replace_all([{"role": "user", "content": "[历史摘要] 压缩过了"}])
         return CompactReport("reactive_compact", "摘要更早的 3 条", 999, 10)
 
-    monkeypatch.setattr("avid.context.reactive", fake_reactive)
+    monkeypatch.setattr("avid.runtime.context.reactive", fake_reactive)
     messages = [{"role": "user", "content": "x"}]
 
     result = agent_loop(messages, config=CONFIG, chat=fake_chat)
@@ -811,7 +811,7 @@ def test_prompt_too_long_triggers_one_reactive_retry(no_hooks, monkeypatch):
 
 
 def test_reactive_is_not_retried_twice(no_hooks, monkeypatch):
-    from avid.llm import PromptTooLongError
+    from avid.ai.client import PromptTooLongError
 
     calls = {"chat": 0, "reactive": 0}
 
@@ -823,7 +823,7 @@ def test_reactive_is_not_retried_twice(no_hooks, monkeypatch):
         calls["reactive"] += 1
         return CompactReport("reactive_compact", "摘要", 999, 10)
 
-    monkeypatch.setattr("avid.context.reactive", fake_reactive)
+    monkeypatch.setattr("avid.runtime.context.reactive", fake_reactive)
 
     with pytest.raises(PromptTooLongError):
         agent_loop(
@@ -835,7 +835,7 @@ def test_reactive_is_not_retried_twice(no_hooks, monkeypatch):
 
 def test_reactive_retry_sends_the_compressed_history(no_hooks, monkeypatch):
     """重试必须拿压缩后的历史再发一次，不能把旧的原样重发。"""
-    from avid.llm import PromptTooLongError
+    from avid.ai.client import PromptTooLongError
 
     seen = []
 
@@ -849,7 +849,7 @@ def test_reactive_retry_sends_the_compressed_history(no_hooks, monkeypatch):
         transcript.replace_all([{"role": "user", "content": "压缩后的历史"}])
         return CompactReport("reactive_compact", "摘要", 999, 10)
 
-    monkeypatch.setattr("avid.context.reactive", fake_reactive)
+    monkeypatch.setattr("avid.runtime.context.reactive", fake_reactive)
 
     agent_loop([{"role": "user", "content": "x"}], config=CONFIG, chat=fake_chat)
 
@@ -859,13 +859,13 @@ def test_reactive_retry_sends_the_compressed_history(no_hooks, monkeypatch):
 
 def test_compaction_is_logged(no_hooks, monkeypatch, caplog):
     monkeypatch.setattr(
-        "avid.compact.tool_result_budget",
+        "avid.policy.compaction.tool_result_budget",
         lambda transcript, **kwargs: CompactReport(
             "tool_result_budget", "落盘 2 项", 300, 100
         ),
     )
 
-    with caplog.at_level("INFO", logger="avid.context"):
+    with caplog.at_level("INFO", logger="avid.runtime.context"):
         agent_loop(
             [{"role": "user", "content": "x"}],
             config=CONFIG,
@@ -879,7 +879,7 @@ def test_compaction_is_logged(no_hooks, monkeypatch, caplog):
 
 def test_compaction_count_reaches_the_stop_hook(no_hooks, monkeypatch):
     monkeypatch.setattr(
-        "avid.compact.snip_compact",
+        "avid.policy.compaction.snip_compact",
         lambda transcript, **kwargs: CompactReport(
             "snip_compact", "裁掉中间 10 条", 60, 30
         ),
@@ -904,7 +904,7 @@ def test_run_state_is_created_per_run(no_hooks, monkeypatch):
         states.append(state)
         return None
 
-    monkeypatch.setattr("avid.context.prepare", fake_prepare)
+    monkeypatch.setattr("avid.runtime.context.prepare", fake_prepare)
 
     agent_loop(
         [{"role": "user", "content": "a"}],

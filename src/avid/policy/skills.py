@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-logger = logging.getLogger("avid.skills")
+logger = logging.getLogger("avid.policy.skills")
 
 SKILLS_DIR = Path.cwd() / "skills"
 
@@ -99,7 +99,7 @@ class SkillLoader:
 
     def build_system_prompt(self, instructions: str = AGENT_INSTRUCTIONS) -> str:
         # 延迟导入：tools 包要 import tools/skill.py，而它要 import 本模块。
-        from .tools import workspace
+        from ..tools import workspace
 
         return (
             f"{instructions}\n"

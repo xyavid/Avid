@@ -2,11 +2,13 @@
 
 它不认识阈值、文案与协议细节——
 
-* 消息结构与不变量：``transcript.py``
-* 运行状态与一次性标志：``state.py``
-* 压缩编排：``context.py``
-* 工具调用协议：``execution.py``
-* 扩展点：``hooks.py``
+* 消息结构与不变量：``ai/transcript.py``
+* 运行状态与一次性标志：``runtime/state.py``
+* 压缩编排：``runtime/context.py``
+* 工具调用协议：``runtime/execution.py``
+* 扩展点：``runtime/hooks.py``
+
+它对 ``policy/`` **零依赖**——阈值、文案、规则与注册表都经 ``state`` 与事件间接取得。
 
 它只回答：什么时候调模型、什么时候跑工具、什么时候停。
 
@@ -22,17 +24,15 @@ from collections.abc import Callable
 from typing import Any
 
 from . import context
-from .config import Config, load_config
+from ..ai.config import Config, load_config
 from .execution import execute_batch
 from .hooks import BLOCK, trigger_hooks
-from .llm import DEFAULT_MAX_TOKENS, PromptTooLongError, Turn, chat_completion
-from .skill_loader import AGENT_INSTRUCTIONS, SkillLoader
-from .state import RunState
-from .tools import TOOL_IMPLS, TOOLS, ToolImpl
-from .tools.todo import TODO_REMINDER_AFTER_ROUNDS, build_reminder
-from .transcript import Transcript
+from ..ai.client import DEFAULT_MAX_TOKENS, PromptTooLongError, Turn, chat_completion
+from ..tools import TOOL_IMPLS, TOOLS, ToolImpl
+from .state import TODO_REMINDER_AFTER_ROUNDS, RunState
+from ..ai.transcript import Transcript
 
-logger = logging.getLogger("avid.agent")
+logger = logging.getLogger("avid.runtime.loop")
 
 MAX_ROUNDS = 8
 
@@ -100,9 +100,9 @@ def agent_loop(
     registry = TOOL_IMPLS if registry is None else registry
 
     transcript = Transcript(messages)
-    # 每次运行重新扫描技能目录：磁盘变了，下一次运行的 system prompt 就是新的。
-    state = RunState(auto_approve=auto_approve, skills=SkillLoader().scan())
-    system_prompt = state.skills.build_system_prompt(system or AGENT_INSTRUCTIONS)
+    # 注册表与 system prompt 都由 state 负责——循环不知道默认指令文案，也不持有注册表。
+    state = RunState.for_run(auto_approve=auto_approve)
+    system_prompt = state.system_prompt(system)
 
     if not _submit_input(transcript, state):
         return ""
@@ -110,14 +110,11 @@ def agent_loop(
     for round_index in range(1, max_rounds + 1):
         state.round = round_index
 
-        # TODO 提醒依赖"第几轮"，这确实是循环自身的事实；文案在 tools/todo.py。
-        if state.rounds_since_todo == todo_reminder_after:
-            transcript.append(
-                {
-                    "role": "user",
-                    "content": build_reminder(state.todo, state.rounds_since_todo),
-                }
-            )
+        # TODO 提醒依赖"第几轮"，这确实是循环自身的事实；
+        # 但"该不该提醒、提醒什么"由 state 决定，循环只负责追加。
+        reminder = state.todo_reminder(todo_reminder_after)
+        if reminder is not None:
+            transcript.append({"role": "user", "content": reminder})
             logger.info("注入 TODO 提醒（连续 %d 轮未更新）", state.rounds_since_todo)
 
         # 上下文管线：①② 每轮跑，③④ 超限时才跑，④ 整个运行最多一次

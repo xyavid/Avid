@@ -4,8 +4,8 @@ import time
 
 import pytest
 
-from avid import permission
-from avid.permission import (
+from avid.policy import permission
+from avid.policy.permission import (
     APPROVAL_RULES,
     auto_approve,
     check_permission,

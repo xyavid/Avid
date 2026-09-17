@@ -9,10 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, NoReturn
 
 if TYPE_CHECKING:  # 只为类型标注；运行时导入会成环（state.py 要 import 本模块）
-    from ..state import RunState
-
-# 连续多少轮没更新 TODO 就提醒一次。调阈值只改这一个常量。
-TODO_REMINDER_AFTER_ROUNDS = 3
+    from ..runtime.state import RunState
 
 VALID_STATUSES = ("pending", "in_progress", "completed")
 

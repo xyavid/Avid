@@ -16,11 +16,11 @@ from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from typing import TYPE_CHECKING, Any
 
-from ..config import Config, load_config
-from ..llm import chat_completion
+from ..ai.config import Config, load_config
+from ..ai.client import chat_completion
 
 if TYPE_CHECKING:  # 运行时导入会成环（state.py 要 import 本模块所在的包）
-    from ..state import RunState
+    from ..runtime.state import RunState
 
 logger = logging.getLogger("avid.subagent")
 
@@ -53,7 +53,7 @@ def run_subagent(
 ) -> str:
     """跑一个子 agent，返回它的结论摘要。"""
     # 延迟导入：agent.py 需要 import 本模块来注册工具，顶部导入会成环。
-    from ..agent import RoundLimitExceeded, agent_loop
+    from ..runtime.loop import RoundLimitExceeded, agent_loop
     from . import SUB_HANDLERS, SUB_TOOLS
 
     messages = [{"role": "user", "content": prompt}]

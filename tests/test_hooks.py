@@ -1,7 +1,7 @@
 import pytest
 
-from avid import hooks
-from avid.hooks import ALLOW, BLOCK, register_hook, trigger_hooks
+from avid.runtime import hooks
+from avid.runtime.hooks import ALLOW, BLOCK, register_hook, trigger_hooks
 
 
 @pytest.fixture

@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from avid import skill_loader
-from avid.skill_loader import AGENT_INSTRUCTIONS, SkillLoader
+from avid.policy import skills as skill_loader
+from avid.policy.skills import AGENT_INSTRUCTIONS, SkillLoader
 
 REPO_SKILLS = Path(__file__).resolve().parent.parent / "skills"
 
