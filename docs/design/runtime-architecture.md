@@ -1107,3 +1107,93 @@ JSON 损坏（实现按"拒绝并回文本"处理，契约测试覆盖，不静�
 | 10 | `complete_task`：owner 匹配才成功；只报告**本次新解锁**的下游；`complete_task(schema)` 的 `Unblocked:` 恰为 {endpoints, docs} 两条（顺序按 `list_tasks()`，断言用集合） | 按图跑一遍完整序列并断言消息 |
 | 11 | `get_task` 返回 `json.dumps(asdict(task), indent=2)`，含 `description` | 文本与字段断言 |
 | 12 | 状态机只有两条迁移；三个状态名在 schema enum、代码与测试里**字面一致** | 契约测试断言 enum；`grep` 断言无第四种状态名 |
+
+## 18. 落地记录（阶段 13，任务图 Task DAG）
+
+§17 的设计稿已实施：`todo_write` 答不了的两件事（**这条现在能不能开工**、**谁在做**）由
+`.tasks/` 里的任务图补上。
+
+### 18.1 落地范围
+
+| 文件 | 动作 | 内容 |
+|---|---|---|
+| `src/avid/tools/tasks.py` | 新增 | `Task` / `TaskStore` / `TASKS` / `load_task` / `list_tasks` / `incomplete_dependencies` + 六个**原文签名**的库函数 + 六个工具外壳 |
+| `src/avid/tools/schemas.py` | 修改 | +6 个 `tool()` 定义（含"两阶段构图"的显式说明） |
+| `src/avid/tools/__init__.py` | 修改 | 注册进 `TOOLS` / `TOOL_IMPLS`：8 → **14** 个工具；`SUB_TOOLS` 自动变成 13 个 |
+| `.gitignore` | 修改 | 加 `.tasks/`（运行期数据，不是源码） |
+| `tests/test_tasks.py` | 新增 | 38 项，覆盖 §17.9 的 12 条验收 + 并发/损坏/越界/容错 |
+| `tests/test_tools_contract.py` | 修改 | 期望工具名清单 8 → 14 |
+
+全量测试：**499 passed**（阶段 12 为 437，本阶段 +62）。
+
+### 18.2 出图时裁决的五个开放问题，落地成了什么
+
+| # | 裁决 | 落地方式 | 证据 |
+|---|---|---|---|
+| 1 | `owner` 默认 `"agent"`，子 agent 身份接线不做 | 库函数签名保留 `owner: str = "agent"`；schema 把 `owner` 暴露为可选参数 | `inspect.signature` 与 §17.4 原文一致 |
+| 2 | 四个写入工具不进审批闸门 | 未改 `APPROVAL_RULES`；写入被 `TaskStore` 限死在 `.tasks/{id}.json`（ID 正则 + 工作区边界 + 覆盖写只针对已存在的任务文件） | 真实运行 8 次任务调用，0 次审批提示；要翻只需在 `APPROVAL_RULES` 加一行 |
+| 3 | 进程内互斥用一把锁 | `TaskStore` 持 `threading.RLock`；`claim_task` / `complete_task` 的"读 → 判断 → 写"由工具外壳整段括起来（RLock 让内部的 `load` / `save` 重入而不自锁） | `test_concurrent_claims_leave_exactly_one_winner`：两个线程抢同一条任务，恰好一个 `Claimed`、一个 `cannot claim`，磁盘上的 owner 是赢家 |
+| 4 | 损坏文件在修改路径报错、只在列表路径跳过 | `load` 抛 `TaskError`；`list_all` 记 warning 后跳过；`update_dependencies` 用严格的 `_load_all_strict`，不把损坏当缺失 | `test_list_tasks_skips_corrupt_files_but_load_and_tools_report_them`、`test_update_task_refuses_to_treat_a_corrupt_dependency_as_missing` |
+| 5 | `completed` 不回退 | 只有 `claim_task` / `complete_task` 两条迁移，两者都先校验当前状态与 owner | `test_status_terminology_is_exactly_the_three_names`、`test_complete_rejects_wrong_status_and_wrong_owner` |
+
+### 18.3 §17.9 的 12 条验收结果
+
+| # | 标准 | 结果 |
+|---|---|---|
+| 1 | 六个接口签名逐字一致 | 库函数层原样：`create_task(subject, description="")`、`update_task(task_id, addBlockedBy)`、`can_start(task_id)`、`claim_task(task_id, owner="agent")`、`complete_task(task_id, owner="agent")`、`get_task(task_id)`；`Task` 六个字段（含 `blockedBy`）逐字 |
+| 2 | 一个任务一个 `.tasks/{id}.json`，ID 匹配 `^task_[0-9a-f]{8}$` | `test_create_task_writes_one_file_with_all_six_fields`、`test_each_task_is_a_separate_file` |
+| 3 | 排他写入与 ID 冲突重生成 | `test_id_collision_regenerates_and_keeps_the_existing_file`：预置 `task_00000000.json` → 新任务拿到下一个 ID，占位文件一字未改 |
+| 4 | `create_task` 初值与结果形态 | `status=pending`、`owner=None`、`blockedBy=[]`；工具结果文本**就是**运行时 ID（`test_create_task_writes_one_file_with_all_six_fields`、真实运行里 `→ task_63116301`） |
+| 5 | 两阶段构图，同轮 ID 不可互引 | `test_two_phase_construction_through_the_agent_loop`（第 1 轮两个 `create_task`、第 2 轮才用返回的 ID 连边）；`test_guessed_id_cannot_be_used_in_the_same_reply`（凭空写的 ID 得到 `错误：找不到任务 task_deadbeef`） |
+| 6 | `update_task` 四类校验被拒且磁盘不变 | `test_update_task_rejects_and_leaves_disk_untouched`（参数化 6 种：目标不存在/依赖不存在/已认领/已完成/自依赖/成环），逐字节比对全部任务文件 |
+| 7 | 重复依赖幂等 | `test_update_task_adds_edges_and_is_idempotent`：`blockedBy` 不出现重复项 |
+| 8 | `can_start` 的三种结果 | `test_can_start_follows_completed_dependencies`（in_progress 不算完成、completed 才算）、`test_can_start_is_false_when_a_dependency_file_disappears`、`test_can_start_is_false_for_a_missing_task` |
+| 9 | `claim_task` 成功与两种拒绝 | `Claimed {id} ({subject})`、`Task {id} is in_progress, cannot claim`、`Blocked by: ['…']`（原文的列表插值形状） |
+| 10 | `complete_task` 只报本次新解锁 | `test_complete_reports_newly_unblocked_downstream`、`test_complete_without_downstream_has_no_unblocked_line`、`test_complete_only_reports_tasks_unblocked_by_this_completion`（已完成依赖的任务不重复报） |
+| 11 | `get_task` 返回完整 JSON | `test_get_task_returns_the_full_json_including_description`（字段与 §17.2 一致，含 `description` 与 `blockedBy`） |
+| 12 | 状态机两条迁移、术语一致 | `test_status_terminology_is_exactly_the_three_names`：三个状态名在 `VALID_STATUSES`、磁盘记录与工具描述里字面一致，无第四种 |
+
+另外补了三条边界测试：任务 ID 不能是路径（`test_task_id_must_match_the_pattern_and_stay_inside_the_directory`、
+`get_task` 传 `../../etc/passwd` 得到 `错误：找不到任务`）、`list_tasks` 跳过损坏文件、
+`complete_task` 遇到损坏的任务文件回 `错误：任务文件损坏`。
+
+### 18.4 真实运行证据（一次连续运行，5 轮 8 次工具调用，0 次拒绝）
+
+提示词要求模型"先只建三个节点、下一轮再加边"，模型的执行顺序：
+
+```
+round=1  create_task ×3           → task_63116301(schema) / task_e3e4df07(endpoints) / task_50e0b08e(tests)
+round=2  update_task ×2          → endpoints.blockedBy=[schema]，tests.blockedBy=[endpoints]
+round=3  can_start(tests)        → False
+         claim_task(schema)      → Claimed task_63116301 (schema)
+round=4  complete_task(schema)   → Completed task_63116301 (schema)
+                                    Unblocked: endpoints
+round=5  （收尾）                 → 模型自己说明"tests 仍被 endpoints 挡住"
+```
+
+`.tasks/` 里三条记录的形状与 §17.2 完全一致（`schema` 为 `completed` 且 `owner=agent`、
+`endpoints`/`tests` 仍 `pending` 并带着各自的 `blockedBy`）。演示产生的三个任务文件在验收后已删除。
+
+### 18.5 落地时发现的偏差（已回写 §17）
+
+1. **`Unblocked:` 的顺序**：`list_tasks()` 按 id 排序，而 id 是每次运行随机生成的；改用文件 mtime
+   也不行——`update_task` 会刷新 mtime，等于用"最后修改"冒充"创建顺序"。因此 §17.4.5 / §17.6 / §17.9
+   的示例与验收口径统一改成**集合**，不再假装有稳定顺序。
+2. **两种拒绝不是一类东西**：`Task {id} is {status}, cannot claim` 与 `is owned by …, not …` 是
+   **正常拒绝**（原文的消息模板），工具结果不加 `错误：` 前缀；只有"任务不存在 / 文件损坏 /
+   参数非法"才加。混为一谈会让模型把"状态不符"当成系统故障去重试。
+3. **两条写路径**：新建用 `"x"`（O_EXCL）——冲突是正常情况，重新生成 ID；字段更新用
+   `.tmp` + `os.replace`——中途失败不能留下半截 JSON。两者都由 `TaskStore` 独占。
+4. **列表容错、修改严格**：同一份目录，`list_tasks()` 跳过坏文件，`update_dependencies` 遇到坏依赖
+   直接报错。理由不同：列表是"尽量给全貌"，修改是"不能基于缺失的信息做判断"。
+
+### 18.6 回滚与后续
+
+**回滚**：`git revert` 本阶段提交即可（新增文件 + 三处注册 + 契约测试清单）。没有数据迁移问题——
+`.tasks/` 是新增目录；回滚后它与 `.gitignore` 里的那条一起变成无用文件，不会被读取。
+
+**未做**（触发条件）：① 子 agent 的 `owner` 身份（需要区分"哪个 subagent 认领的"时，把 actor id
+放进 `RunState` 并让工具外壳读它）；② 任务工具进审批闸门（出现任务文件被写成不该写的内容时，
+在 `APPROVAL_RULES` 加一行）；③ 跨进程互斥（多进程同时操作同一工作区时改文件锁）；
+④ `completed` 回退 / `in_progress` 释放（需要在状态机上**新增动作**而不是直接改 `status`）；
+⑤ 给人看的任务列表（`avid --list-tasks` 之类；模型侧已有 `get_task` 与 `list_tasks` 语义）。
