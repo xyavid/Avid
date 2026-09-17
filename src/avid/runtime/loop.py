@@ -51,11 +51,15 @@ def _calls_todo_write(tool_calls: list[dict[str, Any]]) -> bool:
     )
 
 
-def _submit_input(transcript: Transcript, state: RunState) -> bool:
-    """UserPromptSubmit：可注入上下文，也可拦截整个输入。返回 False 表示被拦截。"""
+def _submit_input(transcript: Transcript, state: RunState) -> int | None:
+    """UserPromptSubmit：可注入上下文，也可拦截整个输入。
+
+    返回值是**本次运行的触发消息**下标；None 表示这次不跑（没有用户消息，或被拦截）。
+    下标要返回出去，是因为注入会改写那条消息——会话落库要的是改写后的版本。
+    """
     index = transcript.last_user_index()
     if index is None:
-        return True
+        return None
 
     submit: dict[str, Any] = {
         "prompt": transcript.text_at(index),
@@ -64,7 +68,7 @@ def _submit_input(transcript: Transcript, state: RunState) -> bool:
     }
     if trigger_hooks("UserPromptSubmit", submit) == BLOCK:
         logger.warning("UserPromptSubmit 被拦截，未调用模型")
-        return False
+        return None
 
     if submit["injected"]:
         transcript.set_content(
@@ -73,7 +77,7 @@ def _submit_input(transcript: Transcript, state: RunState) -> bool:
             + "\n\n"
             + submit["prompt"],
         )
-    return True
+    return index
 
 
 def agent_loop(
@@ -89,23 +93,35 @@ def agent_loop(
     max_rounds: int = MAX_ROUNDS,
     max_stop_blocks: int = MAX_STOP_BLOCKS,
     todo_reminder_after: int = TODO_REMINDER_AFTER_ROUNDS,
+    on_message: Callable[[dict[str, Any]], None] | None = None,
 ) -> str:
     """跑到模型不再要工具为止，返回最后一轮的 assistant 文本。
 
     ``messages`` 原地更新：每轮的 assistant 消息与工具结果都会写回同一个 list。
     ``system`` 是「固定指令部分」，技能目录由 SkillLoader 统一追加。
+
+    ``on_message`` 是循环**唯一的对外观察点**：本次运行产生或改写的每条消息按
+    发生顺序回调一次——先是触发用户消息（UserPromptSubmit 注入**之后**的版本），
+    然后是每轮追加的 assistant、工具结果、注入的 TODO 提醒与 Stop nudge。
+    循环不 import 会话层，落库与否由回调决定（不变量 I7）。
     """
     config = config or load_config()
     tools = TOOLS if tools is None else tools
     registry = TOOL_IMPLS if registry is None else registry
+
+    def emit(message: dict[str, Any]) -> None:
+        if on_message is not None:
+            on_message(message)
 
     transcript = Transcript(messages)
     # 注册表与 system prompt 都由 state 负责——循环不知道默认指令文案，也不持有注册表。
     state = RunState.for_run(auto_approve=auto_approve)
     system_prompt = state.system_prompt(system)
 
-    if not _submit_input(transcript, state):
+    trigger = _submit_input(transcript, state)
+    if trigger is None:
         return ""
+    emit(transcript.as_messages()[trigger])
 
     for round_index in range(1, max_rounds + 1):
         state.round = round_index
@@ -114,7 +130,9 @@ def agent_loop(
         # 但"该不该提醒、提醒什么"由 state 决定，循环只负责追加。
         reminder = state.todo_reminder(todo_reminder_after)
         if reminder is not None:
-            transcript.append({"role": "user", "content": reminder})
+            message = {"role": "user", "content": reminder}
+            transcript.append(message)
+            emit(message)
             logger.info("注入 TODO 提醒（连续 %d 轮未更新）", state.rounds_since_todo)
 
         # 上下文管线：①② 每轮跑，③④ 超限时才跑，④ 整个运行最多一次
@@ -144,6 +162,7 @@ def agent_loop(
             )
 
         transcript.append(turn.message)
+        emit(turn.message)
         logger.info(
             "round=%d finish=%s tool_calls=%d tokens=%d",
             round_index,
@@ -170,7 +189,9 @@ def agent_loop(
                 state.stop_blocks += 1
                 nudge = stop.get("nudge")
                 if nudge:
-                    transcript.append({"role": "user", "content": str(nudge)})
+                    message = {"role": "user", "content": str(nudge)}
+                    transcript.append(message)
+                    emit(message)
                 logger.info("Stop 被拦截（第 %d 次），继续循环", state.stop_blocks)
                 continue
             if blocked:
@@ -180,9 +201,13 @@ def agent_loop(
         outcomes = execute_batch(
             turn.tool_calls, state=state, registry=registry, round_index=round_index
         )
-        transcript.append_many(
-            {"role": "tool", "tool_call_id": outcome.tool_call_id, "content": outcome.content}
-            for outcome in outcomes
-        )
+        for outcome in outcomes:
+            message = {
+                "role": "tool",
+                "tool_call_id": outcome.tool_call_id,
+                "content": outcome.content,
+            }
+            transcript.append(message)
+            emit(message)
 
     raise RoundLimitExceeded(f"达到轮数上限 {max_rounds}，模型仍在请求工具，未收敛")
