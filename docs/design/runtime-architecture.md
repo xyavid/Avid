@@ -630,3 +630,480 @@ seq 非单调；`SessionMutation.commit` 恰好一次、`end` 后失效；`close
 **未做**（全部写明触发条件）：压缩条目（长会话续接需要重复压缩时）、usage 台账（要统计 token
 成本时）、fork（要从某条历史分叉继续时）、operation 状态机（要在途任务跨进程恢复时）、
 文件锁（两个进程可能同时写同一会话文件时）、SQLite 后端（会话数量让 JSONL 重放变慢时）。
+
+## 17. 下一阶段设计：任务图（Task DAG）——补 TodoWrite 的依赖与分工缺口
+
+本章是**下一阶段的设计稿**（尚未实现），用来补齐 `todo_write` 在两类事情上的空缺：**任务之间的依赖关系**与**谁在做哪一条**。文中的代码块分两种来源，逐块标注：
+
+* 【原文】——来自本阶段的原始设计稿，**逐字保留**（签名、消息模板、SVG 源码都不改）；
+* 【补出】——原文提到但未给出实现的接口，按原文语义补出，供实现与测试对齐。
+
+术语统一为 `pending` / `in_progress` / `completed`（`claim` / `complete` 是**动作**，不是状态）。
+
+### 17.1 缺口：清单项只有内容与状态
+
+现状（`policy/todo.py`）：`TodoList.items` 是 `{"content": str, "status": str}` 的数组，
+`replace()` 整份替换并原子校验，最多一项 `in_progress`；状态住在 `RunState.todo`，
+也就是**一次运行之内**，运行结束即消失。它解决了"把多步任务显式计划出来"，但回答不了
+下面三个问题：
+
+| 缺口 | 具体表现 | 现有机制的哪一步失效 |
+|---|---|---|
+| **依赖** | `pending` 只表示"还没开始"，**不区分"现在可以开工"与"被上游挡住"**。Harness 没有任何字段能回答"这条能不能开始" | 顺序只活在 messages 里。阶段 8 的压缩会改写 messages，阶段 12 的续接会把历史换成另一条链——判断依据随之丢失 |
+| **分工** | 没有 `owner`：阶段 6 的 `subagent` 并行派发之后，哪条已被认领、`in_progress` 是谁在执行，都没有记录 | `TodoList` 没有身份字段，主 agent 与子 agent 的进度无法对账 |
+| **标识与恢复** | 清单项靠数组下标与文案定位，**跨会话引用不到同一条任务**；长描述无处安放（`content` 只有一句话） | `todo_write` 是"整份替换"，既没有稳定 id，也没有"按 id 取详情"的入口 |
+
+任务图补的正是这三处：`blockedBy`（依赖）、`owner`（分工）、`task_xxxxxxxx` + `.tasks/{id}.json`（稳定标识与跨会话恢复）。
+
+**与 `todo_write` 的关系：并存，不替换。** 按 `architecture-criteria.md` 的删除测试：
+删掉 `TaskStore` 则"跨会话的依赖判断"没有别处可放；删掉 `todo_write` 则"一次运行内的即时进度"
+失去最轻量的表达（整份替换、零落盘）。两者服务的时间尺度不同——任务是跨会话的图，TODO 是本轮运行的清单。
+
+### 17.2 Task 数据结构
+
+【原文】
+
+```python
+@dataclass
+class Task:
+    id: str
+    subject: str
+    description: str
+    status: str          # pending | in_progress | completed
+    owner: str | None    # 负责当前任务的 Agent
+    blockedBy: list[str] # 依赖的任务 ID 列表
+```
+
+每个任务是一个 JSON 文件，存于 `.tasks/` 目录：
+
+```
+.tasks/
+├── task_9f3c1a7e.json    # {"id": "task_9f3c1a7e", "subject": "schema", ...}
+├── task_1b2c3d4e.json
+└── task_5a6b7c8d.json
+```
+
+ID 使用 `task_` 加 8 位随机十六进制字符生成。创建文件时使用排他写入；如果 ID 已存在，就重新生成。
+
+【补出】上面两句话的实现形状（原文只给了语义，没给代码）：
+
+```python
+import json
+import re
+import secrets
+from dataclasses import asdict
+from pathlib import Path
+
+TASKS_DIR = Path(".tasks")
+ID_PATTERN = re.compile(r"^task_[0-9a-f]{8}$")
+
+
+def new_task_id() -> str:
+    """task_ + 8 位随机十六进制。"""
+    return f"task_{secrets.token_hex(4)}"
+
+
+def write_task_exclusively(path: Path, task: Task) -> bool:
+    """排他写入：文件已存在就返回 False（调用方据此重新生成 ID）。"""
+    try:
+        with path.open("x", encoding="utf-8") as handle:   # "x" = O_EXCL
+            handle.write(json.dumps(asdict(task), ensure_ascii=False, indent=2))
+    except FileExistsError:
+        return False
+    return True
+```
+
+* **解决了什么**：一个任务一个文件，文件名即 ID，排他写入使"两个创建者撞同一个 ID"必然有一方失败而不是互相覆盖。
+* **牺牲了什么**：没有索引文件，列表要扫目录；任务数量上千时 `list_tasks()` 会变慢（触发条件：单目录任务数成为可感延迟时，再加一层按状态的索引）。
+* **在什么条件下成立**：单机、单工作区、任务量在几十到几百；跨工作区共享任务不在本章范围。
+
+### 17.3 TaskStore
+
+TaskStore 负责校验任务 ID 和读写 JSON 文件，`TASKS = TaskStore(TASKS_DIR)` 是本章使用的任务存储。
+
+【补出】按原文语义补出的接口（`create` / `update_dependencies` / `save` 都由原文的调用点确定）：
+
+```python
+class TaskStore:
+    def __init__(self, directory: Path) -> None:
+        self.directory = Path(directory)
+
+    def create(self, subject: str, description: str = "") -> Task:
+        """校验 subject，分配随机 ID，排他写入 .tasks/{id}.json。
+
+        新任务的 blockedBy 固定为空、status 为 pending、owner 为 None；
+        ID 已存在（文件在）就重新生成，不覆盖已有任务。
+        """
+
+    def update_dependencies(self, task_id: str, add_blocked_by: list[str]) -> Task:
+        """先校验整次修改，再统一保存（见 17.4.2）。"""
+
+    def save(self, task: Task) -> None:
+        """覆盖写单个任务文件（只用于已存在任务的字段更新）。"""
+
+    def load(self, task_id: str) -> Task | None:
+        """ID 非法或文件不存在都返回 None——调用方据此给出可读的错误文本。"""
+
+
+TASKS = TaskStore(TASKS_DIR)
+
+
+def load_task(task_id: str) -> Task | None:
+    return TASKS.load(task_id)
+
+
+def list_tasks() -> list[Task]:
+    """列出全部任务（按 id 排序）。"""
+
+
+def incomplete_dependencies(task: Task | None) -> list[str]:
+    """返回还没 completed 的前置任务 ID。
+
+    只要有一个不是 completed，**或者对应文件已经不存在**，就算未完成；
+    task 本身为 None（任务文件缺失）同样视为未完成。
+    """
+```
+
+**校验点**（TaskStore 的唯一职责边界）：ID 必须匹配 `^task_[0-9a-f]{8}$` 且解析后仍落在
+`.tasks/` 之内（拒绝 `../`、绝对路径与 NUL）——这是阶段 2 给文件类工具立的同一条规矩，
+放到这里是为了不让"任务 ID"成为绕过工作区边界的第二个入口。
+
+### 17.4 工具语义
+
+六个工具。返回值一律是**文本**（与项目约定一致：工具失败返回文本、不抛异常，见 §8.2 D2），
+`create_task` / `update_task` 例外——它们的函数返回 `Task`，工具层把 `task.id` 渲染成结果文本。
+
+**【原文】+ 实例化示例**：下面的签名与消息模板逐字保留；"返回"一列是按模板代入一组示例 ID 的结果。
+
+#### 17.4.1 `create_task`：创建任务
+
+【原文】
+
+```python
+def create_task(subject: str, description: str = "") -> Task:
+    return TASKS.create(subject, description)
+```
+
+TaskStore.create 检查 subject，分配随机 ID，再把任务写入 `.tasks/{id}.json`。新任务的 blockedBy 固定为空，工具结果会把运行时生成的 ID 返回给模型。
+
+| 输入 | 返回 |
+|---|---|
+| `create_task("schema", "设计表结构")` | `task_9f3c1a7e`（运行时生成的 ID，工具结果就是它） |
+| `create_task("")` | `错误：subject 不能为空`（【补出】原文只规定"检查 subject"，未给消息文案；不落盘） |
+
+#### 17.4.2 `update_task`：使用返回的 ID 添加依赖
+
+【原文】
+
+```python
+def update_task(task_id: str, addBlockedBy: list[str]) -> Task:
+    return TASKS.update_dependencies(task_id, addBlockedBy)
+```
+
+任务图采用两阶段构建：先创建所有节点，再使用 create_task 返回的 ID 调用 update_task 添加边。模型可能在一条回复里同时发出多个工具调用，而这些同级调用在任何工具结果产生前就已经确定，因此某个 create_task 无法直接使用另一个调用刚生成的 ID。
+
+update_task 会先校验整次修改，再统一保存。目标任务和依赖必须存在，目标必须仍为 pending 且无人认领，并且不能形成自依赖或环。重复添加已有依赖是安全的，不会产生重复边。
+
+| 输入 | 返回 |
+|---|---|
+| `update_task("task_5a6b7c8d", ["task_9f3c1a7e", "task_1b2c3d4e"])` | 更新后的 `Task`（工具结果回 `task_5a6b7c8d` 与新的 `blockedBy`） |
+| 目标不存在 | `错误：找不到任务 task_00000000` |
+| 依赖不存在 | `错误：找不到依赖任务 task_1b2c3d4e` |
+| 目标已被认领 | `错误：task_5a6b7c8d 当前是 in_progress，只能给 pending 且无人认领的任务加依赖` |
+| 自依赖 / 成环 | `错误：加这些依赖会形成环：task_5a6b7c8d → task_1b2c3d4e → task_5a6b7c8d` |
+| 重复依赖 | 成功返回，`blockedBy` 不出现重复项（幂等） |
+
+上表前三行的**错误文案是【补出】**——原文只规定这四类情况必须被拒（"目标任务和依赖必须存在，
+目标必须仍为 pending 且无人认领，并且不能形成自依赖或环"），没有给出消息模板；实现时按项目约定
+统一以 `错误：` 开头，并把"缺哪个 ID、当前是什么状态"写进文本。
+
+**"同级调用不共享结果"是本条的关键约束**：一条 assistant 消息里的多个 tool_call 是并发确定的，
+`create_task` 的结果要到下一轮才可见。所以建模流程固定为**两阶段**——第 1 轮批量 `create_task`
+拿到全部 ID，第 2 轮再用这些 ID 批量 `update_task`。工具描述里必须写清这一点，否则模型会试图
+在同一个回复里"创建 A、创建 B、让 B 依赖 A"，而那时 A 的 ID 还不存在。
+
+#### 17.4.3 `can_start`：依赖检查
+
+一个任务只能在它的 blockedBy 全部 completed 之后才能开始：
+
+【原文】
+
+```python
+def can_start(task_id: str) -> bool:
+    return not incomplete_dependencies(load_task(task_id))
+```
+
+incomplete_dependencies 读取每个前置任务。只要有一个不是 completed，或者对应文件已经不存在，任务就不能认领。
+
+| 输入 | 返回 |
+|---|---|
+| `can_start("task_1b2c3d4e")`（依赖已全部 completed） | `True` |
+| `can_start("task_5a6b7c8d")`（有依赖未完成） | `False`（文本结果同形） |
+
+`can_start` 是**只读判定**，也是 `claim_task` / `complete_task` 内部使用的同一判据
+（`claim_task` 直接用 `incomplete_dependencies`），因此"工具问出来的答案"与"认领时实际的判定"
+不可能分叉。
+
+#### 17.4.4 `claim_task`：认领任务
+
+Agent 开始做一个任务时，调用 claim_task：设置 owner，状态从 pending → in_progress。owner 字段记录谁认领了这个任务：
+
+【原文】
+
+```python
+def claim_task(task_id: str, owner: str = "agent") -> str:
+    task = load_task(task_id)
+    if task.status != "pending":
+        return f"Task {task_id} is {task.status}, cannot claim"
+    dependencies = incomplete_dependencies(task)
+    if dependencies:
+        return f"Blocked by: {dependencies}"
+    task.owner = owner
+    task.status = "in_progress"
+    TASKS.save(task)
+    return f"Claimed {task_id} ({task.subject})"
+```
+
+如果任务不是 pending，或者依赖没有完成，就拒绝认领。S10 只处理顺序执行的状态更新。
+（"S10" 是原文的阶段编号，保留原样。）
+
+| 输入 | 返回 |
+|---|---|
+| `claim_task("task_1b2c3d4e")` | `Claimed task_1b2c3d4e (endpoints)` |
+| `claim_task("task_1b2c3d4e")` 再次 | `Task task_1b2c3d4e is in_progress, cannot claim` |
+| `claim_task("task_5a6b7c8d")` 依赖未完成 | `Blocked by: ['task_1b2c3d4e']`（依赖列表按原文直接插值，保持 Python 列表字面量形状） |
+
+#### 17.4.5 `complete_task`：完成与解锁
+
+任务做完后，设为 completed。同时扫描所有其他任务，找出刚刚被解锁的下游任务：
+
+【原文】
+
+```python
+def complete_task(task_id: str, owner: str = "agent") -> str:
+    task = load_task(task_id)
+    if task.status != "in_progress":
+        return f"Task {task_id} is {task.status}, cannot complete"
+    if task.owner != owner:
+        return f"Task {task_id} is owned by {task.owner}, not {owner}"
+    ready_before = {t.id for t in list_tasks()
+                    if t.status == "pending" and t.blockedBy
+                    and can_start(t.id)}
+    task.status = "completed"
+    TASKS.save(task)
+    unblocked = [t.subject for t in list_tasks()
+                 if t.status == "pending" and t.blockedBy
+                 and t.id not in ready_before
+                 and can_start(t.id)]
+    msg = f"Completed {task_id} ({task.subject})"
+    if unblocked:
+        msg += f"\nUnblocked: {', '.join(unblocked)}"
+    return msg
+```
+
+完成 "schema" 后，"endpoints" 和 "docs" 的 can_start 返回 True，它们可以开始。
+
+| 输入 | 返回 |
+|---|---|
+| `complete_task("task_9f3c1a7e")`（schema） | `Completed task_9f3c1a7e (schema)` + 换行 + `Unblocked: endpoints, docs` |
+| 无下游被解锁 | `Completed task_9f3c1a7e (schema)`（不带 `Unblocked:` 行） |
+| 状态不是 in_progress | `Task task_9f3c1a7e is pending, cannot complete` |
+| owner 不匹配 | `Task task_9f3c1a7e is owned by agent-1, not agent` |
+
+`ready_before` 那一步是**只报告"本次新解锁"**：已经把依赖做完、本来就能开始的任务不会被重复报成
+"刚被解锁"。没有它，每完成一个任务都会把此前所有可开始的任务再报一遍，模型会误以为产生了新进展。
+
+#### 17.4.6 `get_task`：查看完整细节
+
+list_tasks 只显示一行摘要。get_task 返回完整的任务 JSON，包括 description 和依赖细节。跨会话恢复时，Agent 需要读取完整描述才能继续工作：
+
+【原文】
+
+```python
+def get_task(task_id: str) -> str:
+    task = load_task(task_id)
+    return json.dumps(asdict(task), indent=2)
+```
+
+| 输入 | 返回 |
+|---|---|
+| `get_task("task_5a6b7c8d")` | 完整 JSON（逐字对应 17.2 的数据结构，含 `description` 与 `blockedBy`） |
+
+```json
+{
+  "id": "task_5a6b7c8d",
+  "subject": "deploy",
+  "description": "把服务发布到预发环境并跑一遍冒烟",
+  "status": "pending",
+  "owner": null,
+  "blockedBy": [
+    "task_1b2c3d4e",
+    "task_9f3c1a7e"
+  ]
+}
+```
+
+### 17.5 状态机：两个动作，三个状态
+
+【原文】
+
+```
+pending ──claim──→ in_progress ──complete──→ completed
+```
+
+这里的 claim / complete 是动作，pending / in_progress / completed 是状态：
+
+* **claim_task**：pending → in_progress。设置 owner，开始工作。
+* **complete_task**：in_progress → completed。把任务标记为完成，并解锁下游。
+
+| 动作 | 前置状态 | 后置状态 | 附加效果 | 拒绝条件（原文消息模板） |
+|---|---|---|---|---|
+| `claim_task` | `pending` | `in_progress` | 写入 `owner` | 非 `pending` → `Task {id} is {status}, cannot claim`；依赖未完成 → `Blocked by: {dependencies}` |
+| `complete_task` | `in_progress` | `completed` | 扫描下游，报告新解锁 | 非 `in_progress` → `Task {id} is {status}, cannot complete`；`owner` 不匹配 → `Task {id} is owned by {owner}, not {caller}` |
+
+**本章只定义这两条迁移**：`completed` 不可回退，`in_progress` 不可退回 `pending`
+（原文：S10 只处理顺序执行的状态更新）。"重新打开任务""释放认领"属于后续范围，
+需要在同一张状态机上显式补边，而不是让某个工具偷偷改 `status`。
+
+### 17.6 依赖关系图
+
+【原文】SVG 源码逐字保留（可直接存成 `.svg` 用浏览器打开）：
+
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 400" font-family="system-ui, -apple-system, sans-serif">
+  <defs>
+    <marker id="dep" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8"/>
+    </marker>
+  </defs>
+
+  <rect width="760" height="400" fill="#fafbfc" rx="8"/>
+
+  <!-- Title -->
+  <rect x="0" y="0" width="760" height="44" fill="#0d9488" rx="8"/>
+  <rect x="0" y="36" width="760" height="8" fill="#0d9488"/>
+  <text x="380" y="28" fill="#fff" font-size="15" font-weight="700" text-anchor="middle">Task DAG — 依赖关系示例：搭数据库 → API → 测试 → 部署</text>
+
+  <!-- Row 1: schema (completed) -->
+  <rect x="295" y="70" width="170" height="48" rx="8" fill="#dcfce7" stroke="#16a34a" stroke-width="2"/>
+  <text x="380" y="92" fill="#166534" font-size="12" font-weight="700" text-anchor="middle">✓ schema</text>
+  <text x="380" y="108" fill="#16a34a" font-size="9" text-anchor="middle">completed</text>
+
+  <!-- Arrows: schema → endpoints, schema → docs -->
+  <path d="M 340 118 L 240 162" fill="none" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#dep)"/>
+  <path d="M 420 118 L 520 162" fill="none" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#dep)"/>
+
+  <!-- Row 2: endpoints (in_progress), docs (pending) -->
+  <rect x="115" y="164" width="170" height="48" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+  <text x="200" y="186" fill="#1e40af" font-size="12" font-weight="700" text-anchor="middle">● endpoints</text>
+  <text x="200" y="202" fill="#2563eb" font-size="9" text-anchor="middle">in_progress · owner: agent-1</text>
+
+  <rect x="475" y="164" width="170" height="48" rx="8" fill="#f1f5f9" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="560" y="186" fill="#475569" font-size="12" font-weight="700" text-anchor="middle">○ docs</text>
+  <text x="560" y="202" fill="#94a3b8" font-size="9" text-anchor="middle">pending · blockedBy: schema ✓</text>
+
+  <!-- Arrows: endpoints → tests, docs → deploy -->
+  <path d="M 200 212 L 200 262" fill="none" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#dep)"/>
+  <path d="M 510 212 L 440 262" fill="none" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#dep)"/>
+
+  <!-- Row 3: tests (pending), deploy (pending) -->
+  <rect x="115" y="264" width="170" height="48" rx="8" fill="#f1f5f9" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="200" y="286" fill="#475569" font-size="12" font-weight="700" text-anchor="middle">○ tests</text>
+  <text x="200" y="302" fill="#94a3b8" font-size="9" text-anchor="middle">blockedBy: endpoints ●</text>
+
+  <!-- Arrow: tests → deploy -->
+  <path d="M 285 288 L 375 288" fill="none" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#dep)"/>
+
+  <rect x="375" y="264" width="170" height="48" rx="8" fill="#f1f5f9" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="460" y="286" fill="#475569" font-size="12" font-weight="700" text-anchor="middle">○ deploy</text>
+  <text x="460" y="302" fill="#94a3b8" font-size="9" text-anchor="middle">blockedBy: tests, docs</text>
+
+  <!-- Legend -->
+  <rect x="40" y="338" width="680" height="46" rx="6" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+  <rect x="60" y="352" width="14" height="12" rx="3" fill="#dcfce7" stroke="#16a34a" stroke-width="1"/>
+  <text x="80" y="363" fill="#475569" font-size="10">completed</text>
+  <rect x="160" y="352" width="14" height="12" rx="3" fill="#dbeafe" stroke="#2563eb" stroke-width="1"/>
+  <text x="180" y="363" fill="#475569" font-size="10">in_progress</text>
+  <rect x="270" y="352" width="14" height="12" rx="3" fill="#f1f5f9" stroke="#94a3b8" stroke-width="1"/>
+  <text x="290" y="363" fill="#475569" font-size="10">pending</text>
+  <text x="370" y="363" fill="#94a3b8" font-size="10">→ blockedBy（箭头 = 依赖方向）</text>
+  <text x="60" y="378" fill="#94a3b8" font-size="9">docs 的 blockedBy (schema) 已完成 → can_start 返回 True，可被 claim</text>
+</svg>
+```
+
+**读法（箭头方向必须与 `blockedBy` 一致，不能反过来）**：箭头从**被依赖的任务**指向
+**依赖它的任务**；箭头终点的 `blockedBy` 里包含箭头起点。于是这张图对应的边是：
+
+| 箭头 | 含义（数据） |
+|---|---|
+| `schema → endpoints` | `endpoints.blockedBy = ["schema"]` |
+| `schema → docs` | `docs.blockedBy = ["schema"]` |
+| `endpoints → tests` | `tests.blockedBy = ["endpoints"]` |
+| `docs → deploy` | `deploy.blockedBy = ["docs"]` |
+| `tests → deploy` | `deploy.blockedBy = ["tests"]` |
+
+按这张图代入 17.4.5 的原文示例：`complete_task(schema)` 之后，"endpoints" 与 "docs" 的
+`can_start` 由 `False` 变 `True`（它们的 `blockedBy` 只剩已完成的 schema），所以返回消息里的
+`Unblocked:` 恰好是 `endpoints, docs`；而 "tests"（依赖 in_progress 的 endpoints）与
+"deploy"（依赖 tests 与 docs）仍然 `can_start == False`，不在解锁列表里。
+
+### 17.7 集成落点与失败模型
+
+**落点**（待出图时确认，按现有目录约定）：
+
+| 内容 | 位置 |
+|---|---|
+| `Task` / `TaskStore` / 六个工具实现 | 新增 `src/avid/tools/tasks.py` |
+| 六个工具的 schema | `src/avid/tools/schemas.py` 新增定义，沿用 `tool()` 信封 |
+| 注册进 `TOOLS` / `TOOL_IMPLS` | `src/avid/tools/__init__.py` |
+| 契约与行为测试 | 新增 `tests/test_tasks.py`（+ 契约测试自动覆盖"定义与实现一一对应"） |
+
+任务工具**不进** `execution.STATEFUL_TOOLS`：状态在文件里，不在 `RunState` 里，因此签名保持
+`(args)` 形状，与 `bash` 这类工具同类。
+
+注意一个自动后果：`SUB_TOOLS` 只剔除 `subagent` 本身，所以六个任务工具会**自动进入子 agent 的
+工具集**。这既是"分工"能落地的前提（子 agent 自己认领与完成），也正是 17.8 第 1 条必须解决
+`owner` 身份的原因——否则子 agent 只能以默认的 `agent` 身份认领，图上看不出谁在做。
+
+**不变量**
+
+| # | 不变量 | 守护者 |
+|---|---|---|
+| I1 | 一个任务一个文件，文件名即 ID；创建用排他写入，ID 冲突重新生成而不是覆盖 | `TaskStore.create` |
+| I2 | 一次 `update_task` 的校验与保存全有或全无（先校验完，再统一保存） | `TaskStore.update_dependencies` |
+| I3 | 边只在目标仍为 `pending` 且无人认领时添加，且不得自依赖或成环 → 图永远是无环图 | `update_dependencies` 的校验 |
+| I4 | 状态只能沿 `pending → in_progress → completed` 前进 | `claim_task` / `complete_task` |
+| I5 | 只有 `owner` 匹配的那个执行者能 `complete` | `complete_task` 的 owner 校验 |
+
+**失败面**：任务文件缺失（`can_start` 为 `False`、`claim` 拒绝、`get_task` 回可读错误）；
+JSON 损坏（实现按"拒绝并回文本"处理，契约测试覆盖，不静默当空任务）；状态竞争
+（同一 `owner` 顺序执行；**多个 Agent 并发认领同一任务时如何互斥，本章未定义**，需要文件锁或
+排他写——标为开放问题）；进程崩溃（任务即时落盘，未做完的任务停在 `in_progress`，需要人工或
+后续阶段补"回收/超时释放"）。
+
+### 17.8 未定义、留给实现阶段决定
+
+1. `owner` 的身份来源：默认 `owner="agent"`；阶段 6 的 `subagent` 要区分身份，需要给它分配 id 并把
+   它传进工具参数——接线方式待定。
+2. 是否给任务工具加审批：`create_task` / `update_task` / `claim_task` / `complete_task` 会写工作区内
+   文件，按阶段 3 的闸门可以进 `APPROVAL_RULES`；只读的 `can_start` / `get_task` 不必。
+3. 并发认领的互斥机制（文件锁 / 单飞队列）。
+4. 损坏任务文件的修复策略（拒绝 vs 隔离到 `.tasks/corrupt/`）。
+5. `completed` 的回退与 `in_progress` 的释放（需要在本章的状态机上显式补边）。
+
+### 17.9 验收标准
+
+| # | 标准 | 判定方式 |
+|---|---|---|
+| 1 | 六个接口与原文签名**逐字一致**（含 `blockedBy` 这个字段名与默认值 `description=""` / `owner="agent"`） | `inspect.signature` 与本章代码块比对 |
+| 2 | 落盘形状：一个任务一个 `.tasks/{id}.json`；ID 匹配 `^task_[0-9a-f]{8}$` | 建任务后读目录；正则断言 |
+| 3 | 排他写入与 ID 冲突重生成 | 预置同名文件后创建 → 断言生成的 ID 不同、旧文件内容未变 |
+| 4 | `create_task` 的初值：`status=pending`、`owner=None`、`blockedBy=[]`；工具结果返回运行时 ID | 读回 JSON 断言；断言工具结果文本等于该 ID |
+| 5 | 两阶段构图：同一回复内多个 `create_task` 的 ID **不能**互相引用 | 脚本化对话：第 1 轮并发两个 `create_task` → 断言第 2 轮才能拿到 ID 建边 |
+| 6 | `update_task` 四类校验（目标不存在 / 依赖不存在 / 目标非 pending 或已认领 / 自依赖或成环）各自被拒且**磁盘不变** | 逐条断言被拒（错误文案以实现为准）+ 重读文件比对 |
+| 7 | 重复依赖幂等：重复 `addBlockedBy` 不产生重复边 | 连续两次同一依赖 → `len(blockedBy)` 不变 |
+| 8 | `can_start`：依赖全部 completed 且文件都在 → `True`；任一未完成或依赖文件缺失 → `False` | 按 17.6 的图逐节点断言 |
+| 9 | `claim_task`：成功写 `owner` 且 `in_progress`；非 pending / 依赖未完成时返回原文消息 | 断言返回文本与 JSON 状态 |
+| 10 | `complete_task`：owner 匹配才成功；只报告**本次新解锁**的下游；`complete_task(schema)` 的 `Unblocked:` 恰为 `endpoints, docs` | 按图跑一遍完整序列并断言消息 |
+| 11 | `get_task` 返回 `json.dumps(asdict(task), indent=2)`，含 `description` | 文本与字段断言 |
+| 12 | 状态机只有两条迁移；三个状态名在 schema enum、代码与测试里**字面一致** | 契约测试断言 enum；`grep` 断言无第四种状态名 |
