@@ -10,8 +10,8 @@ Avid 是一个自建的 agent 运行时（harness）：模型调用、工具执�
 - **目标**：改动任一模块（模型 / 工具 / 记忆 / 上下文策略）不需要动其它部分，且改动前后有可对比的评测数字。
 - **验收基准**：参考场景 **R**（读取本地文件 + 计算）——首个工具与后续评测集都从它长出来。
 - **技术栈**：内核 Python 3.12，环境与依赖管理用 `uv`；TypeScript 前端留到后期。
-- **当前状态**：最小模型调用、Agent 循环、8 个工具（`bash` / `read_file` / `write_file` / `edit_file` / `glob` / `todo_write` / `subagent` / `load_skill`）、技能系统、上下文压缩管线、权限三闸门与 hook 扩展点均已跑通。项目目标见 `dev/plan/roadmap.md`。
-- **架构设计**：`docs/design/runtime-architecture.md`——分层解耦方案、与 pi 的异同、两阶段落地路径与可验证验收标准。**阶段 A（原地抽取）与阶段 B（分包为 `ai/` / `runtime/` / `policy/`）均已落地**：循环只剩调度且对策略层零依赖，`Transcript`（现在 `ai/`）独占消息写入、`RunState` 取代 3 个 contextvars、`context.prepare` 独占压缩编排、`execution` 独占工具协议；公开签名未变。
+- **当前状态**：最小模型调用、Agent 循环、8 个工具（`bash` / `read_file` / `write_file` / `edit_file` / `glob` / `todo_write` / `subagent` / `load_skill`）、技能系统、上下文压缩管线、权限三闸门与 hook 扩展点、会话持久化（`session/`）均已跑通。项目目标见 `dev/plan/roadmap.md`。
+- **架构设计**：`docs/design/runtime-architecture.md`——分层解耦方案、与 pi 的异同、两阶段落地路径与可验证验收标准。**阶段 A（原地抽取）与阶段 B（分包为 `ai/` / `runtime/` / `policy/`）均已落地**：循环只剩调度且对策略层零依赖，`Transcript`（现在 `ai/`）独占消息写入、`RunState` 取代 3 个 contextvars、`context.prepare` 独占压缩编排、`execution` 独占工具协议。**阶段 12 新增 `session/`（与 `ai/` 平级、零 avid 内部依赖）**：条目树 + 值 + 分支 + 变更线，内存与 JSONL 两个后端共用一套一致性用例；循环只多一个 `on_message` 观察点，`cli.py` 是唯一接线处（见设计文档 §16）。
 
 ## 2. 提交规范
 
