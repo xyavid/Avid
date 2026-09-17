@@ -608,7 +608,7 @@ seq 非单调；`SessionMutation.commit` 恰好一次、`end` 后失效；`close
 
 | # | 标准 | 结果 |
 |---|---|---|
-| 1 | 全量测试 | **436 passed**（阶段 11 为 326，本阶段 +110） |
+| 1 | 全量测试 | **437 passed**（阶段 11 为 326，本阶段 +111） |
 | 2 | 一套一致性用例跑两个后端 | `tests/session_cases.py` 17 条 × memory/jsonl = **34 passed**，用例只碰公开 API |
 | 3 | 生命周期四条 | create 不隐式建分支 / 重复 id 拒绝 / open 已打开拒绝 / delete 打开中拒绝且删除后 open 与 delete 均失败（`lifecycle-*`、`ownership-*`） |
 | 4 | 销毁与关闭 | close 后读写全拒；跨线程 close 会等作业结束且提交不丢；排队中的变更在 seal 后拿到 `SessionClosedError`；同线程 `mutate` 内 close/begine 报 `SessionBusyError`（`test_session_state.py`） |
