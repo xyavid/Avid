@@ -336,7 +336,7 @@ agent_loop(messages, ...)
 | D3 | 工具默认**并行**执行，`executionMode` 可覆盖，批次内任一 sequential 则整批串行 | 串行；只有 `subagent` 内部并行 | **属于新功能**。但接口要留得住：`execute_batch` 的签名允许将来换并发实现而不改调用方 |
 | D4 | 异步事件流 + `await` 订阅者顺序结算 | 同步、进程内、可变 dict | 我们没有 UI 进程内订阅之外的消费者；异步化会引入"回调何时结算"的新失败面（判据 §7 对异步化的追问） |
 | D5 | steering / follow-up 队列（运行中插入转向、排队后续） | 无 | **属于新功能**。需要它时最可能的落点是 `hooks.py` 新增一个 `Steering` 事件，而不是改 `Transcript` |
-| D6 | `session/` + `repo` / `storage` 三层，JSONL 与 SQLite 后端，带 conformance 测试套件 | 无持久化 | **属于新功能**（尚未做）。但 `Transcript` 正是将来接存储的接缝：它是 messages 的唯一所有者，序列化点天然唯一 |
+| D6 | `session/` + `repo` / `storage` 三层，JSONL 与 SQLite 后端，带 conformance 测试套件 | 无持久化 | **属于新功能**。阶段 12 已落地其中的条目树 / 值 / 分支 / 变更线 / JSONL 与内存两个后端，并沿用同一套 conformance 用例；`fork`、usage 台账、operation 状态机仍未做（无真实使用者） |
 | D7 | `harness/runtime/drive/` 的 boundary / checkpoint / recovery / reconcile | 无 | **属于新功能**（崩溃恢复）。我们没有长时任务与进程重启需求 |
 | D8 | `harness/compaction/` 以摘要为主（含 branch-summarization） | 五步阶梯，**以"落盘留恢复路径"为主**，摘要只在整理之后 | 思路相近、取值不同。我们的更保守：优先保留可恢复信息，代价是磁盘占用；pi 的更节省上下文，代价是信息有损。这是 §10 里"边界代价"的一个实例 |
 
@@ -420,11 +420,11 @@ D1–D8 里，D3/D5/D6/D7 是**能力差异**（我们没做），D1/D2/D4 是**
 | 2 | 具体先行 | ✓ | §2（含删除测试） | — |
 | 3 | 耦合 | ✓ | §1.1（逐条耦合机制） | — |
 | 4 | 边界与决定权 | ✓ | §3、§4.2 | 分包后的 ownership 分配（单人项目暂无意义） |
-| 5 | 数据所有权与状态生命周期 | ✓ | §4.1、§4.2、§5.2 | `Transcript` 与 `RunState` 将来如何被会话持久化拆分 |
+| 5 | 数据所有权与状态生命周期 | ✓ | §4.1、§4.2、§5.2 | ~~`Transcript` 与 `RunState` 将来如何被会话持久化拆分~~ → **阶段 12 已回答**：`Transcript` 仍是内存里 messages 的唯一所有者，会话独占持久化条目，两者经 `agent_loop(on_message=…)` 观察点相连（见 §16） |
 | 6 | 不变量 | ✓ | §6（I1–I6） | — |
 | 7 | 失败与恢复 | ✓ | §7 | — |
-| 8 | 并发与一致性 | **部分** | §5.3 | 唯一并发是 `subagent` 线程池；同一 `Transcript` 的并发写**当前不存在**，故不建模 |
-| 9 | 依赖与不可靠边界 | ✓ | §7、§8 | pi 实现的内部细节（只读了 README 与文件树，未读源码） |
+| 8 | 并发与一致性 | **部分** | §5.3、§16 | 唯一并发是 `subagent` 线程池；同一 `Transcript` 的并发写**当前不存在**。阶段 12 给会话加了 `MutationLine`（单写者 + seal/drain），跨线程语义有测试覆盖，但**同一会话被多进程同时打开没有互斥**（无文件锁） |
+| 9 | 依赖与不可靠边界 | ✓ | §7、§8、§16 | ~~pi 实现的内部细节（只读了 README 与文件树，未读源码）~~ → **阶段 12 已读 `harness/session` 全部源码**，差异逐条落在 §16 的对照表里；pi 的 `harness/runtime/drive/` 仍是未验证假设 |
 | 10 | 边界代价与权衡 | ✓ | §10 | 规模 ×100 后的性能结论是估算，非实测 |
 | 11 | 可逆性与决策强度 | ✓ | §10.2（分两步） | — |
 | 12 | 运行与演进 | ✓ | §10.2 失效信号、§13 | 性能数字、部署形态（当前是单机 CLI） |
@@ -451,9 +451,9 @@ D1–D8 里，D3/D5/D6/D7 是**能力差异**（我们没做），D1/D2/D4 是**
 ## 13. 适用条件与失效信号
 
 - **成立条件**：单进程 CLI、单线程运行、工具同步、压缩步骤顺序固定、无持久化需求。
-- **不成立条件**：需要跨进程恢复；需要并发写同一 `Transcript`；需要按轮次动态改变压缩策略组合。
-- **下一次变化最可能落在哪**：按可能性排序——① 新增策略值（阈值/文案），落在 `policy/`，成本最低；② 会话持久化，落在 `Transcript` 的序列化点，需要版本与迁移设计；③ 并行工具执行，落在 `execution.execute_batch` 的实现，签名不变；④ 换 provider 或加 provider，落在 `ai/`。
-- **重新评估的信号**（与 §10.2 一致）：`prepare` 出现按轮次的分支；工具需要直接访问 `Transcript`；会话持久化立项。
+- **不成立条件**：需要跨进程恢复；需要并发写同一 `Transcript`；需要按轮次动态改变压缩策略组合；需要两个进程同时写同一个会话文件。
+- **下一次变化最可能落在哪**：按可能性排序——① 新增策略值（阈值/文案），落在 `policy/`，成本最低；② 会话持久化的**下一段**（压缩条目、usage 台账、fork），落在 `session/`，需要格式版本迁移设计；③ 并行工具执行，落在 `execution.execute_batch` 的实现，签名不变；④ 换 provider 或加 provider，落在 `ai/`。
+- **重新评估的信号**（与 §10.2 一致）：`prepare` 出现按轮次的分支；工具需要直接访问 `Transcript`；会话持久化立项（**已触发**，见 §16）；续接的长会话每次都要重新压缩（触发压缩条目）；会话列表的读取代价变得可感（触发把会话名冗余进 header）。
 
 ## 14. 落地记录（阶段 A）
 
@@ -526,3 +526,107 @@ D1–D8 里，D3/D5/D6/D7 是**能力差异**（我们没做），D1/D2/D4 是**
 | 9 | 真实运行 | 通过；logger 名已随模块路径更新（`avid.runtime.loop` / `avid.policy.skills`） |
 
 **回滚方式**：`git revert <commit>` 即可——分包不改签名、不改职责，回滚只影响 import 路径。
+
+## 16. 落地记录（阶段 12，会话持久化）
+
+需求来自"运行时要有可续接的会话"这一已明确的必经项（`dev/plan/roadmap.md` 的"尚未做"清单），
+参考实现是 `earendil-works/pi` 的 `packages/agent/src/harness/session/`（18 个文件、约 4400 行 TS）。
+本阶段读了它的全部源码，而不是只看 README——§11 里那条"pi 实现细节是未验证假设"因此作废。
+
+### 16.1 参考实现的机制（读完源码后的结论）
+
+| 层 | 文件 | 职责 |
+|---|---|---|
+| 契约 | `types.ts` / `values.ts` | `Entry` 树、`Write` 事务、`Storage` / `Session` / `SessionRepo` / `Branch` 接口、地址化 KV |
+| 会话 | `session.ts` / `mutation-line.ts` / `commit.ts` | 分支、变更线、值、关闭；seq / timestamp 分配与提交前校验 |
+| 状态 | `in-memory-storage-state.ts` | 两个后端共用的物化状态（entries / values / lists / usage / next_seq） |
+| 后端 | `memory.ts` / `jsonl/*` | 进程内与文件（header + 每提交一行，open 时重放，撕裂行修复） |
+| 语义 | `testing/conformance/*` | **一套用例参数化到所有后端**，行为一致靠测试而不是文档 |
+
+抽取出的关键行为（本阶段按此对齐）：create 不隐式建分支；分支头是值 `branch.tip/<name>`、
+条目靠 `parentId` 串链；一次提交分配连续 seq 与同一 timestamp，落地前校验重复 id / 缺 parent /
+seq 非单调；`SessionMutation.commit` 恰好一次、`end` 后失效；`close` 先 seal 变更线再 drain
+已授予的作业；仓库层拒绝重复 id、拒绝 open 已打开的会话、拒绝 delete 打开中的会话；JSONL
+单写裸对象 / 多写数组、末尾撕裂行忽略并原子重写、无索引（靠目录扫描查重）。
+
+### 16.2 跟 / 改 / 不做
+
+**跟**：上列全部行为，以及"一套一致性用例跑所有后端"的做法。
+
+**改**（每条都是 Avid 现状逼出来的）：
+
+| # | pi | Avid | 理由 |
+|---|---|---|---|
+| A1 | 全 async，每次调用传宿主 `Context`（fs / env / telemetry） | 同步 API；能力在构造期注入（`root` / `now` / `id_generator`） | Avid 内核同步；`Context` 是 pi 的异步宿主抽象，删掉不丢边界——文件仍被 `JsonlSessionRepo` 独占 |
+| A2 | 会话存全局根 + `--cwd--` 目录名编码 | 存工作区内 `.avid/sessions/` | 工作区边界已由 `tools/workspace.py` 定义；阶段 8 的教训是落盘必须在工作区内才能被工具读回 |
+| A3 | `SessionStats{messageCount, usage}` | `SessionStats{message_count}` | usage 现在只活在 `Turn` 里，没有真实读取者 |
+| A4 | 标量值 + 列表 + `scanValues(prefix)` | 只有标量 `get/set/delete_value` | 列表与 prefix 扫描的使用者只有 fork 与待定帧，两者都没做 |
+| A5 | `mutate` 内嵌套写会排队（JS 表现为死锁风险） | 同线程嵌套变更直接抛 `SessionBusyError` | 同步阻塞语义下排队必自锁；改成更早、更清楚的失败 |
+| A6 | 13 态 operation 状态机 + checkpoint / recovery | 无；投影时把没有结果的 tool_calls 批次丢掉 | 可恢复的在途操作属于新功能；"崩在批次中间"这个真实症状用更小的办法解决 |
+| A7 | 压缩写 `compaction` 条目 | 只写 `message` 条目 | `CompactReport` 不带摘要正文与保留尾巴；触发条件：续接的长会话每次都要重新压缩 |
+| A8 | `fork` / `branch_summary` | 不做 | fork 语义绑定 lane config 与 operation 台账，Avid 无此概念 |
+| A9 | uuidv7 | 自实现 uuidv7 形状（约 15 行，标准库） | 不新增依赖，同时保留"id 时间有序"这一真实收益 |
+
+**另外两处主动对齐**：pi 的 `list()` 在内存后端是插入序、JSONL 后端是 createdAt 倒序，Avid
+统一为"createdAt 倒序、同刻按 id 升序"；pi 的 JSONL 只在重写时写 `nextSeq`，Avid 保留同一
+高水位字段并在重放后取两者较大值。
+
+### 16.3 模块与集成
+
+新增 `src/avid/session/`（11 个模块 + `__init__.py`）：`errors` / `types` / `values` / `state` / `ids` /
+`mutation` / `session` / `memory` / `jsonl` / `projection` / `recorder`。公开面只有
+`src/avid/session/__init__.py` 里 `__all__` 列出的名字。
+
+集成只有一处：`cli.py` 建 `JsonlSessionRepo(工作区/.avid/sessions)`，用
+`projection.messages_for_branch()` 取历史，把 `recorder.on_message` 交给
+`agent_loop(on_message=…)`。于是
+
+* `loop.py` 只多一个回调参数，**不 import 会话层**；`_submit_input` 从返回 `bool` 改为返回
+  触发消息下标，因为注入会改写那条消息，会话要存注入后的版本；
+* `session/` **不 import** `runtime` / `policy` / `tools` / `ai`（连 `Transcript` 都不 import：
+  投影自己修不完整批次，续接时由调用方交给 `Transcript` 再次校验）。
+
+### 16.4 落地时发现的偏差（已回写上文与模块 docstring）
+
+1. **cursor 必须是排他的**。初稿写成包含语义，一致性用例在 `memory` 与 `jsonl` 上同时变红：
+   翻页会重复上一页最后一条。两个后端同一条用例同时失败，正是"一套用例跑所有后端"的价值。
+2. **`create(id="")` 会被 `id or generator.next()` 悄悄换成新 id**（两个后端都错）。改成显式判断
+   `is None`；非法 id 归 `SessionInvalidIdError`，两个后端共用同一条校验。
+3. **投影的初版语义（"截断尾巴"）不够**：崩溃后**续接**出来的轮次会让半截批次落在链中间，只截
+   尾巴会把有效轮次一起丢掉。改成"只丢不完整批次与孤儿 tool 结果，其余保持原序"，函数名同步改为
+   `repair_incomplete_batches`。
+4. **JSONL 重放必须带行号**：把 `SessionStorageError` 原样抛出会丢掉"第几行"，坏行定位不到。
+5. **`storageVersion` 与格式版本 `v` 是两条错误路径**：`v` 属于 header 解析（格式不认），
+   `storageVersion` 属于仓库打开（存储代际不认），分别报错而不是合成一条。
+6. **`close_storage` 开关是必需的**：pi 用 `MemorySessionFacade` 让"close 之后仍能 reopen"
+   （facade 不关底层 storage）；Avid 用显式开关（内存后端 `False`，JSONL 后端默认 `True`），
+   否则内存后端 close 之后无法重启续接。
+7. **`SessionState.validate` 同时服务运行期提交与文件重放**：两个路径共用同一函数，所以"运行时
+   接受的"和"重放时接受的"不可能分叉——这是把 JSONL 版本检查放到仓库层之后剩下的唯一校验点。
+
+### 16.5 验收结果
+
+| # | 标准 | 结果 |
+|---|---|---|
+| 1 | 全量测试 | **436 passed**（阶段 11 为 326，本阶段 +110） |
+| 2 | 一套一致性用例跑两个后端 | `tests/session_cases.py` 17 条 × memory/jsonl = **34 passed**，用例只碰公开 API |
+| 3 | 生命周期四条 | create 不隐式建分支 / 重复 id 拒绝 / open 已打开拒绝 / delete 打开中拒绝且删除后 open 与 delete 均失败（`lifecycle-*`、`ownership-*`） |
+| 4 | 销毁与关闭 | close 后读写全拒；跨线程 close 会等作业结束且提交不丢；排队中的变更在 seal 后拿到 `SessionClosedError`；同线程 `mutate` 内 close/begine 报 `SessionBusyError`（`test_session_state.py`） |
+| 5 | 变更恰好一次 | 二次 commit 报错、end 后能力作废、零次 commit 合法 |
+| 6 | 提交校验与失败原子性 | 重复 id / 缺 parent 被拒，状态与统计不变，且失败的提交**不消耗 seq** |
+| 7 | 分支与查询 | 串链、tip 前进、oldestFirst/limit/cursor/type、desc/asc 翻页到末尾返回空 |
+| 8 | 文件格式 | header + 每提交一行（多写为数组）、重启后状态一致、撕裂行忽略并修复、坏行报行号、非单调 seq / 缺 parent / 未知格式版本 / 未知存储版本各有断言、目录扫描查重、`.tmp` 不残留 |
+| 9 | 投影 | 完整链原样、不完整批次与孤儿结果被丢、结果通过 `Transcript.validate()` |
+| 10 | 循环集成 | 每条结算消息按序落库；工具往返落库；第二轮输入含历史；注入后的触发消息落库；Stop nudge 落库；写入失败在调模型前中止 |
+| 11 | CLI | 新建/续接/命名/列举/销毁+参数错误退出码（`tests/test_cli_session.py` 11 项） |
+| 12 | 依赖方向 | `grep -rn "session" src/avid/runtime src/avid/policy src/avid/tools` 无 import；`grep -rn "from \.\.\(runtime\|policy\|tools\|ai\)" src/avid/session` 无匹配 |
+| 13 | 公开签名 | `agent_loop` 新增一个带默认值的 `on_message`，其余 11 个参数逐参数不变 |
+
+### 16.6 回滚方式与未做
+
+**回滚**：`git revert` 三个提交即可（会话包、循环观察点、CLI 旗标）。没有数据迁移问题——`.avid/sessions/`
+是新增目录，旧版本程序看不见它；反过来，本阶段写的会话文件在回滚后成为无用文件，不会被读取。
+
+**未做**（全部写明触发条件）：压缩条目（长会话续接需要重复压缩时）、usage 台账（要统计 token
+成本时）、fork（要从某条历史分叉继续时）、operation 状态机（要在途任务跨进程恢复时）、
+文件锁（两个进程可能同时写同一会话文件时）、SQLite 后端（会话数量让 JSONL 重放变慢时）。
