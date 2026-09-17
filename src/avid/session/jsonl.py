@@ -490,7 +490,9 @@ class JsonlSessionRepo:
         try:
             with path.open("r", encoding="utf-8") as handle:
                 first = handle.readline()
+            modified_at = int(path.stat().st_mtime * 1000)
         except OSError as exc:
+            # 列表不该因为一个坏文件（读不了、刚好被删）整体失败。
             logger.warning("跳过读不了的会话文件 %s：%s", path, exc)
             return None
         if not first.endswith("\n"):
@@ -507,7 +509,7 @@ class JsonlSessionRepo:
             storage_version=header.storage_version,
             parent_session_id=header.parent_session_id,
             path=path,
-            modified_at=int(path.stat().st_mtime * 1000),
+            modified_at=modified_at,
         )
 
     def _assert_open(self) -> None:

@@ -184,6 +184,17 @@ def test_list_skips_unreadable_and_broken_files(tmp_path):
     fresh.close()
 
 
+def test_list_skips_files_that_cannot_be_read(tmp_path):
+    repo = make_repo(tmp_path)
+    repo.create(id="good").close()
+    repo.close()
+    (tmp_path / "weird.jsonl").mkdir()  # 名字像会话文件，但读不了
+
+    fresh = make_repo(tmp_path)
+    assert [item.id for item in fresh.list()] == ["good"]
+    fresh.close()
+
+
 def test_duplicate_id_is_detected_by_scanning_the_directory(tmp_path):
     first = make_repo(tmp_path)
     first.create(id="dup").close()
