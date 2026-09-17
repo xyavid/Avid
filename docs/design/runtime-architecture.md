@@ -905,7 +905,7 @@ def complete_task(task_id: str, owner: str = "agent") -> str:
 
 | 输入 | 返回 |
 |---|---|
-| `complete_task("task_9f3c1a7e")`（schema） | `Completed task_9f3c1a7e (schema)` + 换行 + `Unblocked: endpoints, docs` |
+| `complete_task("task_9f3c1a7e")`（schema） | `Completed task_9f3c1a7e (schema)` + 换行 + `Unblocked: <被解锁的 subject 列表>`（顺序即 `list_tasks()` 的顺序，见 §17.3） |
 | 无下游被解锁 | `Completed task_9f3c1a7e (schema)`（不带 `Unblocked:` 行） |
 | 状态不是 in_progress | `Task task_9f3c1a7e is pending, cannot complete` |
 | owner 不匹配 | `Task task_9f3c1a7e is owned by agent-1, not agent` |
@@ -1044,7 +1044,7 @@ pending ──claim──→ in_progress ──complete──→ completed
 
 按这张图代入 17.4.5 的原文示例：`complete_task(schema)` 之后，"endpoints" 与 "docs" 的
 `can_start` 由 `False` 变 `True`（它们的 `blockedBy` 只剩已完成的 schema），所以返回消息里的
-`Unblocked:` 恰好是 `endpoints, docs`；而 "tests"（依赖 in_progress 的 endpoints）与
+`Unblocked:` 恰好是 endpoints 与 docs 两条（顺序按 `list_tasks()` 的排序，断言取集合）；而 "tests"（依赖 in_progress 的 endpoints）与
 "deploy"（依赖 tests 与 docs）仍然 `can_start == False`，不在解锁列表里。
 
 ### 17.7 集成落点与失败模型
@@ -1104,6 +1104,6 @@ JSON 损坏（实现按"拒绝并回文本"处理，契约测试覆盖，不静�
 | 7 | 重复依赖幂等：重复 `addBlockedBy` 不产生重复边 | 连续两次同一依赖 → `len(blockedBy)` 不变 |
 | 8 | `can_start`：依赖全部 completed 且文件都在 → `True`；任一未完成或依赖文件缺失 → `False` | 按 17.6 的图逐节点断言 |
 | 9 | `claim_task`：成功写 `owner` 且 `in_progress`；非 pending / 依赖未完成时返回原文消息 | 断言返回文本与 JSON 状态 |
-| 10 | `complete_task`：owner 匹配才成功；只报告**本次新解锁**的下游；`complete_task(schema)` 的 `Unblocked:` 恰为 `endpoints, docs` | 按图跑一遍完整序列并断言消息 |
+| 10 | `complete_task`：owner 匹配才成功；只报告**本次新解锁**的下游；`complete_task(schema)` 的 `Unblocked:` 恰为 {endpoints, docs} 两条（顺序按 `list_tasks()`，断言用集合） | 按图跑一遍完整序列并断言消息 |
 | 11 | `get_task` 返回 `json.dumps(asdict(task), indent=2)`，含 `description` | 文本与字段断言 |
 | 12 | 状态机只有两条迁移；三个状态名在 schema enum、代码与测试里**字面一致** | 契约测试断言 enum；`grep` 断言无第四种状态名 |

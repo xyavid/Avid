@@ -208,3 +208,89 @@ LOAD_SKILL = tool(
     },
     ("name",),
 )
+
+
+# ---------------- 任务图（Task DAG，阶段 13） ----------------
+#
+# 与 todo_write 的分工：todo_write 是"本次运行内的清单"，任务是"跨会话的图"
+# （有稳定 ID、依赖与归属）。建图固定两阶段：先批量 create_task 拿 ID，再用
+# update_task 加边——同一条回复里的多个工具调用互相看不到结果。
+
+_TASK_ID = {
+    "type": "string",
+    "description": "任务 ID，形如 task_1a2b3c4d（create_task 的返回值）。",
+}
+
+_OWNER = {
+    "type": "string",
+    "description": "认领者标识，默认 agent；多个执行者时要写清是谁。",
+}
+
+CREATE_TASK = tool(
+    "create_task",
+    "创建一个任务节点，返回它的运行时 ID。任务存在 .tasks/ 里，跨会话存活："
+    "blockedBy 表达依赖、owner 表达谁在做。新任务的 blockedBy 固定为空。"
+    "【建图分两阶段】：先用本工具把全部节点建出来拿到 ID，下一轮再用 update_task 加依赖；"
+    "同一条回复里的多个工具调用互相看不到结果，因此不能引用彼此刚生成的 ID。",
+    {
+        "subject": {
+            "type": "string",
+            "description": "任务标题，一句话，不能为空。",
+        },
+        "description": {
+            "type": "string",
+            "description": "可选。完整描述（背景、验收口径），跨会话恢复时靠它继续工作。",
+        },
+    },
+    ("subject",),
+)
+
+UPDATE_TASK = tool(
+    "update_task",
+    "给一个任务加前置依赖（blockedBy），也就是在任务图上连边。"
+    "只能在节点都已创建之后调用，用 create_task 返回的 ID。"
+    "目标必须是 pending 且还没人认领；依赖必须已存在；不能自依赖或成环"
+    "（重复添加同一条依赖是安全的）。"
+    "整次修改先校验再统一保存：任何一条不合法，这次调用不会改任何东西。",
+    {
+        "task_id": _TASK_ID,
+        "addBlockedBy": {
+            "type": "array",
+            "description": "要加的前置任务 ID（这些任务全部 completed 之后本条才能开始）。",
+            "items": {"type": "string"},
+        },
+    },
+    ("task_id", "addBlockedBy"),
+)
+
+CAN_START = tool(
+    "can_start",
+    "查询一条任务现在能不能开始：blockedBy 全部 completed（且依赖文件都还在）才返回 True。"
+    "认领之前先问一次，避免把轮次浪费在被挡住的任务上。",
+    {"task_id": _TASK_ID},
+    ("task_id",),
+)
+
+CLAIM_TASK = tool(
+    "claim_task",
+    "认领任务：状态从 pending 改成 in_progress 并记下 owner，表示你开始做它了。"
+    "任务不是 pending、或依赖没做完都会被拒绝（拒绝文本会说明原因，不要重复提交）。",
+    {"task_id": _TASK_ID, "owner": _OWNER},
+    ("task_id",),
+)
+
+COMPLETE_TASK = tool(
+    "complete_task",
+    "把正在做的任务标记为 completed，并报告因此被解锁的下游任务（只报本次新解锁的）。"
+    "只有认领它的那个 owner 能完成；状态不是 in_progress、或 owner 不匹配都会被拒绝。",
+    {"task_id": _TASK_ID, "owner": _OWNER},
+    ("task_id",),
+)
+
+GET_TASK = tool(
+    "get_task",
+    "读取一条任务的完整 JSON（含 description 与 blockedBy）。"
+    "跨会话恢复、或需要看清依赖细节时用它——列表里只有一行摘要。",
+    {"task_id": _TASK_ID},
+    ("task_id",),
+)

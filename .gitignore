@@ -4,6 +4,7 @@ __pycache__/
 .env
 .pytest_cache/
 .avid/
+.tasks/
 build/
 dist/
 *.egg-info/

@@ -14,12 +14,18 @@ def test_definitions_and_implementations_match():
 def test_expected_tools_are_registered():
     assert sorted(NAMES) == [
         "bash",
+        "can_start",
+        "claim_task",
+        "complete_task",
+        "create_task",
         "edit_file",
+        "get_task",
         "glob",
         "load_skill",
         "read_file",
         "subagent",
         "todo_write",
+        "update_task",
         "write_file",
     ]
 
