@@ -52,11 +52,11 @@
 |---|---|---|---|---|
 | 应用 | `cli.py` | 参数解析、进程退出码、stdout/stderr 格式 | 隔离"交互形态"：改 CLI 不该动运行时 | runtime |
 | 运行时 | `runtime/loop.py` | **只表达调度顺序**：一轮里先做什么、什么条件做什么 | 隔离"轮次"这个概念本身 | runtime 其它 + ai + tools |
-| 运行时 | `runtime/transcript.py` | `messages` 的**唯一所有者**；写入时保证结构不变量；字符估算 | 隔离"消息结构合法性" | 无（纯数据结构） |
+~~`runtime/transcript.py`~~ → 见下方修正：**`ai/transcript.py`**。`messages` 的**唯一所有者**；写入时保证结构不变量；字符估算。工具调用与结果的配对是**协议要求**（OpenAI 兼容端点会拒绝不配对请求），不是运行时策略，所以归协议层 | 隔离"消息结构合法性" | 无（纯数据结构） |
 | 运行时 | `runtime/context.py` | 上下文管线的**编排**：调用哪些压缩步骤、什么顺序、什么条件 | 隔离"上下文策略的组合方式" | policy.compaction |
 | 运行时 | `runtime/execution.py` | 工具执行环节：解析参数 → 拦截 → 执行 → 回填 | 隔离"工具调用协议" | events / policy.permission / tools |
 | 运行时 | `runtime/state.py` | `RunState`：轮次计数、一次性标志、计数统计、TODO 与技能实例 | 隔离"运行期可变状态的生命周期" | policy.todo / policy.skills |
-| 运行时 | `runtime/events.py` | 事件注册与触发（即原 `hooks.py`，**签名不变**） | 隔离"扩展点的发现方式" | 无 |
+| 运行时 | `runtime/hooks.py` | 事件注册与触发（**文件名与签名都不变**——§2 的删除测试判定改名无收益） | 隔离"扩展点的发现方式" | 无 |
 | 策略 | `policy/permission.py` | 三闸门 + 黑名单 + 审批 | 隔离"安全规则" | 无 |
 | 策略 | `policy/compaction.py` | 五步压缩的**实现**与阈值常量 | 隔离"阈值与压缩算法" | 无（纯函数） |
 | 策略 | `policy/todo.py` | `TodoList` 状态模型与更新规则 | 隔离"计划的数据结构" | 无 |
@@ -308,7 +308,7 @@ agent_loop(messages, ...)
 | 数据错误 | 工具参数非法 / 未知工具 | 回文本，不触发事件 | `execution.py` |
 | 环境错误 | 落盘失败（压缩） | 记日志、跳过本次压缩 | `policy/compaction.py` |
 | 环境错误 | 摘要调用失败 | 记日志、保留原历史 | `policy/compaction.py` |
-| 程序错误 | hook 抛异常 | 按 block 处理（失败关闭），不影响其它 hook | `runtime/events.py` |
+| 程序错误 | hook 抛异常 | 按 block 处理（失败关闭），不影响其它 hook | `runtime/hooks.py` |
 | 未收敛 | 轮数耗尽 | `RoundLimitExceeded` | `loop.py` |
 
 **不做**（pi 有而我们没有，且属于新功能）：崩溃恢复 / checkpoint / 重放、失败重试队列、补偿操作。
@@ -335,7 +335,7 @@ agent_loop(messages, ...)
 | D2 | 工具失败要求**抛异常**，循环捕获为 `isError: true` | 工具失败**返回文本**（`错误：…`） | **改变 8 个工具与全部相关测试的行为**，超出"只重组"的范围。我们的约定有独立价值：失败原因直接进上下文，模型无需额外解析 |
 | D3 | 工具默认**并行**执行，`executionMode` 可覆盖，批次内任一 sequential 则整批串行 | 串行；只有 `subagent` 内部并行 | **属于新功能**。但接口要留得住：`execute_batch` 的签名允许将来换并发实现而不改调用方 |
 | D4 | 异步事件流 + `await` 订阅者顺序结算 | 同步、进程内、可变 dict | 我们没有 UI 进程内订阅之外的消费者；异步化会引入"回调何时结算"的新失败面（判据 §7 对异步化的追问） |
-| D5 | steering / follow-up 队列（运行中插入转向、排队后续） | 无 | **属于新功能**。需要它时最可能的落点是 `events.py` 新增一个 `Steering` 事件，而不是改 `Transcript` |
+| D5 | steering / follow-up 队列（运行中插入转向、排队后续） | 无 | **属于新功能**。需要它时最可能的落点是 `hooks.py` 新增一个 `Steering` 事件，而不是改 `Transcript` |
 | D6 | `session/` + `repo` / `storage` 三层，JSONL 与 SQLite 后端，带 conformance 测试套件 | 无持久化 | **属于新功能**（尚未做）。但 `Transcript` 正是将来接存储的接缝：它是 messages 的唯一所有者，序列化点天然唯一 |
 | D7 | `harness/runtime/drive/` 的 boundary / checkpoint / recovery / reconcile | 无 | **属于新功能**（崩溃恢复）。我们没有长时任务与进程重启需求 |
 | D8 | `harness/compaction/` 以摘要为主（含 branch-summarization） | 五步阶梯，**以"落盘留恢复路径"为主**，摘要只在整理之后 | 思路相近、取值不同。我们的更保守：优先保留可恢复信息，代价是磁盘占用；pi 的更节省上下文，代价是信息有损。这是 §10 里"边界代价"的一个实例 |
@@ -348,7 +348,9 @@ D1–D8 里，D3/D5/D6/D7 是**能力差异**（我们没做），D1/D2/D4 是**
 
 分两阶段，理由见 §10（可逆性等级不同）。
 
-### 阶段 A —— 原地抽取（不移动文件）
+### 阶段 A —— 原地抽取（不移动文件）　✅ 已实施
+
+> 下表里的模块路径是**阶段 B 之前**的名字；阶段 B 之后按 §15 的映射改名。
 
 | 文件 | 动作 | 影响面 |
 |---|---|---|
@@ -362,12 +364,13 @@ D1–D8 里，D3/D5/D6/D7 是**能力差异**（我们没做），D1/D2/D4 是**
 | `tests/test_agent.py` | 两个 fixture（`no_hooks`、`point_skills_at`）改为注入 `RunState` | **测试改动集中在这里** |
 | 其它测试 | 仅 import 路径受影响（阶段 A 内几乎为零） | 极小 |
 
-### 阶段 B —— 分包（移动文件）
+### 阶段 B —— 分包（移动文件）　✅ 已实施（映射与偏差见 §15）
 
 | 动作 | 影响面 |
 |---|---|
 | `llm.py` / `config.py` → `ai/` | import 路径全改 |
-| `agent.py` / `transcript.py` / `context.py` / `execution.py` / `state.py` / `hooks.py` → `runtime/` | 同上；`hooks.py` **改名不改语义** |
+| `agent.py` → `runtime/loop.py`；`context.py` / `execution.py` / `state.py` / `hooks.py` → `runtime/` | 同上；`hooks.py` 不改名 |
+| `transcript.py` → **`ai/`**（原计划放 runtime，落地时发现会让 policy 反向依赖 runtime） | 同上 |
 | `compact.py` / `permission.py` / `tools/todo.py` / `skill_loader.py` → `policy/` | 同上 |
 | 全部测试的 import | 机械替换 |
 | `AGENTS.md` §1 当前状态、`docs/design/*` 路径引用 | 文档同步 |
@@ -388,7 +391,7 @@ D1–D8 里，D3/D5/D6/D7 是**能力差异**（我们没做），D1/D2/D4 是**
 | 回滚难度 | 中等（多文件路径） | **易**（逐文件还原） | — |
 | 收益 | B 的全部 + 目录可见性 | 逻辑分层 | 无 |
 
-### 10.2 决策：先原地抽取，再分包（§9 的阶段 A → 阶段 B）
+### 10.2 决策：先原地抽取，再分包（§9 的阶段 A → 阶段 B）　**两步均已实施**
 
 - **解决了什么**：循环不再认识策略值（阈值、文案、规则）与压缩编排；messages 有了唯一所有者；三个 contextvars 与四个局部标志变成显式状态。
 - **牺牲了什么**：多一层间接（读代码要跳 5 个文件）；`ToolImpl` 从 `Callable[[dict], Any]` 放宽为 `Callable[..., Any]`（为让两个有状态工具拿到 `RunState`）。
@@ -436,11 +439,11 @@ D1–D8 里，D3/D5/D6/D7 是**能力差异**（我们没做），D1/D2/D4 是**
 | 2 | **行为不变**：现有 295 项测试全部通过，且**不改任何调用点** | `uv run pytest -q` → 295 passed；`git diff` 中 `tests/` 只有 fixture 段改动 |
 | 3 | **循环不再认识策略值**：`loop.py` 不出现阈值常量与策略名 | `grep -E "TOOL_RESULT_CHAR_BUDGET\|MAX_MESSAGES\|CONTEXT_CHAR_LIMIT\|APPROVAL_RULES\|SUMMARY_SYSTEM" src/avid/runtime/loop.py` → 无匹配 |
 | 4 | **压缩顺序只在一处** | `grep -rn "tool_result_budget\|snip_compact\|micro_compact" src/avid --include=*.py` → 除 `policy/compaction.py` 与 `runtime/context.py` 外无匹配 |
-| 5 | **messages 只有一个所有者** | `grep -rn "messages\.append\|messages\.extend\|messages\[:\]" src/avid --include=*.py` → 只出现在 `runtime/transcript.py` |
+| 5 | **messages 只有一个所有者** | `grep -rn "messages\.append\|messages\.extend\|messages\[:\]" src/avid --include=*.py` → 只出现在 `ai/transcript.py` |
 | 6 | **结构不变量由所有者保证**：非法的 `replace_all` / `splice` 抛错且不改状态 | 新增测试：构造会产生孤立 tool 结果的候选 → 断言抛 `TranscriptError` 且 `transcript.validate() == []` |
 | 7 | **一次性标志各只有一个写入点** | `grep -rn "compacted = True" src/avid` → 1 处；`grep -rn "retried = True" src/avid` → 1 处 |
 | 8 | **①②③ 在类型上无法调用模型** | `inspect.signature(prepare)` 有 `summarize`，且 `policy/compaction.py` 的 `tool_result_budget` / `snip_compact` / `micro_compact` 三个函数签名中无 `chat` |
-| 9 | **依赖方向单向**：`runtime/` 不 import `policy/` 的具体实现 | 阶段 A 是原地抽取，没有 `runtime/` 目录，该条**尚不可验证**；阶段 B 分包后才检查 `grep -rn "from .*policy" src/avid/runtime/*.py`，只允许出现在 `context.py`（调 compaction）与 `state.py`（持有 todo / skills 实例） |
+| 9 | **依赖方向单向**：`runtime/` 不 import `policy/` 的具体实现 | `grep -rn "from \.\.policy" src/avid/runtime/*.py` → 只出现在 `context.py`（调 compaction）、`state.py`（持有 todo / skills）、`hooks.py`（注册默认回调）。**初稿漏了 hooks.py**：它是扩展点的注册处，默认回调必须有人注册；把注册搬去别处只换 import 位置、不换隔离效果。`loop.py` 与 `execution.py` 对 policy **零依赖** |
 | 10 | **压缩日志与计数不减少** | 现有 `test_compaction_is_logged` / `test_compaction_count_reaches_the_stop_hook` 通过 |
 | 11 | **端到端不变**：同一脚本化对话在重构前后产出相同 messages 序列 | 录制-回放测试：固定 `chat` 返回值序列，断言最终 `transcript.as_messages()` 与快照一致 |
 | 12 | 测试总数不减 | `uv run pytest -q` 的 passed 数 ≥ 295 |
@@ -482,3 +485,44 @@ D1–D8 里，D3/D5/D6/D7 是**能力差异**（我们没做），D1/D2/D4 是**
 **回滚方式**：`git revert <commit>`，或逐文件 `git checkout HEAD~1 -- <file>`。阶段 A 不动文件位置、不改公开签名，因此回滚不存在中间态。
 
 **阶段 B 未做**：文件分包（`ai/` / `runtime/` / `policy/`）尚未进行——按 §10.2 的分步决策，等阶段 A 在真实使用中稳定后再评估。
+
+## 15. 落地记录（阶段 B）
+
+阶段 B 已实施：文件搬进 `ai/` / `runtime/` / `policy/` 三个包，只改 import 路径与 fixture 引用。
+
+**迁移映射**
+
+| 原路径 | 新路径 |
+|---|---|
+| `llm.py` | `ai/client.py` |
+| `config.py` | `ai/config.py` |
+| `transcript.py` | **`ai/transcript.py`**（不按原计划放 runtime） |
+| `agent.py` | `runtime/loop.py` |
+| `context.py` / `execution.py` / `state.py` / `hooks.py` | `runtime/` 同名 |
+| `compact.py` | `policy/compaction.py` |
+| `permission.py` | `policy/permission.py` |
+| `skill_loader.py` | `policy/skills.py` |
+| `tools/todo.py` | `policy/todo.py` |
+| `cli.py`、`tools/`（其余）、`skills/` | 不动 |
+
+**三处不是纯搬家**（落地时才发现，已回写 §3 / §9 / §12）：
+
+1. **`transcript.py` 归 `ai/` 而不是 `runtime/`**。`policy/compaction.py` 的五步都要操作 `Transcript`；放 runtime 会让 policy 反向依赖 runtime，违反判据 §4 的依赖方向。而工具调用与结果的配对本就是**协议要求**（端点会拒绝不配对的请求），归协议层名实相符。
+2. **`loop.py` 甩掉最后一个 policy 依赖**。它原本要 import `policy.todo` 取提醒阈值与文案；改为 `RunState.todo_reminder(threshold)` 决定"该不该提醒、提醒什么"，`RunState.for_run()` 负责建注册表，`RunState.system_prompt()` 负责拼提示——**行为不变，但循环从此零 policy 依赖**。
+3. **判据 9 的措辞修正**：`runtime/hooks.py` 必须 import `policy.permission` 才能注册默认回调。原判据漏了这条必然后果；搬代码换不来隔离，所以改的是判据。
+
+**验收结果**
+
+| # | 标准 | 结果 |
+|---|---|---|
+| 1 | 公开签名不变 | `inspect.signature` 逐参数一致（11 个参数） |
+| 2 | 测试不改调用点全过 | **326 passed**（与阶段 A 同数） |
+| 3 | 所有模块可导入 | `pkgutil.walk_packages` 逐个 import，24 个模块无异常 |
+| 4 | 无旧路径残留 | `grep "avid.agent\|avid.compact\|avid.llm\|avid.skill_loader\|avid.tools.todo\|avid.transcript\|from avid import"` → 测试与源码无匹配 |
+| 5 | messages 只有一个所有者 | 仍只在 `ai/transcript.py` |
+| 6 | 一次性标志各一个赋值点 | `compacted` 在 `runtime/context.py`、`retried` 在 `runtime/loop.py` |
+| 7 | 判据 9 | `runtime/` 的 policy import 只在 `context.py` / `state.py` / `hooks.py`；`loop.py` 与 `execution.py` 零依赖 |
+| 8 | 行为不变 | black-box 脚本在分包前后产出的 messages 序列与返回值**逐字节一致** |
+| 9 | 真实运行 | 通过；logger 名已随模块路径更新（`avid.runtime.loop` / `avid.policy.skills`） |
+
+**回滚方式**：`git revert <commit>` 即可——分包不改签名、不改职责，回滚只影响 import 路径。
