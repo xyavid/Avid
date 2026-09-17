@@ -1,0 +1,451 @@
+# Agent Runtime 架构设计
+
+> 状态：设计稿。本文只**重组既有能力**，不引入新功能——所有被参考的方案里属于新能力的部分，都在 §8 逐条写明"为什么不跟"。
+> 推导依据：`docs/design/architecture-criteria.md` 的 12 组检查点。覆盖情况见 §11，未验证的显式标注。
+
+## 1. 变化优先：先定位会变的东西
+
+判据 §1 要求先列变化、标注频率与代价，再看它现在迫使谁跟着改。
+
+| 变化点 | 频率 | 代价 | 现在被迫跟着改的模块 | 是否合理 |
+|---|---|---|---|---|
+| 压缩阈值与步骤顺序 | 高（阶段 8 一次改动就动了 `agent.py` 73 行） | 低 | `agent.py` 的循环体 | ✗ 不该 |
+| TODO 提醒阈值与文案 | 中 | 低 | `agent.py`（计数与注入都写在循环里） | ✗ 不该 |
+| 技能目录结构与 system prompt 组装 | 中 | 低 | `agent.py`（loader 创建与 prompt 拼装都在循环前） | ✗ 不该 |
+| 工具集增删 | 中（阶段 2 / 5 / 6 / 7 各加过一次） | 中 | `tools/` + `agent.py` 的 `_execute_one` | ✗ 部分不该 |
+| 每加一个"整轮最多一次"的机制 | 中（`compacted` / `retried` / `stop_blocks` 各加过一次） | 低 | `agent.py` 新增一个局部标志 | ✗ 不该 |
+| 权限规则 | 中 | 低 | `permission.py` | ✓ 已隔离 |
+| 模型协议 / provider 措辞 | 低 | 高 | `llm.py` | ✓ 已隔离 |
+| 工具实现内部 | 高 | 低 | `tools/` | ✓ 已隔离 |
+| 并行工具执行 / 流式输出 | 低 | 高 | 无（未做） | — |
+
+**结论**：变化集中在两类东西上——**策略值**（阈值、文案、规则）与**编排顺序**（每轮做什么、什么条件做什么）。这两类现在都落在 `agent.py` 里。
+
+### 1.1 现状耦合的量化证据
+
+- `src/avid/agent.py` 共 **324 行**，其中 **35 行**提到某个策略的具体名字（`compact` / `todo` / `skill` / `permission`）。
+- 同文件里有 **5 处**直接写 `messages`：用户输入注入（L212）、TODO 提醒（L232）、assistant 追加（L275）、Stop nudge（L305）、工具结果扩展（L313）。
+- 运行状态通过 **3 个 contextvars** 隐式持有：`RUN_AUTO_APPROVE`（`permission.py`）、`CURRENT`（`tools/todo.py`）、`CURRENT`（`skill_loader.py`）；另有 4 个循环局部标志（`rounds_since_todo` / `compacted` / `retried` / `stop_blocks`）。
+
+判据 §3 把"共享可变状态、隐式调用、全局单例"列为要检查的耦合机制——这三条都命中了。
+
+## 2. 具体先行：抽象准入与删除测试
+
+判据 §2 要求每个新抽象指名证据类型（真实重复 / 真实变化 / 真实耦合），并做删除测试。
+
+| 拟建边界 | 准入证据 | 删除测试结果 |
+|---|---|---|
+| `Transcript`（messages 所有者） | **真实耦合**：5 处直接写 + 结构不变量只能事后 `validate_structure` 检查 | 删掉后 5 处重新耦合、不变量退回事后校验 → **保留** |
+| `runtime/context.py`（压缩编排） | **真实变化**：阶段 8 改过一次编排（加 ⑤、改 ① 语义），每次都动循环 | 删掉后压缩顺序回到循环，改阈值要动循环 → **保留** |
+| `runtime/execution.py`（工具执行环节） | **真实变化**：4 次加工具；**真实耦合**：参数解析/查找/拦截/执行/回写挤在一个函数里 | 删掉后加工具要同时改 `tools/` 与循环 → **保留** |
+| `RunState`（显式运行状态） | **真实耦合**：3 个 contextvars + 4 个局部标志 | 删掉后退回隐式全局状态 → **保留** |
+| `policy/` 目录分包 | **真实变化**：阈值与文案是高频变化 | 删掉（文件位置不动）后逻辑分层仍在，只失去"目录即边界"的可见性 → **可删** |
+| 事件总线从 hooks 改名 | 无（`hooks.py` 已经是对的边界） | 改名不带来隔离增益 → **不做**（只保留文件位置与签名） |
+
+最后两行是本文档最重要的两个"不做"结论：**分包是可删的**（所以放到第二阶段，见 §10），**hooks 不需要改**（避免为改而改）。
+
+## 3. 目标分层与模块职责
+
+四层单向向下，依赖方向由 §12 的断言守住。
+
+| 层 | 模块 | 职责 | 它隔离了什么（判据 §4） | 依赖 |
+|---|---|---|---|---|
+| 应用 | `cli.py` | 参数解析、进程退出码、stdout/stderr 格式 | 隔离"交互形态"：改 CLI 不该动运行时 | runtime |
+| 运行时 | `runtime/loop.py` | **只表达调度顺序**：一轮里先做什么、什么条件做什么 | 隔离"轮次"这个概念本身 | runtime 其它 + ai + tools |
+| 运行时 | `runtime/transcript.py` | `messages` 的**唯一所有者**；写入时保证结构不变量；字符估算 | 隔离"消息结构合法性" | 无（纯数据结构） |
+| 运行时 | `runtime/context.py` | 上下文管线的**编排**：调用哪些压缩步骤、什么顺序、什么条件 | 隔离"上下文策略的组合方式" | policy.compaction |
+| 运行时 | `runtime/execution.py` | 工具执行环节：解析参数 → 拦截 → 执行 → 回填 | 隔离"工具调用协议" | events / policy.permission / tools |
+| 运行时 | `runtime/state.py` | `RunState`：轮次计数、一次性标志、计数统计、TODO 与技能实例 | 隔离"运行期可变状态的生命周期" | policy.todo / policy.skills |
+| 运行时 | `runtime/events.py` | 事件注册与触发（即原 `hooks.py`，**签名不变**） | 隔离"扩展点的发现方式" | 无 |
+| 策略 | `policy/permission.py` | 三闸门 + 黑名单 + 审批 | 隔离"安全规则" | 无 |
+| 策略 | `policy/compaction.py` | 五步压缩的**实现**与阈值常量 | 隔离"阈值与压缩算法" | 无（纯函数） |
+| 策略 | `policy/todo.py` | `TodoList` 状态模型与更新规则 | 隔离"计划的数据结构" | 无 |
+| 策略 | `policy/skills.py` | 技能扫描、目录、全文读取 | 隔离"技能来源与解析" | 无 |
+| 协议 | `ai/client.py` | `/chat/completions`、`Turn`、错误分类 | 隔离"HTTP 与各家措辞" | 无 |
+| 协议 | `ai/config.py` | 环境变量读取 | 隔离"配置来源" | 无 |
+| 能力 | `tools/*` | 8 个工具的实现与 schema | 隔离"文件系统与进程" | 无（`subagent` 例外见 §5.3） |
+
+不新增层、不新增能力。分层只是在既有 13 个模块上重排依赖方向。
+
+## 4. 核心接口与数据结构
+
+### 4.1 `Transcript` —— messages 的唯一所有者
+
+```python
+class Transcript:
+    def __init__(self, messages: list[dict[str, Any]] | None = None) -> None: ...
+
+    def as_messages(self) -> list[dict[str, Any]]:
+        """只读用途：传给模型调用。返回浅拷贝，调用方改它不影响内部状态。"""
+
+    def append(self, message: dict[str, Any]) -> None: ...
+    def append_many(self, messages: Iterable[dict[str, Any]]) -> None: ...
+
+    def replace_all(self, messages: list[dict[str, Any]]) -> None:
+        """整体替换（④ compact_history 用）。替换前校验结构，非法则抛 TranscriptError。"""
+
+    def splice(self, start: int, stop: int, replacement: list[dict[str, Any]]) -> None:
+        """区间替换（② snip_compact 用）。start/stop 必须落在安全边界上，否则抛错。"""
+
+    def set_content(self, index: int, content: str) -> None:
+        """改单条内容（tool_result 落盘留路径、用户输入注入用）。不改结构，无需校验。"""
+
+    def last_user_index(self) -> int | None: ...
+    def tool_indexes(self) -> list[int]: ...
+    def is_safe_boundary(self, index: int) -> bool: ...
+    def validate(self) -> list[str]: ...          # 原 compact.validate_structure
+    def estimate_chars(self) -> int: ...          # 原 compact.estimate_chars
+```
+
+要点：
+- `replace_all` / `splice` 是**唯一**能改变结构的方法，它们内部先构造候选、校验通过才落地。这满足判据 §6「不变量要有唯一守护者」。
+- `set_content` 不校验，因为它不可能破坏配对关系——把校验成本放在真正需要的地方。
+
+### 4.2 `RunState` —— 显式运行状态
+
+```python
+@dataclass
+class RunState:
+    # 轮次与终止
+    round: int = 0
+    rounds_since_todo: int = 0
+    stop_blocks: int = 0
+    # 一次性标志（判据 §6：谁负责"最多一次"）
+    compacted: bool = False
+    retried: bool = False
+    # 统计（进 Stop 事件，供 hook 与测试观察）
+    tool_calls: int = 0
+    denials: int = 0
+    compactions: int = 0
+    # 运行期实例（原来是 3 个 contextvars）
+    todo: TodoList = field(default_factory=TodoList)
+    skills: SkillLoader = field(default_factory=SkillLoader)
+    auto_approve: bool = False
+```
+
+`RunState` 由 `agent_loop` 创建、传给各环节、随运行结束而丢弃。取代表：
+
+| 原机制 | 现在 | 变化 |
+|---|---|---|
+| `contextvars.ContextVar`（3 个） | 数据类字段 | 隐式 → 显式 |
+| 循环局部变量（4 个） | 数据类字段 | 无法被 hook 观察 → 可观察 |
+
+**替代 contextvars 的代价**：`todo_write` / `load_skill` 的 handler 签名是 `Callable[[dict], Any]`，它拿不到 `RunState`。两条路：
+
+1. `run_subagent` 在子线程里自建 `RunState`（现在也是自建 context；改成显式后代码更直白）。
+2. `ToolImpl` 签名不变，改为在 `execution.execute_batch` 里把 `RunState` 放进工具调用上下文，由 `execution` 负责传参——即工具的 handler 多一个可选参数。
+
+**选定方案 2，但只给需要的两个工具**：`todo_write` 与 `load_skill` 的签名改为 `(args, *, state: RunState)`；其余 6 个工具仍是 `(args)`。这样"需要运行状态的工具"是一个显式、可枚举的集合（判据 §4：谁拥有状态要能指名），代价是 `ToolImpl` 变成 `Callable[..., Any]` 且 `execute_batch` 要按名称判断是否传 state。
+
+**这个代价值不值**：值得，因为它是唯一能在不引入依赖注入框架的前提下消除 contextvars 的办法；不值的信号是"需要的工具超过一半"——那时应该给所有工具统一传 state。
+
+### 4.3 `runtime/context.py` —— 压缩编排
+
+```python
+@dataclass(frozen=True)
+class ContextBudget:
+    tool_result_chars: int = 200_000
+    max_messages: int = 50
+    keep_head: int = 8
+    keep_tail: int = 24
+    context_chars: int = 400_000
+    micro_keep_recent: int = 3
+    micro_target_ratio: float = 0.8
+    reactive_keep_recent: int = 5
+
+@dataclass(frozen=True)
+class Preparation:
+    reports: list[CompactReport]
+
+def prepare(
+    transcript: Transcript,
+    state: RunState,
+    *,
+    config: Config,
+    summarize: Callable[..., Turn],   # 只有 ④ 会用；①②③ 拿不到它
+) -> Preparation: ...
+```
+
+- `prepare` 是**唯一**知道"①② 每轮跑、③④ 有条件"的地方。循环只调它一次。
+- `summarize` 作为参数传入而不是让 `prepare` 自己 import：这从**类型上**保证了 ①②③ 无法触达模型（判据 §6 不变量 I4）。原实现靠 `inspect.signature` 事后断言，现在由签名保证。
+- `compact_history` 的"整轮最多一次"由 `state.compacted` 决定，但**只有 `prepare` 写这个字段**——循环不改它。
+
+### 4.4 `runtime/execution.py` —— 工具执行环节
+
+```python
+@dataclass(frozen=True)
+class ToolOutcome:
+    tool_call_id: str
+    content: str
+
+def execute_batch(
+    tool_calls: list[dict[str, Any]],
+    *,
+    state: RunState,
+    registry: dict[str, ToolImpl],
+    round_index: int,
+) -> list[ToolOutcome]: ...
+```
+
+内部顺序与现在完全一致（这是行为不变的关键）：
+
+```
+for call in tool_calls:
+    name, raw_args = 解析 call
+    args = json.loads(raw_args)          # 失败 → content = "参数不是合法 JSON：…"
+    if not isinstance(args, dict):       # → content = "错误：参数必须是 JSON 对象"
+    impl = registry.get(name)            # 缺失 → content = "未知工具：…"
+    state.tool_calls += 1
+    before = {tool, arguments, round}
+    if trigger_hooks("PreToolUse", before) == BLOCK:
+        state.denials += 1
+        content = before.get("denied_content") or DENIED_CONTENT
+    else:
+        content = _as_text(impl(args, state=state) if name in STATEFUL_TOOLS else impl(args))
+    after = {tool, arguments, round, content, truncated: False}
+    trigger_hooks("PostToolUse", after)
+    yield ToolOutcome(call_id, after["content"])
+```
+
+注意所有失败仍**返回文本而不是抛异常**——这是本项目既有约定（见 §8 与 pi 的差异）。
+
+### 4.5 `runtime/loop.py` —— 只剩调度
+
+```python
+def agent_loop(
+    messages: list[dict[str, Any]],
+    *,
+    system: str | None = None,
+    tools=None, registry=None, config=None, chat=chat_completion,
+    auto_approve: bool = False,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    max_rounds: int = MAX_ROUNDS,
+    max_stop_blocks: int = MAX_STOP_BLOCKS,
+    todo_reminder_after: int = TODO_REMINDER_AFTER_ROUNDS,
+) -> str:
+```
+
+**公开签名一字不改**——现有 60+ 处测试调用点因此不用改。这是重构"行为不变"最直接的证据形式。
+
+## 5. 运行时数据流与调度
+
+### 5.1 一轮的时序
+
+```
+agent_loop(messages, ...)
+├─ transcript = Transcript(messages)            # 接管调用方传进来的 list（同一对象，原地语义保持）
+├─ state = RunState(skills=SkillLoader().scan(), auto_approve=auto_approve, todo=TodoList())
+├─ system_prompt = state.skills.build_system_prompt(system or AGENT_INSTRUCTIONS)
+├─ emit UserPromptSubmit(transcript.last_user_index())
+│    ├─ block → 返回 ""
+│    └─ injected → transcript.set_content(last_user_index, 注入 + 原文)
+└─ for round in 1..max_rounds:
+     ├─ state.round = round
+     ├─ if state.rounds_since_todo == todo_reminder_after:
+     │      transcript.append(提醒)              # 依赖轮次，留在循环里（判据 §2：它确实是循环的事实）
+     ├─ context.prepare(transcript, state, config=config, summarize=chat)
+     │    ├─ ① tool_result_budget     （每轮）
+     │    ├─ ② snip_compact           （每轮）
+     │    ├─ ③ micro_compact          （超限时）
+     │    └─ ④ compact_history        （仍超限 且 未用过 → 置 state.compacted）
+     ├─ turn = call_model(transcript, ...)       # ⑤ 包在这层：PromptTooLongError → reactive → 重试一次
+     ├─ transcript.append(turn.message)
+     ├─ state.rounds_since_todo = 0 if 本轮有 todo_write else +1
+     ├─ if not turn.tool_calls:
+     │    ├─ emit Stop(state 快照)
+     │    ├─ block 且 state.stop_blocks < max_stop_blocks → 追加 nudge、continue
+     │    └─ 否则 → return turn.text
+     └─ outcomes = execution.execute_batch(turn.tool_calls, state=state, ...)
+        transcript.append_many(outcomes → tool 消息)
+   raise RoundLimitExceeded
+```
+
+### 5.2 谁在什么时候读 `Transcript`
+
+| 阶段 | 读 | 写 | 写的方法 |
+|---|---|---|---|
+| 启动 | `last_user_index` | 注入上下文 | `set_content` |
+| ① | `tool_indexes` | 落盘留路径 | `set_content` |
+| ② | 长度、边界 | 裁中间 | `splice` |
+| ③ | 字符估算、`tool_indexes` | 落盘留路径 | `set_content` |
+| ④ | 全部 | 摘要替换 | `replace_all` |
+| ⑤ | 全部 | 摘要 + 保留尾部 | `replace_all` |
+| 模型轮 | `as_messages` | 追加 assistant | `append` |
+| 工具轮 | — | 追加 tool 结果 | `append_many` |
+| Stop | — | 追加 nudge | `append` |
+
+九处读写全部经过 4 个方法。**没有任何一处再直接操作 list**。
+
+### 5.3 subagent 的位置
+
+`tools/subagent.py` 的 `run_subagent` 自己构造 `RunState` 并调用 `agent_loop`——与现在自建 TodoList/loader 的做法同构，只是从"绑定 contextvar"变成"构造对象"。子线程不继承 `RunState` 这一点从"隐式失效"变成"签名上看得见"（它必须显式接收 `auto_approve`）。
+
+## 6. 不变量与守护者
+
+判据 §6 要求先列不变量，再指派唯一守护者并检查是否有旁路。
+
+| # | 不变量 | 守护者 | 旁路检查 |
+|---|---|---|---|
+| I1 | 每个 assistant 的 `tool_calls` 都有配对的 `tool` 结果 | `Transcript` | 唯一的写入方法是 `append* / splice / replace_all`，都在内部校验 |
+| I2 | system prompt 不写进 `messages` | `loop`（只有它构造 `system=` 参数） | 无其他模块构造该参数 |
+| I3 | 压缩前后结构合法 | `Transcript.replace_all / splice` 先校验后落地 | 压缩只能通过这些方法改结构 |
+| I4 | ①②③ 不触达模型 API | `context.prepare` 的签名（`summarize` 只传给 ④） | 类型上不可达，无需运行时检查 |
+| I5 | 自动压缩 ≤1 次、兜底 ≤1 次 | `RunState.compacted` / `RunState.retried`，只有 `prepare` 与 `loop` 写 | grep 断言这两个字段的赋值点各只有一处 |
+| I6 | 工具失败不中断循环 | `execution.execute_batch`（失败转文本） | 仅有此一处执行工具 |
+
+## 7. 失败与恢复
+
+判据 §7 要求失败路径与正常路径同等级设计。下表的机制**全部是既有实现**，重构不得削弱：
+
+| 类型 | 场景 | 现行机制 | 重构后位置 |
+|---|---|---|---|
+| 临时 | 模型超时 / 连接断 | `httpx` 超时 + `LLMError` | `ai/client.py`（不变） |
+| 临时 | 上下文超限 | `PromptTooLongError` → ⑤ 兜底 + 重试一次 | `loop.call_model` |
+| 永久 | 其它 4xx / 5xx | `LLMError` 上抛，运行终止 | `ai/client.py` + `cli.py` 退出码 |
+| 业务拒绝 | 权限三闸门拒绝 | 回文本 `Permission denied. …`，循环继续 | `execution.py` |
+| 数据错误 | 工具参数非法 / 未知工具 | 回文本，不触发事件 | `execution.py` |
+| 环境错误 | 落盘失败（压缩） | 记日志、跳过本次压缩 | `policy/compaction.py` |
+| 环境错误 | 摘要调用失败 | 记日志、保留原历史 | `policy/compaction.py` |
+| 程序错误 | hook 抛异常 | 按 block 处理（失败关闭），不影响其它 hook | `runtime/events.py` |
+| 未收敛 | 轮数耗尽 | `RoundLimitExceeded` | `loop.py` |
+
+**不做**（pi 有而我们没有，且属于新功能）：崩溃恢复 / checkpoint / 重放、失败重试队列、补偿操作。
+
+## 8. 与 pi 的异同
+
+参考对象：`earendil-works/pi`（`pi-ai` / `pi-agent-core` / `pi-coding-agent` 三个包，运行时在 `packages/agent/src/harness/`）。以下基于其 README 与仓库文件树，未逐行读实现——标注为**未验证假设**的部分见 §11。
+
+### 8.1 相同或同构（5 条）
+
+| # | pi 的做法 | 我们的对应 | 说明 |
+|---|---|---|---|
+| S1 | 三层包：`pi-ai` → `pi-agent-core` → `pi-coding-agent` | `ai/` → `runtime/` → `cli.py` | 依赖单向向下，协议层不反向依赖运行时 |
+| S2 | 显式上下文转换：`transformContext()` → `convertToLlm()` | `context.prepare()` → `transcript.as_messages()` | 我们的 messages 本来就是 LLM 格式，所以第二步是恒等映射 |
+| S3 | turn = 一次 LLM 调用 + 工具执行 | round | 同构概念，可互相映射 |
+| S4 | `beforeToolCall` / `afterToolCall` 拦截点 | `PreToolUse` / `PostToolUse` | 位置相同（参数校验后、结果落地前） |
+| S5 | 事件订阅把 UI 与循环解耦 | 事件注册表 + `trigger_hooks` | 目的相同；实现不同（见 D4） |
+
+### 8.2 不同，且**不跟**（8 条，逐条给理由）
+
+| # | pi | 我们 | 为什么不跟 |
+|---|---|---|---|
+| D1 | `AgentMessage` 可声明合并自定义角色，`convertToLlm` 过滤 UI-only 消息 | messages 只有 LLM 三种角色 | **属于新功能**：引入自定义消息类型会改变全部工具与压缩的输入契约。判据 §2：这是"预测中的问题"，不是已发生的问题 |
+| D2 | 工具失败要求**抛异常**，循环捕获为 `isError: true` | 工具失败**返回文本**（`错误：…`） | **改变 8 个工具与全部相关测试的行为**，超出"只重组"的范围。我们的约定有独立价值：失败原因直接进上下文，模型无需额外解析 |
+| D3 | 工具默认**并行**执行，`executionMode` 可覆盖，批次内任一 sequential 则整批串行 | 串行；只有 `subagent` 内部并行 | **属于新功能**。但接口要留得住：`execute_batch` 的签名允许将来换并发实现而不改调用方 |
+| D4 | 异步事件流 + `await` 订阅者顺序结算 | 同步、进程内、可变 dict | 我们没有 UI 进程内订阅之外的消费者；异步化会引入"回调何时结算"的新失败面（判据 §7 对异步化的追问） |
+| D5 | steering / follow-up 队列（运行中插入转向、排队后续） | 无 | **属于新功能**。需要它时最可能的落点是 `events.py` 新增一个 `Steering` 事件，而不是改 `Transcript` |
+| D6 | `session/` + `repo` / `storage` 三层，JSONL 与 SQLite 后端，带 conformance 测试套件 | 无持久化 | **属于新功能**（尚未做）。但 `Transcript` 正是将来接存储的接缝：它是 messages 的唯一所有者，序列化点天然唯一 |
+| D7 | `harness/runtime/drive/` 的 boundary / checkpoint / recovery / reconcile | 无 | **属于新功能**（崩溃恢复）。我们没有长时任务与进程重启需求 |
+| D8 | `harness/compaction/` 以摘要为主（含 branch-summarization） | 五步阶梯，**以"落盘留恢复路径"为主**，摘要只在整理之后 | 思路相近、取值不同。我们的更保守：优先保留可恢复信息，代价是磁盘占用；pi 的更节省上下文，代价是信息有损。这是 §10 里"边界代价"的一个实例 |
+
+### 8.3 差异归因
+
+D1–D8 里，D3/D5/D6/D7 是**能力差异**（我们没做），D1/D2/D4 是**取值差异**（做了但选得不同），D8 是**同一问题的不同取舍**。只有 S1/S2 是**结构差异**（同样是重组，pi 选得更彻底）——这才是本文档要借鉴的部分；其余不借鉴的理由与能力清单一致。
+
+## 9. 集成点与改动范围
+
+分两阶段，理由见 §10（可逆性等级不同）。
+
+### 阶段 A —— 原地抽取（不移动文件）
+
+| 文件 | 动作 | 影响面 |
+|---|---|---|
+| `src/avid/transcript.py` | 新增 `Transcript` | 无（新文件） |
+| `src/avid/state.py` | 新增 `RunState` | 无 |
+| `src/avid/context.py` | 新增 `prepare()`；`compact.py` 保留五步实现与阈值 | 无 |
+| `src/avid/execution.py` | 新增 `execute_batch()`；从 `agent.py` 移出 `_execute_one` | `agent.py` 少约 70 行 |
+| `src/avid/agent.py` | 改为只做调度；`agent_loop` 公开签名不变 | 60+ 处调用点**不改** |
+| `src/avid/tools/todo.py`、`skill_loader.py`、`permission.py` | 删除 `bind*` / `current*`（contextvars 退役） | 各少 10–15 行 |
+| `src/avid/tools/subagent.py` | 自建 `RunState` | 约 10 行 |
+| `tests/test_agent.py` | 两个 fixture（`no_hooks`、`point_skills_at`）改为注入 `RunState` | **测试改动集中在这里** |
+| 其它测试 | 仅 import 路径受影响（阶段 A 内几乎为零） | 极小 |
+
+### 阶段 B —— 分包（移动文件）
+
+| 动作 | 影响面 |
+|---|---|
+| `llm.py` / `config.py` → `ai/` | import 路径全改 |
+| `agent.py` / `transcript.py` / `context.py` / `execution.py` / `state.py` / `hooks.py` → `runtime/` | 同上；`hooks.py` **改名不改语义** |
+| `compact.py` / `permission.py` / `tools/todo.py` / `skill_loader.py` → `policy/` | 同上 |
+| 全部测试的 import | 机械替换 |
+| `AGENTS.md` §1 当前状态、`docs/design/*` 路径引用 | 文档同步 |
+
+**阶段 B 不做的事**：不合并文件、不改签名、不调整职责——纯搬家。这样出问题时回滚范围明确。
+
+## 10. 边界代价、方案对比与决策
+
+### 10.1 三个方案
+
+| 维度 | A 全量分包 | B 原地抽取 | C 不动 |
+|---|---|---|---|
+| 逻辑隔离（压缩/工具/状态不再与循环纠缠） | 完整 | **完整** | 无 |
+| 目录即边界的可见性 | 有 | 无 | 无 |
+| 改动文件数 | 20+ | 9 | 0 |
+| 测试 import 改动 | 全部 | 一处 fixture | 0 |
+| 与既有 `.gitignore` 白名单/文档路径的同步成本 | 有 | 无 | 无 |
+| 回滚难度 | 中等（多文件路径） | **易**（逐文件还原） | — |
+| 收益 | B 的全部 + 目录可见性 | 逻辑分层 | 无 |
+
+### 10.2 决策：先 B 后 A，分两步
+
+- **解决了什么**：循环不再认识策略值（阈值、文案、规则）与压缩编排；messages 有了唯一所有者；三个 contextvars 与四个局部标志变成显式状态。
+- **牺牲了什么**：多一层间接（读代码要跳 5 个文件）；`ToolImpl` 从 `Callable[[dict], Any]` 放宽为 `Callable[..., Any]`（为让两个有状态工具拿到 `RunState`）。
+- **增加了什么复杂度**：`Transcript` 的 4 个写入方法；`prepare` 多一个 `summarize` 参数；`RunState` 多一个类。
+- **在什么条件下成立**：单进程、单线程运行一个 `agent_loop`；工具全部同步；压缩步骤只依赖 `messages` 与阈值。这三条现在都成立。
+- **什么条件下失效**：需要并行执行同一 `Transcript`（并发写）、需要跨进程恢复（`RunState` 不可序列化）、需要按轮次动态改变压缩步骤顺序（`prepare` 的固定顺序会不够）。
+- **出现什么信号时重新考虑**：① `prepare` 里出现第一个"按轮次分支"；② 有工具需要在 `execute_batch` 之外访问 `Transcript`；③ 会话持久化立项（那时 `Transcript` 要加版本与迁移，`RunState` 要拆分持久/易失部分）。
+
+**为什么先 B 后 A**（判据 §11 可逆性）：原地抽取是**易撤销**（逐文件 git checkout 即可），分包是**中等**（20+ import 路径 + 文档同步）。按"按撤销难度分配论证成本"，先用最小可逆的一步拿到全部逻辑收益并在真实运行中验证，再决定是否付搬家的代价。
+
+### 10.3 反事实测试（判据 §10）
+
+| 假设 | 哪些边界仍然成立 | 哪些会崩 |
+|---|---|---|
+| 需求全变（换场景） | `Transcript` / `execution` / `ai` 全部成立 | `policy/` 四个模块全部要换——这正是把它们放一起的理由 |
+| 规模 ×100（消息量、工具数） | 分层成立 | `Transcript.estimate_chars` 的 O(n) 全量扫描成为热点，需要缓存；`policy/compaction` 的落盘策略要改 |
+| 模型 API 长期不可靠 | `ai/` 的边界成立 | `loop` 的重试策略要升级；`RunState.retried` 的"最多一次"要重新评估 |
+| 数据存储更换 | `Transcript` 作为唯一序列化点成立 | 无（当前无存储） |
+| 团队从 1 变 10 | 层边界即 ownership 边界 | `policy/` 单目录会成为冲突热点，需按策略再分人 |
+
+## 11. 12 组判据的覆盖情况
+
+| # | 检查点 | 相关 | 结论落在 | 未验证假设 |
+|---|---|---|---|---|
+| 1 | 变化优先 | ✓ | §1 | — |
+| 2 | 具体先行 | ✓ | §2（含删除测试） | — |
+| 3 | 耦合 | ✓ | §1.1（逐条耦合机制） | — |
+| 4 | 边界与决定权 | ✓ | §3、§4.2 | 分包后的 ownership 分配（单人项目暂无意义） |
+| 5 | 数据所有权与状态生命周期 | ✓ | §4.1、§4.2、§5.2 | `Transcript` 与 `RunState` 将来如何被会话持久化拆分 |
+| 6 | 不变量 | ✓ | §6（I1–I6） | — |
+| 7 | 失败与恢复 | ✓ | §7 | — |
+| 8 | 并发与一致性 | **部分** | §5.3 | 唯一并发是 `subagent` 线程池；同一 `Transcript` 的并发写**当前不存在**，故不建模 |
+| 9 | 依赖与不可靠边界 | ✓ | §7、§8 | pi 实现的内部细节（只读了 README 与文件树，未读源码） |
+| 10 | 边界代价与权衡 | ✓ | §10 | 规模 ×100 后的性能结论是估算，非实测 |
+| 11 | 可逆性与决策强度 | ✓ | §10.2（分两步） | — |
+| 12 | 运行与演进 | ✓ | §10.2 失效信号、§13 | 性能数字、部署形态（当前是单机 CLI） |
+
+## 12. 可验证的验收标准
+
+每条都给出可执行的判定命令或断言，不接受"结构更清晰"这类无法证伪的说法。
+
+| # | 验收标准 | 判定方式 |
+|---|---|---|
+| 1 | **行为不变**：`agent_loop` 公开签名逐个参数不变 | `inspect.signature(agent_loop)` 与重构前的快照比对 |
+| 2 | **行为不变**：现有 295 项测试全部通过，且**不改任何调用点** | `uv run pytest -q` → 295 passed；`git diff` 中 `tests/` 只有 fixture 段改动 |
+| 3 | **循环不再认识策略值**：`loop.py` 不出现阈值常量与策略名 | `grep -E "TOOL_RESULT_CHAR_BUDGET\|MAX_MESSAGES\|CONTEXT_CHAR_LIMIT\|APPROVAL_RULES\|SUMMARY_SYSTEM" src/avid/runtime/loop.py` → 无匹配 |
+| 4 | **压缩顺序只在一处** | `grep -rn "tool_result_budget\|snip_compact\|micro_compact" src/avid --include=*.py` → 除 `policy/compaction.py` 与 `runtime/context.py` 外无匹配 |
+| 5 | **messages 只有一个所有者** | `grep -rn "messages\.append\|messages\.extend\|messages\[:\]" src/avid --include=*.py` → 只出现在 `runtime/transcript.py` |
+| 6 | **结构不变量由所有者保证**：非法的 `replace_all` / `splice` 抛错且不改状态 | 新增测试：构造会产生孤立 tool 结果的候选 → 断言抛 `TranscriptError` 且 `transcript.validate() == []` |
+| 7 | **一次性标志各只有一个写入点** | `grep -rn "compacted = True" src/avid` → 1 处；`grep -rn "retried = True" src/avid` → 1 处 |
+| 8 | **①②③ 在类型上无法调用模型** | `inspect.signature(prepare)` 有 `summarize`，且 `policy/compaction.py` 的 `tool_result_budget` / `snip_compact` / `micro_compact` 三个函数签名中无 `chat` |
+| 9 | **依赖方向单向**：`runtime/` 不 import `policy/` 的具体实现 | `grep -rn "from .*policy" src/avid/runtime/*.py` → 只允许出现在 `context.py`（调 compaction）与 `state.py`（持有 todo/skills 实例）；其它文件无匹配 |
+| 10 | **压缩日志与计数不减少** | 现有 `test_compaction_is_logged` / `test_compaction_count_reaches_the_stop_hook` 通过 |
+| 11 | **端到端不变**：同一脚本化对话在重构前后产出相同 messages 序列 | 录制-回放测试：固定 `chat` 返回值序列，断言最终 `transcript.as_messages()` 与快照一致 |
+| 12 | 测试总数不减 | `uv run pytest -q` 的 passed 数 ≥ 295 |
+
+## 13. 适用条件与失效信号
+
+- **成立条件**：单进程 CLI、单线程运行、工具同步、压缩步骤顺序固定、无持久化需求。
+- **不成立条件**：需要跨进程恢复；需要并发写同一 `Transcript`；需要按轮次动态改变压缩策略组合。
+- **下一次变化最可能落在哪**：按可能性排序——① 新增策略值（阈值/文案），落在 `policy/`，成本最低；② 会话持久化，落在 `Transcript` 的序列化点，需要版本与迁移设计；③ 并行工具执行，落在 `execution.execute_batch` 的实现，签名不变；④ 换 provider 或加 provider，落在 `ai/`。
+- **重新评估的信号**（与 §10.2 一致）：`prepare` 出现按轮次的分支；工具需要直接访问 `Transcript`；会话持久化立项。
