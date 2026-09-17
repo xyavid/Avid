@@ -1,16 +1,15 @@
 """todo_write：带状态的 TODO 列表。
 
-状态按运行隔离：``agent_loop`` 每次运行创建一个 ``TodoList`` 并绑定到 ContextVar，
-工具实现按需读取。这样 ``ToolImpl`` 的签名保持 ``Callable[[dict], Any]``，
-其余 5 个工具一行都不用改。
+状态由 ``RunState`` 显式持有并传入（原来是 ContextVar）——工具不再自己去找状态，
+因此"哪个工具需要运行状态"是一个可枚举、可断言的事实（见 ``execution.STATEFUL_TOOLS``）。
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from contextlib import contextmanager
-from contextvars import ContextVar
-from typing import Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
+
+if TYPE_CHECKING:  # 只为类型标注；运行时导入会成环（state.py 要 import 本模块）
+    from ..state import RunState
 
 # 连续多少轮没更新 TODO 就提醒一次。调阈值只改这一个常量。
 TODO_REMINDER_AFTER_ROUNDS = 3
@@ -18,8 +17,6 @@ TODO_REMINDER_AFTER_ROUNDS = 3
 VALID_STATUSES = ("pending", "in_progress", "completed")
 
 _MARKS = {"completed": "x", "in_progress": "~", "pending": " "}
-
-CURRENT: ContextVar["TodoList | None"] = ContextVar("avid_todo_list", default=None)
 
 
 def _bad(message: str) -> NoReturn:
@@ -84,33 +81,18 @@ class TodoList:
         )
 
 
-def current() -> TodoList | None:
-    return CURRENT.get()
-
-
-@contextmanager
-def bind(todo: TodoList) -> Iterator[TodoList]:
-    """把 todo 绑定到当前上下文，退出时还原——这是运行之间互不串状态的保证。"""
-    token = CURRENT.set(todo)
+def todo_write(args: dict[str, Any], *, state: "RunState") -> str:
     try:
-        yield todo
-    finally:
-        CURRENT.reset(token)
-
-
-def todo_write(args: dict[str, Any]) -> str:
-    todo = current()
-    if todo is None:
-        return "错误：当前没有活动的 TODO 列表（不在 agent 循环内）"
-
-    try:
-        todo.replace(args.get("todos"))
+        state.todo.replace(args.get("todos"))
     except ValueError as exc:
         return f"错误：{exc}"
 
-    if not todo.items:
+    if not state.todo.items:
         return "已清空 TODO 列表。"
-    return f"已更新 TODO（{len(todo.items)} 项：{todo.summary()}）\n{todo.render()}"
+    return (
+        f"已更新 TODO（{len(state.todo.items)} 项：{state.todo.summary()}）\n"
+        f"{state.todo.render()}"
+    )
 
 
 def build_reminder(todo: TodoList, rounds: int) -> str:

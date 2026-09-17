@@ -10,9 +10,6 @@ ContextVar，所以磁盘上的技能目录一变，下次运行的 system promp
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
-from contextlib import contextmanager
-from contextvars import ContextVar
 from pathlib import Path
 
 logger = logging.getLogger("avid.skills")
@@ -120,21 +117,3 @@ class SkillLoader:
 
         available = ", ".join(sorted(self.skills)) or "none"
         return f"Error: Unknown skill '{name}'. Available: {available}"
-
-
-CURRENT: ContextVar["SkillLoader | None"] = ContextVar(
-    "avid_skill_loader", default=None
-)
-
-
-def current_skills() -> SkillLoader | None:
-    return CURRENT.get()
-
-
-@contextmanager
-def bind_skills(loader: SkillLoader) -> Iterator[SkillLoader]:
-    token = CURRENT.set(loader)
-    try:
-        yield loader
-    finally:
-        CURRENT.reset(token)

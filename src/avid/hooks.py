@@ -26,7 +26,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from .permission import RUN_AUTO_APPROVE, check_permission, hard_deny
+from .permission import check_permission, hard_deny
 from .permission import auto_approve as _auto_approve
 
 logger = logging.getLogger("avid.hooks")
@@ -125,7 +125,7 @@ def permission_hook(context: dict[str, Any]) -> str | None:
         )
         return BLOCK
 
-    if RUN_AUTO_APPROVE.get():
+    if context.get("auto_approve"):
         allowed = _auto_approve(name, arguments)
     else:
         allowed = check_permission(name, arguments)

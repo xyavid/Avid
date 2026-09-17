@@ -1,13 +1,14 @@
-"""Agent 循环。
+"""Agent 循环：只表达调度顺序。
 
-扩展点全部走 hooks.py 的事件机制——循环本身不认识权限、日志、截断这些策略，
-它只知道四个事件名和 context 字典的约定。
+它不认识阈值、文案与协议细节——
 
-唯一的例外是 TODO 提醒：计数与注入按需求放在循环里（"第几轮"是循环自身的事实），
-但提醒文案与状态模型都在 tools/todo.py，改文案不用碰循环。
+* 消息结构与不变量：``transcript.py``
+* 运行状态与一次性标志：``state.py``
+* 压缩编排：``context.py``
+* 工具调用协议：``execution.py``
+* 扩展点：``hooks.py``
 
-上下文压缩管线（compact.py）按代价从低到高接在每轮开头：①② 每轮无条件跑且不调模型，
-③④ 只在超限时跑，⑤ 在模型报超限时兜底并重试一次。
+它只回答：什么时候调模型、什么时候跑工具、什么时候停。
 
 协议映射（Anthropic 语义 → OpenAI 兼容）：
   content 里的 tool_use 块        → message.tool_calls[]
@@ -16,28 +17,20 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Callable
 from typing import Any
 
-from .compact import (
-    CONTEXT_CHAR_LIMIT,
-    CompactReport,
-    compact_history,
-    estimate_chars,
-    micro_compact,
-    reactive_compact,
-    snip_compact,
-    tool_result_budget,
-)
+from . import context
 from .config import Config, load_config
+from .execution import execute_batch
 from .hooks import BLOCK, trigger_hooks
 from .llm import DEFAULT_MAX_TOKENS, PromptTooLongError, Turn, chat_completion
-from .permission import bind_auto_approve
-from .skill_loader import AGENT_INSTRUCTIONS, SkillLoader, bind_skills
+from .skill_loader import AGENT_INSTRUCTIONS, SkillLoader
+from .state import RunState
 from .tools import TOOL_IMPLS, TOOLS, ToolImpl
-from .tools.todo import TODO_REMINDER_AFTER_ROUNDS, TodoList, bind, build_reminder
+from .tools.todo import TODO_REMINDER_AFTER_ROUNDS, build_reminder
+from .transcript import Transcript
 
 logger = logging.getLogger("avid.agent")
 
@@ -46,26 +39,9 @@ MAX_ROUNDS = 8
 # Stop 被拦截后最多再补几轮。防止写坏的回调把循环拖成死循环。
 MAX_STOP_BLOCKS = 1
 
-# 拦截时回传给模型的兜底文案。回调可以把 context["denied_content"] 设成
-# 更有用的内容（permission_hook 就会），这里只在回调没设时使用。
-DENIED_CONTENT = "Permission denied."
-
 
 class RoundLimitExceeded(RuntimeError):
     """连续多轮都在调用工具，未收敛。后续会把它改成可分类的终止原因。"""
-
-
-def _as_text(value: Any) -> str:
-    if isinstance(value, str):
-        return value
-    return json.dumps(value, ensure_ascii=False, default=str)
-
-
-def _last_user_message(messages: list[dict[str, Any]]) -> dict[str, Any] | None:
-    for message in reversed(messages):
-        if message.get("role") == "user":
-            return message
-    return None
 
 
 def _calls_todo_write(tool_calls: list[dict[str, Any]]) -> bool:
@@ -75,103 +51,29 @@ def _calls_todo_write(tool_calls: list[dict[str, Any]]) -> bool:
     )
 
 
-def _report(report: CompactReport | None, stats: dict[str, int]) -> None:
-    """压缩发生时留下可观察的记录：一条日志 + 一个计数。"""
-    if report is None:
-        return
-    logger.info("compact: %s", report.describe())
-    stats["compactions"] += 1
+def _submit_input(transcript: Transcript, state: RunState) -> bool:
+    """UserPromptSubmit：可注入上下文，也可拦截整个输入。返回 False 表示被拦截。"""
+    index = transcript.last_user_index()
+    if index is None:
+        return True
 
-
-def _execute_one(
-    name: str,
-    raw_arguments: str,
-    registry: dict[str, ToolImpl],
-    *,
-    round_index: int,
-    stats: dict[str, int],
-) -> str:
-    """解析参数 → 查 handler → PreToolUse → 执行 → PostToolUse。
-
-    前两步失败（参数不是合法 JSON、参数不是对象、工具不存在）都不触发事件——
-    那是协议错误，不是策略问题。
-    """
-    try:
-        arguments = json.loads(raw_arguments)
-    except json.JSONDecodeError as exc:
-        return f"参数不是合法 JSON：{exc}"
-
-    if not isinstance(arguments, dict):
-        return "错误：参数必须是 JSON 对象"
-
-    impl = registry.get(name)
-    if impl is None:
-        return f"未知工具：{name}"
-
-    stats["tool_calls"] += 1
-
-    before: dict[str, Any] = {
-        "tool": name,
-        "arguments": arguments,
-        "round": round_index,
+    submit: dict[str, Any] = {
+        "prompt": transcript.text_at(index),
+        "messages": transcript.as_messages(),
+        "injected": [],
     }
-    if trigger_hooks("PreToolUse", before) == BLOCK:
-        stats["denials"] += 1
-        logger.info("  ✗ 已拦截 %s", name)
-        # 文案由拦截它的回调决定；回调没说就用兜底值。
-        return str(before.get("denied_content") or DENIED_CONTENT)
+    if trigger_hooks("UserPromptSubmit", submit) == BLOCK:
+        logger.warning("UserPromptSubmit 被拦截，未调用模型")
+        return False
 
-    try:
-        content = _as_text(impl(arguments))
-    except Exception as exc:  # 工具失败回传模型，循环不中断
-        content = f"工具 {name} 执行失败：{exc}"
-
-    after: dict[str, Any] = {
-        "tool": name,
-        "arguments": arguments,
-        "round": round_index,
-        "content": content,
-        "truncated": False,
-    }
-    trigger_hooks("PostToolUse", after)
-    return str(after["content"])
-
-
-def execute_tool_calls(
-    tool_calls: list[dict[str, Any]],
-    registry: dict[str, ToolImpl],
-    *,
-    round_index: int = 0,
-    stats: dict[str, int] | None = None,
-) -> list[dict[str, Any]]:
-    """逐个执行工具调用，汇总为可直接追加进 messages 的 tool 消息。
-
-    工具不存在、抛异常、参数非法、被 hook 拦截，都变成回传给模型的文本，
-    而不是中断循环。
-    """
-    stats = {"tool_calls": 0, "denials": 0} if stats is None else stats
-    results: list[dict[str, Any]] = []
-
-    for call in tool_calls:
-        function = call.get("function") or {}
-        name = str(function.get("name", ""))
-        raw_arguments = function.get("arguments") or "{}"
-        logger.info("  → %s %s", name, raw_arguments)
-
-        content = _execute_one(
-            name,
-            raw_arguments,
-            registry,
-            round_index=round_index,
-            stats=stats,
+    if submit["injected"]:
+        transcript.set_content(
+            index,
+            "\n".join(str(item) for item in submit["injected"])
+            + "\n\n"
+            + submit["prompt"],
         )
-
-        logger.info("  ← %s 字符", len(content))
-        results.append(
-            {"role": "tool", "tool_call_id": call.get("id", ""), "content": content}
-        )
-
-    return results
+    return True
 
 
 def agent_loop(
@@ -190,135 +92,100 @@ def agent_loop(
 ) -> str:
     """跑到模型不再要工具为止，返回最后一轮的 assistant 文本。
 
-    messages 原地追加：每轮的 assistant 消息，以及工具结果。system 不写进 messages。
+    ``messages`` 原地更新：每轮的 assistant 消息与工具结果都会写回同一个 list。
+    ``system`` 是「固定指令部分」，技能目录由 SkillLoader 统一追加。
     """
     config = config or load_config()
     tools = TOOLS if tools is None else tools
     registry = TOOL_IMPLS if registry is None else registry
-    stats = {"tool_calls": 0, "denials": 0, "compactions": 0}
 
-    # ① UserPromptSubmit：可注入上下文，也可拦截整个输入
-    submit_message = _last_user_message(messages)
-    if submit_message is not None:
-        submit: dict[str, Any] = {
-            "prompt": str(submit_message.get("content", "")),
-            "messages": messages,
-            "injected": [],
-        }
-        if trigger_hooks("UserPromptSubmit", submit) == BLOCK:
-            logger.warning("UserPromptSubmit 被拦截，未调用模型")
-            return ""
-        if submit["injected"]:
-            submit_message["content"] = (
-                "\n".join(str(item) for item in submit["injected"])
-                + "\n\n"
-                + submit["prompt"]
-            )
-
-    todo = TodoList()
-    rounds_since_todo = 0
-
+    transcript = Transcript(messages)
     # 每次运行重新扫描技能目录：磁盘变了，下一次运行的 system prompt 就是新的。
-    loader = SkillLoader().scan()
-    system_prompt = loader.build_system_prompt(system or AGENT_INSTRUCTIONS)
-    compacted = False  # ④ 自动压缩：整个运行最多一次
-    retried = False  # ⑤ 兜底重试：整个运行最多一次
+    state = RunState(auto_approve=auto_approve, skills=SkillLoader().scan())
+    system_prompt = state.skills.build_system_prompt(system or AGENT_INSTRUCTIONS)
 
-    # auto_approve 是整次运行的性质，用 ContextVar 传递而不是逐个调用塞字段。
-    with bind_auto_approve(auto_approve), bind(todo), bind_skills(loader):
-        stop_blocks = 0
-        for round_index in range(1, max_rounds + 1):
-            if rounds_since_todo == todo_reminder_after:
-                messages.append(
-                    {"role": "user", "content": build_reminder(todo, rounds_since_todo)}
-                )
-                logger.info("注入 TODO 提醒（连续 %d 轮未更新）", rounds_since_todo)
+    if not _submit_input(transcript, state):
+        return ""
 
-            # ①② 每轮都跑，不花模型调用
-            _report(tool_result_budget(messages), stats)
-            _report(snip_compact(messages), stats)
+    for round_index in range(1, max_rounds + 1):
+        state.round = round_index
 
-            # ③④ 只在超限时。③ 免费，先做；做完仍超限才付一次摘要调用。
-            if estimate_chars(messages) > CONTEXT_CHAR_LIMIT:
-                _report(micro_compact(messages), stats)
-            if estimate_chars(messages) > CONTEXT_CHAR_LIMIT:
-                if compacted:
-                    logger.info("compact: 自动压缩本运行已用过一次，跳过")
-                else:
-                    report = compact_history(messages, config=config, chat=chat)
-                    if report is not None:
-                        compacted = True
-                    _report(report, stats)
-
-            # ⑤ 兜底：模型已明确报超限时整理更早历史，然后重试一次
-            try:
-                turn = chat(
-                    config,
-                    messages,
-                    system=system_prompt,
-                    tools=tools,
-                    max_tokens=max_tokens,
-                )
-            except PromptTooLongError:
-                if retried:
-                    raise
-                retried = True
-                logger.warning("compact: 模型报上下文超限，兜底压缩后重试一次")
-                _report(reactive_compact(messages, config=config, chat=chat), stats)
-                turn = chat(
-                    config,
-                    messages,
-                    system=system_prompt,
-                    tools=tools,
-                    max_tokens=max_tokens,
-                )
-            messages.append(turn.message)
-            logger.info(
-                "round=%d finish=%s tool_calls=%d tokens=%d",
-                round_index,
-                turn.finish_reason or "-",
-                len(turn.tool_calls),
-                turn.usage.total_tokens,
-            )
-
-            rounds_since_todo = (
-                0 if _calls_todo_write(turn.tool_calls) else rounds_since_todo + 1
-            )
-
-            if not turn.tool_calls:
-                # ④ Stop：回调可以要求"先别退出"
-                stop: dict[str, Any] = {
-                    "final_text": turn.text,
-                    "rounds": round_index,
-                    "messages": messages,
-                    "summary": None,
-                    "nudge": None,
-                    "tool_calls": stats["tool_calls"],
-                    "denials": stats["denials"],
-                    "compactions": stats["compactions"],
+        # TODO 提醒依赖"第几轮"，这确实是循环自身的事实；文案在 tools/todo.py。
+        if state.rounds_since_todo == todo_reminder_after:
+            transcript.append(
+                {
+                    "role": "user",
+                    "content": build_reminder(state.todo, state.rounds_since_todo),
                 }
-                blocked = trigger_hooks("Stop", stop) == BLOCK
-                if blocked and stop_blocks < max_stop_blocks:
-                    stop_blocks += 1
-                    nudge = stop.get("nudge")
-                    if nudge:
-                        messages.append({"role": "user", "content": str(nudge)})
-                    logger.info("Stop 被拦截（第 %d 次），继续循环", stop_blocks)
-                    continue
-                if blocked:
-                    logger.warning("Stop 拦截次数已达上限 %d，照常退出", max_stop_blocks)
-                return turn.text
+            )
+            logger.info("注入 TODO 提醒（连续 %d 轮未更新）", state.rounds_since_todo)
 
-            # ② PreToolUse / ③ PostToolUse 在 execute_tool_calls 里触发
-            messages.extend(
-                execute_tool_calls(
-                    turn.tool_calls,
-                    registry,
-                    round_index=round_index,
-                    stats=stats,
-                )
+        # 上下文管线：①② 每轮跑，③④ 超限时才跑，④ 整个运行最多一次
+        context.prepare(transcript, state, config=config, summarize=chat)
+
+        # 模型调用；报上下文超限时兜底压缩并重试一次（整个运行最多一次）
+        try:
+            turn = chat(
+                config,
+                transcript.as_messages(),
+                system=system_prompt,
+                tools=tools,
+                max_tokens=max_tokens,
+            )
+        except PromptTooLongError:
+            if state.retried:
+                raise
+            state.retried = True
+            logger.warning("compact: 模型报上下文超限，兜底压缩后重试一次")
+            context.reactive(transcript, state, config=config, summarize=chat)
+            turn = chat(
+                config,
+                transcript.as_messages(),
+                system=system_prompt,
+                tools=tools,
+                max_tokens=max_tokens,
             )
 
-        raise RoundLimitExceeded(
-            f"达到轮数上限 {max_rounds}，模型仍在请求工具，未收敛"
+        transcript.append(turn.message)
+        logger.info(
+            "round=%d finish=%s tool_calls=%d tokens=%d",
+            round_index,
+            turn.finish_reason or "-",
+            len(turn.tool_calls),
+            turn.usage.total_tokens,
         )
+
+        state.rounds_since_todo = (
+            0 if _calls_todo_write(turn.tool_calls) else state.rounds_since_todo + 1
+        )
+
+        if not turn.tool_calls:
+            # Stop：回调可以要求"先别退出"
+            stop: dict[str, Any] = {
+                "final_text": turn.text,
+                "messages": transcript.as_messages(),
+                "summary": None,
+                "nudge": None,
+                **state.snapshot(),
+            }
+            blocked = trigger_hooks("Stop", stop) == BLOCK
+            if blocked and state.stop_blocks < max_stop_blocks:
+                state.stop_blocks += 1
+                nudge = stop.get("nudge")
+                if nudge:
+                    transcript.append({"role": "user", "content": str(nudge)})
+                logger.info("Stop 被拦截（第 %d 次），继续循环", state.stop_blocks)
+                continue
+            if blocked:
+                logger.warning("Stop 拦截次数已达上限 %d，照常退出", max_stop_blocks)
+            return turn.text
+
+        outcomes = execute_batch(
+            turn.tool_calls, state=state, registry=registry, round_index=round_index
+        )
+        transcript.append_many(
+            {"role": "tool", "tool_call_id": outcome.tool_call_id, "content": outcome.content}
+            for outcome in outcomes
+        )
+
+    raise RoundLimitExceeded(f"达到轮数上限 {max_rounds}，模型仍在请求工具，未收敛")

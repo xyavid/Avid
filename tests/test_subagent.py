@@ -4,6 +4,7 @@ import time
 import pytest
 
 from avid.config import Config
+from avid.state import RunState
 from avid.tools import SUB_HANDLERS, SUB_TOOLS, TOOLS
 from avid.tools.subagent import (
     MAX_PARALLEL,
@@ -16,9 +17,14 @@ from avid.tools.subagent import (
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
 
 
+def run(payload, **kwargs):
+    """带上 RunState 调工具——真实调用方（execution）也是这么传的。"""
+    return subagent(payload, state=RunState(), **kwargs)
+
+
 @pytest.fixture(autouse=True)
 def fake_env(monkeypatch):
-    """subagent() 会读环境变量建配置；测试里给一份假的。"""
+    """run() 会读环境变量建配置；测试里给一份假的。"""
     monkeypatch.setenv("AVID_API_KEY", "test-key")
     monkeypatch.setenv("AVID_MODEL", "test-model")
 
@@ -52,42 +58,42 @@ def test_sub_system_asks_for_a_self_contained_summary():
 
 
 def test_rejects_empty_tasks():
-    assert "非空数组" in subagent({"tasks": []})
+    assert "非空数组" in run({"tasks": []})
 
 
 def test_rejects_non_list():
-    assert "非空数组" in subagent({"tasks": "不是数组"})
+    assert "非空数组" in run({"tasks": "不是数组"})
 
 
 def test_rejects_too_many_tasks():
     tasks = [task(f"第{i}", "p") for i in range(MAX_PARALLEL + 1)]
 
-    result = subagent({"tasks": tasks})
+    result = run({"tasks": tasks})
 
     assert f"最多派发 {MAX_PARALLEL} 个" in result
     assert f"收到 {MAX_PARALLEL + 1} 个" in result
 
 
 def test_rejects_missing_prompt():
-    result = subagent({"tasks": [{"description": "只有描述"}]})
+    result = run({"tasks": [{"description": "只有描述"}]})
 
     assert "prompt 不能为空" in result
 
 
 def test_rejects_blank_description():
-    result = subagent({"tasks": [{"description": "   ", "prompt": "p"}]})
+    result = run({"tasks": [{"description": "   ", "prompt": "p"}]})
 
     assert "description 不能为空" in result
 
 
 def test_rejects_non_object_item():
-    assert "不是对象" in subagent({"tasks": ["字符串"]})
+    assert "不是对象" in run({"tasks": ["字符串"]})
 
 
 def test_validation_happens_before_any_subagent_runs():
     started = []
 
-    subagent(
+    run(
         {"tasks": [task("好的"), {"description": "坏的"}]},
         runner=lambda prompt, **kwargs: started.append(prompt) or "x",
     )
@@ -105,7 +111,7 @@ def test_runs_every_task_and_labels_the_results():
         seen.append(prompt)
         return f"摘要：{prompt}"
 
-    result = subagent(
+    result = run(
         {
             "tasks": [
                 task("统计行数", "统计 src 下各文件行数"),
@@ -123,7 +129,7 @@ def test_runs_every_task_and_labels_the_results():
 
 
 def test_single_task_uses_singular_wording():
-    result = subagent(
+    result = run(
         {"tasks": [task()]}, runner=lambda prompt, **kwargs: "ok"
     )
 
@@ -131,7 +137,7 @@ def test_single_task_uses_singular_wording():
 
 
 def test_empty_summary_becomes_no_summary():
-    result = subagent(
+    result = run(
         {"tasks": [task()]}, runner=lambda prompt, **kwargs: "   "
     )
 
@@ -144,7 +150,7 @@ def test_one_failure_does_not_lose_the_others():
             raise RuntimeError("内部错误")
         return "好"
 
-    result = subagent(
+    result = run(
         {"tasks": [task("正常", "好"), task("失败", "炸"), task("也正常", "好")]},
         runner=runner,
     )
@@ -159,7 +165,7 @@ def test_timeout_is_reported_per_task():
         time.sleep(1)
         return "太慢"
 
-    result = subagent({"tasks": [task("慢", "p")]}, runner=runner, timeout=0.05)
+    result = run({"tasks": [task("慢", "p")]}, runner=runner, timeout=0.05)
 
     assert "Subagent timed out after" in result
 
@@ -172,7 +178,7 @@ def test_tasks_actually_run_in_parallel():
         barrier.wait()
         return f"完成 {prompt}"
 
-    result = subagent(
+    result = run(
         {"tasks": [task("a", "a"), task("b", "b")]},
         runner=runner,
     )
@@ -182,17 +188,15 @@ def test_tasks_actually_run_in_parallel():
     assert "failed" not in result
 
 
-def test_auto_approve_is_read_in_the_calling_thread(monkeypatch):
-    from avid.permission import bind_auto_approve
-
+def test_auto_approve_comes_from_the_run_state():
+    """免审批开关从 RunState 读，显式传给子运行——不是隐式的全局状态。"""
     seen = []
 
     def runner(prompt, *, auto_approve, config):
         seen.append(auto_approve)
         return "ok"
 
-    with bind_auto_approve(True):
-        subagent({"tasks": [task()]}, runner=runner)
+    subagent({"tasks": [task()]}, state=RunState(auto_approve=True), runner=runner)
 
     assert seen == [True]
 
@@ -204,7 +208,7 @@ def test_auto_approve_defaults_to_false(monkeypatch):
         seen.append(auto_approve)
         return "ok"
 
-    subagent({"tasks": [task()]}, runner=runner)
+    run({"tasks": [task()]}, runner=runner)
 
     assert seen == [False]
 

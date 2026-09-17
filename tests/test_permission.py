@@ -146,13 +146,13 @@ def test_auto_approve_still_honours_hard_deny():
 # ---------- 运行级 --yes ----------
 
 
-def test_bind_auto_approve_sets_and_restores_the_flag():
-    assert permission.RUN_AUTO_APPROVE.get() is False
+def test_permission_holds_no_hidden_run_state():
+    """免审批开关由 RunState 显式传入，模块里不该再留隐式状态。
 
-    with permission.bind_auto_approve(True):
-        assert permission.RUN_AUTO_APPROVE.get() is True
-
-    assert permission.RUN_AUTO_APPROVE.get() is False
+    ContextVar 版本在子线程里会静默失效；显式传参传不过去会立刻报错。
+    """
+    assert not hasattr(permission, "RUN_AUTO_APPROVE")
+    assert not hasattr(permission, "bind_auto_approve")
 
 
 def test_concurrent_approval_prompts_are_serialised(monkeypatch):

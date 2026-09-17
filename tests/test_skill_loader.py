@@ -1,12 +1,7 @@
 from pathlib import Path
 
 from avid import skill_loader
-from avid.skill_loader import (
-    AGENT_INSTRUCTIONS,
-    SkillLoader,
-    bind_skills,
-    current_skills,
-)
+from avid.skill_loader import AGENT_INSTRUCTIONS, SkillLoader
 
 REPO_SKILLS = Path(__file__).resolve().parent.parent / "skills"
 
@@ -189,27 +184,27 @@ def test_load_treats_the_name_as_a_key_not_a_path(tmp_path):
     assert loader.load("alpha/SKILL.md").startswith("Error: Unknown skill")
 
 
-# ---------- 运行级绑定 ----------
+# ---------- 运行隔离：每个 RunState 自带一份注册表 ----------
 
 
-def test_binding_is_isolated_and_restored(tmp_path):
-    assert current_skills() is None
-    loader = SkillLoader(tmp_path)
+def test_two_loaders_do_not_share_state(tmp_path):
+    write_skill(tmp_path, "a", "---\ndescription: A\n---\n")
 
-    with bind_skills(loader):
-        assert current_skills() is loader
+    first = SkillLoader(tmp_path).scan()
+    second = SkillLoader(tmp_path)
 
-    assert current_skills() is None
+    assert set(first.skills) == {"a"}
+    assert second.skills == {}
 
 
-def test_nested_binding_restores_the_outer_loader(tmp_path):
-    outer = SkillLoader(tmp_path)
-    inner = SkillLoader(tmp_path)
+def test_each_scan_produces_its_own_registry(tmp_path):
+    write_skill(tmp_path, "a", "---\ndescription: A\n---\n")
 
-    with bind_skills(outer):
-        with bind_skills(inner):
-            assert current_skills() is inner
-        assert current_skills() is outer
+    first = SkillLoader(tmp_path).scan()
+    second = SkillLoader(tmp_path).scan()
+
+    assert first.skills == second.skills
+    assert first.skills is not second.skills
 
 
 # ---------- 仓库里真实的技能 ----------

@@ -14,10 +14,11 @@
 
 * ⑤ ``reactive_compact`` —— 模型报 ``prompt_too_long`` 时总结更早历史、保留最近若干条，重试一次
 
-三条硬保证：①②③ 不调用模型；④ 每次运行最多一次；⑤ 最多一次。
+三条硬保证：①②③ 不调用模型；④ 每次运行最多一次（由调用方 ``RunState.compacted`` 决定）；
+⑤ 最多一次。①②③ 的签名里没有 ``chat``，这在类型上就保证了它们碰不到模型 API。
 
-所有裁剪只在**安全边界**切开——前一条没有待回应的 ``tool_calls``，且切口处不是
-``tool`` 结果。否则工具调用与结果会被拆散，下一次请求会被端点直接拒绝。
+五步都只通过 ``Transcript`` 的方法读写，因此结构不变量由所有者保证，
+不需要"改完再事后校验"。
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from typing import Any
 
 from .config import Config
 from .llm import chat_completion
+from .transcript import Transcript
 
 logger = logging.getLogger("avid.compact")
 
@@ -73,75 +75,11 @@ class CompactReport:
         return f"{self.step} — {self.detail}"
 
 
-# ---------------- 基础工具 ----------------
-
-
-def _text_of(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value
-    return json.dumps(value, ensure_ascii=False, default=str)
-
-
-def estimate_chars(messages: list[dict[str, Any]]) -> int:
-    """粗估上下文字符数：正文 + tool_calls 序列化 + 每条的结构开销。"""
-    total = 0
-    for message in messages:
-        total += len(_text_of(message.get("content"))) + 16
-        calls = message.get("tool_calls")
-        if calls:
-            total += len(json.dumps(calls, ensure_ascii=False, default=str))
-    return total
-
-
-def validate_structure(messages: list[dict[str, Any]]) -> list[str]:
-    """返回结构违规列表；空列表表示合法。压缩后必须为空。"""
-    problems: list[str] = []
-    expected: set[str] = set()
-
-    for index, message in enumerate(messages):
-        if message.get("role") == "tool":
-            call_id = str(message.get("tool_call_id"))
-            if call_id not in expected:
-                problems.append(f"#{index} 的 tool 结果没有对应的 tool_call：{call_id}")
-            else:
-                expected.discard(call_id)
-            continue
-
-        if expected:
-            problems.append(f"#{index} 之前有 {len(expected)} 个 tool_call 没收到结果")
-            expected = set()
-
-        for call in message.get("tool_calls") or []:
-            expected.add(str(call.get("id")))
-
-    if expected:
-        problems.append(f"结尾有 {len(expected)} 个 tool_call 没收到结果")
-    return problems
-
-
-def _safe_boundary(messages: list[dict[str, Any]], index: int) -> bool:
-    """在 index 处切开是否安全：前一条没有待回应的 tool_calls，且 index 处不是 tool。"""
-    if index <= 0 or index >= len(messages):
-        return True
-    if messages[index].get("role") == "tool":
-        return False
-    return not messages[index - 1].get("tool_calls")
-
-
-def _tool_chars(messages: list[dict[str, Any]]) -> int:
-    return sum(
-        len(_text_of(m.get("content"))) for m in messages if m.get("role") == "tool"
-    )
-
-
-def _is_spilled(content: Any) -> bool:
-    return isinstance(content, str) and content.startswith(SPILL_PREFIX)
+# ---------------- 落盘 ----------------
 
 
 def _spill_root() -> Path:
-    # 延迟导入：agent.py 要 import 本模块，顶部导入会成环。
+    # 延迟导入：agent 侧要 import 本模块，顶部导入会成环。
     from .tools import workspace
 
     return Path(workspace.WORKSPACE_ROOT) / SPILL_DIR
@@ -167,6 +105,10 @@ def _notice(path: str, size: int, kind: str) -> str:
     return f"{SPILL_PREFIX} 原{kind}共 {size} 字符，已存至 {path}；需要时用 read_file 读回。"
 
 
+def _is_spilled(content: str) -> bool:
+    return content.startswith(SPILL_PREFIX)
+
+
 def _save_transcript(messages: list[dict[str, Any]]) -> str:
     global _spill_seq
 
@@ -185,14 +127,15 @@ def _save_transcript(messages: list[dict[str, Any]]) -> str:
     return f"{SPILL_DIR}/{path.name}"
 
 
-def _summarize(messages: list[dict[str, Any]], *, config: Config, chat: Any) -> str | None:
-    request = list(messages) + [{"role": "user", "content": "请把以上对话压缩成要点摘要。"}]
+def _summarize(
+    messages: list[dict[str, Any]], *, config: Config, chat: Any
+) -> str | None:
+    request = list(messages) + [
+        {"role": "user", "content": "请把以上对话压缩成要点摘要。"}
+    ]
     try:
         turn = chat(
-            config,
-            request,
-            system=SUMMARY_SYSTEM,
-            max_tokens=SUMMARY_MAX_TOKENS,
+            config, request, system=SUMMARY_SYSTEM, max_tokens=SUMMARY_MAX_TOKENS
         )
     except Exception as exc:  # 摘要失败不该让整个运行崩掉
         logger.warning("compact: 摘要调用失败：%s", exc)
@@ -214,7 +157,7 @@ def _summary_message(summary: str, transcript: str) -> str:
 
 
 def tool_result_budget(
-    messages: list[dict[str, Any]],
+    transcript: Transcript,
     *,
     budget: int = TOOL_RESULT_CHAR_BUDGET,
     keep_recent: int = TOOL_RESULT_KEEP_RECENT,
@@ -233,19 +176,18 @@ def tool_result_budget(
     否则永远够不到预算线，会变成每轮持续剥工作集。默认 200_000 相对
     单条结果上限（工具的 20_000）× 3 有 3 倍以上余量。
     """
-    before = _tool_chars(messages)
+    before = transcript.tool_chars()
     if before <= budget:
         return None
 
-    tool_indexes = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
-    if len(tool_indexes) <= keep_recent:
+    indexes = transcript.tool_indexes()
+    if len(indexes) <= keep_recent:
         return None
-    spillable = tool_indexes[:-keep_recent]
 
     candidates = [
-        (len(_text_of(messages[index].get("content"))), index)
-        for index in spillable
-        if not _is_spilled(messages[index].get("content"))
+        (len(transcript.text_at(index)), index)
+        for index in indexes[:-keep_recent]
+        if not _is_spilled(transcript.text_at(index))
     ]
     if not candidates:
         return None
@@ -254,16 +196,16 @@ def tool_result_budget(
     if size == 0:
         return None
 
-    path = _spill(_text_of(messages[index].get("content")), "tool-result")
+    path = _spill(transcript.text_at(index), "tool-result")
     if path is None:
         return None
 
-    messages[index]["content"] = _notice(path, size, "工具结果")
+    transcript.set_content(index, _notice(path, size, "工具结果"))
     return CompactReport(
         "tool_result_budget",
         f"落盘最大的一项工具结果（保留最近 {keep_recent} 条）",
         before,
-        _tool_chars(messages),
+        transcript.tool_chars(),
     )
 
 
@@ -271,23 +213,23 @@ def tool_result_budget(
 
 
 def snip_compact(
-    messages: list[dict[str, Any]],
+    transcript: Transcript,
     *,
     max_messages: int = MAX_MESSAGES,
     keep_head: int = SNIP_KEEP_HEAD,
     keep_tail: int = SNIP_KEEP_TAIL,
 ) -> CompactReport | None:
     """消息条数超上限：裁掉中间，保留头尾。切口只在安全边界。"""
-    before = len(messages)
+    before = len(transcript)
     if before <= max_messages:
         return None
 
     head_end = min(keep_head, before)
     tail_start = max(head_end, before - keep_tail)
 
-    while head_end < tail_start and not _safe_boundary(messages, head_end):
+    while head_end < tail_start and not transcript.is_safe_boundary(head_end):
         head_end += 1
-    while tail_start > head_end and not _safe_boundary(messages, tail_start):
+    while tail_start > head_end and not transcript.is_safe_boundary(tail_start):
         tail_start -= 1
 
     if head_end >= tail_start:
@@ -302,44 +244,43 @@ def snip_compact(
             "（较早的工具结果如需恢复，见其中的落盘路径）。"
         ),
     }
-    messages[:] = messages[:head_end] + [marker] + messages[tail_start:]
-    return CompactReport("snip_compact", f"裁掉中间 {dropped} 条", before, len(messages))
+    transcript.splice(head_end, tail_start, [marker])
+    return CompactReport("snip_compact", f"裁掉中间 {dropped} 条", before, len(transcript))
 
 
 # ---------------- ③ micro_compact ----------------
 
 
 def micro_compact(
-    messages: list[dict[str, Any]],
+    transcript: Transcript,
     *,
     limit: int = CONTEXT_CHAR_LIMIT,
     keep_recent: int = MICRO_COMPACT_KEEP_RECENT,
     target_ratio: float = MICRO_COMPACT_TARGET_RATIO,
 ) -> CompactReport | None:
     """上下文超限：把较早的工具结果落盘，保留最近若干条。不调用模型。"""
-    before = estimate_chars(messages)
+    before = transcript.estimate_chars()
     if before <= limit:
         return None
 
     target = int(limit * target_ratio)
-    tool_indexes = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
-    candidates = tool_indexes[:-keep_recent] if keep_recent else tool_indexes
+    indexes = transcript.tool_indexes()
+    candidates = indexes[:-keep_recent] if keep_recent else indexes
 
     spilled = 0
     for index in candidates:
-        if estimate_chars(messages) <= target:
+        if transcript.estimate_chars() <= target:
             break
 
-        content = messages[index].get("content")
+        content = transcript.text_at(index)
         if _is_spilled(content):
             continue
 
-        size = len(_text_of(content))
-        path = _spill(_text_of(content), "tool-result")
+        path = _spill(content, "tool-result")
         if path is None:
             break
 
-        messages[index]["content"] = _notice(path, size, "工具结果")
+        transcript.set_content(index, _notice(path, len(content), "工具结果"))
         spilled += 1
 
     if not spilled:
@@ -348,7 +289,7 @@ def micro_compact(
         "micro_compact",
         f"落盘 {spilled} 项较早的工具结果（保留最近 {keep_recent} 条）",
         before,
-        estimate_chars(messages),
+        transcript.estimate_chars(),
     )
 
 
@@ -356,29 +297,31 @@ def micro_compact(
 
 
 def compact_history(
-    messages: list[dict[str, Any]],
+    transcript: Transcript,
     *,
     config: Config,
     chat: Any = chat_completion,
     limit: int = CONTEXT_CHAR_LIMIT,
 ) -> CompactReport | None:
     """整理之后仍然超限：存完整记录，用一次模型调用换摘要，替换历史。"""
-    before = estimate_chars(messages)
+    before = transcript.estimate_chars()
     if before <= limit:
         return None
 
-    transcript = _save_transcript(messages)
-    summary = _summarize(messages, config=config, chat=chat)
+    path = _save_transcript(transcript.as_messages())
+    summary = _summarize(transcript.as_messages(), config=config, chat=chat)
     if summary is None:
         logger.warning("compact: 摘要生成失败，保留原历史")
         return None
 
-    messages[:] = [{"role": "user", "content": _summary_message(summary, transcript)}]
+    transcript.replace_all(
+        [{"role": "user", "content": _summary_message(summary, path)}]
+    )
     return CompactReport(
         "compact_history",
-        f"摘要替换历史（完整记录 {transcript}）",
+        f"摘要替换历史（完整记录 {path}）",
         before,
-        estimate_chars(messages),
+        transcript.estimate_chars(),
     )
 
 
@@ -386,16 +329,18 @@ def compact_history(
 
 
 def reactive_compact(
-    messages: list[dict[str, Any]],
+    transcript: Transcript,
     *,
     config: Config,
     chat: Any = chat_completion,
     keep_recent: int = REACTIVE_KEEP_RECENT,
 ) -> CompactReport | None:
     """兜底：模型已经报超限，总结更早历史、保留最近若干条，供重试。"""
-    before = estimate_chars(messages)
+    before = transcript.estimate_chars()
+    messages = transcript.as_messages()
+
     tail_start = max(0, len(messages) - keep_recent)
-    while tail_start > 0 and not _safe_boundary(messages, tail_start):
+    while tail_start > 0 and not transcript.is_safe_boundary(tail_start):
         tail_start -= 1
 
     earlier = messages[:tail_start]
@@ -403,16 +348,18 @@ def reactive_compact(
         logger.warning("compact: 没有可总结的更早历史，兜底压缩放弃")
         return None
 
-    transcript = _save_transcript(messages)
+    path = _save_transcript(messages)
     summary = _summarize(earlier, config=config, chat=chat)
     if summary is None:
         return None
 
     tail = messages[tail_start:]
-    messages[:] = [{"role": "user", "content": _summary_message(summary, transcript)}] + tail
+    transcript.replace_all(
+        [{"role": "user", "content": _summary_message(summary, path)}] + tail
+    )
     return CompactReport(
         "reactive_compact",
         f"摘要更早的 {len(earlier)} 条，保留最近 {len(tail)} 条",
         before,
-        estimate_chars(messages),
+        transcript.estimate_chars(),
     )

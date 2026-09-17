@@ -17,9 +17,7 @@ import logging
 import re
 import sys
 import threading
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
-from contextvars import ContextVar
+from collections.abc import Callable
 from typing import Any
 
 logger = logging.getLogger("avid.permission")
@@ -55,23 +53,11 @@ APPROVAL_RULES: dict[str, str] = {
 
 AskUser = Callable[[str, dict[str, Any], str], bool]
 
-# ``--yes`` 是整次运行的性质，不是单次工具调用的性质——所以放 ContextVar，
-# 而不是塞进每个工具的调用上下文。子 agent 在别的线程里跑，而 contextvars
-# 不跨线程继承：由主线程取值后显式传给子运行，--yes 才能穿透到子 agent。
-RUN_AUTO_APPROVE: ContextVar[bool] = ContextVar("avid_run_auto_approve", default=False)
-
 # 多个 subagent 并行时可能同时来要审批，而终端只有一个。
+#
+# 免审批开关本身由 RunState 显式传递，不再用 ContextVar：子 agent 在别的线程跑，
+# contextvars 不跨线程继承，隐式状态在那里会静默失效；显式传参则传不过去就报错。
 _ASK_LOCK = threading.Lock()
-
-
-@contextmanager
-def bind_auto_approve(enabled: bool) -> Iterator[bool]:
-    """把整次运行标记为免审批；硬拒绝闸门不受影响。"""
-    token = RUN_AUTO_APPROVE.set(enabled)
-    try:
-        yield enabled
-    finally:
-        RUN_AUTO_APPROVE.reset(token)
 
 
 def hard_deny(name: str, arguments: Any) -> str | None:

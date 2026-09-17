@@ -5,15 +5,14 @@ import pytest
 from avid.compact import (
     SPILL_PREFIX,
     compact_history,
-    estimate_chars,
     micro_compact,
     reactive_compact,
     snip_compact,
     tool_result_budget,
-    validate_structure,
 )
 from avid.config import Config
 from avid.llm import Turn, Usage
+from avid.transcript import Transcript, estimate_chars, validate
 
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
 
@@ -87,21 +86,21 @@ def test_estimate_grows_with_messages():
 
 
 def test_valid_structure_passes():
-    assert validate_structure([user(), assistant("", [call()]), tool()]) == []
+    assert validate([user(), assistant("", [call()]), tool()]) == []
 
 
 def test_orphan_tool_result_is_a_violation():
-    assert validate_structure([user(), tool()]) != []
+    assert validate([user(), tool()]) != []
 
 
 def test_unanswered_tool_call_is_a_violation():
-    assert validate_structure([user(), assistant("", [call()])]) != []
+    assert validate([user(), assistant("", [call()])]) != []
 
 
 def test_partially_answered_tool_calls_are_a_violation():
     messages = [user(), assistant("", [call("c1"), call("c2")]), tool("c1")]
 
-    assert validate_structure(messages) != []
+    assert validate(messages) != []
 
 
 # ---------- ① tool_result_budget ----------
@@ -110,7 +109,7 @@ def test_partially_answered_tool_calls_are_a_violation():
 def test_budget_is_a_no_op_under_limit():
     messages = [user(), assistant("", [call()]), tool(content="x" * 10)]
 
-    assert tool_result_budget(messages, budget=100) is None
+    assert tool_result_budget(Transcript(messages), budget=100) is None
     assert messages[2]["content"] == "x" * 10
 
 
@@ -120,7 +119,7 @@ def test_budget_spills_the_largest_among_the_older_ones(spill_root):
         messages.append(assistant("", [call(f"c{index}")]))
         messages.append(tool(f"c{index}", "x" * size))
 
-    report = tool_result_budget(messages, budget=50, keep_recent=3)
+    report = tool_result_budget(Transcript(messages), budget=50, keep_recent=3)
 
     assert report is not None
     assert report.step == "tool_result_budget"
@@ -139,7 +138,7 @@ def test_budget_never_spills_the_newest_results(spill_root):
         messages.append(assistant("", [call(f"c{index}")]))
         messages.append(tool(f"c{index}", "x" * 500))
 
-    tool_result_budget(messages, budget=10, keep_recent=3)
+    tool_result_budget(Transcript(messages), budget=10, keep_recent=3)
 
     tool_messages = [m for m in messages if m["role"] == "tool"]
     flags = [m["content"].startswith(SPILL_PREFIX) for m in tool_messages]
@@ -155,7 +154,7 @@ def test_budget_is_a_no_op_when_there_is_nothing_spillable(spill_root):
         messages.append(assistant("", [call(f"c{index}")]))
         messages.append(tool(f"c{index}", "x" * 10_000))
 
-    assert tool_result_budget(messages, budget=10, keep_recent=3) is None
+    assert tool_result_budget(Transcript(messages), budget=10, keep_recent=3) is None
     assert all(
         not m["content"].startswith(SPILL_PREFIX)
         for m in messages
@@ -170,7 +169,7 @@ def test_budget_spills_at_most_one_per_call(spill_root):
         messages.append(assistant("", [call(f"c{index}")]))
         messages.append(tool(f"c{index}", "x" * 1000))
 
-    report = tool_result_budget(messages, budget=10, keep_recent=3)
+    report = tool_result_budget(Transcript(messages), budget=10, keep_recent=3)
 
     assert report is not None
     older = [m for m in messages if m["role"] == "tool"][:-3]
@@ -184,13 +183,13 @@ def test_repeated_budget_calls_drain_older_results_then_stop(spill_root):
         messages.append(tool(f"c{index}", "x" * 1000))
 
     for _ in range(10):
-        if tool_result_budget(messages, budget=10, keep_recent=3) is None:
+        if tool_result_budget(Transcript(messages), budget=10, keep_recent=3) is None:
             break
 
     older = [m for m in messages if m["role"] == "tool"][:-3]
     assert all(m["content"].startswith(SPILL_PREFIX) for m in older)
-    assert tool_result_budget(messages, budget=10, keep_recent=3) is None
-    assert validate_structure(messages) == []
+    assert tool_result_budget(Transcript(messages), budget=10, keep_recent=3) is None
+    assert validate(messages) == []
 
 
 def test_budget_skips_already_spilled_items():
@@ -200,11 +199,11 @@ def test_budget_skips_already_spilled_items():
         tool(content=SPILL_PREFIX + " 原工具结果共 999 字符，已存至 .avid/context/x.txt"),
     ]
 
-    assert tool_result_budget(messages, budget=10) is None
+    assert tool_result_budget(Transcript(messages), budget=10) is None
 
 
 def test_budget_ignores_non_tool_messages():
-    assert tool_result_budget([user("x" * 1000)], budget=10) is None
+    assert tool_result_budget(Transcript([user("x" * 1000)]), budget=10) is None
 
 
 # ---------- ② snip_compact ----------
@@ -213,14 +212,14 @@ def test_budget_ignores_non_tool_messages():
 def test_snip_is_a_no_op_below_the_limit():
     messages = [user(f"m{i}") for i in range(10)]
 
-    assert snip_compact(messages) is None
+    assert snip_compact(Transcript(messages)) is None
     assert len(messages) == 10
 
 
 def test_snip_keeps_head_and_tail():
     messages = [user(f"m{i}") for i in range(60)]
 
-    report = snip_compact(messages)
+    report = snip_compact(Transcript(messages))
 
     assert report is not None
     assert report.step == "snip_compact"
@@ -237,10 +236,10 @@ def test_snip_never_splits_a_tool_pair():
         messages.append(tool(f"c{index}", "x" * 5))
 
     assert len(messages) == 61
-    report = snip_compact(messages)
+    report = snip_compact(Transcript(messages))
 
     assert report is not None
-    assert validate_structure(messages) == []
+    assert validate(messages) == []
 
     kept_results = {m["tool_call_id"] for m in messages if m.get("role") == "tool"}
     declared = {
@@ -249,11 +248,15 @@ def test_snip_never_splits_a_tool_pair():
     assert kept_results <= declared
 
 
-def test_snip_gives_up_when_no_safe_cut_exists():
-    messages = [tool(f"c{i}") for i in range(60)]
+def test_snip_gives_up_when_head_and_tail_cover_everything():
+    """头尾保留量之和超过消息数时无中间可裁——放弃而不是硬裁。"""
+    messages = [user(f"m{i}") for i in range(11)]
 
-    assert snip_compact(messages) is None
-    assert len(messages) == 60
+    assert (
+        snip_compact(Transcript(messages), max_messages=10, keep_head=8, keep_tail=24)
+        is None
+    )
+    assert len(messages) == 11
 
 
 # ---------- ③ micro_compact ----------
@@ -262,7 +265,7 @@ def test_snip_gives_up_when_no_safe_cut_exists():
 def test_micro_is_a_no_op_under_the_limit():
     messages = [user(), assistant("", [call()]), tool(content="x" * 100)]
 
-    assert micro_compact(messages, limit=10_000) is None
+    assert micro_compact(Transcript(messages), limit=10_000) is None
 
 
 def test_micro_spills_older_results_and_keeps_the_newest(spill_root):
@@ -271,7 +274,7 @@ def test_micro_spills_older_results_and_keeps_the_newest(spill_root):
         messages.append(assistant("", [call(f"c{index}")]))
         messages.append(tool(f"c{index}", "x" * 200))
 
-    report = micro_compact(messages, limit=500, keep_recent=3)
+    report = micro_compact(Transcript(messages), limit=500, keep_recent=3)
 
     assert report is not None
     assert report.step == "micro_compact"
@@ -281,7 +284,7 @@ def test_micro_spills_older_results_and_keeps_the_newest(spill_root):
 
     assert flags[-3:] == [False, False, False]  # 最近 3 条原样保留
     assert any(flags[:-3])
-    assert validate_structure(messages) == []
+    assert validate(messages) == []
 
 
 def test_micro_reaches_the_target_when_it_can(spill_root):
@@ -293,7 +296,7 @@ def test_micro_reaches_the_target_when_it_can(spill_root):
         messages.append(assistant("", [call(f"small{index}")]))
         messages.append(tool(f"small{index}", "x" * 10))
 
-    report = micro_compact(messages, limit=30_000, keep_recent=3)
+    report = micro_compact(Transcript(messages), limit=30_000, keep_recent=3)
 
     assert report is not None
     assert report.after <= int(30_000 * 0.8)
@@ -310,7 +313,7 @@ def test_micro_compacts_as_far_as_it_can(spill_root):
         messages.append(assistant("", [call(f"c{index}")]))
         messages.append(tool(f"c{index}", "x" * 1000))
 
-    report = micro_compact(messages, limit=5000, keep_recent=3)
+    report = micro_compact(Transcript(messages), limit=5000, keep_recent=3)
 
     assert report is not None
     assert report.after < report.before
@@ -333,7 +336,7 @@ def test_compact_history_is_a_no_op_under_the_limit():
     chat = FakeChat()
     messages = [user("x" * 100)]
 
-    assert compact_history(messages, config=CONFIG, chat=chat, limit=10_000) is None
+    assert compact_history(Transcript(messages), config=CONFIG, chat=chat, limit=10_000) is None
     assert chat.requests == []
 
 
@@ -341,7 +344,7 @@ def test_compact_history_summarises_and_replaces(spill_root):
     chat = FakeChat("这是摘要")
     messages = [user("x" * 2000), assistant("y" * 2000)]
 
-    report = compact_history(messages, config=CONFIG, chat=chat, limit=100)
+    report = compact_history(Transcript(messages), config=CONFIG, chat=chat, limit=100)
 
     assert report is not None
     assert len(chat.requests) == 1  # 只有一次模型调用
@@ -349,14 +352,14 @@ def test_compact_history_summarises_and_replaces(spill_root):
     assert "[历史摘要]" in messages[0]["content"]
     assert "这是摘要" in messages[0]["content"]
     assert ".avid/context/transcript-" in messages[0]["content"]
-    assert validate_structure(messages) == []
+    assert validate(messages) == []
 
 
 def test_compact_history_saves_the_full_transcript(spill_root):
     chat = FakeChat("摘要")
     messages = [user("原始内容" * 100)]
 
-    compact_history(messages, config=CONFIG, chat=chat, limit=100)
+    compact_history(Transcript(messages), config=CONFIG, chat=chat, limit=100)
 
     transcripts = list((spill_root / ".avid/context").glob("transcript-*.json"))
     assert len(transcripts) == 1
@@ -371,7 +374,7 @@ def test_compact_history_keeps_history_when_the_summary_fails(spill_root):
 
     messages = [user("x" * 2000)]
 
-    assert compact_history(messages, config=CONFIG, chat=broken_chat, limit=100) is None
+    assert compact_history(Transcript(messages), config=CONFIG, chat=broken_chat, limit=100) is None
     assert len(messages) == 1
     assert messages[0]["content"].startswith("x")
 
@@ -390,7 +393,7 @@ def test_reactive_keeps_the_recent_messages(spill_root):
         assistant("最近的2"),
     ]
 
-    report = reactive_compact(messages, config=CONFIG, chat=chat, keep_recent=3)
+    report = reactive_compact(Transcript(messages), config=CONFIG, chat=chat, keep_recent=3)
 
     assert report is not None
     assert report.step == "reactive_compact"
@@ -409,10 +412,10 @@ def test_reactive_widens_the_tail_to_keep_a_pair(spill_root):
         tool("c2", "结果2"),
     ]
 
-    report = reactive_compact(messages, config=CONFIG, chat=chat, keep_recent=1)
+    report = reactive_compact(Transcript(messages), config=CONFIG, chat=chat, keep_recent=1)
 
     assert report is not None
-    assert validate_structure(messages) == []
+    assert validate(messages) == []
     assert messages[-2]["tool_calls"][0]["id"] == "c2"
     assert messages[-1]["tool_call_id"] == "c2"
 
@@ -421,5 +424,5 @@ def test_reactive_gives_up_with_nothing_earlier():
     chat = FakeChat()
     messages = [user("只有这一条")]
 
-    assert reactive_compact(messages, config=CONFIG, chat=chat, keep_recent=5) is None
+    assert reactive_compact(Transcript(messages), config=CONFIG, chat=chat, keep_recent=5) is None
     assert chat.requests == []

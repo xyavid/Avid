@@ -14,11 +14,13 @@ import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..config import Config, load_config
 from ..llm import chat_completion
-from ..permission import RUN_AUTO_APPROVE
+
+if TYPE_CHECKING:  # 运行时导入会成环（state.py 要 import 本模块所在的包）
+    from ..state import RunState
 
 logger = logging.getLogger("avid.subagent")
 
@@ -127,6 +129,7 @@ def _render(tasks: list[dict[str, str]], results: list[str]) -> str:
 def subagent(
     args: dict[str, Any],
     *,
+    state: "RunState",
     runner: Callable[..., str] | None = None,
     timeout: float = SUBAGENT_TIMEOUT_SECONDS,
 ) -> str:
@@ -138,8 +141,9 @@ def subagent(
 
     run = run_subagent if runner is None else runner
     config = load_config()
-    # 在主线程取值：子 agent 在别的线程跑，contextvars 不跨线程继承。
-    auto_approve = RUN_AUTO_APPROVE.get()
+    # 免审批开关从 RunState 读，显式传给每个子运行——子 agent 在别的线程里跑，
+    # 隐式状态在那里会静默失效。
+    auto_approve = state.auto_approve
 
     executor = ThreadPoolExecutor(max_workers=min(len(tasks), MAX_PARALLEL))
     try:
