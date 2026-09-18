@@ -344,3 +344,55 @@ def test_task_board_reads_the_workspace_not_the_process_cwd(client, multi, tmp_p
     unknown = client.get("/api/tasks", params={"workspace": "w-nope"})
     assert unknown.status_code == 404
     assert unknown.json()["error"]["code"] == "workspace_not_found"
+
+
+# ---------------- 会话归属的定位成本（P2-6） ----------------
+
+
+def test_session_lookup_scans_once_then_hits_the_cache(sandbox, monkeypatch):
+    """定位一个会话要扫"每个工作区 × 每个会话文件头"，而它每次运行启动都要付一次。
+
+    扫一次就把所有会话记进缓存；TTL 内再查同一个会话不该再扫。
+    """
+    from avid.session import JsonlSessionRepo
+    from avid.svc import Services
+
+    services = Services(root=sandbox / ".avid" / "sessions")
+    try:
+        first = services.sessions.create(workspace=services.workspaces.default.id)
+        second = services.sessions.create(workspace=services.workspaces.default.id)
+
+        scans: list[str] = []
+        real_list = JsonlSessionRepo.list
+        monkeypatch.setattr(
+            JsonlSessionRepo, "list", lambda self: (scans.append("list"), real_list(self))[1]
+        )
+
+        # 第一次：缓存里没有（上面 create 时登记过 second，先清掉模拟"新进程"）
+        services.workspaces._lookup.clear()
+        workspace, meta = services.workspaces.repo_of_session(first["id"])
+        assert meta.id == first["id"]
+        assert len(scans) >= 1
+
+        scans.clear()
+        for _ in range(3):
+            assert services.workspaces.repo_of_session(first["id"])[1].id == first["id"]
+            assert services.workspaces.repo_of_session(second["id"])[1].id == second["id"]
+        assert scans == [], "TTL 内不该再扫全库"
+    finally:
+        services.close()
+
+
+def test_deleting_a_session_invalidates_its_lookup(sandbox):
+    from avid.svc import Services
+
+    services = Services(root=sandbox / ".avid" / "sessions")
+    try:
+        created = services.sessions.create(workspace=services.workspaces.default.id)
+        assert services.workspaces.find_session(created["id"]) is not None
+
+        services.sessions.delete(created["id"])
+
+        assert services.workspaces.find_session(created["id"]) is None, "删掉的会话不该被缓存命中"
+    finally:
+        services.close()

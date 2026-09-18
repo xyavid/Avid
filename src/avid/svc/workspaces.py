@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -65,6 +66,10 @@ class WorkspaceInvalid(ServiceError):
     status = 400
 
 
+# 归属缓存的 TTL（秒）。取值小是刻意的：缓存只是省一次全库扫描，不是权威。
+SESSION_LOOKUP_TTL_SECONDS = 5.0
+
+
 class WorkspaceService:
     def __init__(
         self,
@@ -81,6 +86,10 @@ class WorkspaceService:
             Path(default_sessions_root) if default_sessions_root is not None else None
         )
         self._repos: dict[str, JsonlSessionRepo] = {}
+        # 会话 → 归属的短期缓存。定位一个会话要扫"每个工作区 × 每个会话文件头"
+        # （O(工作区数 × 会话数)），而它每次运行启动、每次读会话都要付一次。
+        # TTL 很短：别的进程新建的会话最多晚这么久可见；本进程的建/删显式失效。
+        self._lookup: dict[str, tuple[float, Workspace, SessionMetadata]] = {}
         # 一次只允许一个对话框：第二个窗口会盖住第一个，用户会以为界面卡死。
         self._pick_lock = threading.Lock()
 
@@ -234,12 +243,35 @@ class WorkspaceService:
         return repo
 
     def repo_of_session(self, session_id: str) -> tuple[Workspace, SessionMetadata]:
-        """会话属于哪个工作区。会话 id 不携带工作区信息，所以只能逐个库找。"""
+        """会话属于哪个工作区。会话 id 不携带工作区信息，所以只能逐个库找。
+
+        扫一次就把**所有**会话都记进缓存（反正已经列过了），命中缓存则完全不扫。
+        """
+        cached = self._lookup.get(session_id)
+        if cached is not None and cached[0] > time.monotonic():
+            return cached[1], cached[2]
+
+        expires = time.monotonic() + SESSION_LOOKUP_TTL_SECONDS
         for workspace in self.workspaces():
-            found = self._find(self.repo_for(workspace), session_id)
-            if found is not None:
-                return workspace, found
+            for meta in self.repo_for(workspace).list():
+                self._lookup[meta.id] = (expires, workspace, meta)
+
+        cached = self._lookup.get(session_id)
+        if cached is not None:
+            return cached[1], cached[2]
         raise SessionNotFound(f"没有这个会话：{session_id}")
+
+    def remember_session(self, workspace: Workspace, metadata: SessionMetadata) -> None:
+        """新建会话时直接登记归属：不必等下一次全库扫描。"""
+        self._lookup[metadata.id] = (
+            time.monotonic() + SESSION_LOOKUP_TTL_SECONDS,
+            workspace,
+            metadata,
+        )
+
+    def forget_session(self, session_id: str) -> None:
+        """删除/改名之后清掉：让下一次定位重新扫（删除过的会话不该再被缓存命中）。"""
+        self._lookup.pop(session_id, None)
 
     def find_session(self, session_id: str) -> tuple[Workspace, SessionMetadata] | None:
         try:
@@ -258,6 +290,7 @@ class WorkspaceService:
         for repo in self._repos.values():
             repo.close()
         self._repos.clear()
+        self._lookup.clear()
 
 
 def bound_workspace(root: str | Path) -> Workspace:

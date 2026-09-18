@@ -175,6 +175,7 @@ class SessionService:
         repo = self.workspaces.repo_for(owner)
         try:
             session = repo.create(id=id, workspace=owner.id)
+            self.workspaces.remember_session(owner, session.metadata)
         except SessionExistsError as exc:
             raise SessionExists(f"会话已存在：{id}") from exc
         except SessionInvalidIdError as exc:
@@ -215,6 +216,7 @@ class SessionService:
                 self.workspaces.repo_for(workspace).delete(metadata)
             except SessionError as exc:
                 raise SessionReadError(f"销毁会话失败：{exc}") from exc
+            self.workspaces.forget_session(session_id)
 
     # ---------------- 分支 ----------------
 
