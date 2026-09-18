@@ -226,6 +226,42 @@
   border-bottom: var(--stroke-hair) solid rgb(var(--avid-ink-rgb));
 }
 
+/* ---------------- 安静按钮的方框提示（.quiet-chip） ----------------
+ *
+ * 静止时没有边框、底色与阴影；**悬停或键盘聚焦时**出现与 .sketch-chip 同一套方框：
+ * 墨线（--stroke-hair 的宽度来自 Button 的 border-hair）、--sketch-r-chip 圆角、
+ * 纸卡底色、--sticker-1 档硬阴影。三者都取自 tokens，所以换主题只改 tokens.css。
+ *
+ * 为什么这样写：Button 基类带了 border-hair + border-ink，ghost 用 border-transparent
+ * 覆盖颜色而**保留宽度**，于是出框时没有布局位移；:not(:disabled) 让禁用态不出框、
+ * 不位移（禁用按钮在多数浏览器里仍会命中 :hover）。
+ * 按下时位移量 = 本档阴影偏移（1px × --avid-scale），阴影归零，与其它按钮的按压手感一致。
+ */
+.quiet-chip {
+  transition: border-color var(--motion-hover) ease, background-color var(--motion-hover) ease,
+    box-shadow var(--motion-press) ease, transform var(--motion-press) ease;
+}
+
+.quiet-chip:not(:disabled):hover,
+.quiet-chip:not(:disabled):focus-visible {
+  border-color: rgb(var(--avid-ink-rgb));
+  background-color: rgb(var(--avid-card-rgb));
+  box-shadow: var(--sticker-1);
+}
+
+/* 放在 hover 规则之后：同特异度下由顺序决定，按住时阴影必须归零。 */
+.quiet-chip:not(:disabled):active {
+  transform: translate(calc(1px * var(--avid-scale)), calc(1px * var(--avid-scale)));
+  box-shadow: none;
+}
+
+.quiet-chip:disabled {
+  border-color: transparent;
+  background-color: transparent;
+  box-shadow: none;
+  transform: none;
+}
+
 /* 长命令行不能撑破卡片：横向滚动只出现在工具输出里。 */
 .break-anywhere {
   overflow-wrap: anywhere;

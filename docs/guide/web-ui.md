@@ -99,7 +99,7 @@ curl -s -o /dev/null -w '%{http_code} %{content_type}\n' localhost:8765/api/nope
   首屏、四条路由、提交→审批→完成、检查器与 `e2e/layout.spec.ts`（输入条始终在视口内、
   会话区域独立滚动、其他工作面不溢出）；a11y / 视觉回归 / 降级仍只有约定没有用例。
 
-## 6. 布局约定（别改回去）
+## 6. 布局与交互约定（别改回去）
 
 外壳的高度链是**视口高度**：`AppShell` 外层 `h-dvh overflow-hidden`，内层行 `h-full min-h-0`，
 再往下每一级 flex 容器都带 `min-h-0`。这样「时间线是唯一滚动容器」才成立：
@@ -108,3 +108,10 @@ curl -s -o /dev/null -w '%{http_code} %{content_type}\n' localhost:8765/api/nope
 用 `min-h-screen` 代替 `h-dvh` 会让容器高度由内容决定，`flex-1` / `h-full` 全部失去参照，
 消息区会把整页撑高、输入条被推到视口之外（`web/e2e/layout.spec.ts` 就是这条的回归用例）。
 非会话工作面（任务板 / 技能目录 / 设置）由各自的 route 容器 `scroll-area` 承担滚动。
+
+交互反馈同理只有一处定义：`variant="ghost"` 的安静按钮（时间线的「复制文本 / 查看原始
+JSON」、工具卡收起、处理中展开、会话标题、导航收起、关闭检查器等）静止时无框，
+**悬停或键盘聚焦**时由 `ui/sketch.css` 的 `.quiet-chip` 给出方框：墨线边（`--stroke-hair`）、
+`--sketch-r-chip` 圆角、纸卡底、`--sticker-1` 档硬阴影；按下时阴影归零、位移等于该档偏移；
+禁用态不出框、不位移。所有取值来自 `ui/tokens.css`，所以「换主题」与「整体缩放」都不需要
+改组件。回归用例：`web/e2e/interaction.spec.ts`。

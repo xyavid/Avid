@@ -78,7 +78,7 @@ export function AppShell(props: AppShellProps) {
       <div className="paper-canvas" aria-hidden="true" />
       <a
         href="#main"
-        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-toast focus:bg-card focus:p-2"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-toast focus:rounded-chip focus:border-hair focus:border-ink focus:bg-card focus:p-2 focus:shadow-sticker-2"
       >
         {t('common.skipToContent')}
       </a>

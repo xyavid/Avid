@@ -44,6 +44,15 @@ AVID_E2E=1 pnpm test:e2e    # Playwright 14 项（需先 pnpm exec playwright in
    `shadow-[…]`、`z-[…]`、内联 `borderRadius`/`fontFamily`、裸 `<button>/<input>/<select>`
    （`ui/` 之外）、`transition-all`、JSX 内联文案、空 `catch` 全部报错。
 
+## 交互反馈（安静按钮）
+
+`variant="ghost"` 的按钮静止时没有方框，但**悬停与键盘聚焦**时必须出现与其它按钮同一套
+方框：`.quiet-chip`（`ui/sketch.css`）给出墨线边、`--sketch-r-chip` 圆角、纸卡底与
+`--sticker-1` 档硬阴影，按下时阴影归零、位移等于该档偏移，禁用态一律不出框。
+这条规则写在 `ui/primitives/Button.tsx` 一处，所有 ghost 按钮（时间线的复制/查看、
+工具卡收起、处理中展开、会话标题、导航收起、关闭检查器……）自动同族；
+取值只来自 `ui/tokens.css`，所以换主题不需要动组件。回归用例：`e2e/interaction.spec.ts`。
+
 ## 状态三域
 
 | 域 | 机制 | 权威来源 |
