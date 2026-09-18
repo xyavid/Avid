@@ -21,7 +21,7 @@ from typing import Any
 from . import events
 from .hooks import BLOCK, trigger_hooks
 from .state import RunState
-from ..tools import ToolImpl
+from ..tools import ToolImpl, workspace
 
 logger = logging.getLogger("avid.runtime.execution")
 
@@ -29,9 +29,20 @@ logger = logging.getLogger("avid.runtime.execution")
 # 更有用的内容（permission_hook 就会），这里只在回调没设时使用。
 DENIED_CONTENT = "Permission denied."
 
-# 需要读 RunState 的工具。新增这类工具时同时改这里——契约测试会校验它
-# 与工具注册表一致、且这些 handler 确实接受 state 参数。
-STATEFUL_TOOLS: frozenset[str] = frozenset({"todo_write", "load_skill", "subagent"})
+# 需要读 RunState 的工具。文件类工具进去是因为它们要读运行级工作区根与越界授权账本
+# （``state.workspace_root`` / ``state.outside_allowed``），而这两个决定都由权限层做。
+# 契约测试校验这张表里的名字都在注册表里、且这些 handler 确实接受 state 关键字。
+STATEFUL_TOOLS: frozenset[str] = frozenset(
+    {
+        "read_file",
+        "write_file",
+        "edit_file",
+        "glob",
+        "todo_write",
+        "load_skill",
+        "subagent",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -81,6 +92,11 @@ def execute_one(
         "round": round_index,
         "tool_call_id": tool_call_id,
         "auto_approve": state.auto_approve,
+        # 权限层的运行级上下文：模式决定"哪些动作打问号"，账本让"同意一次"生效，
+        # 工作区根是越界判定的基准。根在**调用时**解析，测试的 monkeypatch 才有效。
+        "permission_mode": state.permission_mode,
+        "approval_ledger": state.ledger,
+        "workspace_root": state.workspace_root or str(workspace.WORKSPACE_ROOT),
         # 策略注入点：hook 回调据此发起审批，而不必自己去读 stdin（§7.2）。
         "ask": state.ask,
     }

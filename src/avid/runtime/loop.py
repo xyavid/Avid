@@ -35,7 +35,7 @@ from .state import TODO_REMINDER_AFTER_ROUNDS, RunState
 from ..ai.transcript import Transcript
 
 if TYPE_CHECKING:  # 只有类型标注用它：注解是惰性的，运行时不必跨层 import 策略层
-    from ..policy.permission import AskUser
+    from ..policy.permission import ApprovalLedger, AskUser
 
 logger = logging.getLogger("avid.runtime.loop")
 
@@ -79,6 +79,9 @@ def _submit_input(transcript: Transcript, state: RunState) -> int | None:
         "prompt": transcript.text_at(index),
         "messages": transcript.as_messages(),
         "injected": [],
+        # 运行级工作区根：注入给模型的"[环境] 工作区根目录"要与实际解析一致。
+        "workspace_root": state.workspace_root,
+        "permission_mode": state.permission_mode,
     }
     if trigger_hooks("UserPromptSubmit", submit) == BLOCK:
         logger.warning("UserPromptSubmit 被拦截，未调用模型")
@@ -107,6 +110,12 @@ def agent_loop(
     # 摘要接成非流式，delta 流里就不会混进摘要文本（否则它会与真正的回复粘成一条气泡）。
     summarize: Callable[..., Turn] | None = None,
     auto_approve: bool = False,
+    # 权限模式（strict / workspace / system）与"同意一次"账本。None 交给 RunState
+    # 取默认（循环不认识策略层的默认值）。账本由调用方传入时与子 agent 共用，
+    # 于是同一项操作的同意覆盖整个运行。
+    permission_mode: str | None = None,
+    ledger: "ApprovalLedger | None" = None,
+    workspace_root: str | None = None,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     max_rounds: int = MAX_ROUNDS,
     max_stop_blocks: int = MAX_STOP_BLOCKS,
@@ -131,6 +140,8 @@ def agent_loop(
 
     ``ask`` 注入审批回调（None = 回落到 stdin）；``state`` 允许调用方传入一份
     已建好的运行状态——取消需要从另一个线程置位，所以取消路径必须能拿到它。
+    传了 ``state`` 时 ``auto_approve`` / ``ask`` / ``on_event`` / ``permission_mode`` /
+    ``ledger`` / ``workspace_root`` 全部以那份 state 为准（唯一权威，不做合并）。
     """
     config = config or load_config()
     summarize = summarize or chat
@@ -143,7 +154,14 @@ def agent_loop(
 
     transcript = Transcript(messages)
     # 注册表与 system prompt 都由 state 负责——循环不知道默认指令文案，也不持有注册表。
-    state = state or RunState.for_run(auto_approve=auto_approve, ask=ask, observer=on_event)
+    state = state or RunState.for_run(
+        auto_approve=auto_approve,
+        ask=ask,
+        observer=on_event,
+        permission_mode=permission_mode,
+        ledger=ledger,
+        workspace_root=workspace_root,
+    )
     system_prompt = state.system_prompt(system)
 
     trigger = _submit_input(transcript, state)

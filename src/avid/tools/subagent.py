@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..ai.config import Config, load_config
 from ..ai.client import chat_completion
+from ..policy.permission import DEFAULT_MODE
 
 if TYPE_CHECKING:  # 运行时导入会成环（state.py 要 import 本模块所在的包）
     from ..runtime.state import RunState
@@ -51,12 +52,19 @@ def run_subagent(
     auto_approve: bool = False,
     chat: Callable[..., Any] = chat_completion,
     ask: Any = None,
+    permission_mode: str = DEFAULT_MODE,
+    ledger: Any = None,
+    workspace_root: str | None = None,
 ) -> str:
     """跑一个子 agent，返回它的结论摘要。
 
     ``ask`` 由父运行注入并前传：没有它，子 agent 的审批会落到 stdin 上——在
     uvicorn 进程里那是 EOF 或永久阻塞。这是**既有缺陷的修复**，只是 CLI 下被
     终端与 ``_ASK_LOCK`` 掩盖了（设计文档 §7.2）。
+
+    ``permission_mode`` / ``ledger`` / ``workspace_root`` 同理必须逐字段前传：
+    子 agent 在别的线程跑，``RunState`` 不跨线程继承。漏传 mode 的后果是**最严一档
+    被静默绕过**（父运行 strict、子 agent 却按默认值放行），因此有一条专门的用例盯着。
     """
     # 延迟导入：agent.py 需要 import 本模块来注册工具，顶部导入会成环。
     from ..runtime.loop import RoundLimitExceeded, agent_loop
@@ -74,6 +82,9 @@ def run_subagent(
             auto_approve=auto_approve,
             max_rounds=SUBAGENT_MAX_TURNS,
             ask=ask,
+            permission_mode=permission_mode,
+            ledger=ledger,
+            workspace_root=workspace_root,
         )
     except RoundLimitExceeded:
         return (
@@ -148,16 +159,27 @@ def subagent(
 
     run = run_subagent if runner is None else runner
     config = load_config()
-    # 免审批开关与审批回调都从 RunState 读，显式传给每个子运行——子 agent 在别的
-    # 线程里跑，隐式状态在那里会静默失效。
+    # 免审批开关、审批回调、权限模式与账本都从 RunState 读，显式传给每个子运行——
+    # 子 agent 在别的线程里跑，隐式状态在那里会静默失效。账本共用一本，于是
+    # "同意一次即生效"覆盖整个运行（含子 agent）。
     auto_approve = state.auto_approve
     ask = state.ask
+    permission_mode = state.permission_mode
+    ledger = state.ledger
+    workspace_root = state.workspace_root
 
     executor = ThreadPoolExecutor(max_workers=min(len(tasks), MAX_PARALLEL))
     try:
         futures = [
             executor.submit(
-                run, task["prompt"], config=config, auto_approve=auto_approve, ask=ask
+                run,
+                task["prompt"],
+                config=config,
+                auto_approve=auto_approve,
+                ask=ask,
+                permission_mode=permission_mode,
+                ledger=ledger,
+                workspace_root=workspace_root,
             )
             for task in tasks
         ]

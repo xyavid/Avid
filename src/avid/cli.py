@@ -26,6 +26,7 @@ from pathlib import Path
 from .runtime.loop import RoundLimitExceeded, agent_loop
 from .ai.config import ConfigError, load_config
 from .ai.client import LLMError, ask
+from .policy.permission import DEFAULT_MODE, MODE_LABELS, MODES
 from .session import (
     JsonlSessionRepo,
     JsonlSessionMetadata,
@@ -66,6 +67,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--yes",
         action="store_true",
         help="跳过审批闸门（硬拒绝仍然生效），非交互场景需显式指定",
+    )
+    parser.add_argument(
+        "--permission",
+        choices=MODES,
+        default=DEFAULT_MODE,
+        metavar="{strict,workspace,system}",
+        help="权限模式："
+        + "；".join(f"{mode}={MODE_LABELS[mode]}" for mode in MODES)
+        + f"（默认 {DEFAULT_MODE}）。模式决定哪些动作要问，--yes 只决定谁来回答",
     )
     parser.add_argument(
         "--session",
@@ -129,6 +139,7 @@ def main(argv: list[str] | None = None) -> int:
                     [{"role": "user", "content": args.prompt}],
                     config=config,
                     auto_approve=args.yes,
+                    permission_mode=args.permission,
                 )
             )
         except (LLMError, RoundLimitExceeded) as exc:
@@ -181,6 +192,7 @@ def _run_session(args: argparse.Namespace, config) -> int:
                 messages,
                 config=config,
                 auto_approve=args.yes,
+                permission_mode=args.permission,
                 on_message=recorder.on_message,
             )
         except (LLMError, RoundLimitExceeded) as exc:

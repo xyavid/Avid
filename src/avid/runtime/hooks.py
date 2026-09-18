@@ -26,8 +26,12 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from ..policy.permission import check_permission, hard_deny
-from ..policy.permission import auto_approve as _auto_approve
+from ..policy.permission import (
+    DEFAULT_MODE,
+    always_allow,
+    danger_reason,
+    gate,
+)
 
 logger = logging.getLogger("avid.runtime.hooks")
 
@@ -95,55 +99,92 @@ def trigger_hooks(event: str, context: dict[str, Any]) -> str:
 
 
 def context_inject_hook(context: dict[str, Any]) -> str | None:
-    """UserPromptSubmit：注入工作区路径与可用工具，省掉模型猜环境的往返。"""
+    """UserPromptSubmit：注入工作区路径与可用工具，省掉模型猜环境的往返。
+
+    工作区根优先取运行级上下文（``state.workspace_root``，阶段 18 起每个会话可以属于
+    不同工作区），没有时回落到进程默认根。
+    """
     from ..tools import TOOLS, workspace
 
+    root = context.get("workspace_root") or workspace.WORKSPACE_ROOT
     names = "、".join(item["function"]["name"] for item in TOOLS)
     context.setdefault("injected", []).append(
-        f"[环境] 工作区根目录：{workspace.WORKSPACE_ROOT}\n[环境] 可用工具：{names}"
+        f"[环境] 工作区根目录：{root}\n[环境] 可用工具：{names}"
     )
     return None
 
 
+# 需要按"目标是否在工作区之外"判断的工具：它们的 path 参数就是待判定的目标。
+PATH_TOOLS = frozenset({"read_file", "write_file", "edit_file", "glob"})
+
+
+def permission_facts(
+    name: str, arguments: dict[str, Any], root: str | None = None
+) -> tuple[str | None, str | None]:
+    """算出危险类别与越界目标两个**事实**，交给 ``permission.gate`` 裁决。
+
+    路径数学只有一份（``tools/workspace.py``），策略层不复制它；这里也不做决定。
+    """
+    from pathlib import Path
+
+    from ..tools import workspace
+
+    base = Path(root) if root else None
+    danger = danger_reason(name, arguments)
+
+    if name == "bash":
+        command = arguments.get("command")
+        target = (
+            workspace.outside_command_target(command, root=base)
+            if isinstance(command, str)
+            else None
+        )
+    elif name in PATH_TOOLS:
+        raw = arguments.get("path")
+        target = (
+            workspace.outside_target(raw, root=base) if isinstance(raw, str) else None
+        )
+    else:
+        target = None
+
+    return danger, target
+
+
 def permission_hook(context: dict[str, Any]) -> str | None:
-    """PreToolUse：走权限三闸门；拒绝时写明原因，并给出可执行的下一步。
+    """PreToolUse：走四层权限裁决；拒绝时按档写明原因，并给出可执行的下一步。
 
-    硬拒绝与用户拒绝对模型意味着完全不同的事——一个是"永远不许，换做法"，
-    另一个是"这次不行，别重复提交"。只回一句 "Permission denied." 会让模型
-    分不清两者，于是反复重试同一条命令直到烧穿轮数上限。
+    硬拒绝、危险命令、越界、常规规则对模型意味着完全不同的事——"永远不许，换做法"、
+    "这条命令危险，换非破坏性做法"、"这个路径在区外，别重复试"、"这次不行，别重复提交"。
+    只回一句 "Permission denied." 会让模型分不清，于是反复重试同一条命令直到烧穿轮数上限。
 
-    审批回调优先取 ``context["ask"]``（由 ``execution.execute_one`` 从
-    ``RunState.ask`` 注入）。Web 路径注入自己的实现——在 uvicorn 进程里 stdin
-    不是终端，读它会立刻 EOF 或永久阻塞；CLI 路径没有注入，逐字回落到 stdin，
-    行为与改动前一致（设计文档 §7.2）。
+    运行级上下文由 ``execution.execute_one`` 注入：``permission_mode``、``approval_ledger``、
+    ``workspace_root``、``ask``、``auto_approve``。审批回调优先取 ``context["ask"]``；
+    没有注入时逐字回落到 stdin（CLI 路径），行为与改动前一致（设计文档 §7.2）。
     """
     name = context.get("tool", "")
     arguments = context.get("arguments") or {}
+    mode = context.get("permission_mode") or DEFAULT_MODE
+    ledger = context.get("approval_ledger")
+    danger, outside = permission_facts(name, arguments, context.get("workspace_root"))
 
-    hard = hard_deny(name, arguments)
-    if hard:
-        context["denied_kind"] = "hard"
-        context["denied_reason"] = f"{name}：{hard}"
-        context["denied_content"] = (
-            f"Permission denied. 原因：硬拒绝（{hard}）。"
-            "这条命令被永久禁止，不要重试、也不要改写绕过，请改用别的方式完成任务。"
-        )
-        return BLOCK
+    # ``--yes`` 只换回答者，不改变"哪些动作会打问号"。
+    answerer = always_allow if context.get("auto_approve") else context.get("ask")
 
-    if context.get("auto_approve"):
-        allowed = _auto_approve(name, arguments)
-    else:
-        allowed = check_permission(name, arguments, ask=context.get("ask"))
-
-    if allowed:
+    decision = gate(
+        name,
+        arguments,
+        mode=mode,
+        ask=answerer,
+        ledger=ledger,
+        danger=danger,
+        outside=outside,
+    )
+    if decision.allowed:
         return None
 
-    context["denied_kind"] = "user"
-    context["denied_reason"] = f"{name}：未获批准"
-    context["denied_content"] = (
-        "Permission denied. 原因：本次未获用户批准。"
-        "不要重复提交同一条调用；请说明你需要它做什么，或改用其它工具。"
-    )
+    context["denied_kind"] = decision.kind
+    context["denied_reason"] = f"{name}：{decision.reason}"
+    context["denied_content"] = decision.message
     return BLOCK
 
 

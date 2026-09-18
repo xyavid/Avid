@@ -13,6 +13,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from ..policy.permission import (
+    MODE_SYSTEM,
+    DEFAULT_MODE,
+    ApprovalLedger,
+    validate_mode,
+)
 from ..policy.skills import SkillLoader
 from ..policy.todo import TodoList, build_reminder
 from .events import RunObserver, event
@@ -30,6 +36,17 @@ TODO_REMINDER_AFTER_ROUNDS = 3
 class RunState:
     # 运行级开关
     auto_approve: bool = False
+
+    # 权限模式：名字即信任边界（strict / workspace / system）。默认最严，
+    # 因为默认值一放宽就是静默放大所有既有调用方的权限。
+    permission_mode: str = DEFAULT_MODE
+
+    # "同意一次即生效"的账本：只活一次运行、只在内存里。子 agent 与父 agent 共用一本。
+    ledger: ApprovalLedger = field(default_factory=ApprovalLedger)
+
+    # 本次运行的工作区根。None 表示"由 tools.workspace.WORKSPACE_ROOT 决定"——
+    # **在调用时读取**，而不是在 import 时拷进默认值，否则测试的 monkeypatch 会失效。
+    workspace_root: str | None = None
 
     # 策略注入点：审批回调（None = 回落到 policy.permission.ask_user）。
     # Web 路径注入自己的实现，于是审批不再读 stdin（设计文档 §7.2）。
@@ -68,14 +85,32 @@ class RunState:
         auto_approve: bool = False,
         ask: AskUser | None = None,
         observer: RunObserver | None = None,
+        permission_mode: str | None = None,
+        ledger: ApprovalLedger | None = None,
+        workspace_root: str | None = None,
     ) -> "RunState":
         """建一份运行状态，并**重新扫描一次技能目录**——磁盘变了，下次运行就生效。"""
         return cls(
             auto_approve=auto_approve,
             ask=ask,
             observer=observer,
+            permission_mode=validate_mode(permission_mode or DEFAULT_MODE),
+            ledger=ledger if ledger is not None else ApprovalLedger(),
+            workspace_root=workspace_root,
             skills=SkillLoader().scan(),
         )
+
+    # ---------------- 权限 ----------------
+
+    def outside_allowed(self, path: object) -> bool:
+        """文件工具据此判断越界目标是否已获授权。
+
+        只读结果、不做决定：决定由 ``policy.permission.gate`` 做出并写进账本，
+        所以"没有授权"必然失败关闭。``system`` 模式下整圈预授权。
+        """
+        if self.permission_mode == MODE_SYSTEM:
+            return True
+        return self.ledger.outside_allowed(path)
 
     # ---------------- 事件与取消 ----------------
 
