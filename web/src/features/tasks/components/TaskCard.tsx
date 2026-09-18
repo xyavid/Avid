@@ -59,7 +59,7 @@ export function TaskCard({ task, index }: TaskCardProps) {
   return (
     <article className={clsx('sketch-card', shapeFor(index))}>
       <Button
-        variant="ghost"
+        variant="secondary"
         size="sm"
         className="w-full justify-between gap-2 text-left"
         aria-expanded={open}

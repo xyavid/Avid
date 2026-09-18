@@ -101,7 +101,7 @@ export function AppShell(props: AppShellProps) {
                 </Button>
               </Tooltip>
               {isWide ? (
-                <Button size="sm" variant="ghost" onClick={() => toggleNav()} aria-expanded={expanded}>
+                <Button size="sm" variant="secondary" onClick={() => toggleNav()} aria-expanded={expanded}>
                   {expanded ? t('common.collapse') : t('common.expand')}
                 </Button>
               ) : null}

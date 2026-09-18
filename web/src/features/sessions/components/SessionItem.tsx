@@ -85,7 +85,7 @@ export function SessionItem({
         <Button size="sm" onClick={onStartRename}>
           {t('common.rename')}
         </Button>
-        <Button size="sm" variant="ghost" onClick={onRequestDelete}>
+        <Button size="sm" variant="secondary" onClick={onRequestDelete}>
           {t('common.delete')}
         </Button>
       </div>

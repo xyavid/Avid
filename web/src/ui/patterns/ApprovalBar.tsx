@@ -105,7 +105,7 @@ export function ApprovalBar({ approval, busy = false, onAnswer }: ApprovalBarPro
             {t('approvals.expires', { time: relativeTime(approval.expiresAt - Date.now(), locale) })}
           </span>
         ) : null}
-        <Button size="sm" variant="ghost" className="ml-auto" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <Button size="sm" variant="secondary" className="ml-auto" aria-expanded={open} onClick={() => setOpen(!open)}>
           {open ? t('common.collapse') : t('common.expand')}
         </Button>
       </div>

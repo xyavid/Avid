@@ -20,6 +20,9 @@ import { defineConfig } from '@playwright/test'
 export default defineConfig({
   testDir: './e2e',
   baseURL: 'http://127.0.0.1:8765',
+  // 串行：被测后端是**单进程**的（每会话一个活动 run 的注册表 + 同一份会话文件），
+  // 多个 worker 并行造会话时会互相拖慢，表现为与本文件无关的偶发失败。
+  workers: 1,
   use: {
     trace: 'off',
   },

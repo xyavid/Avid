@@ -2,22 +2,22 @@ import { expect, test } from '@playwright/test'
 import type { Locator, Page } from '@playwright/test'
 
 /**
- * 交互反馈回归：安静按钮（`variant="ghost"`，含时间线的「复制文本 / 查看原始 JSON」）
- * 在悬停与键盘聚焦时必须出现与其它按钮同一套方框，禁用态不出框，按下时阴影归零，
- * 且方框的取值全部来自 tokens（换主题只改 tokens.css，不需要动组件）。
+ * 交互反馈回归：**行动型按键本身就有方框**（与「改名」同族），悬停再抬升一档；
+ * `ghost` 只留给标题/链接型控件（会话列表的会话标题），它保持无框。
  *
- * 断言一律等样式稳定后再读：方框是 120ms/90ms 的过渡，读中间帧会读到插值颜色
- * （例如 rgba(26,26,26,0.165)），那是动画而不是缺陷。用 expect.poll 等结果而不是
- * 关掉动效，顺带证明动效真的在跑。
+ * 需要 AVID_E2E=1 且内核已起（脚本模型即可）。
+ * 断言一律等样式稳定后再读：阴影与位移是 90–120ms 的过渡，读中间帧会读到插值
+ * （例如 rgba(26,26,26,0.165) 或 0.638591px），那是动画而不是缺陷。
  */
 test.skip(!process.env.AVID_E2E, '需要 AVID_E2E=1 且内核已启动')
 
 const BASE = process.env.AVID_BASE_URL ?? 'http://127.0.0.1:8765'
-// `--sketch-r-chip` 是 `4px 6px 3px 5px / 5px 3px 6px 4px`，左上角解析后是 `4px 5px`。
+// `--sketch-r-chip` = `4px 6px 3px 5px / 5px 3px 6px 4px`，左上角解析后是 `4px 5px`。
 const CHIP_CORNER = '4px 5px'
-const CHIP_TOKEN = '--sketch-r-chip'
 const INK = 'rgb(26, 26, 26)'
 const CARD = 'rgb(255, 255, 255)'
+const STICKER_2 = '2px 2px 0px 0px'
+const STICKER_3 = '3px 3px 0px 0px'
 const TRANSPARENT = /rgba?\(0, 0, 0, 0\)/
 
 interface ChipStyle {
@@ -72,7 +72,7 @@ async function expectStyle(
     .toBe(true)
 }
 
-async function openSessionWithTool(page: Page): Promise<void> {
+async function openSession(page: Page): Promise<void> {
   const listed = await page.request.get(`${BASE}/api/sessions`)
   const sessions: { id: string; message_count: number }[] = (await listed.json()).sessions
   const target = sessions.find((item) => item.message_count > 0)
@@ -84,141 +84,136 @@ async function openSessionWithTool(page: Page): Promise<void> {
     .toBeGreaterThan(50)
 }
 
-function actionButton(page: Page, name: string): Locator {
-  return page.getByRole('log').getByRole('button', { name }).first()
-}
+test('行动型按键本身就有方框（不依赖悬停）：删除与改名同族', async ({ page }) => {
+  await openSession(page)
+  const remove = page.getByRole('button', { name: '删除' }).first()
+  const rename = page.getByRole('button', { name: '改名' }).first()
 
-test('时间线消息动作：静止无框，悬停出框，样式取自 token', async ({ page }) => {
-  await openSessionWithTool(page)
-  const action = actionButton(page, '复制文本')
+  const rest = await styleOf(remove)
+  expect(rest.borderColor, '静止时就有墨线方框').toBe(INK)
+  expect(rest.borderWidth, '边框宽度 = --stroke-hair').toBe('2px')
+  expect(rest.borderRadius, '圆角 = --sketch-r-chip').toBe(CHIP_CORNER)
+  expect(rest.backgroundColor, '底色 = 纸卡 token').toBe(CARD)
+  expect(rest.boxShadow, '静止时就有 --sticker-2 档硬阴影').toContain(STICKER_2)
 
-  // 静止态：透明度 0（时间线的「悬停/聚焦才出现」）且没有墨线方框
-  const rest = await styleOf(action)
-  expect(rest.opacity, '静止时应隐藏').toBe('0')
-  expect(rest.borderColor, '静止时边框透明').toMatch(TRANSPARENT)
-  expect(shadowVisible(rest.boxShadow), '静止时没有硬阴影').toBe(false)
-  // 动效存在，且只过渡显式属性（不是 transition-all）
-  const motion = await action.evaluate((element) => {
-    const style = getComputedStyle(element)
-    return { property: style.transitionProperty, duration: style.transitionDuration }
-  })
-  expect(motion.property).toContain('border-color')
-  expect(motion.property).toContain('box-shadow')
-  expect(motion.property).not.toContain('all')
-  expect(motion.duration).not.toBe('0s')
+  const sibling = await styleOf(rename)
+  expect(rest.borderWidth, '与「改名」同边框').toBe(sibling.borderWidth)
+  expect(rest.borderRadius, '与「改名」同圆角').toBe(sibling.borderRadius)
+  expect(rest.boxShadow, '与「改名」同高度档').toBe(sibling.boxShadow)
+})
+
+test('悬停抬升一档，按住时阴影归零、位移等于新档偏移', async ({ page }) => {
+  await openSession(page)
+  // 用「复制文本」而不是「删除」：删除点下去会弹确认框，按钮随即失去悬停态。
+  const action = page.getByRole('log').getByRole('button', { name: '复制文本' }).first()
 
   await action.hover()
-  await expectStyle(action, (style) => style.opacity === '1', '悬停后可见')
-  await expectStyle(action, (style) => style.borderColor === INK, '悬停出现墨色方框')
-  const hovered = await styleOf(action)
-  expect(hovered.borderWidth, '边框宽度与其它按钮一致（--stroke-hair）').toBe('2px')
-  expect(hovered.borderRadius, '圆角取 --sketch-r-chip').toBe(CHIP_CORNER)
-  const token = await action.evaluate(
-    (element, name) => getComputedStyle(element).getPropertyValue(name),
-    CHIP_TOKEN,
+  await expectStyle(
+    action,
+    (style) => style.boxShadow.includes(STICKER_3),
+    '悬停抬升一档（--sticker-2 → --sticker-3）',
   )
-  expect(token.trim(), '圆角来自 token 而不是组件里的字面量').not.toBe('')
-  expect(hovered.backgroundColor, '底色取纸卡 token').toBe(CARD)
-  expect(hovered.boxShadow, '高度取 --sticker-1 档').toContain('1px 1px 0px 0px')
-})
-
-test('键盘聚焦：按钮显形、出框，并保留焦点环', async ({ page }) => {
-  await openSessionWithTool(page)
-  const action = actionButton(page, '复制文本')
-
-  await action.focus()
-  await page.keyboard.press('Tab')
-  await page.keyboard.press('Shift+Tab') // 用键盘回到该按钮 → 命中 :focus-visible
-
-  await expectStyle(action, (style) => style.opacity === '1', '键盘聚焦必须让动作可见')
-  await expectStyle(action, (style) => style.borderColor === INK, '聚焦出现墨色方框')
-  await expectStyle(action, (style) => shadowVisible(style.boxShadow), '聚焦有硬阴影')
-  await expectStyle(action, (style) => style.outlineWidth === '2px', '保留 focus-visible 焦点环')
-  const focused = await styleOf(action)
-  expect(focused.outlineColor, '焦点环用强调色 token').toBe('rgb(212, 122, 90)')
-})
-
-test('按下：阴影归零、位移等于 --sticker-1 档偏移', async ({ page }) => {
-  await openSessionWithTool(page)
-  const action = actionButton(page, '查看原始 JSON')
-  await action.hover()
-  await expectStyle(action, (style) => shadowVisible(style.boxShadow), '悬停先出现阴影')
 
   await page.mouse.down()
   await expectStyle(action, (style) => !shadowVisible(style.boxShadow), '按住时阴影归零')
   await expectStyle(
     action,
-    (style) => style.transform === 'matrix(1, 0, 0, 1, 1, 1)',
-    '位移量 = 本档偏移（1px，缩放为 1 时）',
+    (style) => style.transform === 'matrix(1, 0, 0, 1, 3, 3)',
+    '位移 = 悬停后本档偏移（3px）',
   )
   await page.mouse.up()
+  await expectStyle(action, (style) => style.boxShadow.includes(STICKER_3), '松开回到悬停档')
 })
 
-test('禁用：不出框、不位移、不显示阴影', async ({ page }) => {
-  await openSessionWithTool(page)
-  const action = actionButton(page, '复制文本')
-  await action.evaluate((element) => {
+test('键盘聚焦：方框在、焦点环在', async ({ page }) => {
+  await openSession(page)
+  const remove = page.getByRole('button', { name: '删除' }).first()
+
+  await remove.focus()
+  await page.keyboard.press('Tab')
+  await page.keyboard.press('Shift+Tab') // 用键盘回到该按钮 → 命中 :focus-visible
+
+  await expectStyle(remove, (style) => style.outlineWidth === '2px', '保留 focus-visible 焦点环')
+  const focused = await styleOf(remove)
+  expect(focused.outlineColor, '焦点环用强调色 token').toBe('rgb(212, 122, 90)')
+  expect(focused.borderColor, '聚焦时方框仍在').toBe(INK)
+  expect(focused.boxShadow).toContain(STICKER_2)
+})
+
+test('禁用：方框还在，但不抬升、不位移', async ({ page }) => {
+  await openSession(page)
+  const remove = page.getByRole('button', { name: '删除' }).first()
+  await remove.evaluate((element) => {
     ;(element as HTMLButtonElement).disabled = true
   })
-  await action.hover()
+  await remove.hover()
 
-  await expectStyle(action, (style) => !shadowVisible(style.boxShadow), '禁用时没有阴影')
-  const disabled = await styleOf(action)
-  expect(disabled.borderColor, '禁用时边框透明').toMatch(TRANSPARENT)
+  await expectStyle(
+    remove,
+    (style) => style.boxShadow.includes(STICKER_2),
+    '禁用时停在 --sticker-2，不抬升',
+  )
+  const disabled = await styleOf(remove)
+  expect(disabled.borderColor, '禁用时仍有方框').toBe(INK)
   expect(disabled.transform, '禁用时不位移').toBe('none')
+  expect(disabled.opacity, '禁用时半透明').toBe('0.5')
+})
+
+test('时间线动作：静止（未悬停）时就已带方框，悬停只负责显形', async ({ page }) => {
+  await openSession(page)
+  const action = page.getByRole('log').getByRole('button', { name: '复制文本' }).first()
+
+  // 关键：**没有做任何悬停**，方框已经在
+  const rest = await styleOf(action)
+  expect(rest.opacity, '静止时按时间线约定隐藏').toBe('0')
+  expect(rest.borderColor, '静止时方框已在（墨线）').toBe(INK)
+  expect(rest.boxShadow, '静止时高度档已在（--sticker-2）').toContain(STICKER_2)
+
+  await action.hover()
+  await expectStyle(action, (style) => style.opacity === '1', '悬停让动作显形')
+  await expectStyle(action, (style) => style.boxShadow.includes(STICKER_3), '悬停抬升一档')
+})
+
+test('标题型控件（会话标题）保持无框', async ({ page }) => {
+  await openSession(page)
+  const title = page.locator('section[aria-label="会话"] ul li').first().locator('button').first()
+
+  const rest = await styleOf(title)
+  expect(rest.borderColor, '标题型不该有方框').toMatch(TRANSPARENT)
+  expect(shadowVisible(rest.boxShadow), '标题型没有硬阴影').toBe(false)
 })
 
 test('换主题只改 tokens：注入另一组 --avid-*-rgb 后方框跟着变', async ({ page }) => {
-  await openSessionWithTool(page)
-  const action = actionButton(page, '复制文本')
+  await openSession(page)
+  const remove = page.getByRole('button', { name: '删除' }).first()
 
-  // 模拟「深色」一组 token：只替换 RGB 三元组，组件一个字都不改
+  // 模拟另一套主题：只替换 RGB 三元组，组件一个字都不改
   await page.addStyleTag({
     content: ':root { --avid-ink-rgb: 236 233 228; --avid-card-rgb: 30 32 36; }',
   })
-  await action.hover()
   await expectStyle(
-    action,
+    remove,
     (style) => style.borderColor === 'rgb(236, 233, 228)',
     '边框跟随 --avid-ink-rgb',
   )
-  const dark = await styleOf(action)
-  expect(dark.backgroundColor, '底色跟随 --avid-card-rgb').toBe('rgb(30, 32, 36)')
-  expect(dark.boxShadow, '硬阴影用同一个墨色 token').toContain('rgb(236, 233, 228)')
+  await expectStyle(
+    remove,
+    (style) => style.backgroundColor === 'rgb(30, 32, 36)',
+    '底色跟随 --avid-card-rgb',
+  )
+  await expectStyle(
+    remove,
+    (style) => style.boxShadow.includes('rgb(236, 233, 228)'),
+    '硬阴影用同一个墨色 token',
+  )
 })
 
 test('系统深色方案下样式不变（项目只有一套 token 主题）', async ({ page }) => {
-  // 本项目按设计只有一套纸面主题，`dark:` 修饰符被 lint 禁止。这里验证系统处于
-  // prefers-color-scheme: dark 时方框仍是同一套 token 值（不会因 UA 方案而变样）。
   await page.emulateMedia({ colorScheme: 'dark' })
-  await openSessionWithTool(page)
-  const action = actionButton(page, '复制文本')
-  await action.hover()
-  await expectStyle(action, (style) => style.borderColor === INK, '深色方案下边框仍是墨色 token')
-  const style = await styleOf(action)
+  await openSession(page)
+  const remove = page.getByRole('button', { name: '删除' }).first()
+  const style = await styleOf(remove)
+  expect(style.borderColor, '深色方案下仍是墨色 token').toBe(INK)
   expect(style.backgroundColor, '底色仍是纸卡 token').toBe(CARD)
-  expect(style.boxShadow, '高度档位不变').toContain('1px 1px 0px 0px')
-})
-
-test('其它安静按钮与时间线动作同族（同一圆角与高度档）', async ({ page }) => {
-  await openSessionWithTool(page)
-
-  const cases: { name: string; locator: Locator }[] = [
-    {
-      name: '会话标题',
-      locator: page.locator('section[aria-label="会话"] ul li').first().locator('button').first(),
-    },
-    { name: '面板收起', locator: page.getByRole('button', { name: '收起' }).first() },
-  ]
-
-  for (const item of cases) {
-    if ((await item.locator.count()) === 0) continue
-    await item.locator.hover()
-    await expectStyle(item.locator, (style) => style.borderColor === INK, `${item.name}：出墨线方框`)
-    const style = await styleOf(item.locator)
-    expect(style.borderRadius, `${item.name}：圆角与时间线动作一致`).toBe(CHIP_CORNER)
-    expect(style.boxShadow, `${item.name}：高度档位一致（--sticker-1）`).toContain(
-      '1px 1px 0px 0px',
-    )
-  }
+  expect(style.boxShadow).toContain(STICKER_2)
 })

@@ -52,7 +52,7 @@ export function StepGroup({
       <div className="flex items-center gap-2">
         {head ? <Badge tone="mark">{head}</Badge> : null}
         <span className="font-sketch text-xs">{label}</span>
-        <Button size="sm" variant="ghost" className="ml-auto" aria-expanded onClick={() => setOpen(false)}>
+        <Button size="sm" variant="secondary" className="ml-auto" aria-expanded onClick={() => setOpen(false)}>
           {t('common.collapse')}
         </Button>
       </div>

@@ -44,14 +44,21 @@ AVID_E2E=1 pnpm test:e2e    # Playwright 14 项（需先 pnpm exec playwright in
    `shadow-[…]`、`z-[…]`、内联 `borderRadius`/`fontFamily`、裸 `<button>/<input>/<select>`
    （`ui/` 之外）、`transition-all`、JSX 内联文案、空 `catch` 全部报错。
 
-## 交互反馈（安静按钮）
+## 交互反馈（按键一律有方框）
 
-`variant="ghost"` 的按钮静止时没有方框，但**悬停与键盘聚焦**时必须出现与其它按钮同一套
-方框：`.quiet-chip`（`ui/sketch.css`）给出墨线边、`--sketch-r-chip` 圆角、纸卡底与
-`--sticker-1` 档硬阴影，按下时阴影归零、位移等于该档偏移，禁用态一律不出框。
-这条规则写在 `ui/primitives/Button.tsx` 一处，所有 ghost 按钮（时间线的复制/查看、
-工具卡收起、处理中展开、会话标题、导航收起、关闭检查器……）自动同族；
-取值只来自 `ui/tokens.css`，所以换主题不需要动组件。回归用例：`e2e/interaction.spec.ts`。
+**行动型按键本身就有方框**，与「改名」等次级按钮同族：`variant="secondary"`（时间线的
+复制文本 / 查看原始 JSON、工具卡收起、处理中展开、任务卡展开、审批原因、关闭检查器、
+导航折叠、会话项删除）走 `ui/primitives/Button.tsx` 的同一套 `sketch-chip`——墨线边
+（`--stroke-hair`）、`--sketch-r-chip` 圆角、纸卡底、`--sticker-2` 档硬阴影。
+悬停由 `ui/sketch.css` 统一抬升一档（`--sticker-3`）并把按压位移同步改成新档偏移，
+按住时阴影归零；键盘聚焦有全局 `:focus-visible` 焦点环；禁用保留方框但不抬升、不位移。
+
+`variant="ghost"` 只剩「标题/链接型」用途（会话列表里的会话标题）：整块卡片点进去，
+加框反而像按钮套按钮，所以它保持无框。时间线动作的 `opacity-0 → 100` 只决定
+「什么时候显形」，方框与高度档在静止时就已在 DOM 里。
+
+取值只来自 `ui/tokens.css`，所以换主题与整体缩放不需要动组件。回归用例：
+`e2e/interaction.spec.ts`。
 
 ## 状态三域
 

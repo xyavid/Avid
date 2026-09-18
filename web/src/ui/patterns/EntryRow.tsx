@@ -35,12 +35,12 @@ function Actions({ entry, onInspect, onCopy }: Pick<EntryRowProps, 'entry' | 'on
   return (
     <div className="mt-1 flex gap-1">
       {onCopy ? (
-        <Button size="sm" variant="ghost" className={ACTION} onClick={() => onCopy(entry.text)}>
+        <Button size="sm" variant="secondary" className={ACTION} onClick={() => onCopy(entry.text)}>
           {t('chat.message.copy')}
         </Button>
       ) : null}
       {onInspect ? (
-        <Button size="sm" variant="ghost" className={ACTION} onClick={() => onInspect(entry)}>
+        <Button size="sm" variant="secondary" className={ACTION} onClick={() => onInspect(entry)}>
           {t('chat.message.raw')}
         </Button>
       ) : null}

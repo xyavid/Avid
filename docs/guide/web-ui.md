@@ -109,9 +109,13 @@ curl -s -o /dev/null -w '%{http_code} %{content_type}\n' localhost:8765/api/nope
 消息区会把整页撑高、输入条被推到视口之外（`web/e2e/layout.spec.ts` 就是这条的回归用例）。
 非会话工作面（任务板 / 技能目录 / 设置）由各自的 route 容器 `scroll-area` 承担滚动。
 
-交互反馈同理只有一处定义：`variant="ghost"` 的安静按钮（时间线的「复制文本 / 查看原始
-JSON」、工具卡收起、处理中展开、会话标题、导航收起、关闭检查器等）静止时无框，
-**悬停或键盘聚焦**时由 `ui/sketch.css` 的 `.quiet-chip` 给出方框：墨线边（`--stroke-hair`）、
-`--sketch-r-chip` 圆角、纸卡底、`--sticker-1` 档硬阴影；按下时阴影归零、位移等于该档偏移；
-禁用态不出框、不位移。所有取值来自 `ui/tokens.css`，所以「换主题」与「整体缩放」都不需要
-改组件。回归用例：`web/e2e/interaction.spec.ts`。
+交互反馈同理只有一处定义：**行动型按键本身就有方框**（时间线的「复制文本 / 查看原始
+JSON」、工具卡收起、处理中展开、任务卡展开、审批原因、关闭检查器、导航折叠、会话项删除），
+用的是与「改名」相同的 `secondary` 样式——墨线边（`--stroke-hair`）、`--sketch-r-chip` 圆角、
+纸卡底、`--sticker-2` 档硬阴影。悬停由 `ui/sketch.css` 统一抬升一档（`--sticker-3`），
+按压位移同步改成新档偏移、按住时阴影归零；键盘聚焦有全局 `:focus-visible` 焦点环；
+禁用保留方框但不抬升、不位移。`ghost` 只剩标题/链接型（会话标题）用，保持无框；
+时间线动作的 `opacity` 只决定何时显形，方框在静止时就已存在。
+
+所有取值来自 `ui/tokens.css`，所以「换主题」与「整体缩放」都不需要改组件。
+回归用例：`web/e2e/interaction.spec.ts`。

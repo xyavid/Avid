@@ -42,7 +42,7 @@ export function Inspector({ open, tab, density, selection, onTabChange, onClose 
     >
       <header className="flex items-center gap-2">
         <h3 className="truncate font-sketch text-sm">{selection?.title ?? t('common.none')}</h3>
-        <Button size="sm" variant="ghost" className="ml-auto" onClick={onClose}>
+        <Button size="sm" variant="secondary" className="ml-auto" onClick={onClose}>
           {t('common.close')}
         </Button>
       </header>

@@ -30,7 +30,7 @@ export function ProcessingCard({ phaseLabel, round, tokens, activeTool }: Proces
         </span>
         <Button
           size="sm"
-          variant="ghost"
+          variant="secondary"
           className="ml-auto"
           aria-expanded={expanded}
           onClick={() => toggle()}

@@ -198,13 +198,13 @@ export function ToolCallCard({
         <span className="font-mono text-xs text-ink/70">{t('tools.duration', { ms: run.durationMs })}</span>
         <span className="font-mono text-xs text-ink/70">{t('tools.chars', { chars: run.contentChars })}</span>
         {onInspect ? (
-          <Button size="sm" variant="ghost" className="ml-auto" onClick={() => onInspect(run)}>
+          <Button size="sm" variant="secondary" className="ml-auto" onClick={() => onInspect(run)}>
             {t('common.inspect')}
           </Button>
         ) : null}
         <Button
           size="sm"
-          variant="ghost"
+          variant="secondary"
           aria-expanded
           className={onInspect ? '' : 'ml-auto'}
           onClick={() => setExpanded(false)}
