@@ -11,7 +11,12 @@ import itertools
 import pytest
 from session_cases import all_cases
 
-from avid.session import JsonlSessionRepo, MemorySessionRepo, UuidV7Generator
+from avid.session import (
+    JsonlSessionRepo,
+    MemorySessionRepo,
+    SessionStorageError,
+    UuidV7Generator,
+)
 
 BACKENDS = ("memory", "jsonl")
 
@@ -40,3 +45,32 @@ def test_session_repo_contract(backend, case, tmp_path):
         case.run(repo)
     finally:
         repo.close()
+
+
+def make_workspace_repo(backend: str, root, clock, workspace: str):
+    """带归属的仓库：一致性用例里要能表达"这是哪个工作区的库"。"""
+    generator = UuidV7Generator(clock)
+    if backend == "memory":
+        return MemorySessionRepo(
+            now=clock, id_generator=generator, workspace=workspace
+        )
+    return JsonlSessionRepo(
+        root, now=clock, id_generator=generator, workspace=workspace
+    )
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_a_session_claiming_another_workspace_is_refused(backend, tmp_path):
+    """归属护栏两个后端必须同义：文件后端早就有，内存后端以前什么都不校验。"""
+    clock = ticking_clock()
+    repo = make_workspace_repo(backend, tmp_path / "sessions", clock, "w-mine")
+    session = repo.create(id="s1", workspace="w-other")
+    metadata = session.metadata
+    assert metadata.workspace == "w-other"
+    session.close()
+
+    with pytest.raises(SessionStorageError):
+        repo.open(metadata)
+    with pytest.raises(SessionStorageError):
+        repo.delete(metadata)
+    repo.close()

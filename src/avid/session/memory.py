@@ -17,6 +17,7 @@ from .errors import (
     SessionClosedError,
     SessionExistsError,
     SessionNotFoundError,
+    SessionStorageError,
 )
 from .ids import UuidV7Generator, now_ms, validate_session_id
 from .session import StorageBackedSession
@@ -152,6 +153,7 @@ class MemorySessionRepo:
 
     def open(self, metadata: SessionMetadata) -> StorageBackedSession:
         self._assert_open()
+        self._assert_owned(metadata)
         record = self._sessions.get(metadata.id)
         if record is None:
             raise SessionNotFoundError(metadata.id)
@@ -176,6 +178,7 @@ class MemorySessionRepo:
 
     def delete(self, metadata: SessionMetadata) -> None:
         self._assert_open()
+        self._assert_owned(metadata)
         record = self._sessions.get(metadata.id)
         if record is None:
             raise SessionNotFoundError(metadata.id)
@@ -192,6 +195,23 @@ class MemorySessionRepo:
                 record.open = False
 
     # ---------------- 内部 ----------------
+
+    def _assert_owned(self, metadata: SessionMetadata) -> None:
+        """归属护栏：与文件后端同义——metadata 说别的工作区就拒绝。
+
+        审查里的一致性问题：文件后端在 `open` 时校验 header 归属，内存后端什么都不
+        校验，于是"两个后端共用一套一致性用例"这条声明在这类路径上不成立。内存后端
+        没有落盘格式（因此没有 storage_version 可校验），但归属是有的。
+        """
+        if (
+            self.workspace
+            and metadata.workspace
+            and metadata.workspace != self.workspace
+        ):
+            raise SessionStorageError(
+                f"会话 {metadata.id} 属于另一个工作区（{metadata.workspace}），"
+                f"不能在 {self.workspace} 的仓库里访问"
+            )
 
     def _reserve(self, session_id: str) -> None:
         if session_id in self._sessions or session_id in self._pending:
