@@ -449,3 +449,20 @@ def test_subagent_child_is_as_strict_as_the_parent():
     subagent({"tasks": [{"description": "d", "prompt": "p"}]}, state=state, runner=runner)
 
     assert seen == [MODE_STRICT]
+
+
+def test_every_tool_with_a_path_argument_is_scope_checked():
+    """漏进 PATH_TOOLS 的工具在 workspace 档会静默放行区外——这条守住它。
+
+    判据是工具自己的 schema：只要它接 ``path`` 参数，就越界检查必须覆盖它。
+    """
+    from avid.runtime.hooks import PATH_TOOLS
+    from avid.tools import TOOLS
+
+    declared = {
+        item["function"]["name"]
+        for item in TOOLS
+        if "path" in item["function"]["parameters"]["properties"]
+    }
+
+    assert declared == set(PATH_TOOLS)
