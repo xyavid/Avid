@@ -19,6 +19,7 @@ import logging
 import threading
 import uuid
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -38,7 +39,13 @@ from ..session import (
     messages_for_branch,
 )
 from .approvals import APPROVAL_TIMEOUT_SECONDS, ApprovalTable
-from .errors import RunBusy, RunFinished, RunNotFound, SessionNotFound
+from .errors import (
+    RunBusy,
+    RunFinished,
+    RunNotFound,
+    SessionNotFound,
+    SessionReadError,
+)
 from .workspaces import WorkspaceService
 
 logger = logging.getLogger("avid.svc.runs")
@@ -134,6 +141,25 @@ class RunRegistry:
         self._active: dict[str, str] = {}
         self._lock = threading.RLock()
         self._sessions: dict[str, Any] = {}  # run_id -> 运行期打开的会话句柄
+        # 每会话一把"句柄锁"：会话层只允许一个句柄，而读路径与运行路径会同时想开它。
+        # 所有 open/close 该会话的地方都先持这把锁（顺序恒为 句柄锁 → self._lock）。
+        self._session_locks: dict[str, threading.RLock] = {}
+
+    @contextmanager
+    def session_lock(self, session_id: str):
+        """串行化同一会话的句柄获取与释放。
+
+        不变量：**持锁期间才 open/close**。否则"读路径先开、运行线程后开"必然
+        撞上 ``SessionAlreadyOpenError``，而那会以两种都很难看的形式冒出来——
+        运行刚起就 failed，或读取返回 500「会话已关闭」。
+        """
+        with self._lock:
+            lock = self._session_locks.get(session_id)
+            if lock is None:
+                lock = threading.RLock()
+                self._session_locks[session_id] = lock
+        with lock:
+            yield
 
     # ---------------- 生命周期 ----------------
 
@@ -158,21 +184,33 @@ class RunRegistry:
         workspace, metadata = found
         mode = permission or workspace.default_permission
 
-        with self._lock:
-            if session_id in self._active:
-                raise RunBusy(f"会话已有活动 run：{self._active[session_id]}")
-            run_id = f"run_{uuid.uuid4().hex[:12]}"
-            record = RunRecord(
-                run_id=run_id, session_id=session_id, started_at=events.now_ms()
-            )
-            record.approvals = ApprovalTable(
-                emit=lambda type, **data: self.emit(record, type, **data),
-                set_status=lambda status: self._set_status(record, status),
-                is_cancelled=lambda: record.cancel_requested,
-                timeout=self.approval_timeout,
-            )
-            self._runs[run_id] = record
-            self._active[session_id] = run_id
+        with self.session_lock(session_id):
+            with self._lock:
+                if session_id in self._active:
+                    raise RunBusy(f"会话已有活动 run：{self._active[session_id]}")
+                run_id = f"run_{uuid.uuid4().hex[:12]}"
+                record = RunRecord(
+                    run_id=run_id, session_id=session_id, started_at=events.now_ms()
+                )
+                record.approvals = ApprovalTable(
+                    emit=lambda type, **data: self.emit(record, type, **data),
+                    set_status=lambda status: self._set_status(record, status),
+                    is_cancelled=lambda: record.cancel_requested,
+                    timeout=self.approval_timeout,
+                )
+                self._runs[run_id] = record
+                # 先占位（防第二个 run），句柄在**同一个句柄锁**内开好再放行——
+                # 于是"`_active` 可见"蕴含"句柄已就绪"，读路径不必再猜。
+                self._active[session_id] = run_id
+            try:
+                session = self.workspaces.repo_for(workspace).open(metadata)
+            except SessionError as exc:
+                with self._lock:
+                    self._runs.pop(run_id, None)
+                    self._active.pop(session_id, None)
+                raise SessionReadError(f"打不开会话 {session_id}：{exc}") from exc
+            with self._lock:
+                self._sessions[run_id] = session
 
         logger.info("起运行 %s（会话 %s）", run_id, session_id)
         thread = threading.Thread(
@@ -180,7 +218,7 @@ class RunRegistry:
             args=(
                 record,
                 workspace,
-                metadata,
+                session,
                 prompt,
                 auto_approve,
                 chat or self.chat,
@@ -386,14 +424,14 @@ class RunRegistry:
         self,
         record: RunRecord,
         workspace: Any,
-        metadata: JsonlSessionMetadata,
+        session: Any,
         prompt: str,
         auto_approve: bool,
         chat: Callable[..., Any] | None,
         branch: str = DEFAULT_BRANCH,
         permission: str | None = None,
     ) -> None:
-        session = None
+        """运行线程。会话句柄由 ``start`` 在句柄锁内开好并传入，这里不再 open。"""
         # run_started 带上归属与模式：刷新页面后重建界面靠它，而不是靠内存里的 RunRecord。
         self.emit(
             record,
@@ -407,9 +445,6 @@ class RunRegistry:
         )
         try:
             config = load_config()
-            session = self.workspaces.repo_for(workspace).open(metadata)
-            with self._lock:
-                self._sessions[record.run_id] = session
             recorder = SessionRecorder(session, branch)
             recorder.ensure_branch()
             history = messages_for_branch(session, recorder.branch)
@@ -455,14 +490,18 @@ class RunRegistry:
         finally:
             if record.approvals is not None:
                 record.approvals.close("run_ended")
-            with self._lock:
-                self._sessions.pop(record.run_id, None)
-                self._active.pop(record.session_id, None)
-            if session is not None and not session.closed:
-                try:
-                    session.close()
-                except SessionError:  # 关闭失败不该掩盖运行结果
-                    logger.warning("关闭会话 %s 失败", record.session_id, exc_info=True)
+            # 先摘句柄再关：读路径正在用这个句柄时必须等它读完（否则读一半句柄被关掉）。
+            with self.session_lock(record.session_id):
+                with self._lock:
+                    self._sessions.pop(record.run_id, None)
+                    self._active.pop(record.session_id, None)
+                if session is not None and not session.closed:
+                    try:
+                        session.close()
+                    except SessionError:  # 关闭失败不该掩盖运行结果
+                        logger.warning(
+                            "关闭会话 %s 失败", record.session_id, exc_info=True
+                        )
 
     def _observe(self, record: RunRecord, event: RunEvent) -> None:
         """内核观察者 → 注册表事件：补上 run_id/seq/ts，并标注注入消息。"""

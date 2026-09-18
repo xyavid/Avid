@@ -177,16 +177,18 @@ class SessionService:
         return self.get(session_id)
 
     def delete(self, session_id: str) -> None:
-        if self.runs.active_run_id(session_id) is not None:
-            raise SessionBusy(f"会话有活动 run，不能销毁：{session_id}")
-        found = self.workspaces.find_session(session_id)
-        if found is None:
-            raise SessionNotFound(f"没有这个会话：{session_id}")
-        workspace, metadata = found
-        try:
-            self.workspaces.repo_for(workspace).delete(metadata)
-        except SessionError as exc:
-            raise SessionReadError(f"销毁会话失败：{exc}") from exc
+        # 关句柄的路径都要先持会话句柄锁：销毁要求会话已关闭，与运行/读取互斥。
+        with self.runs.session_lock(session_id):
+            if self.runs.active_run_id(session_id) is not None:
+                raise SessionBusy(f"会话有活动 run，不能销毁：{session_id}")
+            found = self.workspaces.find_session(session_id)
+            if found is None:
+                raise SessionNotFound(f"没有这个会话：{session_id}")
+            workspace, metadata = found
+            try:
+                self.workspaces.repo_for(workspace).delete(metadata)
+            except SessionError as exc:
+                raise SessionReadError(f"销毁会话失败：{exc}") from exc
 
     # ---------------- 分支 ----------------
 
@@ -332,27 +334,31 @@ class SessionService:
 
         ``meta``/``workspace`` 由调用方传进来时不再反查归属：列表已经为每个工作区
         遍历过一遍，再查一次会让列举变成 O(工作区数 × 会话数) 的平方级扫描。
-        """
-        active = self.runs.active_session(session_id)
-        if active is not None:
-            yield active
-            return
 
-        owner = workspace
-        metadata = meta
-        if owner is None or metadata is None:
-            found = self.workspaces.find_session(session_id)
-            if found is None:
-                raise SessionNotFound(f"没有这个会话：{session_id}")
-            owner, metadata = found
-        try:
-            session = self.workspaces.repo_for(owner).open(metadata)
-        except SessionError as exc:
-            raise SessionReadError(f"打不开会话 {session_id}：{exc}") from exc
-        try:
-            yield session
-        finally:
-            session.close()
+        整段持**会话句柄锁**：会话层只允许一个句柄，而运行线程会在别处开/关它。
+        没有这把锁，"读路径先开、运行线程后开"必然撞车（运行 failed 或读 500）。
+        """
+        with self.runs.session_lock(session_id):
+            active = self.runs.active_session(session_id)
+            if active is not None:
+                yield active
+                return
+
+            owner = workspace
+            metadata = meta
+            if owner is None or metadata is None:
+                found = self.workspaces.find_session(session_id)
+                if found is None:
+                    raise SessionNotFound(f"没有这个会话：{session_id}")
+                owner, metadata = found
+            try:
+                session = self.workspaces.repo_for(owner).open(metadata)
+            except SessionError as exc:
+                raise SessionReadError(f"打不开会话 {session_id}：{exc}") from exc
+            try:
+                yield session
+            finally:
+                session.close()
 
 
 __all__ = ["DEFAULT_ENTRY_LIMIT", "MAX_ENTRY_LIMIT", "SessionService"]

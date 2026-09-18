@@ -240,3 +240,44 @@ def test_many_deltas_do_not_evict_durable_events(sandbox, monkeypatch):
     assert record.evicted_upto == 0, "delta 把 durable 挤出了重放缓冲"
     got = collect(services, record.run_id, after=0)
     assert events.RESYNC not in [event.type for event in got]
+
+
+# ---------------- 会话句柄的并发（阶段 18 修掉的竞态） ----------------
+
+
+def test_reading_while_a_run_starts_never_double_opens_the_session(sandbox):
+    """读路径与运行路径会同时想开会话，而会话层只允许一个句柄。
+
+    修之前：``start`` 先登记 ``_active`` 再在运行线程里 ``open``，窗口期内读取
+    看到"有活动 run 但拿不到句柄"，就自己开——同一会话被开两次，运行刚起就
+    failed（``会话已经打开``），或读取 500（``会话已关闭``）。修法是把
+    「开句柄」放进每会话一把的句柄锁，并让 ``_active`` 与句柄同时可见。
+    """
+    services = build(sandbox, ScriptedChat(make_turn("答")))
+    session_id = new_session(services)
+    failures: list[str] = []
+    stop = threading.Event()
+
+    def reader() -> None:
+        while not stop.is_set():
+            try:
+                services.sessions.get(session_id)
+                services.sessions.list_sessions()
+            except Exception as exc:  # 读路径任何异常都算失败
+                failures.append(f"{type(exc).__name__}: {exc}")
+                return
+
+    readers = [threading.Thread(target=reader) for _ in range(3)]
+    for thread in readers:
+        thread.start()
+    try:
+        record = services.runs.start(session_id, "跑一下")
+        assert wait_terminal(record), record.status
+    finally:
+        stop.set()
+        for thread in readers:
+            thread.join(timeout=5)
+
+    assert failures == []
+    assert record.status == "finished", record.status
+    assert services.sessions.get(session_id)["message_count"] >= 2
