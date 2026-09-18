@@ -214,6 +214,73 @@ def test_health(bundle):
     assert body["uptime_ms"] >= 0
 
 
+# ---------------- F4：分支端点 ----------------
+
+
+def test_branch_endpoints_list_fork_and_reject_conflicts(bundle):
+    client, _ = bundle(chat=ScriptedChat(make_turn("主线"), make_turn("分支上")))
+    session_id = client.post("/api/sessions", json={"name": "分支"}).json()["id"]
+
+    fresh = client.get(f"/api/sessions/{session_id}/branches").json()
+    assert [item["name"] for item in fresh["branches"]] == ["main"]
+    assert fresh["branches"][0]["is_default"] is True
+    assert fresh["branches"][0]["tip_entry_id"] is None
+    assert fresh["branches"][0]["entry_count"] == 0
+
+    started = client.post(
+        f"/api/sessions/{session_id}/runs", json={"prompt": "跑一下", "auto_approve": True}
+    )
+    assert started.status_code == 201, started.text
+    run_id = started.json()["run_id"]
+    assert wait_for(lambda: client.get(f"/api/runs/{run_id}").json()["status"] == "finished")
+
+    entries = client.get(f"/api/sessions/{session_id}/entries?order=asc").json()["entries"]
+    assert len(entries) == 2
+    fork_at = entries[1]["entry_id"]
+
+    created = client.post(f"/api/sessions/{session_id}/branches", json={"at": fork_at})
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body["name"] == "b2"
+    assert body["tip_entry_id"] == fork_at
+    assert body["entry_count"] == 2
+    assert body["is_default"] is False
+
+    # 重名 409（悄悄重建会丢掉原来那条链）；未知分叉点 400（它只是请求体里的一个坏值）
+    duplicate = client.post(f"/api/sessions/{session_id}/branches", json={"name": "b2"})
+    assert duplicate.status_code == 409
+    assert duplicate.json()["error"]["code"] == "branch_exists"
+    assert client.post(f"/api/sessions/{session_id}/branches", json={"at": "e_missing"}).status_code == 400
+
+    # 在分支上起运行：请求体带 branch，main 的链条一个字都不变
+    def main_chain() -> list[str]:
+        page = client.get(
+            f"/api/sessions/{session_id}/entries?branch=main&order=asc"
+        ).json()
+        return [entry["entry_id"] for entry in page["entries"]]
+
+    main_before = main_chain()
+    branch_run = client.post(
+        f"/api/sessions/{session_id}/runs",
+        json={"prompt": "在分支上继续", "auto_approve": True, "branch": "b2"},
+    )
+    assert branch_run.status_code == 201, branch_run.text
+    branch_run_id = branch_run.json()["run_id"]
+    assert wait_for(lambda: client.get(f"/api/runs/{branch_run_id}").json()["status"] == "finished")
+
+    assert main_chain() == main_before
+    side = client.get(f"/api/sessions/{session_id}/entries?branch=b2&order=asc").json()["entries"]
+    assert [entry["entry_id"] for entry in side[:2]] == main_before
+    assert len(side) == 4
+
+    listed = {
+        item["name"]: item
+        for item in client.get(f"/api/sessions/{session_id}/branches").json()["branches"]
+    }
+    assert set(listed) == {"main", "b2"}
+    assert listed["b2"]["entry_count"] == 4
+
+
 # ---------------- B16 与分页 ----------------
 
 

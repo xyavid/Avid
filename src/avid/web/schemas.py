@@ -132,12 +132,32 @@ class EntryPageOut(BaseModel):
     truncated_tail: bool = False
 
 
+class BranchOut(BaseModel):
+    name: str
+    tip_entry_id: str | None = None
+    entry_count: int = 0
+    is_default: bool = False
+
+
+class BranchListOut(BaseModel):
+    session_id: str
+    branches: list[BranchOut]
+
+
+class CreateBranchIn(BaseModel):
+    """``at`` 是分叉点条目 id；缺省 = 从零开一条空分支。"""
+
+    name: str | None = None
+    at: str | None = None
+
+
 # ---------------- 运行与审批 ----------------
 
 
 class StartRunIn(BaseModel):
     prompt: str
     auto_approve: bool = False
+    branch: str = "main"
 
 
 class RunCreatedOut(BaseModel):

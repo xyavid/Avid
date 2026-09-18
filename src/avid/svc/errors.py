@@ -58,6 +58,13 @@ class SessionBusy(ServiceError):
     status = 409
 
 
+class BranchExists(ServiceError):
+    """同名分支已存在。悄悄重建会丢掉原来那条链，所以显式报错。"""
+
+    code = "branch_exists"
+    status = 409
+
+
 class InvalidRequest(ServiceError):
     code = "invalid_request"
     status = 400
@@ -101,6 +108,7 @@ __all__ = [
     "ApprovalConflict",
     "ApprovalExpired",
     "ApprovalNotFound",
+    "BranchExists",
     "InvalidRequest",
     "RunBusy",
     "RunFinished",

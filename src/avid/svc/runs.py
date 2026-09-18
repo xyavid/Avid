@@ -29,6 +29,7 @@ from ..runtime.events import RunEvent
 from ..runtime.loop import RoundLimitExceeded, RunCancelled, agent_loop
 from ..runtime.state import RunState
 from ..session import (
+    DEFAULT_BRANCH,
     JsonlSessionMetadata,
     JsonlSessionRepo,
     SessionError,
@@ -144,8 +145,12 @@ class RunRegistry:
         *,
         auto_approve: bool = False,
         chat: Callable[..., Any] | None = None,
+        branch: str = DEFAULT_BRANCH,
     ) -> RunRecord:
-        """登记并起线程。已占用 → ``RunBusy``；会话不存在 → ``SessionNotFound``。"""
+        """登记并起线程。已占用 → ``RunBusy``；会话不存在 → ``SessionNotFound``。
+
+        ``branch`` 决定这次运行追加到哪条链上：历史取该分支的链，新消息接在它的链尾。
+        """
         metadata = self.find_metadata(session_id)
         if metadata is None:
             raise SessionNotFound(f"没有这个会话：{session_id}")
@@ -169,7 +174,7 @@ class RunRegistry:
         logger.info("起运行 %s（会话 %s）", run_id, session_id)
         thread = threading.Thread(
             target=self._run,
-            args=(record, metadata, prompt, auto_approve, chat or self.chat),
+            args=(record, metadata, prompt, auto_approve, chat or self.chat, branch),
             name=f"avid-run-{run_id}",
             daemon=True,
         )
@@ -372,6 +377,7 @@ class RunRegistry:
         prompt: str,
         auto_approve: bool,
         chat: Callable[..., Any] | None,
+        branch: str = DEFAULT_BRANCH,
     ) -> None:
         session = None
         self.emit(
@@ -386,7 +392,7 @@ class RunRegistry:
             session = self.repo.open(metadata)
             with self._lock:
                 self._sessions[record.run_id] = session
-            recorder = SessionRecorder(session)
+            recorder = SessionRecorder(session, branch)
             recorder.ensure_branch()
             history = messages_for_branch(session, recorder.branch)
             messages = [*history, {"role": "user", "content": prompt}]

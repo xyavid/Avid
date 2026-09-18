@@ -22,15 +22,20 @@ from pathlib import Path
 from typing import Any
 
 from ..session import (
+    DEFAULT_BRANCH,
     BranchScan,
     JsonlSessionRepo,
+    SessionBranchExistsError,
     SessionError,
     SessionExistsError,
     SessionInvalidIdError,
     SessionMetadata,
+    SessionUnknownTargetError,
     messages_for_branch,
 )
 from .errors import (
+    BranchExists,
+    InvalidRequest,
     SessionBusy,
     SessionExists,
     SessionNotFound,
@@ -42,7 +47,6 @@ logger = logging.getLogger("avid.svc.sessions")
 
 DEFAULT_ENTRY_LIMIT = 100
 MAX_ENTRY_LIMIT = 500
-DEFAULT_BRANCH = "main"
 
 # 判定链尾是否残缺时最多回看多少条——超过就放弃判定（返回 False），
 # 不做昂贵的历史扫描。
@@ -144,6 +148,57 @@ class SessionService:
         except SessionError as exc:
             raise SessionReadError(f"销毁会话失败：{exc}") from exc
 
+    # ---------------- 分支 ----------------
+
+    def list_branches(self, session_id: str) -> dict[str, Any]:
+        """分支列表（含链尾与条数）。
+
+        条数要沿 parent 链走一趟，所以是 O(分支数 × 链长)。当前规模（分支个位数、
+        条目数百）付得起；触发条件是长会话里分支列表明显变慢，届时把条数冗余成值。
+        """
+        with self._session(session_id) as session:
+            branches = [self._branch_to_dict(session, name) for name in session.branch_names()]
+        return {"session_id": session_id, "branches": branches}
+
+    def create_branch(
+        self, session_id: str, *, name: str | None = None, at: str | None = None
+    ) -> dict[str, Any]:
+        """在某条目处开一条新分支（fork）。``name`` 缺省时自动取 b2 / b3…
+
+        活动 run 期间拒绝：分支头与条目共用同一个会话句柄，而运行还在往旧链尾追加，
+        此刻分叉会让「新链从哪来」含混（还会和运行线程抢同一把写锁）。
+        """
+        if self.runs.active_run_id(session_id) is not None:
+            raise SessionBusy(f"会话有活动 run，不能分叉：{session_id}")
+        with self._session(session_id) as session:
+            chosen = name or self._next_branch_name(session)
+            try:
+                session.create_branch(chosen, at)
+            except SessionBranchExistsError as exc:
+                raise BranchExists(f"分支已存在：{chosen}") from exc
+            except SessionUnknownTargetError as exc:
+                raise InvalidRequest(f"分叉点不存在：{at}") from exc
+            return self._branch_to_dict(session, chosen)
+
+    @staticmethod
+    def _branch_to_dict(session: Any, name: str) -> dict[str, Any]:
+        target = session.branch(name)
+        return {
+            "name": name,
+            "tip_entry_id": None if target is None else target.get_tip_id(),
+            "entry_count": 0 if target is None else len(target.find_entries(BranchScan())),
+            "is_default": name == DEFAULT_BRANCH,
+        }
+
+    @staticmethod
+    def _next_branch_name(session: Any) -> str:
+        """b2、b3…：跳过已存在的名字，免得默认命名撞上一个手工起的同名分支。"""
+        existing = set(session.branch_names())
+        index = 2
+        while f"b{index}" in existing:
+            index += 1
+        return f"b{index}"
+
     # ---------------- 条目分页 ----------------
 
     def entries(
@@ -157,8 +212,6 @@ class SessionService:
     ) -> dict[str, Any]:
         """按分支分页取条目。``order=desc`` 是默认：首屏要的是链尾。"""
         if order not in ("asc", "desc"):
-            from .errors import InvalidRequest
-
             raise InvalidRequest(f"order 只能是 asc 或 desc，收到 {order!r}")
 
         size = DEFAULT_ENTRY_LIMIT if limit is None else max(1, min(limit, MAX_ENTRY_LIMIT))

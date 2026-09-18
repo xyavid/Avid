@@ -36,7 +36,7 @@ FEATURES: dict[str, int] = {
     "sessions": 1,
     "entries": 1,
     "deltas": 1,  # F3：内核按 SSE 流式解析，delta 经事件流投递（需 ?deltas=1 订阅）
-    "branches": 0,  # 前端侧分支视图是 F4
+    "branches": 1,  # F4：分支列表 / 分叉 / 在指定分支上运行
 }
 
 # 事件流相关常量对客户端可见：它据此设超时与对账阈值（I13）。
