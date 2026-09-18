@@ -427,3 +427,39 @@ def test_stream_without_usage_frame_falls_back_to_zero():
     assert turn.text == "hi"
     assert turn.usage.total_tokens == 0
     assert turn.finish_reason == "stop"
+
+
+def test_the_http_client_is_created_once_and_reused(monkeypatch):
+    """每次调用新建 Client 会重新握手：多轮 agent 与 subagent 线性叠加。
+
+    这条断言机制（只构造一次、两次拿到同一个实例），不发真实请求。
+    """
+    import httpx as httpx_module
+
+    from avid.ai import client as client_module
+
+    created: list[int] = []
+    real_client = httpx_module.Client
+
+    def counting_client(*args, **kwargs):
+        created.append(1)
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(client_module.httpx, "Client", counting_client)
+    monkeypatch.setattr(client_module, "_CLIENT", None)
+
+    first = client_module.shared_client()
+    second = client_module.shared_client()
+
+    assert first is second
+    assert created == [1], f"构造了 {len(created)} 个 Client"
+
+
+def test_connect_timeout_is_tighter_than_the_read_timeout():
+    """端点不可达时不该等满 60 秒；长回答的读超时仍留足。"""
+    from avid.ai.client import CONNECT_TIMEOUT_SECONDS, TIMEOUT_SECONDS, _timeout
+
+    timeout = _timeout()
+    assert timeout.connect == CONNECT_TIMEOUT_SECONDS
+    assert timeout.read == TIMEOUT_SECONDS
+    assert CONNECT_TIMEOUT_SECONDS < TIMEOUT_SECONDS

@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -19,7 +20,28 @@ import httpx
 from .config import Config
 
 TIMEOUT_SECONDS = 60.0
+# 连接超时单独收紧：端点不可达时不该等满 60 秒（读超时仍给长回答留足）。
+CONNECT_TIMEOUT_SECONDS = 10.0
 DEFAULT_MAX_TOKENS = 8000
+
+# 进程内复用一个 Client。以前每次调用都新建 `httpx.Client` 再关掉：每轮模型调用
+# 都要重新 TCP/TLS 握手，多轮 agent 与 subagent 场景下线性叠加。`httpx.Client`
+# 是线程安全的（连接池自己带锁），所以整个进程共用一个实例。
+_CLIENT_LOCK = threading.Lock()
+_CLIENT: httpx.Client | None = None
+
+
+def _timeout() -> httpx.Timeout:
+    return httpx.Timeout(TIMEOUT_SECONDS, connect=CONNECT_TIMEOUT_SECONDS)
+
+
+def shared_client() -> httpx.Client:
+    """共享的 HTTP 客户端（首次调用时建，之后复用）。"""
+    global _CLIENT
+    with _CLIENT_LOCK:
+        if _CLIENT is None or _CLIENT.is_closed:
+            _CLIENT = httpx.Client(timeout=_timeout())
+        return _CLIENT
 
 
 class LLMError(Exception):
@@ -168,15 +190,12 @@ def post(config: Config, request: dict[str, Any], *, client: httpx.Client | None
         "Content-Type": "application/json",
     }
 
-    owns_client = client is None
-    http = client or httpx.Client(timeout=TIMEOUT_SECONDS)
+    # 注入的 client（测试）归调用方管；没有就复用进程级的那个（不关它）。
+    http = client or shared_client()
     try:
         response = http.post(config.chat_completions_url, json=request, headers=headers)
     except httpx.HTTPError as exc:
         raise LLMError(f"请求 {config.chat_completions_url} 失败：{exc}") from exc
-    finally:
-        if owns_client:
-            http.close()
 
     if response.status_code != 200:
         if _prompt_too_long(response):
@@ -370,8 +389,7 @@ def stream_completion(
         "Accept": "text/event-stream",
     }
 
-    owns_client = client is None
-    http = client or httpx.Client(timeout=TIMEOUT_SECONDS)
+    http = client or shared_client()
     state = StreamState()
     try:
         with http.stream(
@@ -392,9 +410,6 @@ def stream_completion(
                         on_delta(text)
     except httpx.HTTPError as exc:
         raise LLMError(f"请求 {config.chat_completions_url} 失败：{exc}") from exc
-    finally:
-        if owns_client:
-            http.close()
 
     return state.to_turn()
 
