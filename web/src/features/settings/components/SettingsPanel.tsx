@@ -5,7 +5,8 @@ import { ApiError } from '../../../api/client'
 import { useUiStore } from '../../../state/uiStore'
 import { AboutCard, BuildStamp, FeaturesTable, MetaRow, ToolsRow } from './AboutCard'
 import type { LocaleApi } from '../../../lib/i18n'
-import type { Density, TextScale } from '../../../state/uiStore'
+import type { Density } from '../../../lib/density'
+import type { TextScale } from '../../../state/uiStore'
 import type { Meta } from '../../../api/types'
 
 const SCALES: TextScale[] = [90, 100, 110, 125]

@@ -16,6 +16,14 @@
 
 import type { EventEnvelope, MessagePayload, ToolCallPayload } from './types'
 import type { Entry } from '../api/types'
+import type {
+  ApprovalRequest,
+  CompactionNote,
+  TimelineEntry,
+  ToolCallRef,
+  ToolRun,
+  ToolStatus,
+} from '../lib/timeline'
 
 export type RunPhase =
   | 'idle'
@@ -26,61 +34,6 @@ export type RunPhase =
   | 'done'
   | 'failed'
   | 'cancelled'
-
-export type ToolStatus = 'running' | 'ok' | 'failed' | 'denied' | 'truncated'
-
-export interface ToolCallRef {
-  toolCallId: string
-  tool: string
-  arguments: Record<string, unknown>
-}
-
-export interface TimelineEntry {
-  id: string
-  kind: 'user' | 'assistant' | 'tool' | 'notice'
-  notice?: 'compaction' | 'todo' | 'nudge'
-  text: string
-  entryId?: string
-  toolCallId?: string
-  toolCalls?: ToolCallRef[]
-  seq: number
-  at: number
-  /** 乐观渲染的临时条目：durable 消息到达时就地丢弃（I11）。 */
-  optimistic?: boolean
-}
-
-export interface ToolRun {
-  toolCallId: string
-  tool: string
-  arguments: Record<string, unknown>
-  status: ToolStatus
-  truncated: boolean
-  contentChars: number
-  durationMs: number
-  reason?: string
-  seq: number
-  at: number
-}
-
-export interface ApprovalRequest {
-  approvalId: string
-  tool: string
-  arguments: Record<string, unknown>
-  reason: string
-  createdAt: number
-  expiresAt: number
-  decision: string | null
-  resolvedReason: string | null
-}
-
-export interface CompactionNote {
-  id: string
-  step: string
-  detail: string
-  before: number
-  after: number
-  seq: number
-}
 
 export interface RunView {
   runId: string | null

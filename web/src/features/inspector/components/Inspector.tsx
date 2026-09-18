@@ -1,6 +1,7 @@
 import { Button } from '../../../ui/primitives'
 import { useTranslation } from '../../../lib/i18n'
-import type { Density, InspectorTab } from '../../../state/uiStore'
+import type { Density } from '../../../lib/density'
+import type { InspectorTab } from '../../../state/uiStore'
 import { DiffView } from './DiffView'
 import { JsonView } from './JsonView'
 

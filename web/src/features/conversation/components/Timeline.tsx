@@ -2,11 +2,11 @@ import { Button, Tooltip } from '../../../ui/primitives'
 
 import { useTranslation } from '../../../lib/i18n'
 import { EntryRow, StepGroup, ToolCallCard } from '../../../ui/patterns'
-import type { Density } from '../../../state/uiStore'
-import type { TimelineEntry } from '../../../events/reducer'
+import type { Density } from '../../../lib/density'
+import type { TimelineEntry } from '../../../lib/timeline'
 import { useGroupedTimeline } from '../hooks/useGroupedTimeline'
 import { useTimelineWindow } from '../hooks/useTimelineWindow'
-import type { ToolRun } from '../../../events/reducer'
+import type { ToolRun } from '../../../lib/timeline'
 
 export interface TimelineProps {
   entries: TimelineEntry[]

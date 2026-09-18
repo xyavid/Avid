@@ -20,7 +20,7 @@ import { InspectorSlot } from '../layouts/InspectorSlot'
 import { useTranslation } from '../lib/i18n'
 import { runStoreActions, useRunView } from '../state/runStore'
 import { useUiStore } from '../state/uiStore'
-import type { TimelineEntry, ToolRun } from '../events/reducer'
+import type { TimelineEntry, ToolRun } from '../lib/timeline'
 import { RunStreamProvider, useRunStreamState } from './useRunStream'
 
 function flatten(pages: { entries: Entry[] }[] | undefined): Entry[] {

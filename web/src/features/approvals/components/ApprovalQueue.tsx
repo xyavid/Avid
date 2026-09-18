@@ -1,7 +1,7 @@
 import { Badge } from '../../../ui/primitives'
 import { useTranslation } from '../../../lib/i18n'
 import { ApprovalBar } from '../../../ui/patterns'
-import type { ApprovalRequest } from '../../../events/reducer'
+import type { ApprovalRequest } from '../../../lib/timeline'
 
 export interface ApprovalQueueProps {
   approvals: ApprovalRequest[]

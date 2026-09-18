@@ -22,8 +22,8 @@ import { clsx } from 'clsx'
 
 import { useTranslation } from '../../lib/i18n'
 import { Markdown } from '../../lib/markdown'
-import type { TimelineEntry } from '../../events/reducer'
-import type { Density } from '../../state/uiStore'
+import type { Density } from '../../lib/density'
+import type { TimelineEntry } from '../../lib/timeline'
 import { Badge, Button } from '../../ui/primitives'
 import { AvidMark, UserMark, shapeFor } from '../../ui/sketch'
 

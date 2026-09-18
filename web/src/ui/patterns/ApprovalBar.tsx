@@ -12,7 +12,7 @@ import { useState } from 'react'
 import type { KeyboardEvent } from 'react'
 
 import { useTranslation } from '../../lib/i18n'
-import type { ApprovalRequest } from '../../events/reducer'
+import type { ApprovalRequest } from '../../lib/timeline'
 import { Badge, Button } from '../../ui/primitives'
 
 export interface ApprovalBarProps {

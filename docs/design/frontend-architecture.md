@@ -212,12 +212,19 @@ Avid/
 | L3 `layouts/AppShell` | 三栏骨架、响应式、键盘图 | 可依赖含 `uiStore`；不得直接读 `runStore` |
 | L4 `routes/` | URL ↔ feature 组合，接查询 hooks 与 store | 唯一允许把查询结果与 store 数据拼在一起的地方 |
 
-四条可执行的规则（§14 A8/A9）：
+五条可执行的规则（§14 A8/A9）：
 
 1. 网络只能在 `src/api/` 里出现：`fetch(`/`EventSource(`/`new WebSocket(` 出现在其它目录即失败。
 2. `features/a` import `features/b` 即失败。
 3. `runStore` 的写入口只有 `events/reducer.ts` 与 `events/coalescer.ts`（其余模块 import 只读访问器）。
 4. 颜色/间距字面量只能出现在 `ui/tokens.css`；`dark:` 修饰符与 Tailwind 内建调色板类一律报错。
+5. **L1 只接受 props**：`src/ui/**` 不得 import `events/`/`state/`/`features/`/`routes/`/`api/`/`layouts/`。
+
+第 5 条的由来：L1 曾经 import `events/reducer` 的 `TimelineEntry`/`ToolRun` 与
+`state/uiStore` 的 `Density`（都是 `import type`，所以没有运行时环，但方向已经反了，
+"patterns 可以脱离 store 单测"这句声明随之不成立）。修法是把**渲染用的视图类型**
+下沉到 `lib/timeline.ts` 与 `lib/density.ts`：`events/reducer`（生产这些视图）与
+`ui/patterns`（渲染它们）依赖同一份形状，且各自只有一条 import 路径。
 
 这条「把架构约束写成会失败的检查」的形态取自 OpenHands 的源码正则测试（`dev/research/agent-frontend-survey-final.md:482`），代价是正则能力有边界——只匹配字面量，拼接出来的 URL 与间接 import 不在覆盖内；规则文档必须同时写明这条边界。
 

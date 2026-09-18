@@ -8,8 +8,8 @@
 import { useState } from 'react'
 
 import { useTranslation } from '../../lib/i18n'
-import type { ToolRun } from '../../events/reducer'
-import type { Density } from '../../state/uiStore'
+import type { Density } from '../../lib/density'
+import type { ToolRun } from '../../lib/timeline'
 import { Badge, Button } from '../../ui/primitives'
 import { ToolCallCard } from './ToolCallCard'
 

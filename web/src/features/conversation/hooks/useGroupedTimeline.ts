@@ -1,4 +1,4 @@
-import type { TimelineEntry, ToolRun } from '../../../events/reducer'
+import type { TimelineEntry, ToolRun } from '../../../lib/timeline'
 // 阈值单点来自 L1 patterns：失败或拒绝的调用不进组（它们需要单独被看见）。
 import { EVENT_GROUP_MIN_SIZE } from '../../../ui/patterns'
 

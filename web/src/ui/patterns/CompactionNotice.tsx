@@ -5,7 +5,7 @@
  * 由调用方的容器决定。
  */
 import { useTranslation } from '../../lib/i18n'
-import type { CompactionNote } from '../../events/reducer'
+import type { CompactionNote } from '../../lib/timeline'
 
 export function CompactionNotice({ note }: { note: CompactionNote }) {
   const { t } = useTranslation()

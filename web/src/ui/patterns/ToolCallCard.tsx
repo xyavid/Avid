@@ -12,8 +12,8 @@ import { diffFromEdit, looksLikeDiff, parseUnifiedDiff, summarizeDiff } from '..
 import type { DiffLine, DiffLineKind } from '../../lib/diff'
 import { useTranslation } from '../../lib/i18n'
 import { sanitizeToolContent } from '../../lib/markdown'
-import type { ToolRun, ToolStatus } from '../../events/reducer'
-import type { Density } from '../../state/uiStore'
+import type { Density } from '../../lib/density'
+import type { ToolRun, ToolStatus } from '../../lib/timeline'
 import { Badge, Button } from '../../ui/primitives'
 
 export interface ToolCallCardProps {

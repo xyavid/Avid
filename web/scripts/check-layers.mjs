@@ -9,7 +9,9 @@
  *      相对路径（`../b/`、`../../features/b`）与别名（`@/features/b`）都算。
  *   3. `runStoreActions` 只允许被 `src/state` / `src/events` / `src/routes` import。
  *   4. `src/**` 不得出现 `https?://`（字符串与注释都算；只有 `src/api/**` 放接口注释）。
- *   5. 暂缺：不在 `src/ui/**` 之外 import `radix` 之外的组件库（无此约束）。
+ *   5. L1 只接受 props：`src/ui/**` 不得 import `events/` / `state/` / `features/` /
+ *      `routes/` / `api/` / `layouts/`（`frontend-architecture.md` §3.4 的分层声明）。
+ *   6. 暂缺：不在 `src/ui/**` 之外 import `radix` 之外的组件库（无此约束）。
  *
  * 为什么先用「扫描文本」而不是 AST：这里查的是 import 图与少数禁用标识符，正则足够；
  * 引入 parser 会把门禁脚本本身变成需要维护的依赖，与「纯 Node、零新依赖」冲突。
@@ -212,6 +214,30 @@ for (const file of files) {
           file,
           lineAt(code, match.index ?? 0),
           `feature「${from}」不得 import feature「${targetFeature[1]}」：${specifier}`,
+        )
+      }
+    }
+  }
+
+  // ---- 规则 6：L1 只接受 props —— `src/ui/**` 不得 import 上层 ----
+  //
+  // frontend-architecture.md §3.4 声明 L1（ui/patterns、ui/primitives、ui/sketch）
+  // "只接受 props；不得读 store、不得发请求"，patterns/README 也声明"反过来没有依赖，
+  // 所以这一层可以脱离 store 单测"。只写声明不写检查，这条方向就会被类型 import
+  // 悄悄违反（曾经 ui/patterns 就 import 了 events/reducer 与 state/uiStore）。
+  if (/^src\/ui\//.test(rel.split('\\').join('/'))) {
+    for (const match of imports) {
+      const specifier = match[2] ?? match[1]
+      if (!specifier) continue
+      const target = specifier.startsWith('.')
+        ? relative(WEB_ROOT, resolve(dirname(file), specifier)).split('\\').join('/')
+        : specifier
+      const upper = /(?:^|\/)src\/(events|state|features|routes|api|layouts)\//.exec(target)
+      if (upper) {
+        report(
+          file,
+          lineAt(code, match.index ?? 0),
+          `L1（ui/）不得 import 上层 ${upper[1]}/（只接受 props）：${specifier}`,
         )
       }
     }

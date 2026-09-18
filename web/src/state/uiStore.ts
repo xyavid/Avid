@@ -6,10 +6,11 @@
  */
 
 import { create } from 'zustand'
+
+import type { Density } from '../lib/density'
 import { persist } from 'zustand/middleware'
 
 export type TextScale = 90 | 100 | 110 | 125
-export type Density = 'compact' | 'comfy'
 export type InspectorTab = 'content' | 'diff' | 'json'
 
 export interface UiState {

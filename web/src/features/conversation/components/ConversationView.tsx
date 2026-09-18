@@ -2,8 +2,9 @@ import type { ReactNode } from 'react'
 
 import { useTranslation } from '../../../lib/i18n'
 
-import type { RunView, TimelineEntry, ToolRun } from '../../../events/reducer'
-import type { Density } from '../../../state/uiStore'
+import type { Density } from '../../../lib/density'
+import type { TimelineEntry, ToolRun } from '../../../lib/timeline'
+import type { RunView } from '../../../events/reducer'
 import { ConversationHeader } from './ConversationHeader'
 import { ProcessingCard } from './ProcessingCard'
 import { StatusBanner } from './StatusBanner'
