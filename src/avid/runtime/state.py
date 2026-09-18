@@ -20,7 +20,7 @@ from ..policy.permission import (
     ApprovalLedger,
     validate_mode,
 )
-from ..policy.skills import SkillLoader
+from ..policy.skills import SkillLoader, default_skills_dir
 from ..policy.todo import TodoList, build_reminder
 from .events import RunObserver, event
 
@@ -102,7 +102,8 @@ class RunState:
             permission_mode=validate_mode(permission_mode or DEFAULT_MODE),
             ledger=ledger if ledger is not None else ApprovalLedger(),
             workspace_root=workspace_root,
-            skills=SkillLoader().scan(),
+            # 技能目录跟着运行级工作区根（没有工作区根时回落到 cwd）。
+            skills=SkillLoader(default_skills_dir(workspace_root)).scan(),
         )
 
     # ---------------- 权限 ----------------

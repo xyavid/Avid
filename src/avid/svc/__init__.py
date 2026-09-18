@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from ..ai.config import ConfigError, load_config
-from ..policy.skills import SkillLoader
+from ..policy.skills import SkillLoader, default_skills_dir
 from ..runtime.events import EVENT_TYPES, now_ms
 from ..session import JsonlSessionRepo
 from ..tools import TOOLS, workspace
@@ -176,7 +176,8 @@ class Services:
         """
         now = time.monotonic()
         if self._skills is None or now - self._skills_at > SKILLS_CACHE_SECONDS:
-            loader = SkillLoader().scan()
+            root = self.workspaces.default.root if self.workspaces.default else None
+            loader = SkillLoader(default_skills_dir(root)).scan()
             self._skills = [
                 {"name": name, "description": loader.skills[name]["description"]}
                 for name in sorted(loader.skills)

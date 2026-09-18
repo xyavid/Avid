@@ -1,6 +1,5 @@
 from pathlib import Path
 
-from avid.policy import skills as skill_loader
 from avid.policy.skills import AGENT_INSTRUCTIONS, SkillLoader
 
 REPO_SKILLS = Path(__file__).resolve().parent.parent / "skills"
@@ -226,7 +225,21 @@ def test_repository_catalog_shape():
     assert all(line.startswith("- ") and ": " in line for line in lines)
 
 
-def test_default_skills_dir_sits_at_the_repository_root(monkeypatch, tmp_path):
-    monkeypatch.setattr(skill_loader, "SKILLS_DIR", tmp_path)
+def test_default_skills_dir_is_resolved_at_construction_time(monkeypatch, tmp_path):
+    """默认目录 = `<cwd>/skills`，且**构造时**求值。
 
-    assert SkillLoader().skills_dir == tmp_path
+    以前是模块级 `SKILLS_DIR = Path.cwd() / "skills"`：import 时绑定，之后换目录
+    （或一个进程服务多个工作区）都不生效。
+    """
+    monkeypatch.chdir(tmp_path)
+
+    assert SkillLoader().skills_dir == tmp_path / "skills"
+    assert SkillLoader(tmp_path).skills_dir == tmp_path, "显式给目录时就用给的"
+
+
+def test_default_skills_dir_follows_the_workspace_root(tmp_path):
+    """有运行级工作区根时，技能目录跟着它走（阶段 18 的落点之一）。"""
+    from avid.policy.skills import default_skills_dir
+
+    assert default_skills_dir(tmp_path) == tmp_path / "skills"
+    assert default_skills_dir(str(tmp_path)) == tmp_path / "skills"

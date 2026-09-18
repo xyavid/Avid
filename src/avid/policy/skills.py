@@ -3,8 +3,13 @@
 系统提示里只放技能目录（name + description，每个一行），完整说明要模型主动调
 ``load_skill`` 才进上下文——技能变多也不会撑爆 system prompt。
 
-注册表按运行隔离：``agent_loop`` 每次运行新建一个 ``SkillLoader`` 并绑定到
-ContextVar，所以磁盘上的技能目录一变，下次运行的 system prompt 就是新的。
+注册表按运行隔离：``agent_loop`` 每次运行新建一个 ``SkillLoader``，所以磁盘上的
+技能目录一变，下次运行的 system prompt 就是新的。
+
+**技能目录在构造时解析，不在 import 时**：以前是模块级 `SKILLS_DIR = Path.cwd() /
+"skills"`，于是从别的目录启动、或一个进程服务多个工作区时，技能目录永远是"启动
+那一刻的 cwd"（阶段 18 把运行级工作区根推到了所有落点，这里是漏掉的一个）。
+默认值是 `<运行级工作区根>/skills`，没有工作区根时才回落到进程 cwd。
 """
 
 from __future__ import annotations
@@ -14,7 +19,15 @@ from pathlib import Path
 
 logger = logging.getLogger("avid.policy.skills")
 
-SKILLS_DIR = Path.cwd() / "skills"
+SKILLS_SUBDIR = "skills"
+
+
+def default_skills_dir(root: str | Path | None = None) -> Path:
+    """默认技能目录：`<root>/skills`；没给 root 才回落到进程 cwd。
+
+    调用时求值——这是本函数存在的全部理由（见模块 docstring）。
+    """
+    return (Path(root) if root is not None else Path.cwd()) / SKILLS_SUBDIR
 
 AGENT_INSTRUCTIONS = (
     "你是 Avid，一个能自主调用工具完成任务的 agent。"
@@ -53,7 +66,9 @@ class SkillLoader:
     """扫描 ``skills_dir/<name>/SKILL.md``，维护 name → 技能 的注册表。"""
 
     def __init__(self, skills_dir: str | Path | None = None) -> None:
-        self.skills_dir = Path(skills_dir) if skills_dir is not None else SKILLS_DIR
+        self.skills_dir = (
+            Path(skills_dir) if skills_dir is not None else default_skills_dir()
+        )
         self.skills: dict[str, dict[str, str]] = {}
 
     def scan(self) -> "SkillLoader":

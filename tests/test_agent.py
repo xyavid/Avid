@@ -686,10 +686,15 @@ def test_default_threshold_does_not_fire_on_short_runs(no_hooks):
 
 
 def point_skills_at(tmp_path, monkeypatch):
+    """把技能目录指到临时工作区。
+
+    技能目录是"运行级工作区根 / skills"，且在**构造时**解析（P2-18 之前是 import 时
+    绑定的模块常量）。所以这里换 cwd，而不是改模块常量——那个常量已经不存在了。
+    """
     from avid.policy import skills as skill_loader
 
-    monkeypatch.setattr(skill_loader, "SKILLS_DIR", tmp_path)
-    return tmp_path
+    monkeypatch.chdir(tmp_path)
+    return skill_loader.default_skills_dir(tmp_path)
 
 
 def write_skill(root, directory, text):
