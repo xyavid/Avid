@@ -1,4 +1,7 @@
+export { AvidMark } from './AvidMark'
+export type { AvidMarkProps } from './AvidMark'
 export { Blob } from './Blob'
 export type { BlobProps } from './Blob'
+export { SKETCH_SHAPES, shapeFor } from './shapes'
 export { Tape } from './Tape'
 export type { TapeProps } from './Tape'

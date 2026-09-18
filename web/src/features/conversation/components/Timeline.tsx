@@ -79,6 +79,7 @@ export function Timeline({
               <EntryRow
                 key={block.id}
                 entry={block.entry}
+                shapeIndex={block.shapeIndex}
                 density={density}
                 onInspect={onInspect}
                 onCopy={onCopy}

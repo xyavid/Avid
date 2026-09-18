@@ -1,5 +1,13 @@
 /**
- * 时间线条目：用户是右侧便签，assistant 走 Markdown，工具结果与 notice 是 chip。
+ * 时间线条目：用户是右侧便签，模型回复是左侧对话框，工具结果与 notice 是 chip。
+ *
+ * 模型回复与用户消息是**同一族卡片**（`sketch-card`：墨框 + 手绘形状 + `--sticker-4`
+ * 硬阴影），差别只在方向与角色标记——参照实现 purrcat 的对话框就是这一套
+ * （`bg-paper` + `border-4 border-ink` + 大硬阴影 + 小角度倾斜），这里把它的外壳
+ * 语言用在消息上，尺寸按消息收敛。形状按 `shapeIndex` 轮换，相邻卡片不同形。
+ *
+ * 只有确实有正文的模型回复才用整张卡；只声明工具调用、正文为空的那一轮退化成
+ * 一枚 chip（图标 + 角色名），免得每轮工具调用都多出一个空框。
  *
  * `aria-live` 只加在 durable（非乐观）的 assistant 条目上：乐观 delta 每帧都在变，读屏器
  * 会把它念成一串噪音，而 durable 消息才是完整的一句话。动作行默认透明，鼠标悬停或键盘
@@ -13,9 +21,12 @@ import { Markdown } from '../../lib/markdown'
 import type { TimelineEntry } from '../../events/reducer'
 import type { Density } from '../../state/uiStore'
 import { Badge, Button } from '../../ui/primitives'
+import { AvidMark, shapeFor } from '../../ui/sketch'
 
 export interface EntryRowProps {
   entry: TimelineEntry
+  /** 同级卡片的轮换序号：按**全部**条目计算，所以加载更早不会改变已有卡片的形状。 */
+  shapeIndex?: number
   density?: Density
   onInspect?: (entry: TimelineEntry) => void
   onCopy?: (text: string) => void
@@ -28,6 +39,15 @@ const NOTICE_KEY = {
 } as const
 
 const ACTION = 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100'
+
+function Role({ label }: { label: string }) {
+  return (
+    <p className="flex items-center gap-1 font-sketch text-xs text-ink/70">
+      <AvidMark className="text-ink" />
+      {label}
+    </p>
+  )
+}
 
 function Actions({ entry, onInspect, onCopy }: Pick<EntryRowProps, 'entry' | 'onInspect' | 'onCopy'>) {
   const { t } = useTranslation()
@@ -48,14 +68,22 @@ function Actions({ entry, onInspect, onCopy }: Pick<EntryRowProps, 'entry' | 'on
   )
 }
 
-export function EntryRow({ entry, density = 'comfy', onInspect, onCopy }: EntryRowProps) {
+export function EntryRow({
+  entry,
+  shapeIndex = 0,
+  density = 'comfy',
+  onInspect,
+  onCopy,
+}: EntryRowProps) {
   const { t } = useTranslation()
   const pad = density === 'compact' ? 'p-2' : 'p-3'
   const actions = <Actions entry={entry} onInspect={onInspect} onCopy={onCopy} />
 
   if (entry.kind === 'user') {
     return (
-      <article className={clsx('group sketch-card ml-auto w-fit max-w-[80%]', pad)}>
+      <article
+        className={clsx('group sketch-card ml-auto w-fit max-w-[80%]', shapeFor(shapeIndex), pad)}
+      >
         <p className="font-sketch text-xs text-ink/70">{t('chat.message.role.user')}</p>
         <p className="whitespace-pre-wrap break-anywhere text-sm">{entry.text}</p>
         {actions}
@@ -83,9 +111,28 @@ export function EntryRow({ entry, density = 'comfy', onInspect, onCopy }: EntryR
       </article>
     )
   }
+
+  // 只是一个工具调用的「空回合」：用 chip 标记，别为它撑起一张空卡
+  if (!entry.text.trim()) {
+    return (
+      <article className="group sketch-chip flex w-fit items-center gap-2 px-3 py-1">
+        <Role label={t('chat.message.role.assistant')} />
+        {actions}
+      </article>
+    )
+  }
+
   return (
-    <article className="group" aria-live={entry.optimistic ? undefined : 'polite'}>
-      <Markdown text={entry.text} className={pad} />
+    <article
+      aria-live={entry.optimistic ? undefined : 'polite'}
+      className={clsx(
+        'group sketch-card mr-auto flex w-fit max-w-[88%] flex-col gap-1',
+        shapeFor(shapeIndex),
+        pad,
+      )}
+    >
+      <Role label={t('chat.message.role.assistant')} />
+      <Markdown text={entry.text} />
       {actions}
     </article>
   )

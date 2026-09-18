@@ -139,6 +139,11 @@ button.sketch-chip.press:hover:not(:disabled):active {
   transform: rotate(var(--tilt-input));
 }
 
+/* 手绘小标记：−2deg，只给 ≤48px 的装饰元素（§8.1 ⑤）。 */
+.tilt-mark {
+  transform: rotate(calc(-1 * var(--tilt-2)));
+}
+
 .tilt-input-content {
   transform: rotate(calc(-1 * var(--tilt-input)));
 }
@@ -156,6 +161,10 @@ button.sketch-chip.press:hover:not(:disabled):active {
   .tilt-input,
   .tilt-input-content {
     transform: none;
+  }
+
+  .tilt-mark {
+    transform: rotate(calc(-1 * var(--tilt-1)));
   }
 }
 

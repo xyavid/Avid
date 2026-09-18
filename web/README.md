@@ -44,6 +44,14 @@ AVID_E2E=1 pnpm test:e2e    # Playwright 14 项（需先 pnpm exec playwright in
    `shadow-[…]`、`z-[…]`、内联 `borderRadius`/`fontFamily`、裸 `<button>/<input>/<select>`
    （`ui/` 之外）、`transition-all`、JSX 内联文案、空 `catch` 全部报错。
 
+## 消息卡片与手绘小标记
+
+时间线里用户消息与模型回复是**同一族对话框**（`ui/patterns/EntryRow.tsx` 用 `sketch-card`：
+4px 墨框 + 手绘形状 + `--sticker-4` 硬阴影；方向相反、角色标记不同，照 purrcat 的对话框
+外壳语言收敛到消息尺寸）。形状由 `ui/sketch/shapes.ts` 的 `shapeFor` 按条目序号轮换，
+序号按全部条目算，加载更早不会让已有卡片换形。模型卡片的角色标记是 `ui/sketch/AvidMark.tsx`
+的一枚静态手绘 SVG（粗笔画 + 非缩放描边 + −2deg，`aria-hidden`）。
+
 ## 交互反馈（按键一律有方框）
 
 **行动型按键本身就有方框**，与「改名」等次级按钮同族：`variant="secondary"`（时间线的

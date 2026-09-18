@@ -2,6 +2,7 @@ import { clsx } from 'clsx'
 import { useState } from 'react'
 
 import { Badge, Button } from '../../../ui/primitives'
+import { shapeFor } from '../../../ui/sketch'
 import { useTranslation } from '../../../lib/i18n'
 import type { BadgeTone } from '../../../ui/primitives'
 import type { Task } from '../../../api/types'
@@ -10,13 +11,6 @@ const STATUS_TONES: Record<Task['status'], BadgeTone> = {
   pending: 'warn',
   in_progress: 'info',
   completed: 'ok',
-}
-
-/** 形状按索引轮换 1→2→3→1，相邻卡片永不同形。 */
-const SHAPES = ['shape-1', 'shape-2', 'shape-3'] as const
-
-function shapeFor(index: number): string {
-  return SHAPES[index % SHAPES.length] ?? 'shape-1'
 }
 
 function DependencyList({ task }: { task: Task }) {

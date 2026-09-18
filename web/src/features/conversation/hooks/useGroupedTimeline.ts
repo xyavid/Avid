@@ -3,7 +3,7 @@ import type { TimelineEntry, ToolRun } from '../../../events/reducer'
 import { EVENT_GROUP_MIN_SIZE } from '../../../ui/patterns'
 
 export type TimelineBlock =
-  | { kind: 'entry'; id: string; entry: TimelineEntry }
+  | { kind: 'entry'; id: string; entry: TimelineEntry; shapeIndex: number }
   | { kind: 'tool'; id: string; run: ToolRun; content: string }
   | { kind: 'group'; id: string; runs: ToolRun[]; contents: Record<string, string> }
 
@@ -26,10 +26,13 @@ export function useGroupedTimeline(
   const byId = new Map(tools.map((run) => [run.toolCallId, run]))
   const placed = new Set<string>()
   const blocks: TimelineBlock[] = []
+  // 形状轮换按**全部**条目计数（不是可见窗口），所以「加载更早」不会让已渲染的卡片换形。
+  let entryOrdinal = 0
 
   for (const entry of entries) {
     if (entry.kind === 'tool') continue
-    blocks.push({ kind: 'entry', id: entry.id, entry })
+    blocks.push({ kind: 'entry', id: entry.id, entry, shapeIndex: entryOrdinal })
+    entryOrdinal += 1
     const calls = entry.toolCalls ?? []
     const runs = calls
       .map((call) => byId.get(call.toolCallId))
