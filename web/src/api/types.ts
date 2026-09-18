@@ -61,6 +61,8 @@ export interface Capabilities {
   skills: Skill[]
   model: string | null
   workspace: string
+  /** 这台机器上会用到哪个文件夹选择器后端（null = 没有可用的）。诊断用。 */
+  workspace_picker: string | null
 }
 
 export interface StreamInfo {
