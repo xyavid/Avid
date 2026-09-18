@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 
-import { workspaceFolder } from './helpers'
+import { createSession, workspaceFolder } from './helpers'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 
@@ -165,4 +165,44 @@ test('新增工作区：取消不变更，选择后登记并切过去，重复�
   } finally {
     rmSync(folder, { recursive: true, force: true })
   }
+})
+
+/**
+ * 按会话搜索：只留匹配项、没有匹配给提示、清除后恢复。
+ *
+ * 搜索是纯客户端的（服务端没有全文检索），所以这里断言的是导航树的可见性，
+ * 不涉及任何网络请求——顺带说明它不该因为过滤而多发一次会话列表请求。
+ */
+test('按会话搜索：过滤、无匹配提示、清除后恢复', async ({ page, request }) => {
+  const stamp = Date.now()
+  const hit = `alpha${stamp}`
+  const miss = `beta${stamp}`
+  for (const name of [hit, miss]) {
+    const created = await createSession(request, { name })
+    expect(created.status(), `造会话失败：${await created.text()}`).toBe(201)
+  }
+
+  await page.goto(`${BASE}/sessions`)
+  const nav = page.locator('section[aria-label="工作区"]')
+  const hitRow = nav.getByRole('button', { name: new RegExp(`^${hit}`) })
+  const missRow = nav.getByRole('button', { name: new RegExp(`^${miss}`) })
+  await expect(hitRow).toBeVisible({ timeout: 10_000 })
+  await expect(missRow).toBeVisible()
+
+  // 打开搜索并输入：只剩匹配的那条，另一条连按钮都不存在。
+  await page.getByRole('button', { name: '搜索会话' }).click()
+  const box = page.getByRole('searchbox', { name: '搜索会话' })
+  await box.fill(hit)
+  await expect(hitRow).toBeVisible()
+  await expect(missRow).toHaveCount(0)
+
+  // 没有匹配：给"没有名字含 X 的会话"，而不是空列表。
+  await box.fill(`zzz${stamp}`)
+  await expect(nav.getByText(new RegExp(`没有名字含`))).toBeVisible()
+  await expect(hitRow).toHaveCount(0)
+
+  // 清除后恢复。
+  await page.getByRole('button', { name: '清除搜索' }).click()
+  await expect(hitRow).toBeVisible()
+  await expect(missRow).toBeVisible()
 })

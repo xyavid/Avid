@@ -35,6 +35,9 @@ AVID_E2E=1 pnpm test:e2e    # Playwright 14 项（需先 pnpm exec playwright in
 每个文件夹自己的 `useState`（纯界面偏好，不进 `uiStore`）。两个按钮的可访问名必须能分辨：
 折叠按钮 = 工作区名，新建按钮 = `在「<名字>」新建会话`。
 
+右上角两个图标按钮：🔍 展开搜索（纯客户端按会话名过滤，命中项强制展开且不受预览上限
+约束，查询不持久化），＋ 新增工作区（宿主机文件夹选择器）。
+
 ## 布局的高度链
 
 `AppShell` 外层 `h-dvh overflow-hidden`、内层行 `h-full min-h-0`，往下每级 flex 容器都带

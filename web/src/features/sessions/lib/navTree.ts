@@ -91,3 +91,39 @@ export function isExpanded(
 ): boolean {
   return toggled[workspaceId] ?? workspaceId === defaultId
 }
+
+/**
+ * 一条会话是否命中搜索词。
+ *
+ * 匹配的是**界面上显示的那个名字**（没有名字的会话显示为「未命名会话」，那就按它匹配），
+ * 全小写包含匹配。**不匹配工作区名**：搜 "Avid" 时把整个 Avid 文件夹的几百条会话全捞出来
+ * 只会让人更找不到目标；要按工作区找就用文件夹本身。
+ */
+export function matchesQuery(
+  session: SessionSummary,
+  query: string,
+  unnamedLabel: string,
+): boolean {
+  const needle = query.trim().toLowerCase()
+  if (needle === '') return true
+  return (session.name ?? unnamedLabel).toLowerCase().includes(needle)
+}
+
+/**
+ * 按搜索词过滤分组：只留命中的会话，**没有命中的工作区整组不显示**。
+ *
+ * 空查询原样返回（调用方据此判断"是不是在搜索"）。
+ */
+export function filterGroups(
+  groups: WorkspaceGroup[],
+  query: string,
+  unnamedLabel: string,
+): WorkspaceGroup[] {
+  if (query.trim() === '') return groups
+  return groups
+    .map((group) => ({
+      workspace: group.workspace,
+      sessions: group.sessions.filter((session) => matchesQuery(session, query, unnamedLabel)),
+    }))
+    .filter((group) => group.sessions.length > 0)
+}

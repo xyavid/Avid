@@ -13,6 +13,8 @@ export interface WorkspaceFolderProps {
   activeId: string | null
   /** 这个工作区里正在新建会话（只有它自己的按钮转圈）。 */
   creating: boolean
+  /** 正在搜索：强制展开、不设预览上限（要找的东西不能被"展开其余"藏起来）。 */
+  searching?: boolean
   onNewSession: () => void
   editing: string | null
   name: string
@@ -40,6 +42,7 @@ export function WorkspaceFolder({
   onToggle,
   activeId,
   creating,
+  searching = false,
   onNewSession,
   editing,
   name,
@@ -53,7 +56,7 @@ export function WorkspaceFolder({
   const { t } = useTranslation()
   const [allShown, setAllShown] = useState(false)
   const sessions = group.sessions
-  const { shown, hidden } = visibleSessions(sessions, allShown)
+  const { shown, hidden } = visibleSessions(sessions, allShown || searching)
   const label = group.workspace?.name ?? group.workspace?.root ?? t('sessions.orphans')
 
   return (
@@ -64,6 +67,8 @@ export function WorkspaceFolder({
           variant="secondary"
           className="flex-1 justify-start gap-1"
           aria-expanded={expanded}
+          // 搜索时一律展开（匹配项不能被折叠藏住），所以折叠按钮此时无事可做。
+          disabled={searching}
           onClick={onToggle}
         >
           <span aria-hidden="true">{expanded ? '▾' : '▸'}</span>
@@ -109,7 +114,7 @@ export function WorkspaceFolder({
               ))}
             </ul>
           )}
-          {hidden > 0 ? (
+          {hidden > 0 && !searching ? (
             <div className="flex items-center gap-2">
               <Button size="sm" variant="secondary" onClick={() => setAllShown(true)}>
                 {t('sessions.showMore', { count: hidden })}
@@ -119,7 +124,7 @@ export function WorkspaceFolder({
               </Badge>
             </div>
           ) : null}
-          {allShown && sessions.length > 0 ? (
+          {allShown && !searching && sessions.length > 0 ? (
             <Button size="sm" variant="secondary" onClick={() => setAllShown(false)}>
               {t('sessions.collapse')}
             </Button>

@@ -4,8 +4,10 @@ import type { SessionSummary, WorkspaceSummary } from '../../../api/types'
 import {
   PREVIEW_SESSIONS,
   defaultExpandedWorkspace,
+  filterGroups,
   groupByWorkspace,
   isExpanded,
+  matchesQuery,
   visibleSessions,
 } from '../lib/navTree'
 
@@ -120,5 +122,49 @@ describe('isExpanded', () => {
   it('没操作过就按默认值', () => {
     expect(isExpanded('b', {}, 'b')).toBe(true)
     expect(isExpanded('a', {}, 'b')).toBe(false)
+  })
+})
+
+describe('matchesQuery / filterGroups（按会话搜索）', () => {
+  const named = [
+    { ...session('s1', 'a'), name: '前端架构方案梳理' },
+    { ...session('s2', 'a'), name: null },
+    { ...session('s3', 'b'), name: '读文件并计算' },
+  ]
+  const groupsWithNames = [
+    { workspace: workspace('a', 'Avid'), sessions: named.slice(0, 2) },
+    { workspace: workspace('b', 'blog'), sessions: named.slice(2) },
+  ]
+
+  it('空查询不做过滤（原样返回，调用方据此判断在不在搜索）', () => {
+    expect(filterGroups(groupsWithNames, '', '未命名会话')).toBe(groupsWithNames)
+    expect(filterGroups(groupsWithNames, '   ', '未命名会话')).toBe(groupsWithNames)
+  })
+
+  it('按名字包含匹配，大小写不敏感，前后空白忽略', () => {
+    expect(matchesQuery(named[0]!, '架构', '未命名会话')).toBe(true)
+    expect(matchesQuery(named[0]!, ' 架构 ', '未命名会话')).toBe(true)
+    expect(matchesQuery(named[2]!, '读文件', '未命名会话')).toBe(true)
+    expect(matchesQuery(named[2]!, '架构', '未命名会话')).toBe(false)
+  })
+
+  it('没有名字的会话按界面显示的名字（未命名会话）匹配', () => {
+    expect(matchesQuery(named[1]!, '未命名', '未命名会话')).toBe(true)
+    expect(matchesQuery(named[1]!, '架构', '未命名会话')).toBe(false)
+  })
+
+  it('过滤后只留命中的会话，没有命中的工作区整组消失', () => {
+    const filtered = filterGroups(groupsWithNames, '架构', '未命名会话')
+
+    expect(filtered.map((group) => group.workspace?.id)).toEqual(['a'])
+    expect(filtered[0]?.sessions.map((item) => item.id)).toEqual(['s1'])
+  })
+
+  it('全部不命中时返回空表（界面据此给"没有匹配"）', () => {
+    expect(filterGroups(groupsWithNames, '不存在的会话名', '未命名会话')).toEqual([])
+  })
+
+  it('不按工作区名匹配：搜工作区名不该把整组捞出来', () => {
+    expect(filterGroups(groupsWithNames, 'blog', '未命名会话')).toEqual([])
   })
 })

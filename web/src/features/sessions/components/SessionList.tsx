@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 
-import { Button, Dialog } from '../../../ui/primitives'
+import { Button, Dialog, Input } from '../../../ui/primitives'
 import { useTranslation } from '../../../lib/i18n'
 import { useErrorText } from '../../../lib/errors'
 import { ApiError } from '../../../api/client'
@@ -16,6 +16,7 @@ import {
 } from '../../../api/queries'
 import {
   defaultExpandedWorkspace,
+  filterGroups,
   groupByWorkspace,
   isExpanded,
 } from '../lib/navTree'
@@ -57,9 +58,16 @@ export function SessionList({ activeId, onSelect }: SessionListProps) {
   // 折叠覆盖表：用户点过的那些记在这里，没点过的按默认规则展开（数据是异步来的，
   // 默认值不能写进 state 初值）。它是纯界面展开态，不进 uiStore（服务端状态不留副本）。
   const [toggled, setToggled] = useState<Record<string, boolean>>({})
+  // 搜索：只在客户端按会话名过滤（服务端没有全文检索，也不该为一个过滤条件加接口）。
+  // 不持久化——"刷新后还留着一个把列表藏掉一半的过滤条件"是坑不是贴心。
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const searchInput = useRef<HTMLInputElement>(null)
 
-  const groups = groupByWorkspace(workspaces.data ?? [], list.data ?? [])
-  const defaultId = defaultExpandedWorkspace(groups, activeId)
+  const allGroups = groupByWorkspace(workspaces.data ?? [], list.data ?? [])
+  const searching = query.trim() !== ''
+  const groups = filterGroups(allGroups, query, t('sessions.unnamed'))
+  const defaultId = defaultExpandedWorkspace(allGroups, activeId)
 
   const failure = (error: unknown) =>
     setAlert(
@@ -136,6 +144,25 @@ export function SessionList({ activeId, onSelect }: SessionListProps) {
     >
       <div className="flex items-center justify-between">
         <h2 className="font-sketch text-lg">{t('sessions.workspacesTitle')}</h2>
+        <Button
+          size="icon"
+          variant="secondary"
+          aria-label={t('sessions.search.open')}
+          title={t('sessions.search.open')}
+          aria-expanded={searchOpen}
+          onClick={() => {
+            const next = !searchOpen
+            setSearchOpen(next)
+            if (next) {
+              // 打开就聚焦：这一个动作的目的就是打字，让人再点一次输入框是多余的。
+              window.setTimeout(() => searchInput.current?.focus(), 0)
+            } else {
+              setQuery('')
+            }
+          }}
+        >
+          <span aria-hidden="true">🔍</span>
+        </Button>
         {canAddWorkspace ? (
           <Button
             size="icon"
@@ -149,6 +176,37 @@ export function SessionList({ activeId, onSelect }: SessionListProps) {
           </Button>
         ) : null}
       </div>
+
+      {searchOpen ? (
+        <div className="flex items-center gap-1">
+          <Input
+            ref={searchInput}
+            type="search"
+            aria-label={t('sessions.search.label')}
+            placeholder={t('sessions.search.placeholder')}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                setQuery('')
+                setSearchOpen(false)
+              }
+            }}
+          />
+          <Button
+            size="icon"
+            variant="secondary"
+            aria-label={t('sessions.search.clear')}
+            title={t('sessions.search.clear')}
+            onClick={() => {
+              setQuery('')
+              searchInput.current?.focus()
+            }}
+          >
+            <span aria-hidden="true">×</span>
+          </Button>
+        </div>
+      ) : null}
 
       {notice ? <p className="empty-note">{notice}</p> : null}
       {alert ? <p className="empty-note text-danger">{alert}</p> : null}
@@ -179,6 +237,10 @@ export function SessionList({ activeId, onSelect }: SessionListProps) {
         </div>
       ) : null}
 
+      {searching && groups.length === 0 ? (
+        <p className="empty-note">{t('sessions.search.empty', { query: query.trim() })}</p>
+      ) : null}
+
       <ul className="scroll-area flex-1 space-y-2 pr-1">
         {groups.map((group) => {
           const id = group.workspace?.id
@@ -195,6 +257,7 @@ export function SessionList({ activeId, onSelect }: SessionListProps) {
                 }}
                 activeId={activeId}
                 creating={create.isPending}
+                searching={searching}
                 onNewSession={() => {
                   if (id === undefined) return
                   handleNewSession(id)

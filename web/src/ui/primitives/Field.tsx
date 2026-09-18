@@ -1,3 +1,4 @@
+import { forwardRef } from 'react'
 import { clsx } from 'clsx'
 import type {
   InputHTMLAttributes,
@@ -35,9 +36,15 @@ export function Field({ label, hint, error, htmlFor, children }: FieldProps) {
 const CONTROL =
   'min-h-control w-full rounded-chip border-hair border-ink bg-input px-3 py-2 text-sm text-ink'
 
-export function Input({ className, ...rest }: InputHTMLAttributes<HTMLInputElement>) {
-  return <input {...rest} className={clsx(CONTROL, className)} />
-}
+/**
+ * ``forwardRef`` 是为了"打开就能打字"这类焦点管理（导航列的搜索框用它）。
+ * React 18 里 ref 不是普通 prop，所以只有在这里显式转发。
+ */
+export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
+  function Input({ className, ...rest }, ref) {
+    return <input ref={ref} {...rest} className={clsx(CONTROL, className)} />
+  },
+)
 
 export function TextArea({ className, ...rest }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return <textarea {...rest} className={clsx(CONTROL, 'resize-y leading-relaxed', className)} />

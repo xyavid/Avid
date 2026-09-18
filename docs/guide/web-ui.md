@@ -46,6 +46,7 @@ uv run avid web --port 8765      # 静态资源与 API 同源
 |---|---|---|
 | 导航列（`/sessions` 左侧） | `GET /api/workspaces`（文件夹）+ `GET /api/sessions`（里面的会话）、`POST /api/sessions`、`PATCH /api/sessions/{id}`、`DELETE /api/sessions/{id}` | 查询流（TanStack Query）；两份查询在客户端按 `workspace.id` 归拢成树，服务端接口不变 |
 | 工作区文件夹（导航列的一项） | `GET /api/workspaces` + `GET /api/sessions` | 点标题折叠/展开；点 ＋ 在该工作区建会话（id 随 `POST /api/sessions` 发出，**必填**，缺了是 400 `workspace_required`） |
+| 🔍（导航列右上角） | 不新增接口 | 纯客户端按**会话名**过滤：只留命中的会话、没有命中的工作区整组隐藏、命中项不受 5 条上限约束；Esc 或 × 清除 |
 | 「新增工作区…」（导航列右上角 ＋） | `POST /api/workspaces/pick`（弹宿主机文件夹选择器）→ `POST /api/workspaces`（登记） | 命令流；成功后刷新候选并**展开新工作区**。取消 → 什么都不做；已在列表里 → 409 `workspace_exists` + 展开已有的那个，不重复添加 |
 | 权限模式选择器（输入条旁） | 不新增接口 | 随 `POST /api/sessions/{id}/runs` 的 `permission` 发出；缺省取会话所属工作区的 `default_permission` |
 | 会话时间线（`/sessions/{id}`） | `GET /api/sessions/{id}/entries`（分页，带 `branch`）、`GET /api/runs/{id}/events`（SSE） | 历史来自条目（权威），实时来自事件 |
@@ -117,6 +118,11 @@ zenity/kdialog → Windows（WSL 互操作）→ osascript 依次探测，`GET /
   展开第一个（空文件夹也要露出"还没有会话 + ＋"，否则新机器上界面看着像空的）。
 - 进程绑定的工作地点**不写进注册表**，所以"注册表里有什么"只取决于你登记过什么，
   不取决于你起过几次服务。
+- **搜索**（🔍）在客户端按**会话名**过滤，不发任何请求：只留命中的会话，没有命中的
+  工作区整组不显示，命中项一律展开且不受"前 5 条"限制。匹配的是界面上显示的那个名字
+  （没名字的会话按「未命名会话」匹配），**不匹配工作区名**——搜 "Avid" 把整个文件夹的
+  几百条会话全捞出来只会更难找。查询**不持久化**（刷新即清空），"刷新后还留着一个把
+  列表藏掉一半的过滤条件"是坑不是贴心。没有匹配时给「没有名字含「X」的会话」。
 会话卡与详情显示归属名字。归属是**创建时的静态事实**，写在会话 header 里，
 所以注册表被删掉也不影响已有会话的归属查询。
 
