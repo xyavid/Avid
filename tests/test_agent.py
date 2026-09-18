@@ -755,7 +755,7 @@ def test_unknown_skill_returns_error_text_without_raising(hook_registry, tmp_pat
 
     result = agent_loop(messages, config=CONFIG, chat=chat)
 
-    assert messages[2]["content"] == "Error: Unknown skill 'nope'. Available: none"
+    assert messages[2]["content"] == "错误：没有这个技能「nope」。可用：（无）"
     assert result == "好的"
 
 

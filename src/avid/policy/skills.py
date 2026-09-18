@@ -134,5 +134,7 @@ class SkillLoader:
         if skill is not None:
             return skill["content"]
 
-        available = ", ".join(sorted(self.skills)) or "none"
-        return f"Error: Unknown skill '{name}'. Available: {available}"
+        available = "、".join(sorted(self.skills)) or "（无）"
+        # 工具结果的失败文案统一以「错误：」开头（tools/ 的约定，模型据此判断失败）；
+        # 这里以前返回英文 "Error: …"，而它正是模型看到的工具结果。
+        return f"错误：没有这个技能「{name}」。可用：{available}"

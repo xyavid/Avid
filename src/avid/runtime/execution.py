@@ -28,6 +28,8 @@ logger = logging.getLogger("avid.runtime.execution")
 # 拦截时回传给模型的兜底文案。回调可以把 context["denied_content"] 设成
 # 更有用的内容（permission_hook 就会），这里只在回调没设时使用。
 DENIED_CONTENT = "Permission denied."
+# PostToolUse 拦截后回给模型的文本：说清"结果被拦了"，否则模型会以为自己拿到了空输出。
+POST_BLOCKED_CONTENT = "错误：工具结果被 PostToolUse hook 拦截，内容未进入上下文。"
 
 # 需要读 RunState 的工具。文件类工具进去是因为它们要读运行级工作区根与越界授权账本
 # （``state.workspace_root`` / ``state.outside_allowed``），而这两个决定都由权限层做。
@@ -145,7 +147,13 @@ def execute_one(
         "content": content,
         "truncated": False,
     }
-    state.hooks.trigger("PostToolUse", after)
+    if state.hooks.trigger("PostToolUse", after) == BLOCK:
+        # PostToolUse 的 BLOCK 语义：工具**已经跑过**了，拦的是"结果进上下文"
+        # （例如输出里带凭据）。以前这个返回值被直接丢掉——注册了拦截的回调等于
+        # 静默失效，而且失败方向是"内容照样进了上下文"（审查里的 P3-6）。
+        after["content"] = str(after.get("denied_content") or POST_BLOCKED_CONTENT)
+        after["blocked"] = True
+        logger.info("  ✗ 结果被 PostToolUse 拦截 %s", name)
     final = str(after["content"])
     state.emit(
         events.TOOL_CALL_FINISHED,

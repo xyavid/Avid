@@ -68,7 +68,7 @@ def run_subagent(
     子 agent 在别的线程跑，``RunState`` 不跨线程继承。漏传 mode 的后果是**最严一档
     被静默绕过**（父运行 strict、子 agent 却按默认值放行），因此有一条专门的用例盯着。
     """
-    # 延迟导入：agent.py 需要 import 本模块来注册工具，顶部导入会成环。
+    # 延迟导入：runtime/state.py 要 import 本包来拿工具表，顶部导入会成环。
     from ..runtime.loop import RoundLimitExceeded, agent_loop
     from . import SUB_HANDLERS, SUB_TOOLS
 

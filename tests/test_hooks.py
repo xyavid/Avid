@@ -334,3 +334,50 @@ def test_copy_is_independent_but_inherits():
 
     assert len(parent.registered("Stop")) == 1, "父注册表不该被子运行改动"
     assert len(clone.registered("Stop")) == 2, "副本继承父的回调"
+
+
+# ---------- PostToolUse 的 BLOCK 语义（P3-6） ----------
+
+
+def test_post_tool_use_block_stops_the_result_from_entering_context():
+    """PostToolUse 返回 BLOCK 时必须真的拦住结果。
+
+    以前这个返回值被直接丢掉：注册了拦截的回调等于静默失效，而且失败方向正好是
+    最糟的那个——内容照样进了上下文（比如输出里带凭据）。
+    """
+    from avid.runtime.execution import POST_BLOCKED_CONTENT, execute_one
+
+    def runner(arguments, *, state=None):
+        return "SECRET=topsecret"
+
+    registry = {"bash": runner}
+
+    def blocking(context: dict) -> str:
+        return BLOCK if "topsecret" in str(context.get("content")) else None
+
+    registry_obj = HookRegistry()
+    registry_obj.register("PostToolUse", blocking)
+    from avid.runtime.state import RunState
+
+    state = RunState.for_run(hooks=registry_obj, auto_approve=True)
+    content = execute_one(
+        "bash", '{"command": "env"}', registry, state=state, round_index=0
+    )
+
+    assert content == POST_BLOCKED_CONTENT
+    assert "topsecret" not in content, "被拦的内容不能回给模型"
+
+
+def test_post_tool_use_without_block_passes_the_content_through():
+    """没有拦截时结果照常回传（别把"显式处理 BLOCK"做成"总是拦截"）。"""
+    from avid.runtime.execution import execute_one
+    from avid.runtime.state import RunState
+
+    registry = {"bash": lambda arguments, *, state=None: "正常输出"}
+    state = RunState.for_run(hooks=HookRegistry(), auto_approve=True)
+
+    content = execute_one(
+        "bash", '{"command": "echo"}', registry, state=state, round_index=0
+    )
+
+    assert content == "正常输出"

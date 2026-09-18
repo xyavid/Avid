@@ -166,21 +166,21 @@ def test_load_miss_lists_available_names(tmp_path):
 
     result = SkillLoader(tmp_path).scan().load("nope")
 
-    assert result == "Error: Unknown skill 'nope'. Available: alpha, beta"
+    assert result == "错误：没有这个技能「nope」。可用：alpha、beta"
 
 
 def test_load_miss_on_an_empty_registry_says_none(tmp_path):
     result = SkillLoader(tmp_path).scan().load("nope")
 
-    assert result == "Error: Unknown skill 'nope'. Available: none"
+    assert result == "错误：没有这个技能「nope」。可用：（无）"
 
 
 def test_load_treats_the_name_as_a_key_not_a_path(tmp_path):
     write_skill(tmp_path, "alpha", "---\ndescription: A\n---\n秘密内容")
     loader = SkillLoader(tmp_path).scan()
 
-    assert loader.load("../../etc/passwd").startswith("Error: Unknown skill")
-    assert loader.load("alpha/SKILL.md").startswith("Error: Unknown skill")
+    assert loader.load("../../etc/passwd").startswith("错误：没有这个技能")
+    assert loader.load("alpha/SKILL.md").startswith("错误：没有这个技能")
 
 
 # ---------- 运行隔离：每个 RunState 自带一份注册表 ----------
