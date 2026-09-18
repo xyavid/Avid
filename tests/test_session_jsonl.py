@@ -22,6 +22,7 @@ from avid.session import (
     SessionClosedError,
     SessionExistsError,
     SessionInvalidMessageError,
+    SessionInvariantError,
     SessionLockedError,
     SessionStorageError,
     UuidV7Generator,
@@ -422,6 +423,50 @@ def test_open_refuses_a_session_from_another_workspace(tmp_path):
         mine2 = JsonlSessionRepo(tmp_path, workspace="w-mine")
         mine2.open(metadata)
     assert "另一个工作区" in str(exc.value)
+
+
+# ---------------- 分支扫描与会话定位的成本（P2-16） ----------------
+
+
+def test_newest_first_scan_stops_before_the_chain_breaks(tmp_path):
+    """newestFirst + limit 必须尽早停：链可以很长，只要够数就不该走到根。
+
+    机制断言：把链中间的一个条目从状态里抹掉（模拟"链在更深处断了"），
+    `limit=2` 的降序扫描不该碰到断点、因此不报错；升序扫描必须走到根、于是报错。
+    """
+    repo = make_repo(tmp_path)
+    session = repo.create(id="demo")
+    branch = session.create_branch("main", None)
+    ids = [branch.append_message({"role": "user", "content": f"第 {index} 条"}) for index in range(5)]
+
+    state = session._storage._state  # type: ignore[attr-defined]
+    broken = ids[2]
+    saved = state._entries.pop(broken)  # type: ignore[attr-defined]
+    try:
+        tip = branch.get_tip_id()
+        assert tip == ids[-1]
+
+        recent = session.scan_branch(BranchScan(start=tip, order="newestFirst", limit=2))
+        assert [entry.id for entry in recent] == [ids[-1], ids[-2]]
+
+        with pytest.raises(SessionInvariantError):
+            session.scan_branch(BranchScan(start=tip, order="oldestFirst"))
+    finally:
+        state._entries[broken] = saved  # type: ignore[attr-defined]
+        session.close()
+        repo.close()
+
+
+def test_a_session_id_is_not_confused_with_another_ids_suffix(tmp_path):
+    """`create(id="a")` 不该被已存在的 `x_a` 挡住（后缀匹配的经典误判）。"""
+    repo = make_repo(tmp_path)
+    repo.create(id="x_a").close()
+
+    created = repo.create(id="a")  # 以前 `_session_paths("a")` 会匹配到 `..._x_a.jsonl`
+    created.close()
+
+    assert sorted(item.id for item in repo.list()) == ["a", "x_a"]
+    repo.close()
 
 
 # ---------------- 删除的护栏（P1-15） ----------------

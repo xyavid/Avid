@@ -215,6 +215,17 @@ class SessionState:
         with self._lock:
             return self._scan_branch(query)
 
+    @staticmethod
+    def _branch_match(entry: Entry, query: BranchScan) -> bool:
+        if query.type is not None and entry.type != query.type:
+            return False
+        if query.cursor_seq is None:
+            return True
+        # cursor 是排他的：升序取它之后的，降序取它之前的。
+        if query.order == "oldestFirst":
+            return entry.seq > query.cursor_seq
+        return entry.seq < query.cursor_seq
+
     def _scan_branch(self, query: BranchScan) -> list[Entry]:
         if query.start is None:
             raise SessionInvariantError("scan_branch 需要一个起点条目 id")
@@ -222,10 +233,19 @@ class SessionState:
         if start is None:
             raise SessionInvariantError(f"分支起点不存在：{query.start}")
 
+        limit = None if query.limit is None else max(0, query.limit)
+        newest_first = query.order != "oldestFirst"
+
         path: list[Entry] = []
         cursor: Entry | None = start
         while cursor is not None:
-            path.append(cursor)
+            if self._branch_match(cursor, query):
+                path.append(cursor)
+                # newestFirst 且已经够数：不必再往链的深处走。链可以很长（长会话的
+                # 分支扫描以前是 O(链长)，哪怕只要 1 条——`find_entry(limit=1)` 与
+                # 链尾残缺判定都走这条路）。
+                if newest_first and limit is not None and len(path) >= limit:
+                    break
             if cursor.parent_id is None:
                 break
             parent = self._entries.get(cursor.parent_id)
@@ -234,23 +254,14 @@ class SessionState:
                     f"链断了：{cursor.id} 的 parent {cursor.parent_id} 不存在"
                 )
             cursor = parent
-        if query.order == "oldestFirst":
-            path.reverse()
 
-        filtered = [
-            item
-            for item in path
-            if (query.type is None or item.type == query.type)
-            and (
-                query.cursor_seq is None
-                or (
-                    item.seq > query.cursor_seq
-                    if query.order == "oldestFirst"
-                    else item.seq < query.cursor_seq
-                )
-            )
-        ]
-        page = filtered if query.limit is None else filtered[: max(0, query.limit)]
+        if newest_first:
+            filtered = path
+        else:
+            # oldestFirst 必须走到根才知道哪条最老，之后才谈得上 limit。
+            path.reverse()
+            filtered = [item for item in path if self._branch_match(item, query)]
+        page = filtered if limit is None else filtered[:limit]
         return [_copy_entry(item) for item in page]
 
     def scan_entries(self, query: EntryQuery) -> list[Entry]:

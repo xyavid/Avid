@@ -895,14 +895,21 @@ class JsonlSessionRepo:
         raise SessionNotFoundError(metadata.id)
 
     def _session_paths(self, session_id: str) -> builtins.list[Path]:
+        """这个 id 对应的文件（文件名形如 ``<时间戳>-<毫秒>_<id>.jsonl``）。
+
+        以前用 `name.endswith("_" + id + ".jsonl")` 判断：`create(id="a")` 会被
+        已存在的 `..._x_a.jsonl`（id 就是 `x_a`）误判成"已存在"。前缀里没有下划线，
+        所以 id 就是第一个 ``_`` 之后的部分——按下划线切一刀再比，才是精确匹配。
+        """
         if not self.root.exists():
             return []
-        suffix = f"_{quote(session_id, safe='')}{SUFFIX}"
-        return [
-            path
-            for path in sorted(self.root.glob(f"*{SUFFIX}"))
-            if path.name.endswith(suffix)
-        ]
+        want = f"{quote(session_id, safe='')}{SUFFIX}"
+        found: builtins.list[Path] = []
+        for path in sorted(self.root.glob(f"*_{want}")):
+            _, _, tail = path.name.partition("_")
+            if tail == want:
+                found.append(path)
+        return found
 
     def _reserve(self, session_id: str) -> None:
         if session_id in self._open or session_id in self._pending:
