@@ -2,8 +2,8 @@ import { expect, test } from '@playwright/test'
 import type { Locator, Page } from '@playwright/test'
 
 /**
- * 交互反馈回归：**行动型按键本身就有方框**（与「改名」同族），悬停再抬升一档；
- * `ghost` 只留给标题/链接型控件（会话列表的会话标题），它保持无框。
+ * 交互反馈回归：**所有按键本身就有方框**（与「改名」同族），悬停再抬升一档。
+ * 包括会话列表里的会话标题——它和下面的「改名 / 删除」是同一排控件，没框时不像一族。
  *
  * 需要 AVID_E2E=1 且内核已起（脚本模型即可）。
  * 断言一律等样式稳定后再读：阴影与位移是 90–120ms 的过渡，读中间帧会读到插值
@@ -174,13 +174,22 @@ test('时间线动作：静止（未悬停）时就已带方框，悬停只负�
   await expectStyle(action, (style) => style.boxShadow.includes(STICKER_3), '悬停抬升一档')
 })
 
-test('标题型控件（会话标题）保持无框', async ({ page }) => {
+test('会话标题也有框，与「改名 / 删除」同族', async ({ page }) => {
   await openSession(page)
   const title = page.locator('section[aria-label="会话"] ul li').first().locator('button').first()
+  const remove = page.getByRole('button', { name: '删除' }).first()
 
   const rest = await styleOf(title)
-  expect(rest.borderColor, '标题型不该有方框').toMatch(TRANSPARENT)
-  expect(shadowVisible(rest.boxShadow), '标题型没有硬阴影').toBe(false)
+  expect(rest.borderColor, '标题本身就有墨线方框').toBe(INK)
+  expect(rest.borderWidth, '边框宽度 = --stroke-hair').toBe('2px')
+  expect(rest.borderRadius, '圆角 = --sketch-r-chip').toBe(CHIP_CORNER)
+  expect(rest.backgroundColor, '底色 = 纸卡 token').toBe(CARD)
+  expect(rest.boxShadow, '高度取 --sticker-2 档').toContain(STICKER_2)
+
+  const sibling = await styleOf(remove)
+  expect(rest.borderWidth, '与「删除」同边框').toBe(sibling.borderWidth)
+  expect(rest.borderRadius, '与「删除」同圆角').toBe(sibling.borderRadius)
+  expect(rest.boxShadow, '与「删除」同高度档').toBe(sibling.boxShadow)
 })
 
 test('换主题只改 tokens：注入另一组 --avid-*-rgb 后方框跟着变', async ({ page }) => {
