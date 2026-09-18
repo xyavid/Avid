@@ -274,3 +274,35 @@ def test_a13_type_checking_imports_stay_inert():
     runtime, typing_only = policy_imports(SRC / "runtime" / "loop.py")
     assert runtime == set()
     assert typing_only == {"policy.permission"}
+
+
+def test_web_imports_name_submodules_not_the_package():
+    """`web/` 内部不许用 `from . import <子模块>` 的形式（P3-15）。
+
+    `web/__init__.py` 会 import `app`，`app` 会 import 各个路由模块；路由再写
+    `from .. import sse`，静态依赖图里就等于"回头 import 包"，于是出现
+    `web ↔ app ↔ routes.events` 的环。`from ..sse import X` 表达的是对子模块的依赖，
+    方向清楚。
+
+    注意 `from . import current_services` **不算**：`current_services` 是路由包
+    `__init__` 导出的函数（名字），不是子模块。所以这里按 AST 判断被导入的名字是否
+    对应真实存在的模块文件/子包——只看语法会把这条合法用法一起误伤。
+    """
+    offenders: list[str] = []
+    for path in sorted((ROOT / "src" / "avid" / "web").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom) or node.module or not node.level:
+                continue
+            package = path.parent
+            for _ in range(node.level - 1):
+                package = package.parent
+            for alias in node.names:
+                if (package / f"{alias.name}.py").is_file() or (
+                    package / alias.name / "__init__.py"
+                ).is_file():
+                    offenders.append(
+                        f"{path.relative_to(ROOT)}:{node.lineno} "
+                        f"from {'.' * node.level} import {alias.name}"
+                    )
+    assert offenders == [], f"web 内部按子模块名 import：{offenders}"

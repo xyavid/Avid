@@ -13,7 +13,7 @@ from fastapi import APIRouter, Query, Request, status
 from fastapi.responses import StreamingResponse
 
 from ...svc import STREAM_HEARTBEAT_SECONDS, Services, TooManyStreams
-from .. import sse
+from ..sse import STREAM_HEADERS, stream
 from . import current_services
 
 router = APIRouter()
@@ -64,7 +64,7 @@ def stream_events(
         )
     body = _leased(
         services,
-        sse.stream(
+        stream(
             services.runs,
             record,
             after=cursor,
@@ -78,7 +78,7 @@ def stream_events(
         body,
         status_code=status.HTTP_200_OK,
         media_type="text/event-stream",
-        headers=dict(sse.STREAM_HEADERS),
+        headers=dict(STREAM_HEADERS),
     )
 
 

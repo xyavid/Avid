@@ -28,7 +28,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from ..svc import API_VERSION, Services
 from ..svc.errors import ServiceError
-from . import routes  # noqa: F401 - 只为让 routes 包可见
 from .routes import approvals, events, meta, runs, sessions, tasks, workspaces
 from .schemas import ErrorBody, ErrorOut
 
