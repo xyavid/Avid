@@ -129,6 +129,24 @@ def test_server_error_with_overflow_wording_is_not_treated_as_overflow():
     assert not isinstance(exc.value, PromptTooLongError)
 
 
+def test_a_non_json_body_becomes_an_llm_error():
+    """网关返回 HTML 错误页时必须是 LLMError，不能漏出 JSONDecodeError。
+
+    否则调用方按"模型层失败"分类的路径接不住它：svc 会把它归成 internal
+    而不是 llm_error，前端拿到的错误分类就是错的。
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html>bad gateway</html>")
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(LLMError) as exc:
+            ask(CONFIG, "你好", client=client)
+
+    assert not isinstance(exc.value, PromptTooLongError)
+    assert "不是合法 JSON" in str(exc.value)
+
+
 # ---------- 流式（F3） ----------
 
 # 同一份内容的两种线格式：非流式 JSON 与流式 SSE 分片。
@@ -222,6 +240,79 @@ def test_stream_and_non_stream_turns_are_field_equal():
     assert from_stream == from_json
     assert from_stream.usage.total_tokens == 46
     assert from_stream.finish_reason == "tool_calls"
+
+
+def test_null_content_is_normalised_the_same_way_in_both_paths():
+    """带 tool_calls 时 content 为 null 是常见形状：两条路径必须给它同一个答案。
+
+    修之前非流式把 `None` 原样写进 message（流式写 `""`）——那份 None 会随
+    transcript 进入下一轮请求，"同形"在最常见的一种响应上就不成立。
+    """
+    data = {
+        "model": "test-model",
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "read_file", "arguments": '{"path":"a.py"}'},
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+    }
+
+    from_json = parse_turn(data)
+    from_stream = fold(
+        [
+            _frame(
+                {
+                    "tool_calls": [
+                        _call(
+                            0,
+                            id="call_1",
+                            type="function",
+                            function={"name": "read_file", "arguments": '{"path":"a.py"}'},
+                        )
+                    ]
+                },
+                finish="tool_calls",
+            )
+        ]
+    ).to_turn()
+
+    assert from_json.message == from_stream.message
+    assert from_json.message["content"] == ""
+    assert from_json.text == ""
+
+
+def test_content_parts_are_joined_into_text():
+    """分片数组形状也归一成正文，而不是把 list 当成 Turn.text。"""
+    turn = parse_turn(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "text", "text": "前"},
+                            {"type": "text", "text": "后"},
+                        ],
+                    },
+                    "finish_reason": "stop",
+                }
+            ]
+        }
+    )
+
+    assert turn.text == "前后"
+    assert turn.message == {"role": "assistant", "content": "前后"}
 
 
 def test_interleaved_tool_call_fragments_merge_by_index():

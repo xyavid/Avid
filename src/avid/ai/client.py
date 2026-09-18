@@ -112,24 +112,44 @@ def _usage_of(data: dict[str, Any]) -> Usage:
     )
 
 
+def _content_text(raw: Any) -> str:
+    """把 assistant 的 ``content`` 归一成正文。
+
+    各家的等价写法必须走同一条路：``null`` / 缺字段 / 分片数组都要变成字符串，
+    否则非流式路径会把 ``None`` 原样写进回传给模型的消息（而流式路径写 ``""``），
+    两条路径宣称的"同形"就不成立。
+    """
+    if isinstance(raw, str):
+        return raw
+    if isinstance(raw, list):  # content parts：拼其中的 text 字段
+        return "".join(
+            item.get("text", "")
+            for item in raw
+            if isinstance(item, dict) and isinstance(item.get("text"), str)
+        )
+    return ""
+
+
 def parse_turn(data: dict[str, Any]) -> Turn:
     try:
         choice = data["choices"][0]
         raw = choice["message"]
     except (KeyError, IndexError, TypeError) as exc:
-        raise LLMError(f"响应缺少 choices[0].message：{data!r}") from exc
+        # 只回一段截断的响应：完整响应体可能很大，也可能含不该进日志的内容。
+        raise LLMError(f"响应缺少 choices[0].message：{repr(data)[:300]}") from exc
 
     tool_calls = list(raw.get("tool_calls") or [])
+    text = _content_text(raw.get("content"))
 
     # 只保留协议字段：服务商可能附带的额外字段（如 reasoning_content）
     # 原样回传会污染下一轮请求。
-    message: dict[str, Any] = {"role": "assistant", "content": raw.get("content", "")}
+    message: dict[str, Any] = {"role": "assistant", "content": text}
     if tool_calls:
         message["tool_calls"] = tool_calls
 
     return Turn(
         message=message,
-        text=raw.get("content") or "",
+        text=text,
         tool_calls=tool_calls,
         usage=_usage_of(data),
         model=str(data.get("model", "")),
@@ -165,7 +185,12 @@ def post(config: Config, request: dict[str, Any], *, client: httpx.Client | None
             )
         raise LLMError(f"HTTP {response.status_code} — {response.text[:500]}")
 
-    return response.json()
+    try:
+        return response.json()
+    except ValueError as exc:
+        # 网关返回 HTML 错误页之类：必须收敛成 LLMError，否则调用方按
+        # "模型层失败"分类的路径会漏掉它（svc 会把它归成 internal）。
+        raise LLMError(f"响应不是合法 JSON：{response.text[:200]}") from exc
 
 
 def chat_completion(
