@@ -50,13 +50,10 @@ export function TextArea({ className, ...rest }: TextareaHTMLAttributes<HTMLText
   return <textarea {...rest} className={clsx(CONTROL, 'resize-y leading-relaxed', className)} />
 }
 
-/** 同 `Input`：`forwardRef` 是为了让 Tooltip / 焦点管理能挂在真正的控件上。 */
-export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSelectElement>>(
-  function Select({ className, children, ...rest }, ref) {
-    return (
-      <select ref={ref} {...rest} className={clsx(CONTROL, 'font-sketch', className)}>
-        {children}
-      </select>
-    )
-  },
-)
+export function Select({ className, children, ...rest }: SelectHTMLAttributes<HTMLSelectElement>) {
+  return (
+    <select {...rest} className={clsx(CONTROL, 'font-sketch', className)}>
+      {children}
+    </select>
+  )
+}

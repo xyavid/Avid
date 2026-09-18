@@ -69,19 +69,23 @@ test('选工作区建会话、选权限模式提交，两个值都进请求体',
     // 缺省不该是 system：工作区没登记默认权限时两侧都回落到 strict。
     await expect(permission).toHaveValue('strict')
 
-    // 呈现上只有控件本身：上方标签与下方常显说明都没有，说明改挂悬停提示（内容跟着当前档）。
-    await expect(page.getByText('严格：每个受管动作都要问')).toHaveCount(0)
+    // 说明行在控件下方原位、平时透明；悬停或聚焦才显形，内容跟着当前档走。
+    const hint = page.locator('#permission-mode-hint')
+    await expect(hint).toHaveText('严格：每个受管动作都要问')
+    await expect(hint).toHaveCSS('opacity', '0')
+    await expect(page.getByText('权限模式', { exact: true })).toHaveCount(0) // 上方标签已删
     await permission.hover()
-    await expect(page.getByRole('tooltip')).toContainText('严格：每个受管动作都要问')
+    await expect(hint).toHaveCSS('opacity', '1')
 
     const runRequest = page.waitForRequest(
       (req) => req.method() === 'POST' && req.url().includes(`/api/sessions/${sessionId}/runs`),
     )
     await permission.selectOption('system')
-    // 悬停提示跟着选中的档变。
+    // 切档后同一行跟着变；鼠标移开又藏起来（不占视觉空间，但也不丢给读屏）。
+    await expect(hint).toHaveText('系统级：默认免问，仅危险命令问')
+    await expect(hint).toHaveCSS('opacity', '1')
     await page.mouse.move(0, 0)
-    await permission.hover()
-    await expect(page.getByRole('tooltip')).toContainText('系统级：默认免问，仅危险命令问')
+    await expect(hint).toHaveCSS('opacity', '0')
 
     const composer = page.getByLabel(COMPOSER_LABEL)
     await composer.fill(`权限模式用例-${stamp}`)
