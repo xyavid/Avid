@@ -25,12 +25,15 @@ from typing import Any
 
 from . import context
 from ..ai.config import Config, load_config
+from . import events
+from .events import RunObserver
 from .execution import execute_batch
 from .hooks import BLOCK, trigger_hooks
 from ..ai.client import DEFAULT_MAX_TOKENS, PromptTooLongError, Turn, chat_completion
 from ..tools import TOOL_IMPLS, TOOLS, ToolImpl
 from .state import TODO_REMINDER_AFTER_ROUNDS, RunState
 from ..ai.transcript import Transcript
+from ..policy.permission import AskUser
 
 logger = logging.getLogger("avid.runtime.loop")
 
@@ -42,6 +45,15 @@ MAX_STOP_BLOCKS = 1
 
 class RoundLimitExceeded(RuntimeError):
     """连续多轮都在调用工具，未收敛。后续会把它改成可分类的终止原因。"""
+
+
+class RunCancelled(RuntimeError):
+    """运行被显式取消（与 ``RoundLimitExceeded`` 同类，是终止原因而不是错误）。
+
+    它只在**步骤边界**抛出：在飞的模型调用或工具调用结束后（§7.4）。已产生
+    的消息在产生时就已落库，所以取消不需要补偿写，也不产生伪造的工具结果
+    （不变量 I9）。
+    """
 
 
 def _calls_todo_write(tool_calls: list[dict[str, Any]]) -> bool:
@@ -94,16 +106,25 @@ def agent_loop(
     max_stop_blocks: int = MAX_STOP_BLOCKS,
     todo_reminder_after: int = TODO_REMINDER_AFTER_ROUNDS,
     on_message: Callable[[dict[str, Any]], None] | None = None,
+    ask: AskUser | None = None,
+    on_event: RunObserver | None = None,
+    state: RunState | None = None,
 ) -> str:
     """跑到模型不再要工具为止，返回最后一轮的 assistant 文本。
 
     ``messages`` 原地更新：每轮的 assistant 消息与工具结果都会写回同一个 list。
     ``system`` 是「固定指令部分」，技能目录由 SkillLoader 统一追加。
 
-    ``on_message`` 是循环**唯一的对外观察点**：本次运行产生或改写的每条消息按
+    ``on_message`` 是循环**唯一的消息通道**：本次运行产生或改写的每条消息按
     发生顺序回调一次——先是触发用户消息（UserPromptSubmit 注入**之后**的版本），
     然后是每轮追加的 assistant、工具结果、注入的 TODO 提醒与 Stop nudge。
     循环不 import 会话层，落库与否由回调决定（不变量 I7）。
+
+    ``on_event`` 是**步骤级事实**的通道（轮次、TODO 提醒、Stop nudge、取消），
+    不是第二个消息通道：``on_message`` 仍然是消息的唯一出口。两者都不改调度。
+
+    ``ask`` 注入审批回调（None = 回落到 stdin）；``state`` 允许调用方传入一份
+    已建好的运行状态——取消需要从另一个线程置位，所以取消路径必须能拿到它。
     """
     config = config or load_config()
     tools = TOOLS if tools is None else tools
@@ -115,7 +136,7 @@ def agent_loop(
 
     transcript = Transcript(messages)
     # 注册表与 system prompt 都由 state 负责——循环不知道默认指令文案，也不持有注册表。
-    state = RunState.for_run(auto_approve=auto_approve)
+    state = state or RunState.for_run(auto_approve=auto_approve, ask=ask, observer=on_event)
     system_prompt = state.system_prompt(system)
 
     trigger = _submit_input(transcript, state)
@@ -125,6 +146,7 @@ def agent_loop(
 
     for round_index in range(1, max_rounds + 1):
         state.round = round_index
+        state.check_cancelled()  # 检查点 1：每轮开始前（§7.4）
 
         # TODO 提醒依赖"第几轮"，这确实是循环自身的事实；
         # 但"该不该提醒、提醒什么"由 state 决定，循环只负责追加。
@@ -132,8 +154,13 @@ def agent_loop(
         if reminder is not None:
             message = {"role": "user", "content": reminder}
             transcript.append(message)
+            # 先生成事件，再发消息：svc 据此把这条 user 消息认成 TODO 提醒，
+            # 而不是用户输入（避免靠解析「[提醒]」文本前缀分类，§5.3）。
+            state.emit(events.TODO_REMINDER, content=reminder, message=message)
             emit(message)
             logger.info("注入 TODO 提醒（连续 %d 轮未更新）", state.rounds_since_todo)
+
+        state.emit(events.RUN_STATUS, round=round_index, tokens=state.tokens, activity="model")
 
         # 上下文管线：①② 每轮跑，③④ 超限时才跑，④ 整个运行最多一次
         context.prepare(transcript, state, config=config, summarize=chat)
@@ -161,8 +188,16 @@ def agent_loop(
                 max_tokens=max_tokens,
             )
 
+        state.tokens += turn.usage.total_tokens
         transcript.append(turn.message)
         emit(turn.message)
+        state.emit(
+            events.RUN_STATUS,
+            round=round_index,
+            tokens=state.tokens,
+            activity="model",
+            finish_reason=turn.finish_reason,
+        )
         logger.info(
             "round=%d finish=%s tool_calls=%d tokens=%d",
             round_index,
@@ -191,6 +226,7 @@ def agent_loop(
                 if nudge:
                     message = {"role": "user", "content": str(nudge)}
                     transcript.append(message)
+                    state.emit(events.STOP_NUDGE, content=str(nudge), message=message)
                     emit(message)
                 logger.info("Stop 被拦截（第 %d 次），继续循环", state.stop_blocks)
                 continue
@@ -198,6 +234,7 @@ def agent_loop(
                 logger.warning("Stop 拦截次数已达上限 %d，照常退出", max_stop_blocks)
             return turn.text
 
+        state.check_cancelled()  # 检查点 2：每批工具执行前（§7.4）
         outcomes = execute_batch(
             turn.tool_calls, state=state, registry=registry, round_index=round_index
         )

@@ -133,7 +133,7 @@ def test_context_inject_hook_reports_environment(clean):
 
 
 def test_permission_hook_blocks_and_records_reason(clean, monkeypatch):
-    monkeypatch.setattr(hooks, "check_permission", lambda name, arguments: False)
+    monkeypatch.setattr(hooks, "check_permission", lambda name, arguments, **kwargs: False)
     context = {"tool": "bash", "arguments": {"command": "ls"}}
 
     assert hooks.permission_hook(context) == BLOCK
@@ -143,7 +143,7 @@ def test_permission_hook_blocks_and_records_reason(clean, monkeypatch):
 
 
 def test_permission_hook_allows_and_stays_quiet(clean, monkeypatch):
-    monkeypatch.setattr(hooks, "check_permission", lambda name, arguments: True)
+    monkeypatch.setattr(hooks, "check_permission", lambda name, arguments, **kwargs: True)
     context = {"tool": "read_file", "arguments": {"path": "a"}}
 
     assert hooks.permission_hook(context) is None
@@ -162,7 +162,7 @@ def test_permission_hook_reports_hard_deny_reason(clean):
 
 def test_hard_deny_and_user_refusal_give_different_guidance(clean, monkeypatch):
     """两种拒绝必须让模型看到不同的话，否则它分不清"永远不许"和"这次不行"。"""
-    monkeypatch.setattr(hooks, "check_permission", lambda name, arguments: False)
+    monkeypatch.setattr(hooks, "check_permission", lambda name, arguments, **kwargs: False)
 
     hard = {"tool": "bash", "arguments": {"command": "rm -rf /"}}
     user = {"tool": "bash", "arguments": {"command": "ls"}}
@@ -192,7 +192,7 @@ def test_permission_hook_routes_to_auto_approve(clean, monkeypatch):
 def test_permission_hook_goes_interactive_without_the_run_flag(clean, monkeypatch):
     calls = []
     monkeypatch.setattr(
-        hooks, "check_permission", lambda n, a: calls.append("interactive") or True
+        hooks, "check_permission", lambda n, a, **kwargs: calls.append("interactive") or True
     )
     monkeypatch.setattr(
         hooks, "_auto_approve", lambda n, a: calls.append("auto") or True
@@ -201,6 +201,19 @@ def test_permission_hook_goes_interactive_without_the_run_flag(clean, monkeypatc
     hooks.permission_hook({"tool": "bash", "arguments": {}})
 
     assert calls == ["interactive"]
+
+
+def test_permission_hook_forwards_injected_ask(clean, monkeypatch):
+    """注入了 ask 就必须用它——Web 路径的审批不能落到 stdin 上（§7.2）。"""
+    seen = []
+    monkeypatch.setattr(
+        hooks, "check_permission", lambda n, a, ask=None: seen.append(ask) or True
+    )
+    ask = lambda name, arguments, reason: True  # noqa: E731 - 只关心它被原样传递
+
+    hooks.permission_hook({"tool": "bash", "arguments": {}, "ask": ask})
+
+    assert seen == [ask]
 
 
 def test_log_hook_never_blocks(clean):

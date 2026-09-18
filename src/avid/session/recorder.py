@@ -39,12 +39,17 @@ class SessionRecorder:
             )
         return self._branch
 
-    def on_message(self, message: dict[str, Any]) -> None:
-        """与 ``agent_loop`` 的观察点同签名，可直接作为参数传入。"""
+    def on_message(self, message: dict[str, Any]) -> str:
+        """与 ``agent_loop`` 的观察点同签名，可直接作为参数传入。
+
+        返回条目 id：调用方（``svc/runs.py``）要把它带进 durable 事件，
+        前端因此不必自己维护会话身份（设计文档 §5.3）。
+        """
         branch = self.ensure_branch()
         entry_id = branch.append_message(message)
         self.entry_ids.append(entry_id)
         logger.debug("会话落库 %s：%s", entry_id, message.get("role"))
+        return entry_id
 
     @property
     def count(self) -> int:

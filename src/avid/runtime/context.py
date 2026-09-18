@@ -15,6 +15,7 @@ from typing import Any
 from ..policy import compaction as compact
 from ..policy.compaction import CompactReport
 from ..ai.config import Config
+from . import events
 from .state import RunState
 from ..ai.transcript import Transcript
 
@@ -46,14 +47,22 @@ class Preparation:
 
 
 def announce(report: CompactReport | None, state: RunState) -> None:
-    """压缩发生时留下可观察的记录：一条日志 + 一个计数。
+    """压缩发生时留下可观察的记录：一条日志 + 一个计数 + 一条事件。
 
-    单点实现：循环里的兜底压缩也走它，避免日志格式与计数两处维护。
+    单点实现：循环里的兜底压缩也走它，避免日志格式、计数与事件三处维护。
+    事件里带的是 ``CompactReport`` 的四个字段，前端据此显示"压缩发生了什么"。
     """
     if report is None:
         return
     logger.info("compact: %s", report.describe())
     state.compactions += 1
+    state.emit(
+        events.CONTEXT_COMPACTED,
+        step=report.step,
+        detail=report.detail,
+        before=report.before,
+        after=report.after,
+    )
 
 
 def prepare(

@@ -111,6 +111,11 @@ def permission_hook(context: dict[str, Any]) -> str | None:
     硬拒绝与用户拒绝对模型意味着完全不同的事——一个是"永远不许，换做法"，
     另一个是"这次不行，别重复提交"。只回一句 "Permission denied." 会让模型
     分不清两者，于是反复重试同一条命令直到烧穿轮数上限。
+
+    审批回调优先取 ``context["ask"]``（由 ``execution.execute_one`` 从
+    ``RunState.ask`` 注入）。Web 路径注入自己的实现——在 uvicorn 进程里 stdin
+    不是终端，读它会立刻 EOF 或永久阻塞；CLI 路径没有注入，逐字回落到 stdin，
+    行为与改动前一致（设计文档 §7.2）。
     """
     name = context.get("tool", "")
     arguments = context.get("arguments") or {}
@@ -128,7 +133,7 @@ def permission_hook(context: dict[str, Any]) -> str | None:
     if context.get("auto_approve"):
         allowed = _auto_approve(name, arguments)
     else:
-        allowed = check_permission(name, arguments)
+        allowed = check_permission(name, arguments, ask=context.get("ask"))
 
     if allowed:
         return None

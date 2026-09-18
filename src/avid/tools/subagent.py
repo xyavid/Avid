@@ -50,8 +50,14 @@ def run_subagent(
     config: Config | None = None,
     auto_approve: bool = False,
     chat: Callable[..., Any] = chat_completion,
+    ask: Any = None,
 ) -> str:
-    """跑一个子 agent，返回它的结论摘要。"""
+    """跑一个子 agent，返回它的结论摘要。
+
+    ``ask`` 由父运行注入并前传：没有它，子 agent 的审批会落到 stdin 上——在
+    uvicorn 进程里那是 EOF 或永久阻塞。这是**既有缺陷的修复**，只是 CLI 下被
+    终端与 ``_ASK_LOCK`` 掩盖了（设计文档 §7.2）。
+    """
     # 延迟导入：agent.py 需要 import 本模块来注册工具，顶部导入会成环。
     from ..runtime.loop import RoundLimitExceeded, agent_loop
     from . import SUB_HANDLERS, SUB_TOOLS
@@ -67,6 +73,7 @@ def run_subagent(
             chat=chat,
             auto_approve=auto_approve,
             max_rounds=SUBAGENT_MAX_TURNS,
+            ask=ask,
         )
     except RoundLimitExceeded:
         return (
@@ -141,15 +148,16 @@ def subagent(
 
     run = run_subagent if runner is None else runner
     config = load_config()
-    # 免审批开关从 RunState 读，显式传给每个子运行——子 agent 在别的线程里跑，
-    # 隐式状态在那里会静默失效。
+    # 免审批开关与审批回调都从 RunState 读，显式传给每个子运行——子 agent 在别的
+    # 线程里跑，隐式状态在那里会静默失效。
     auto_approve = state.auto_approve
+    ask = state.ask
 
     executor = ThreadPoolExecutor(max_workers=min(len(tasks), MAX_PARALLEL))
     try:
         futures = [
             executor.submit(
-                run, task["prompt"], config=config, auto_approve=auto_approve
+                run, task["prompt"], config=config, auto_approve=auto_approve, ask=ask
             )
             for task in tasks
         ]
