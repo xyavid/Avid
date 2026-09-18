@@ -11,6 +11,7 @@ import threading
 
 from avid.runtime import events
 from avid.svc import Services
+from avid.svc import runs
 from support import (
     RecordingTools,
     ScriptedChat,
@@ -281,3 +282,54 @@ def test_reading_while_a_run_starts_never_double_opens_the_session(sandbox):
     assert failures == []
     assert record.status == "finished", record.status
     assert services.sessions.get(session_id)["message_count"] >= 2
+
+
+# ---------------- 运行记录的取消与统计 ----------------
+
+
+def test_cancel_arriving_before_the_state_exists_is_not_lost(sandbox, monkeypatch):
+    """取消在 ``record.state`` 装上之前到达时必须补一次，否则永久丢失。
+
+    ``cancel()`` 只在 state 已就绪时调 ``state.cancel()``，而循环检查的是
+    ``state.cancelled``。线程启动到 ``RunState.for_run`` 之间有一段真实工作
+    （装配记录器、读历史），此间的取消以前会静默丢掉：202 已返回、取消标志
+    为真，运行却照跑完。
+    """
+    entered = threading.Event()
+    release = threading.Event()
+    real = runs.messages_for_branch
+
+    def slow(session, branch):
+        entered.set()
+        assert release.wait(5), "测试自己没放行"
+        return real(session, branch)
+
+    monkeypatch.setattr(runs, "messages_for_branch", slow)
+
+    services = build(sandbox, ScriptedChat(make_turn("答")))
+    session_id = new_session(services)
+    record = services.runs.start(session_id, "跑一下")
+    assert entered.wait(5), "运行线程没走到读历史那一步"
+
+    services.runs.cancel(record.run_id)  # 此刻 record.state 还是 None
+    release.set()
+
+    assert wait_terminal(record), record.status
+    assert record.status == "cancelled", record.status
+    assert record.cancel_reason == "user"
+
+
+def test_run_record_reports_the_real_round_and_tokens(sandbox):
+    """``GET /runs/{id}`` 的 round/tokens 曾经恒为 0：权威在 state，读数在 RunRecord。
+
+    ``many_rounds(2)`` 是"两轮工具 + 一轮收尾"，所以 round 到 3；tokens 每轮累加。
+    """
+    tools = RecordingTools().registry("read_file")
+    services = build(sandbox, many_rounds(2), tools)
+    session_id = new_session(services)
+    record = services.runs.start(session_id, "跑一下")
+    assert wait_terminal(record), record.status
+
+    payload = services.runs.get(record.run_id).to_dict()
+    assert payload["round"] >= 3, payload
+    assert payload["tokens"] > 0, payload

@@ -458,6 +458,11 @@ class RunRegistry:
                 workspace_root=workspace.root,
             )
             record.state = state
+            # 线程启动到这一刻之间有一段（装配记录器、读历史、扫描技能）：
+            # 这期间的取消写不进 state（record.state 还是 None），循环检查的却是
+            # state.cancelled——不补这一次，取消就被永久丢掉，运行照跑完。
+            if record.cancel_requested:
+                state.cancel(record.cancel_reason or "user")
 
             # 没有注入 chat = 生产路径：主轮次流式、摘要非流式（见 agent_loop 的 summarize）。
             streaming = chat is None
@@ -511,6 +516,14 @@ class RunRegistry:
                 record.injected[id(message)] = (
                     "todo" if event.type == events.TODO_REMINDER else "nudge"
                 )
+        if event.type == events.RUN_STATUS:
+            # 轮次与 token 的权威在 state（循环里只写 state.round / state.tokens），
+            # 而 GET /runs/{id} 读的是 RunRecord——不在这里回填，REST 视图会一直
+            # 报 round=0 / tokens=0，只有 SSE 的 run_status 是真值。
+            if "round" in event.data:
+                record.round = int(event.data["round"])
+            if "tokens" in event.data:
+                record.tokens = int(event.data["tokens"])
         self.emit(record, event.type, **event.data)
 
     def _message_sink(
