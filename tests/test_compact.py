@@ -2,6 +2,9 @@ import inspect
 
 import pytest
 
+from avid.ai.client import Turn, Usage
+from avid.ai.config import Config
+from avid.ai.transcript import Transcript, estimate_chars, validate
 from avid.policy.compaction import (
     SPILL_PREFIX,
     compact_history,
@@ -10,9 +13,6 @@ from avid.policy.compaction import (
     snip_compact,
     tool_result_budget,
 )
-from avid.ai.config import Config
-from avid.ai.client import Turn, Usage
-from avid.ai.transcript import Transcript, estimate_chars, validate
 
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
 

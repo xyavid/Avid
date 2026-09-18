@@ -14,8 +14,8 @@ import pytest
 
 from avid.session import (
     EntryQuery,
-    JsonlSessionRepo,
     JsonlSessionMetadata,
+    JsonlSessionRepo,
     SessionClosedError,
     SessionExistsError,
     SessionLockedError,

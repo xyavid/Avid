@@ -10,15 +10,13 @@ from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
+from support import ScriptedChat, create_session, make_turn
 
 from avid.svc import Services
 from avid.svc import picker as picker_module
 from avid.svc.picker import PickerFailed, PickerUnavailable, pick_directory
 from avid.web import create_app
 from avid.workspaces import WorkspaceRegistry
-
-from support import ScriptedChat, create_session, make_turn
-
 
 # ---------------- 后端 ----------------
 

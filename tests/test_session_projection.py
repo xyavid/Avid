@@ -13,9 +13,9 @@ from avid.session import (
     MemorySessionRepo,
     SessionRecorder,
     UuidV7Generator,
-    repair_incomplete_batches,
     entries_to_messages,
     messages_for_branch,
+    repair_incomplete_batches,
 )
 
 

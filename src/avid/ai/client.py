@@ -103,7 +103,7 @@ def build_request(
     return request
 
 
-def _usage_of(data: dict[str, Any]) -> Usage:
+def _usage_of(data: Mapping[str, Any]) -> Usage:
     raw = data.get("usage") or {}
     return Usage(
         prompt_tokens=int(raw.get("prompt_tokens", 0)),

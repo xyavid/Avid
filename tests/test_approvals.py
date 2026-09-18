@@ -10,19 +10,19 @@ import threading
 
 import pytest
 from fastapi.testclient import TestClient
-
-from avid.runtime import events
-from avid.svc import Services
-from avid.web import create_app
 from support import (
-    create_session,
     RecordingTools,
     ScriptedChat,
     collect,
+    create_session,
     make_turn,
     tool_call,
     wait_for,
 )
+
+from avid.runtime import events
+from avid.svc import Services
+from avid.web import create_app
 
 
 class GateChat:

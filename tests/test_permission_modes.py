@@ -107,7 +107,7 @@ def test_decision_table(
     # 因为 --yes 只换回答者）。
     ok, _ = count_asks(always_allow)
     approved = gate(tool, arguments, mode=mode, ask=ok, danger=danger, outside=outside)
-    assert approved.allowed is (False if kind == "hard" else True)
+    assert approved.allowed is (kind != "hard")
 
 
 # 每条 DENY_PATTERNS 至少一条样本——加规则而忘了加样本，下面那条覆盖断言会红。
@@ -332,10 +332,10 @@ def test_ledger_is_safe_under_parallel_subagents():
 def test_each_denial_kind_has_its_own_message():
     kinds = {}
     cases = [
-        ("hard", dict(tool="bash", arguments={"command": "rm -rf /"})),
-        ("danger", dict(tool="bash", arguments={"command": "sudo ls"}, danger="提权")),
-        ("outside", dict(tool="write_file", arguments={"path": "/etc/hosts"}, outside="/etc/hosts")),
-        ("user", dict(tool="bash", arguments={"command": "echo hi"})),
+        ("hard", {"tool": "bash", "arguments": {"command": "rm -rf /"}}),
+        ("danger", {"tool": "bash", "arguments": {"command": "sudo ls"}, "danger": "提权"}),
+        ("outside", {"tool": "write_file", "arguments": {"path": "/etc/hosts"}, "outside": "/etc/hosts"}),
+        ("user", {"tool": "bash", "arguments": {"command": "echo hi"}}),
     ]
     for expected, case in cases:
         decision = gate(case.pop("tool"), case.pop("arguments"), ask=refuse, **case)

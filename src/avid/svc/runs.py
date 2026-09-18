@@ -29,15 +29,14 @@ from ..runtime import events
 from ..runtime.events import RunEvent
 from ..runtime.loop import RoundLimitExceeded, RunCancelled, agent_loop
 from ..runtime.state import RunState
-from ..workspaces import SESSION_DIR
 from ..session import (
     DEFAULT_BRANCH,
-    JsonlSessionMetadata,
-    JsonlSessionRepo,
     SessionError,
+    SessionMetadata,
     SessionRecorder,
     messages_for_branch,
 )
+from ..workspaces import SESSION_DIR
 from .approvals import APPROVAL_TIMEOUT_SECONDS, ApprovalTable
 from .errors import (
     RunBusy,
@@ -237,8 +236,11 @@ class RunRegistry:
                 record = RunRecord(
                     run_id=run_id, session_id=session_id, started_at=events.now_ms()
                 )
+                def emit_approval(type: str, **data: Any) -> None:
+                    self.emit(record, type, **data)
+
                 record.approvals = ApprovalTable(
-                    emit=lambda type, **data: self.emit(record, type, **data),
+                    emit=emit_approval,
                     set_status=lambda status: self._set_status(record, status),
                     is_cancelled=lambda: record.cancel_requested,
                     timeout=self.approval_timeout,
@@ -577,7 +579,7 @@ class RunRegistry:
             text = agent_loop(
                 messages,
                 config=config,
-                chat=self.streaming_chat(record) if streaming else chat,
+                chat=chat if chat is not None else self.streaming_chat(record),
                 summarize=chat_completion if streaming else None,
                 auto_approve=auto_approve,
                 on_message=self._message_sink(record, recorder),
@@ -725,7 +727,7 @@ class RunRegistry:
 
     # ---------------- 会话定位 ----------------
 
-    def find_metadata(self, session_id: str) -> JsonlSessionMetadata | None:
+    def find_metadata(self, session_id: str) -> SessionMetadata | None:
         """会话元信息（跨工作区找）。会话本身不带工作区信息，所以只能逐个库扫。"""
         found = self.workspaces.find_session(session_id)
         return None if found is None else found[1]

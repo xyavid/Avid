@@ -448,8 +448,15 @@ def complete_task(
 
 
 def get_task(task_id: str, store: TaskStore | None = None) -> str:
+    """读取一条任务的完整 JSON。任务不存在抛 ``TaskError``。
+
+    以前这里直接 ``asdict(task)``：缺失任务会抛 ``TypeError``（不是会话层的
+    ``TaskError``），库函数调用者按文档捕获 TaskError 时接不住。
+    """
     task = load_task(task_id, store)
-    return json.dumps(asdict(task), indent=2)
+    if task is None:
+        raise TaskError(f"找不到任务 {task_id}")
+    return json.dumps(asdict(task), indent=2, ensure_ascii=False)
 
 
 # ---------------- 工具外壳层：失败一律变成以「错误：」开头的文本 ----------------

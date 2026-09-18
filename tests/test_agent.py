@@ -1,10 +1,10 @@
 import pytest
 
+from avid.ai.client import Turn, Usage
+from avid.ai.config import Config
+from avid.policy.compaction import CompactReport
 from avid.runtime import hooks
 from avid.runtime.loop import RoundLimitExceeded, agent_loop
-from avid.policy.compaction import CompactReport
-from avid.ai.config import Config
-from avid.ai.client import Turn, Usage
 from avid.tools import TOOLS
 
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
@@ -309,7 +309,7 @@ def test_denials_still_count_towards_the_round_limit(no_hooks):
 def test_post_tool_use_can_rewrite_the_result(no_hooks):
     def rewrite(ctx):
         ctx["content"] = "改写过的结果"
-        return None
+        return
 
     hooks.register_hook("PostToolUse", rewrite)
     chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
@@ -902,7 +902,7 @@ def test_run_state_is_created_per_run(no_hooks, monkeypatch):
 
     def fake_prepare(transcript, state, **kwargs):
         states.append(state)
-        return None
+        return
 
     monkeypatch.setattr("avid.runtime.context.prepare", fake_prepare)
 

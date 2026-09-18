@@ -32,8 +32,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..ai.config import Config
 from ..ai.client import LLMError, chat_completion
+from ..ai.config import Config
 from ..ai.transcript import Transcript
 
 logger = logging.getLogger("avid.policy.compaction")

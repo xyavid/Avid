@@ -18,10 +18,10 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from ..tools import ToolImpl, workspace
 from . import events
 from .hooks import BLOCK, trigger_hooks
 from .state import RunState
-from ..tools import ToolImpl, workspace
 
 logger = logging.getLogger("avid.runtime.execution")
 

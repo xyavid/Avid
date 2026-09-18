@@ -47,6 +47,7 @@ def read_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     path, error = resolve(raw, root=_root(state), outside_ok=_grant(state))
     if error:
         return f"错误：{error}"
+    assert path is not None  # resolve 成功时必有路径（error 与 path 二选一）
     if not path.exists():
         return f"错误：文件不存在：{raw}"
     if path.is_dir():
@@ -81,6 +82,7 @@ def write_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     path, error = resolve(raw, root=_root(state), outside_ok=_grant(state))
     if error:
         return f"错误：{error}"
+    assert path is not None  # resolve 成功时必有路径
 
     content = args.get("content")
     if not isinstance(content, str):
@@ -104,6 +106,7 @@ def edit_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     path, error = resolve(raw, root=_root(state), outside_ok=_grant(state))
     if error:
         return f"错误：{error}"
+    assert path is not None  # resolve 成功时必有路径
 
     old = args.get("old_string")
     new = args.get("new_string")
@@ -146,6 +149,7 @@ def glob_files(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     root, error = resolve(raw, root=_root(state), outside_ok=_grant(state))
     if error:
         return f"错误：{error}"
+    assert root is not None  # resolve 成功时必有路径
     if not root.is_dir():
         return f"错误：{raw} 不是目录"
 

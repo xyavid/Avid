@@ -4,7 +4,6 @@ import json
 import httpx
 import pytest
 
-from avid.ai.config import Config
 from avid.ai.client import (
     LLMError,
     PromptTooLongError,
@@ -17,6 +16,7 @@ from avid.ai.client import (
     parse_turn,
     stream_completion,
 )
+from avid.ai.config import Config
 
 CONFIG = Config(api_key="test-key", base_url="https://api.test/v1", model="test-model")
 

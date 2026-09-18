@@ -23,19 +23,19 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from .runtime.loop import RoundLimitExceeded, agent_loop
-from .ai.config import ConfigError, load_config
 from .ai.client import LLMError, ask
+from .ai.config import ConfigError, load_config
 from .policy.permission import DEFAULT_MODE, MODE_LABELS, MODES
+from .runtime.loop import RoundLimitExceeded, agent_loop
 from .session import (
-    JsonlSessionRepo,
     JsonlSessionMetadata,
+    JsonlSessionRepo,
     SessionError,
     SessionRecorder,
     messages_for_branch,
 )
-from .tools import TOOLS, workspace
 from .svc.workspaces import WorkspaceInvalid, bound_workspace
+from .tools import TOOLS, workspace
 from .workspaces import (
     SESSION_DIR,
     Workspace,

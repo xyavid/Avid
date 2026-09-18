@@ -23,16 +23,15 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from . import context
+from ..ai.client import DEFAULT_MAX_TOKENS, PromptTooLongError, Turn, chat_completion
 from ..ai.config import Config, load_config
-from . import events
+from ..ai.transcript import Transcript
+from ..tools import TOOL_IMPLS, TOOLS, ToolImpl
+from . import context, events
 from .events import RunObserver
 from .execution import execute_batch
 from .hooks import BLOCK, trigger_hooks
-from ..ai.client import DEFAULT_MAX_TOKENS, PromptTooLongError, Turn, chat_completion
-from ..tools import TOOL_IMPLS, TOOLS, ToolImpl
 from .state import TODO_REMINDER_AFTER_ROUNDS, RunState
-from ..ai.transcript import Transcript
 
 if TYPE_CHECKING:  # 只有类型标注用它：注解是惰性的，运行时不必跨层 import 策略层
     from ..policy.permission import ApprovalLedger, AskUser
@@ -120,7 +119,7 @@ def agent_loop(
     max_rounds: int = MAX_ROUNDS,
     max_stop_blocks: int = MAX_STOP_BLOCKS,
     todo_reminder_after: int = TODO_REMINDER_AFTER_ROUNDS,
-    on_message: Callable[[dict[str, Any]], None] | None = None,
+    on_message: Callable[[dict[str, Any]], Any] | None = None,
     ask: AskUser | None = None,
     on_event: RunObserver | None = None,
     state: RunState | None = None,

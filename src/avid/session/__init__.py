@@ -39,7 +39,7 @@ from .jsonl import (
 )
 from .memory import MemorySessionRepo, MemoryStorage
 from .mutation import MutationLine
-from .projection import repair_incomplete_batches, entries_to_messages, messages_for_branch
+from .projection import entries_to_messages, messages_for_branch, repair_incomplete_batches
 from .recorder import SessionRecorder
 from .session import (
     SessionBranch,
@@ -48,6 +48,8 @@ from .session import (
     validate_message,
 )
 from .types import (
+    MESSAGE_ENTRY,
+    STORAGE_VERSION,
     Branch,
     BranchScan,
     CommitResult,
@@ -61,14 +63,12 @@ from .types import (
     EntryWrite,
     IdGenerator,
     JsonlSessionMetadata,
-    MESSAGE_ENTRY,
     NewEntry,
     PreparedCommit,
     Session,
     SessionMetadata,
     SessionRepo,
     SessionStats,
-    STORAGE_VERSION,
     Storage,
     StoredValue,
     ValueDeleteWrite,
@@ -77,13 +77,13 @@ from .types import (
 )
 from .values import (
     DEFAULT_BRANCH,
+    ValueAddress,
     branch_tip,
     delete_value,
     entry_label,
     session_name,
     set_value,
     value,
-    ValueAddress,
 )
 
 __all__ = [

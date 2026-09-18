@@ -18,14 +18,17 @@ Avid 放在工作区内的 ``.avid/sessions/``（取舍 A2）——工作区边�
 
 from __future__ import annotations
 
+import builtins
 import json
 import logging
 import os
 import threading
 from collections.abc import Sequence
+from contextlib import suppress
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote
 
 from .errors import (
@@ -40,6 +43,7 @@ from .ids import UuidV7Generator, now_ms, validate_session_id
 from .session import StorageBackedSession
 from .state import SessionState
 from .types import (
+    STORAGE_VERSION,
     BranchScan,
     CommitResult,
     CommittedEntry,
@@ -53,7 +57,6 @@ from .types import (
     NewEntry,
     SessionMetadata,
     SessionStats,
-    STORAGE_VERSION,
     StoredValue,
     Write,
 )
@@ -474,16 +477,14 @@ except ImportError:  # pragma: no cover - Windows
 
     def _try_lock(fd: int) -> bool:
         try:
-            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)  # type: ignore[attr-defined]
         except OSError:
             return False
         return True
 
     def _unlock(fd: int) -> None:
-        try:
-            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
-        except OSError:
-            pass
+        with suppress(OSError):
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
 
 
 class SessionFileLock:
@@ -521,12 +522,9 @@ class SessionFileLock:
             fd, self._fd = self._fd, None
         if fd is None:
             return
-        try:
+        with suppress(OSError):  # pragma: no cover - 平台不支持解锁时忽略
             _unlock(fd)
-        except OSError:  # pragma: no cover
-            pass
-        finally:
-            os.close(fd)
+        os.close(fd)
 
 
 class JsonlStorage:
@@ -663,7 +661,7 @@ class JsonlStorage:
 
 
 def session_file_name(created_at: int, session_id: str) -> str:
-    stamp = datetime.fromtimestamp(created_at / 1000, tz=timezone.utc).strftime(
+    stamp = datetime.fromtimestamp(created_at / 1000, tz=UTC).strftime(
         "%Y-%m-%dT%H-%M-%S"
     )
     return f"{stamp}-{created_at % 1000:03d}_{quote(session_id, safe='')}{SUFFIX}"
@@ -839,11 +837,14 @@ class JsonlSessionRepo:
     ) -> StorageBackedSession:
         if metadata.id in self._open:
             raise SessionAlreadyOpenError(metadata.id)
+        def forget() -> None:
+            self._open.pop(metadata.id, None)
+
         session = StorageBackedSession(
             metadata,
             storage,
             id_generator=self._id_generator,
-            on_close=lambda: self._open.pop(metadata.id, None),
+            on_close=forget,
         )
         self._open[metadata.id] = storage
         return session
@@ -856,7 +857,7 @@ class JsonlSessionRepo:
             return candidate
         raise SessionNotFoundError(metadata.id)
 
-    def _session_paths(self, session_id: str) -> list[Path]:
+    def _session_paths(self, session_id: str) -> builtins.list[Path]:
         if not self.root.exists():
             return []
         suffix = f"_{quote(session_id, safe='')}{SUFFIX}"

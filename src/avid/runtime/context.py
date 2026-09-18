@@ -13,12 +13,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..ai.config import Config
+from ..ai.transcript import Transcript
 from ..policy import compaction as compact
 from ..policy.compaction import CompactReport
-from ..ai.config import Config
 from . import events
 from .state import RunState
-from ..ai.transcript import Transcript
 
 logger = logging.getLogger("avid.runtime.context")
 

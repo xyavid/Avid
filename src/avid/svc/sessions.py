@@ -18,20 +18,17 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Any
 
 from ..session import (
     DEFAULT_BRANCH,
     BranchScan,
-    JsonlSessionRepo,
     SessionBranchExistsError,
     SessionError,
     SessionExistsError,
     SessionInvalidIdError,
     SessionMetadata,
     SessionUnknownTargetError,
-    messages_for_branch,
 )
 from .errors import (
     BranchExists,
@@ -168,7 +165,7 @@ class SessionService:
     def create(
         self,
         *,
-        workspace: str,
+        workspace: str | None,
         id: str | None = None,
         name: str | None = None,
     ) -> dict[str, Any]:

@@ -11,12 +11,11 @@ import json
 from pathlib import Path
 
 import pytest
+from support import ScriptedChat, make_turn
 
 from avid.svc import Services
-from avid.workspaces import WorkspaceRegistry
 from avid.web import create_app
-
-from support import ScriptedChat, make_turn
+from avid.workspaces import WorkspaceRegistry
 
 
 @pytest.fixture

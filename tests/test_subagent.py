@@ -8,8 +8,8 @@ from avid.runtime.state import RunState
 from avid.tools import SUB_HANDLERS, SUB_TOOLS, TOOLS
 from avid.tools.subagent import (
     MAX_PARALLEL,
-    SUBAGENT_MAX_TURNS,
     SUB_SYSTEM,
+    SUBAGENT_MAX_TURNS,
     run_subagent,
     subagent,
 )

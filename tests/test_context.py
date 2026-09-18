@@ -7,11 +7,11 @@
 
 import pytest
 
+from avid.ai.config import Config
+from avid.ai.transcript import Transcript
 from avid.policy import compaction as compact
 from avid.runtime import context
-from avid.ai.config import Config
 from avid.runtime.state import RunState
-from avid.ai.transcript import Transcript
 
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
 

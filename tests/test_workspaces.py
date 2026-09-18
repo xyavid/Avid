@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from avid.policy.permission import MODE_STRICT, MODE_WORKSPACE
+from avid.policy.permission import MODE_WORKSPACE
 from avid.workspaces import (
     AVID_HOME_ENV,
     WorkspaceError,

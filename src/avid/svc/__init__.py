@@ -18,10 +18,10 @@ from ..ai.config import ConfigError, load_config
 from ..policy.skills import SkillLoader
 from ..runtime.events import EVENT_TYPES, now_ms
 from ..session import JsonlSessionRepo
-from ..tools import TOOLS
-from ..tools import workspace
-from ..workspaces import Workspace, WorkspaceRegistry
+from ..tools import TOOLS, workspace
+from ..workspaces import WorkspaceRegistry
 from .approvals import APPROVAL_TIMEOUT_SECONDS
+from .picker import available_backend
 from .runs import (
     MAX_EVENT_BUFFER,
     MAX_RETAINED_RUNS,
@@ -30,7 +30,6 @@ from .runs import (
     RunRegistry,
 )
 from .sessions import SessionService
-from .picker import available_backend
 from .tasks import TaskService
 from .workspaces import WorkspaceService, bound_workspace, single_workspace
 

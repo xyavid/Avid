@@ -19,13 +19,53 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 # 测试要打 Web 端点，所以开发环境把可选依赖也装上。
-dev = ["pytest>=8.0", "fastapi>=0.110", "uvicorn>=0.27", "pydantic>=2.6"]
+dev = [
+    "pytest>=8.0",
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "pydantic>=2.6",
+    # 静态门禁：ruff 管风格与明显的错，mypy 管类型。CI 跑同一个配置。
+    "ruff>=0.9",
+    "mypy>=1.11",
+]
 
 [tool.uv]
 package = true
 
+# ---- 静态检查 ----
+#
+# 规则集**显式钉住**：ruff 的默认集会随版本扩大（0.16 的默认已经不是
+# E4/E7/E9/F），门禁不能跟着版本漂。要加规则就在这里加，别依赖默认值。
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = ["dev", "web", ".venv"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "B", "UP", "C4", "RET", "SIM"]
+ignore = [
+    "E501",   # 行宽交给 formatter/评审，不用 lint 报
+    "SIM117", # 嵌套 with 拆开更好读（外层是断言/守卫时常这样写）
+    "UP037",  # 引号注解：pydantic 会求值注解，TYPE_CHECKING 下的前向引用需要引号
+    "RET504", # 先赋值再 return：调试时方便看中间值
+]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src/avid"]
+# 不追求一次性 strict：先把"能查出来的错"变成 0，再逐步收紧。
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unreachable = true
+# 第三方可选依赖（fastapi/pydantic/uvicorn）在 web extra 里，缺类型桩不报。
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# 默认不跑 stress：它按定义是长会话/性能门禁，CI 里单独一个 job 显式跑。
+addopts = "-m 'not stress' --strict-markers"
 markers = [
     "stress: 性能与长会话类门禁，默认不跑（需显式 -m stress）",
 ]

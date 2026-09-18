@@ -35,6 +35,7 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable
+from contextlib import suppress
 
 logger = logging.getLogger("avid.svc.picker")
 
@@ -128,10 +129,8 @@ def _tkinter(timeout: float, env: dict[str, str]) -> str | None:
         logger.info("tkinter 对话框异常（多半是超时关闭）：%s", exc)
         return None
     finally:
-        try:
+        with suppress(Exception):  # 已销毁
             root.destroy()
-        except Exception:  # noqa: BLE001 - 已销毁
-            pass
     return chosen or None
 
 
@@ -240,7 +239,7 @@ def pick_directory(
 def available_backend() -> str | None:
     """第一个能起来的后端名（只探测，不弹窗）。给 `/api/meta` 做诊断用。"""
     environment = dict(os.environ)
-    for name, backend in BACKENDS:
+    for name, _backend in BACKENDS:
         if name == "override":
             if environment.get(ENV_OVERRIDE, "").strip():
                 return "override"
@@ -254,18 +253,14 @@ def available_backend() -> str | None:
             if not (environment.get("DISPLAY") or environment.get("WAYLAND_DISPLAY")):
                 continue
             return "tkinter"
-        if name == "zenity":
-            if shutil.which("zenity"):
-                return name
-        elif name == "kdialog":
-            if shutil.which("kdialog"):
-                return name
-        elif name == "windows":
-            if shutil.which("powershell.exe"):
-                return name
-        elif name == "osascript":
-            if shutil.which("osascript"):
-                return name
+        binary = {
+            "zenity": "zenity",
+            "kdialog": "kdialog",
+            "windows": "powershell.exe",
+            "osascript": "osascript",
+        }.get(name)
+        if binary and shutil.which(binary):
+            return name
     return None
 
 

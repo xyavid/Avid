@@ -9,10 +9,10 @@ from __future__ import annotations
 import threading
 
 import pytest
+from support import ScriptedChat, bound_workspace, make_turn, wait_terminal
 
 from avid.svc import Services
 from avid.svc.errors import BranchExists, InvalidRequest, SessionBusy
-from support import ScriptedChat, bound_workspace, make_turn, wait_terminal
 
 
 def build(root, chat, **kwargs) -> Services:

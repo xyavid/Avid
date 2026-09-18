@@ -1,7 +1,7 @@
 import pytest
 
 from avid.cli import AGENT_TOOL_HELP, build_parser
-from avid.tools import TOOLS, TOOL_IMPLS
+from avid.tools import TOOL_IMPLS, TOOLS
 from avid.tools.schemas import tool
 
 NAMES = [item["function"]["name"] for item in TOOLS]

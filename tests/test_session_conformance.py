@@ -9,10 +9,9 @@ from __future__ import annotations
 import itertools
 
 import pytest
+from session_cases import all_cases
 
 from avid.session import JsonlSessionRepo, MemorySessionRepo, UuidV7Generator
-
-from session_cases import all_cases
 
 BACKENDS = ("memory", "jsonl")
 

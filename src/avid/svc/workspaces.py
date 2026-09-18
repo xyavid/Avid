@@ -29,11 +29,15 @@ from ..session import JsonlSessionRepo, SessionMetadata
 from ..workspaces import Workspace, WorkspaceError, WorkspaceRegistry, derive_id
 from .errors import (
     PickerBusy,
-    PickerFailed as PickerFailedError,
-    PickerUnavailable as PickerUnavailableError,
     ServiceError,
     SessionNotFound,
     WorkspaceExists,
+)
+from .errors import (
+    PickerFailed as PickerFailedError,
+)
+from .errors import (
+    PickerUnavailable as PickerUnavailableError,
 )
 from .picker import PickerError, PickerFailed, PickerUnavailable, pick_directory
 

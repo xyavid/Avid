@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 
 from avid.session import (
+    STORAGE_VERSION,
     BranchScan,
     EntryQuery,
     EntryWrite,
@@ -29,12 +30,11 @@ from avid.session import (
     SessionInvalidMessageError,
     SessionInvariantError,
     SessionNotFoundError,
-    SessionUnknownTargetError,
     SessionStats,
-    STORAGE_VERSION,
+    SessionUnknownTargetError,
     branch_tip,
-    set_value,
     session_name,
+    set_value,
     value,
 )
 

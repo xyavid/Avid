@@ -15,6 +15,7 @@ from collections.abc import Sequence
 
 from .errors import SessionInvariantError
 from .types import (
+    MESSAGE_ENTRY,
     BranchScan,
     CommittedEntry,
     CommittedValueDelete,
@@ -23,7 +24,6 @@ from .types import (
     Entry,
     EntryQuery,
     EntryWrite,
-    MESSAGE_ENTRY,
     PreparedCommit,
     SessionStats,
     StoredValue,

@@ -15,8 +15,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from ..policy.permission import (
-    MODE_SYSTEM,
     DEFAULT_MODE,
+    MODE_SYSTEM,
     ApprovalLedger,
     validate_mode,
 )

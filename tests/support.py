@@ -7,7 +7,8 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Callable, Iterable
+from collections.abc import Callable, Iterable
+from typing import Any
 
 from avid.ai.client import Turn, Usage
 

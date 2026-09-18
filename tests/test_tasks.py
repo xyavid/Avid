@@ -20,10 +20,9 @@ from avid.ai.config import Config
 from avid.runtime import hooks
 from avid.runtime.execution import STATEFUL_TOOLS
 from avid.runtime.loop import agent_loop
-from avid.tools import TOOLS, TOOL_IMPLS
+from avid.tools import TOOL_IMPLS, TOOLS, workspace
 from avid.tools import tasks as task_tools
 from avid.tools.tasks import TaskError
-from avid.tools import workspace
 
 CONFIG = Config(api_key="k", base_url="http://localhost", model="m")
 ID_RE = re.compile(r"^task_[0-9a-f]{8}$")
@@ -494,6 +493,16 @@ def test_get_task_returns_the_full_json_including_description(sandbox):
         "owner": None,
         "blockedBy": [],
     }
+
+
+def test_get_task_on_a_missing_task_raises_task_error(sandbox):
+    """库函数层：缺失任务是 TaskError，不是 TypeError。
+
+    以前直接 asdict(None) 抛 TypeError，按文档捕获 TaskError 的调用者接不住
+    （工具外壳有显式判空所以没暴露，是 mypy 的 arg-type 先发现的）。
+    """
+    with pytest.raises(task_tools.TaskError):
+        task_tools.get_task("task_00000000")
 
 
 def test_get_task_missing_returns_error_text(sandbox):

@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from .types import BranchScan, Entry, MESSAGE_ENTRY
+from .types import MESSAGE_ENTRY, BranchScan, Entry
 
 __all__ = ["messages_for_branch", "entries_to_messages", "repair_incomplete_batches"]
 
@@ -58,7 +58,7 @@ def repair_incomplete_batches(messages: Sequence[dict[str, Any]]) -> list[dict[s
             continue
 
         if pending:
-            del kept[batch_start:]  # type: ignore[arg-type]
+            del kept[batch_start:]
             pending = set()
             batch_start = None
 
@@ -69,5 +69,5 @@ def repair_incomplete_batches(messages: Sequence[dict[str, Any]]) -> list[dict[s
         kept.append(message)
 
     if pending:
-        del kept[batch_start:]  # type: ignore[arg-type]
+        del kept[batch_start:]
     return kept

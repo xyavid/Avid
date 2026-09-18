@@ -11,11 +11,6 @@ import threading
 import time
 
 import pytest
-
-from avid.runtime import events
-from avid.svc import Services
-from avid.svc import runs
-from avid.svc.errors import RunNotFound
 from support import (
     RecordingTools,
     ScriptedChat,
@@ -26,6 +21,10 @@ from support import (
     wait_for,
     wait_terminal,
 )
+
+from avid.runtime import events
+from avid.svc import Services, runs
+from avid.svc.errors import RunNotFound
 
 
 def build(root, chat, tools=None, **kwargs) -> Services:

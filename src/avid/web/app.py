@@ -26,14 +26,16 @@ from ..svc import API_VERSION, Services
 from ..svc.errors import ServiceError
 from . import routes  # noqa: F401 - 只为让 routes 包可见
 from .routes import approvals, events, meta, runs, sessions, tasks, workspaces
-from .schemas import ErrorOut
+from .schemas import ErrorBody, ErrorOut
 
 logger = logging.getLogger("avid.web.app")
 
 STATIC_DIR = Path(__file__).parent / "static"
 
 # 未知 /api 路径的兜底 JSON 404。绝不回落 SPA（B10）。
-UNKNOWN_API = ErrorOut(error={"code": "not_found", "message": "未知的 API 路径"}).model_dump()
+UNKNOWN_API = ErrorOut(
+    error=ErrorBody(code="not_found", message="未知的 API 路径")
+).model_dump()
 
 
 def load_build_info(static_dir: Path) -> dict[str, Any]:

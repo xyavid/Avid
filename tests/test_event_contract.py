@@ -10,7 +10,12 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from avid.runtime.events import DELTA_EVENT_TYPES, DURABLE_EVENT_TYPES, EVENT_TYPES, TRANSIENT_EVENT_TYPES
+from avid.runtime.events import (
+    DELTA_EVENT_TYPES,
+    DURABLE_EVENT_TYPES,
+    EVENT_TYPES,
+    TRANSIENT_EVENT_TYPES,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 TYPES_TS = ROOT / "web" / "src" / "events" / "types.ts"

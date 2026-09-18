@@ -11,12 +11,6 @@ import threading
 
 import pytest
 from fastapi.testclient import TestClient
-
-from avid.runtime import events
-from avid.session import SessionRecorder
-from avid.svc import API_VERSION, FEATURES, Services
-from avid.web import create_app
-from avid.web.schemas import classify_tool_status
 from support import (
     RecordingTools,
     ScriptedChat,
@@ -26,6 +20,12 @@ from support import (
     tool_call,
     wait_for,
 )
+
+from avid.runtime import events
+from avid.session import SessionRecorder
+from avid.svc import API_VERSION, FEATURES, Services
+from avid.web import create_app
+from avid.web.schemas import classify_tool_status
 
 
 @pytest.fixture

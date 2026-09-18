@@ -16,8 +16,8 @@ from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from typing import TYPE_CHECKING, Any
 
-from ..ai.config import Config, load_config
 from ..ai.client import chat_completion
+from ..ai.config import Config, load_config
 from ..policy.permission import DEFAULT_MODE
 
 if TYPE_CHECKING:  # 运行时导入会成环（state.py 要 import 本模块所在的包）
@@ -139,7 +139,7 @@ def _render(tasks: list[dict[str, str]], results: list[str]) -> str:
     # 输出契约不该因此破掉。
     blocks = [
         f"=== {index}/{total} · {task['description']} ===\n{_no_summary(result)}"
-        for index, (task, result) in enumerate(zip(tasks, results), start=1)
+        for index, (task, result) in enumerate(zip(tasks, results, strict=True), start=1)
     ]
     return header + "\n\n" + "\n\n".join(blocks)
 

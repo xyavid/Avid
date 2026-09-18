@@ -87,7 +87,7 @@ class ApprovalTable:
     知道事件的 seq 怎么分配，也不认识运行记录（那是注册表的事）。
     """
 
-    emit: Callable[..., None]
+    emit: Callable[..., object]
     set_status: Callable[[str], None]
     is_cancelled: Callable[[], bool]
     timeout: float = APPROVAL_TIMEOUT_SECONDS
@@ -117,7 +117,7 @@ class ApprovalTable:
             expires_at=events.now_ms() + int(self.timeout * 1000),
         )
         with self._condition:
-            if self._closed:
+            if self._closed_now():
                 return False
             self._pending[pending.id] = pending
         self.set_status("awaiting_approval")
@@ -190,6 +190,14 @@ class ApprovalTable:
             return Resolution(
                 accepted=False, decision=previous.decision, reason=previous.reason
             )
+
+    def _closed_now(self) -> bool:
+        """持锁后再查一次关闭标志。
+
+        另一个线程可能在两次检查之间 ``close()``，所以这次重查是必要的；
+        写成方法是为了绕开 mypy 的属性窄化（它假设属性两次读之间不变）。
+        """
+        return self._closed
 
     def pending(self) -> list[PendingApproval]:
         with self._condition:
