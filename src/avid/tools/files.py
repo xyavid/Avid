@@ -42,6 +42,40 @@ def _int(value: Any, *, default: int, minimum: int) -> int:
     return max(number, minimum)
 
 
+def _count_lines(path: Path) -> int:
+    """流式数行数：分块读、不驻留（`splitlines()` 会把整个文件变成一份行列表）。"""
+    total = 0
+    tail_ends_with_newline = True
+    try:
+        with path.open("rb") as handle:
+            while chunk := handle.read(1 << 20):
+                total += chunk.count(b"\n")
+                tail_ends_with_newline = chunk.endswith(b"\n")
+    except OSError:
+        return total
+    if total and not tail_ends_with_newline:
+        total += 1  # 最后一行没有换行也算一行
+    return total
+
+
+def _read_window(handle: Any, offset: int, limit: int) -> tuple[list[str], bool]:
+    """从第 ``offset`` 行起取最多 ``limit`` 行，返回 (窗口, 是否被行数截断)。
+
+    只把窗口读进内存：以前 `read_text().splitlines()` 会把整个文件（几 GB 的日志
+    也一样）变成字符串加一份行列表，再切出两千行——读大文件等于把进程撑爆。
+    """
+    window: list[str] = []
+    hit_limit = False
+    for number, line in enumerate(handle, start=1):
+        if number < offset:
+            continue
+        if len(window) == limit:
+            hit_limit = True  # 当前这一行没进窗口：后面确实还有
+            break
+        window.append(line[:-1] if line.endswith("\n") else line)
+    return window, hit_limit
+
+
 def read_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     raw = str(args.get("path", ""))
     path, error = resolve(raw, root=_root(state), outside_ok=_grant(state))
@@ -53,25 +87,27 @@ def read_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     if path.is_dir():
         return f"错误：{raw} 是目录；列目录用 glob，或用 bash 的 ls"
 
+    offset = _int(args.get("offset"), default=1, minimum=1)
+    limit = _int(args.get("limit"), default=MAX_READ_LINES, minimum=1)
+
     try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            window, hit_limit = _read_window(handle, offset, limit)
     except OSError as exc:
         return f"错误：读取失败：{exc}"
 
-    offset = _int(args.get("offset"), default=1, minimum=1)
-    limit = _int(args.get("limit"), default=MAX_READ_LINES, minimum=1)
-    window = lines[offset - 1 : offset - 1 + limit]
-
-    if not window and lines:
-        return f"错误：offset {offset} 超出文件范围（共 {len(lines)} 行）"
+    if not window:
+        if offset == 1:
+            return ""  # 空文件
+        return f"错误：offset {offset} 超出文件范围（共 {_count_lines(path)} 行）"
 
     text = "\n".join(window)
     reasons = []
     if len(text) > MAX_READ_CHARS:
         text = text[:MAX_READ_CHARS]
         reasons.append("字符数")
-    if offset - 1 + len(window) < len(lines):
-        reasons.append(f"行数（共 {len(lines)} 行）")
+    if hit_limit:
+        reasons.append(f"行数（共 {_count_lines(path)} 行）")
     if reasons:
         text += f"\n…（已按{'、'.join(reasons)}截断，可调 offset / limit 继续读）"
     return text
