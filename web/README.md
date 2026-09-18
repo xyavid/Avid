@@ -61,8 +61,8 @@ AVID_E2E=1 pnpm test:e2e    # Playwright 14 项（需先 pnpm exec playwright in
 悬停由 `ui/sketch.css` 统一抬升一档（`--sticker-3`）并把按压位移同步改成新档偏移，
 按住时阴影归零；键盘聚焦有全局 `:focus-visible` 焦点环；禁用保留方框但不抬升、不位移。
 
-会话列表里的会话标题也是 `secondary`：它和下面的「改名 / 删除」是同一排控件，
-没有理由只有它没框。变体只有 primary / secondary / danger 三种，**每个都自带方框**；
+会话列表里的会话标题也是 `secondary`，而且 `w-full`：它和下面的「改名 / 删除」是同一排
+控件，没有理由只有它没框；框与卡片同宽（铺满卡片内容区），长会话名在框内换行而不会撑破卡片。变体只有 primary / secondary / danger 三种，**每个都自带方框**；
 原先那个无框的 `ghost` 变体在最后一个调用点消失后已删除（没有调用点的变体是不可验证的
 死代码）。时间线动作的 `opacity-0 → 100` 只决定「什么时候显形」，方框与高度档在静止时
 就已在 DOM 里。

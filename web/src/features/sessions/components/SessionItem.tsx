@@ -56,7 +56,7 @@ export function SessionItem({
       ) : (
         <Button
           variant="secondary"
-          className="h-auto max-w-full flex-col items-start gap-0.5 px-2 py-1 text-left"
+          className="h-auto w-full flex-col items-start gap-0.5 px-2 py-1 text-left"
           onClick={onSelect}
           aria-current={active ? 'true' : undefined}
         >

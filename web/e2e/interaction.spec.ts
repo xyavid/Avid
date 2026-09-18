@@ -190,6 +190,23 @@ test('会话标题也有框，与「改名 / 删除」同族', async ({ page }) 
   expect(rest.borderWidth, '与「删除」同边框').toBe(sibling.borderWidth)
   expect(rest.borderRadius, '与「删除」同圆角').toBe(sibling.borderRadius)
   expect(rest.boxShadow, '与「删除」同高度档').toBe(sibling.boxShadow)
+
+  // 与卡片同宽：标题的方框铺满卡片的内容区，且不把卡片撑出横向滚动
+  const widths = await title.evaluate((element) => {
+    const card = element.parentElement as HTMLElement
+    const style = getComputedStyle(card)
+    return {
+      title: element.getBoundingClientRect().width,
+      inner:
+        card.clientWidth -
+        Number.parseFloat(style.paddingLeft) -
+        Number.parseFloat(style.paddingRight),
+      cardScroll: card.scrollWidth,
+      cardClient: card.clientWidth,
+    }
+  })
+  expect(Math.abs(widths.title - widths.inner), '标题方框宽度 = 卡片内容区宽度').toBeLessThanOrEqual(1)
+  expect(widths.cardScroll, '卡片不应出现横向溢出').toBeLessThanOrEqual(widths.cardClient + 1)
 })
 
 test('换主题只改 tokens：注入另一组 --avid-*-rgb 后方框跟着变', async ({ page }) => {
