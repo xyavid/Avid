@@ -119,7 +119,13 @@ def _lock_for(directory: Path) -> threading.RLock:
 
 
 class TaskStore:
-    """校验任务 ID 与读写 ``.tasks/{id}.json``。任务图的唯一写入口。"""
+    """校验任务 ID 与读写 ``.tasks/{id}.json``。任务图的唯一写入口。
+
+    **读-改-写的不变量由这里守**：``claim`` / ``complete`` 自己把三步括在锁里，
+    而不是要求调用方先拿锁。以前的写法把锁交给工具外壳（``_transition``），
+    于是库函数层（文档明确说可被脚本与测试直接调用）绕开外壳就能并发写，
+    "同一条任务只能被认领一次"在第二条路径上不成立。
+    """
 
     def __init__(self, directory: Path = TASKS_DIR) -> None:
         self._directory = Path(directory)
@@ -310,18 +316,82 @@ class TaskStore:
                 stack.extend(node.blockedBy)
         return False
 
+    # ---------------- 状态迁移（读-改-写，锁在内部） ----------------
+
+    def incomplete_of(self, task: Task) -> list[str]:
+        """这条任务还没 completed 的前置。文件缺失也算未完成。"""
+        incomplete: list[str] = []
+        for dependency in task.blockedBy:
+            upstream = self.load(dependency)
+            if upstream is None or upstream.status != "completed":
+                incomplete.append(dependency)
+        return incomplete
+
+    def can_start(self, task_id: str) -> bool:
+        task = self.load(task_id)
+        if task is None:
+            return False
+        return not self.incomplete_of(task)
+
+    def claim(self, task_id: str, owner: str = "agent") -> str:
+        """认领：pending → in_progress。整段读-改-写持锁。"""
+        with self.lock:
+            task = self._require(task_id)
+            if task.status != "pending":
+                return f"Task {task_id} is {task.status}, cannot claim"
+            blocked = self.incomplete_of(task)
+            if blocked:
+                return f"Blocked by: {blocked}"
+            task.owner = owner
+            task.status = "in_progress"
+            self._write_atomic(task)
+            return f"Claimed {task_id} ({task.subject})"
+
+    def complete(self, task_id: str, owner: str = "agent") -> str:
+        """完成：in_progress → completed，并报告本次新解锁的下游。持锁。"""
+        with self.lock:
+            task = self._require(task_id)
+            if task.status != "in_progress":
+                return f"Task {task_id} is {task.status}, cannot complete"
+            if task.owner != owner:
+                return f"Task {task_id} is owned by {task.owner}, not {owner}"
+            ready_before = {
+                item.id for item in self.list_all() if self._ready(item)
+            }
+            task.status = "completed"
+            self._write_atomic(task)
+            unblocked = [
+                item.subject
+                for item in self.list_all()
+                if item.status == "pending"
+                and item.blockedBy
+                and item.id not in ready_before
+                and self._ready(item)
+            ]
+            message = f"Completed {task_id} ({task.subject})"
+            if unblocked:
+                message += f"\nUnblocked: {', '.join(unblocked)}"
+            return message
+
+    def _ready(self, task: Task) -> bool:
+        return task.status == "pending" and bool(task.blockedBy) and not self.incomplete_of(task)
+
 
 TASKS = TaskStore(TASKS_DIR)
 
 
-def store_for(state: "RunState | None") -> TaskStore:
-    """运行级任务库：任务跟着工作区走，不再固定于进程 CWD。
+def store_for_root(root: str | Path | None) -> TaskStore:
+    """按**工作区根**取任务库：任务跟着工作区走，不再固定于进程 CWD。
 
-    每次都新建一个 ``TaskStore``，但**锁按目录共享**（见 ``TaskStore.lock``），
+    每次新建一个 ``TaskStore``，但**锁按目录共享**（见 ``TaskStore.lock``），
     所以同一个工作区里的并发运行仍然互斥认领同一条任务。
     """
-    raw_root = getattr(state, "workspace_root", None)
-    return TaskStore(Path(raw_root) / TASKS_DIR) if raw_root else TASKS
+    return TaskStore(Path(root) / TASKS_DIR) if root else TASKS
+
+
+def store_for(state: "RunState | None") -> TaskStore:
+    """运行级任务库：根取 ``RunState.workspace_root``。"""
+    return store_for_root(getattr(state, "workspace_root", None))
 
 
 # ---------------- 库函数层（签名与消息模板 = 设计文档原文） ----------------
@@ -347,13 +417,7 @@ def incomplete_dependencies(task: Task | None, store: TaskStore | None = None) -
     """
     if task is None:
         return [MISSING]
-    active = store or TASKS
-    incomplete: list[str] = []
-    for dependency in task.blockedBy:
-        upstream = active.load(dependency)
-        if upstream is None or upstream.status != "completed":
-            incomplete.append(dependency)
-    return incomplete
+    return (store or TASKS).incomplete_of(task)
 
 
 def create_task(subject: str, description: str = "", store: TaskStore | None = None) -> Task:
@@ -367,45 +431,20 @@ def update_task(
 
 
 def can_start(task_id: str, store: TaskStore | None = None) -> bool:
-    return not incomplete_dependencies(load_task(task_id, store), store)
+    """能不能开工。任务不存在返回 False（查询的语义是"现在能不能开始"）。"""
+    return (store or TASKS).can_start(task_id)
 
 
 def claim_task(task_id: str, owner: str = "agent", store: TaskStore | None = None) -> str:
-    active = store or TASKS
-    task = load_task(task_id, active)
-    if task.status != "pending":
-        return f"Task {task_id} is {task.status}, cannot claim"
-    dependencies = incomplete_dependencies(task, active)
-    if dependencies:
-        return f"Blocked by: {dependencies}"
-    task.owner = owner
-    task.status = "in_progress"
-    active.save(task)
-    return f"Claimed {task_id} ({task.subject})"
+    """认领。**不要求调用方先加锁**：读-改-写在 store 内部完成。"""
+    return (store or TASKS).claim(task_id, owner)
 
 
 def complete_task(
     task_id: str, owner: str = "agent", store: TaskStore | None = None
 ) -> str:
-    active = store or TASKS
-    task = load_task(task_id, active)
-    if task.status != "in_progress":
-        return f"Task {task_id} is {task.status}, cannot complete"
-    if task.owner != owner:
-        return f"Task {task_id} is owned by {task.owner}, not {owner}"
-    ready_before = {t.id for t in list_tasks(active)
-                    if t.status == "pending" and t.blockedBy
-                    and can_start(t.id, active)}
-    task.status = "completed"
-    active.save(task)
-    unblocked = [t.subject for t in list_tasks(active)
-                 if t.status == "pending" and t.blockedBy
-                 and t.id not in ready_before
-                 and can_start(t.id, active)]
-    msg = f"Completed {task_id} ({task.subject})"
-    if unblocked:
-        msg += f"\nUnblocked: {', '.join(unblocked)}"
-    return msg
+    """完成并报告新解锁的下游。**不要求调用方先加锁**。"""
+    return (store or TASKS).complete(task_id, owner)
 
 
 def get_task(task_id: str, store: TaskStore | None = None) -> str:
@@ -464,20 +503,19 @@ def can_start_tool(args: dict[str, Any], *, state: "RunState | None" = None) -> 
 
 
 def _transition(args: dict[str, Any], action, state: "RunState | None") -> str:
-    """claim / complete 共用：整段读-改-写拿锁，缺任务先变文本。"""
+    """claim / complete 共用：缺任务先变文本，其余交给 store 自己加锁。"""
     try:
         task_id = _string(args, "task_id", "")
         owner = _string(args, "owner", "agent")
     except TaskError as exc:
         return f"错误：{exc}"
     store = store_for(state)
-    with store.lock:
-        try:
-            if store.load(task_id or "") is None:
-                return f"错误：找不到任务 {task_id}"
-        except TaskError as exc:
-            return f"错误：{exc}"
-        return action(task_id or "", owner or "agent", store)
+    try:
+        if store.load(task_id or "") is None:
+            return f"错误：找不到任务 {task_id}"
+    except TaskError as exc:
+        return f"错误：{exc}"
+    return action(task_id or "", owner or "agent", store)
 
 
 def claim_task_tool(args: dict[str, Any], *, state: "RunState | None" = None) -> str:

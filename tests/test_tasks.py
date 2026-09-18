@@ -370,6 +370,33 @@ def test_concurrent_claims_leave_exactly_one_winner(sandbox):
     assert stored["owner"] in {"agent-1", "agent-2"}
 
 
+def test_concurrent_library_claims_are_also_serialised(sandbox):
+    """库函数层也必须互斥：文档说脚本与测试可以直接调 `claim_task`。
+
+    以前锁在工具外壳 `_transition` 里，`claim_task` 自己不加锁——绕过外壳的
+    调用方（第二个消费者）会让"同一条任务只能被认领一次"不成立。
+    """
+    task_id = make("库层抢一条任务")
+    results: list[str] = []
+    barrier = threading.Barrier(4)
+
+    def worker(name: str) -> None:
+        barrier.wait(5)
+        results.append(task_tools.claim_task(task_id, name))
+
+    threads = [threading.Thread(target=worker, args=(f"lib-{index}",)) for index in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(5)
+
+    assert sum(result.startswith("Claimed") for result in results) == 1
+    assert sum("cannot claim" in result for result in results) == 3
+    stored = record(task_id, sandbox)
+    assert stored["status"] == "in_progress"
+    assert stored["owner"] in {f"lib-{index}" for index in range(4)}
+
+
 # ---------------- 10：complete_task 与解锁 ----------------
 
 

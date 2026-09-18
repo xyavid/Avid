@@ -98,7 +98,7 @@ class Services:
             approval_timeout=approval_timeout,
         )
         self.sessions = SessionService(self.workspaces, self.runs)
-        self.tasks = TaskService()
+        self.tasks = TaskService(self.workspaces)
         self.started_at = now_ms()
 
     # ---------------- 兼容访问器 ----------------

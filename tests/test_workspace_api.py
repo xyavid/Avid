@@ -7,6 +7,9 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from avid.svc import Services
@@ -256,3 +259,59 @@ def test_explicit_registration_is_the_only_writer(tmp_path):
         assert services.registry.find(str(home)) is None
     finally:
         services.close()
+
+
+# ---------------- 任务板跟着工作区走 ----------------
+
+
+def _seed_task(root, subject: str) -> None:
+    """直接在某个工作区的 ``.tasks/`` 里放一条任务（模拟 agent 写过）。"""
+    directory = Path(root) / ".tasks"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "task_aaaaaaaa.json").write_text(
+        json.dumps(
+            {
+                "id": "task_aaaaaaaa",
+                "subject": subject,
+                "description": "",
+                "status": "pending",
+                "owner": None,
+                "blockedBy": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_task_board_reads_the_workspace_not_the_process_cwd(client, multi, tmp_path):
+    """任务库每个工作区一份；视图以前用模块级 TASKS（按进程 CWD 解析），
+    多工作区模式下任务板显示的是另一个工作区的任务（阶段 18 漏掉的落点）。"""
+    services, registry = multi
+    bound = services.workspaces.default
+    other_root = tmp_path.parent / f"tasks-other-{tmp_path.name}"
+    other_root.mkdir()
+    other = registry.add(other_root)
+    _seed_task(bound.root, "绑定工作区的任务")
+    _seed_task(other.root, "另一个工作区的任务")
+
+    default_board = client.get("/api/tasks")
+    assert default_board.status_code == 200, default_board.text
+    assert [item["subject"] for item in default_board.json()["tasks"]] == [
+        "绑定工作区的任务"
+    ]
+
+    # 显式指定：界面在多工作区模式下要能看别的工作区的任务板。
+    explicit = client.get("/api/tasks", params={"workspace": other.id})
+    assert explicit.status_code == 200, explicit.text
+    assert [item["subject"] for item in explicit.json()["tasks"]] == [
+        "另一个工作区的任务"
+    ]
+
+    # 单条任务同样按工作区解析：同一个 id 在两个工作区里是两条不同的任务。
+    single = client.get("/api/tasks/task_aaaaaaaa", params={"workspace": other.id})
+    assert single.status_code == 200, single.text
+    assert single.json()["subject"] == "另一个工作区的任务"
+
+    unknown = client.get("/api/tasks", params={"workspace": "w-nope"})
+    assert unknown.status_code == 404
+    assert unknown.json()["error"]["code"] == "workspace_not_found"
