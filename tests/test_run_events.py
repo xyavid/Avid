@@ -24,7 +24,8 @@ from support import (
 
 from avid.ai.client import LLMError
 from avid.runtime import events
-from avid.session import SessionStorageError
+from avid.session import SessionStorageError, messages_for_branch
+from avid.session.types import NOTICE_ENTRY
 from avid.svc import Services, runs
 from avid.svc.errors import RunNotFound
 
@@ -564,3 +565,36 @@ def test_run_record_reports_the_real_round_and_tokens(sandbox):
     payload = services.runs.get(record.run_id).to_dict()
     assert payload["round"] >= 3, payload
     assert payload["tokens"] > 0, payload
+
+
+# ---------------- 注入提醒的条目类型 ----------------
+
+
+def test_injected_reminder_is_persisted_as_a_notice_entry(sandbox):
+    """注入的 TODO 提醒照样落库（续接要逐字一致），但类型是 ``notice``。
+
+    它的 ``role`` 确实是 ``user``、内容是内核写的，渲染侧只能靠类型分辨——文本上
+    认不出来（Stop nudge 的文本由 hook 任意给定，没有稳定前缀）。
+    """
+    tools = RecordingTools().registry("read_file")
+    services = build(sandbox, many_rounds(4), tools)
+    record = run_to_end(services)
+
+    entries = services.sessions.entries(record.session_id, order="asc")["entries"]
+    notices = [entry for entry in entries if entry["type"] == NOTICE_ENTRY]
+    assert len(notices) == 1
+    assert notices[0]["message"]["role"] == "user"
+    assert "[提醒]" in notices[0]["message"]["content"]
+
+    # 事件侧照旧把它认成 todo_reminder，而不是用户输入
+    kinds = [event.type for event in collect(services, record.run_id)]
+    assert kinds.count(events.TODO_REMINDER) == 1
+    assert kinds.count(events.USER_MESSAGE) == 1
+
+    # 投影不变：提醒仍在模型的历史里
+    session = services.repo.open(services.runs.find_metadata(record.session_id))
+    try:
+        history = [str(message.get("content") or "") for message in messages_for_branch(session)]
+    finally:
+        session.close()
+    assert sum("[提醒]" in text for text in history) == 1

@@ -40,8 +40,10 @@ from .types import (
     CommitResult,
     Entry,
     EntryQuery,
+    EntryType,
     EntryWrite,
     IdGenerator,
+    MESSAGE_ENTRY,
     NewEntry,
     SessionMetadata,
     SessionStats,
@@ -190,8 +192,10 @@ class SessionBranch:
         )
         return found[0] if found else None
 
-    def append_message(self, message: dict[str, Any]) -> str:
-        return self._session.append_message(self.name, message)
+    def append_message(
+        self, message: dict[str, Any], *, entry_type: EntryType = MESSAGE_ENTRY
+    ) -> str:
+        return self._session.append_message(self.name, message, entry_type=entry_type)
 
     def __repr__(self) -> str:  # pragma: no cover - 只为日志可读
         return f"<SessionBranch {self.name!r}>"
@@ -313,8 +317,18 @@ class StorageBackedSession:
         self.mutate(job)
         return self._branch_object(name)
 
-    def append_message(self, branch: str, message: dict[str, Any]) -> str:
-        """往分支尾追加一条消息，返回条目 id。分支头与条目同一次提交。"""
+    def append_message(
+        self,
+        branch: str,
+        message: dict[str, Any],
+        *,
+        entry_type: EntryType = MESSAGE_ENTRY,
+    ) -> str:
+        """往分支尾追加一条消息，返回条目 id。分支头与条目同一次提交。
+
+        ``entry_type`` 区分「对话消息」与「内核注入的提醒」（见 ``NOTICE_ENTRY``）：
+        两者都要进投影（模型当时确实看到了它们），差别只在渲染侧。
+        """
         self._assert_open()
         validate_message(message)
         entry_id = self.id_generator.next()
@@ -334,6 +348,7 @@ class StorageBackedSession:
                         NewEntry(
                             id=entry_id,
                             parent_id=parent_id,
+                            type=entry_type,
                             message=message,
                         )
                     ),

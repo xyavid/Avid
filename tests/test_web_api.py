@@ -575,6 +575,32 @@ def test_branch_endpoints_list_fork_and_reject_conflicts(bundle):
     assert listed["b2"]["entry_count"] == 4
 
 
+# ---------------- 注入提醒的线格式 ----------------
+
+
+def test_injected_reminder_keeps_its_notice_type_on_the_wire(bundle):
+    """前端按这个字符串分辨「内核注入的提醒」与「用户说的话」，所以钉住线格式。
+
+    它的 ``role`` 确实是 ``user``（对模型而言它就是一条 user 消息），文本上也认不出来
+    ——Stop nudge 的文本由 hook 任意给定——所以判别只能靠条目类型。
+    """
+    client, services = bundle()
+    session_id = create_session(client).json()["id"]
+
+    session = services.repo.open(services.runs.find_metadata(session_id))
+    try:
+        recorder = SessionRecorder(session)
+        recorder.ensure_branch()
+        recorder.on_message({"role": "user", "content": "问题"})
+        recorder.on_message({"role": "user", "content": "还有一步"}, notice=True)
+    finally:
+        session.close()
+
+    entries = client.get(f"/api/sessions/{session_id}/entries?order=asc").json()["entries"]
+    assert [entry["type"] for entry in entries] == ["message", "notice"]
+    assert [entry["message"]["role"] for entry in entries] == ["user", "user"]
+
+
 # ---------------- B16 与分页 ----------------
 
 

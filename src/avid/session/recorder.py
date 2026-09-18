@@ -13,6 +13,7 @@ import logging
 from typing import Any
 
 from .session import SessionBranch, StorageBackedSession
+from .types import MESSAGE_ENTRY, NOTICE_ENTRY
 from .values import DEFAULT_BRANCH
 
 logger = logging.getLogger("avid.session.recorder")
@@ -38,14 +39,20 @@ class SessionRecorder:
             )
         return self._branch
 
-    def on_message(self, message: dict[str, Any]) -> str:
+    def on_message(self, message: dict[str, Any], *, notice: bool = False) -> str:
         """与 ``agent_loop`` 的观察点同签名，可直接作为参数传入。
 
         返回条目 id：调用方（``svc/runs.py``）要把它带进 durable 事件，
         前端因此不必自己维护会话身份（设计文档 §5.3）。
+
+        ``notice=True`` 用于内核注入的提醒（TODO 提醒 / Stop nudge）：它们照样落库
+        （续接时模型看到的历史必须与当时逐字一致），但类型不同，渲染侧据此不当成
+        用户说的话——nudge 的文本由 Stop hook 任意给定，文本上认不出来。
         """
         branch = self.ensure_branch()
-        entry_id = branch.append_message(message)
+        entry_id = branch.append_message(
+            message, entry_type=NOTICE_ENTRY if notice else MESSAGE_ENTRY
+        )
         self.entry_ids.append(entry_id)
         logger.debug("会话落库 %s：%s", entry_id, message.get("role"))
         return entry_id

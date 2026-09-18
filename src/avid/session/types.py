@@ -22,9 +22,13 @@ if TYPE_CHECKING:  # 仅用于标注：运行时由 values.py 提供，避免循
 
 T = TypeVar("T")
 
-# 条目判别字段。现在只有一种；格式版本号（storage_version）为新类型留位。
+# 条目判别字段。现在有两种；格式版本号（storage_version）为新类型留位。
 EntryType = str
 MESSAGE_ENTRY: EntryType = "message"
+# 内核注入给模型的提醒（TODO 提醒 / Stop nudge）：它**是**模型当时看到的历史，所以照旧
+# 进投影；但它不是对话内容，渲染侧不该把它当成用户说的话。单靠文本分不出来——nudge 的
+# 文本由 Stop hook 任意给定（测试里是「还有一步」），所以判别必须结构化。
+NOTICE_ENTRY: EntryType = "notice"
 
 Order = Literal["asc", "desc"]
 BranchOrder = Literal["newestFirst", "oldestFirst"]
@@ -221,7 +225,9 @@ class Branch(Protocol):
 
     def find_entry(self, query: BranchScan | None = None) -> Entry | None: ...
 
-    def append_message(self, message: dict[str, Any]) -> str: ...
+    def append_message(
+        self, message: dict[str, Any], *, entry_type: EntryType = MESSAGE_ENTRY
+    ) -> str: ...
 
 
 class Session(Protocol):

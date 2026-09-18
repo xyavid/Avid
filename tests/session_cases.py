@@ -33,10 +33,13 @@ from avid.session import (
     SessionStats,
     SessionUnknownTargetError,
     branch_tip,
+    entries_to_messages,
     session_name,
     set_value,
     value,
 )
+# 条目类型不在门面里（见 avid/session/__init__.py 的取舍）：内部判别字段按子模块导入。
+from avid.session.types import MESSAGE_ENTRY, NOTICE_ENTRY
 
 USER = {"role": "user", "content": "一"}
 ASSISTANT = {"role": "assistant", "content": "二"}
@@ -460,6 +463,43 @@ def _workspace_membership_is_recorded_and_queryable(repo) -> None:
     reopened.close()
 
 
+# ---------------- 注入提醒 ----------------
+
+
+def _notice_entries_are_typed_and_projected(repo) -> None:
+    """内核注入的提醒用 ``NOTICE_ENTRY`` 存：类型在存储里留存，但仍进投影。
+
+    两件事必须同时成立——类型可判别（渲染侧据此不把它画成用户说的话），投影照旧
+    带上（续接时模型看到的历史与当时逐字一致）。文本上认不出来：nudge 的文本由
+    Stop hook 任意给定，没有稳定前缀可匹配。
+    """
+    session = repo.create(id="s")
+    branch = session.create_branch("main", None)
+    first = branch.append_message({"role": "user", "content": "问题"})
+    notice = branch.append_message(
+        {"role": "user", "content": "[提醒] 该更新计划了"}, entry_type=NOTICE_ENTRY
+    )
+    last = branch.append_message({"role": "assistant", "content": "答"})
+
+    ordered = branch.find_entries(BranchScan(order="oldestFirst"))
+    assert {entry.id: entry.type for entry in ordered} == {
+        first: MESSAGE_ENTRY,
+        notice: NOTICE_ENTRY,
+        last: MESSAGE_ENTRY,
+    }
+
+    # 按类型召回是存储层的能力（调试与统计要用）
+    assert [entry.id for entry in branch.find_entries(BranchScan(type=NOTICE_ENTRY))] == [notice]
+
+    # 投影两种都带，顺序不变
+    assert [message["content"] for message in entries_to_messages(ordered)] == [
+        "问题",
+        "[提醒] 该更新计划了",
+        "答",
+    ]
+    session.close()
+
+
 def all_cases() -> list[Case]:
     return [
         Case("lifecycle", "create 不隐式建分支并拒绝重复 id", _create_has_no_branch),
@@ -478,6 +518,7 @@ def all_cases() -> list[Case]:
         Case("mutation", "失败的提交什么都不消耗", _failed_commits_consume_nothing),
         Case("values", "值的读写删除与标签", _values_roundtrip),
         Case("values", "命名空间枚举有序且互不串门", _value_namespace_scan_is_ordered_and_isolated),
+        Case("notices", "注入提醒的条目类型留存且仍进投影", _notice_entries_are_typed_and_projected),
         Case("queries", "条目查询的翻页与过滤", _entry_queries_page_and_filter),
         Case("queries", "分支扫描的顺序、上限与翻页", _branch_scan_orders_limits_and_pages),
         Case("ownership", "工作区归属可查可持久化", _workspace_membership_is_recorded_and_queryable),

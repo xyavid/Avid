@@ -14,9 +14,15 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from .types import MESSAGE_ENTRY, BranchScan, Entry
+from .types import MESSAGE_ENTRY, NOTICE_ENTRY, BranchScan, Entry
 
 __all__ = ["messages_for_branch", "entries_to_messages", "repair_incomplete_batches"]
+
+# 两种类型都进投影：`NOTICE_ENTRY` 是内核注入的提醒，模型**当时确实看到了它**，
+# 所以续接出来的 messages 必须逐字带上（否则与当时的 transcript 不一致，
+# test_session_integration 的 test_stop_nudge_is_persisted 钉的就是这条）。
+# 它与对话消息的区别只在渲染侧：前端据此不把它画成用户说的话。
+_TRANSCRIPT_TYPES = (MESSAGE_ENTRY, NOTICE_ENTRY)
 
 
 def messages_for_branch(session: Any, branch: str = "main") -> list[dict[str, Any]]:
@@ -33,7 +39,7 @@ def entries_to_messages(entries: Sequence[Entry]) -> list[dict[str, Any]]:
     messages = [
         dict(entry.message)
         for entry in entries
-        if entry.type == MESSAGE_ENTRY and entry.message is not None
+        if entry.type in _TRANSCRIPT_TYPES and entry.message is not None
     ]
     return repair_incomplete_batches(messages)
 
