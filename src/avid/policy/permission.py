@@ -67,6 +67,10 @@ DANGER_PATTERNS: tuple[tuple[str, str], ...] = (
         r"(?:curl|wget)\b[^|;&]*\|\s*(?:sudo\s+)?(?:sh|bash|zsh|python\d?)\b",
         "把网络内容直接交给解释器执行",
     ),
+    (
+        r"\b(?:sh|bash|zsh|python\d?|source)\b[^|;&]*<\s*\(\s*(?:curl|wget)\b",
+        "把网络内容直接交给解释器执行",
+    ),
     (_CMD_START + r"git\b[^|;&]*\bpush\b[^|;&]*(?:--force|-f)\b", "强制推送"),
     (_CMD_START + r"git\b[^|;&]*\breset\b[^|;&]*--hard\b", "丢弃工作区改动"),
     (_CMD_START + r"git\b[^|;&]*\bclean\b[^|;&]*\s-[a-zA-Z]*f", "删除未跟踪文件"),

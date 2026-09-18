@@ -120,8 +120,9 @@ class Services:
                 "tools": [item["function"]["name"] for item in TOOLS],
                 "skills": self.skills(),
                 "model": self.model_name(),
-                # 本进程的默认工作区根（多工作区模式下为空）；候选列表走
-                # GET /api/workspaces，避免同一概念两种拼写。
+                # 单工作区模式给那一个的根；多工作区模式回落到进程默认根
+                # （只是给界面的文本提示，**候选列表**一律走 GET /api/workspaces，
+                # 避免同一概念两种拼写）。
                 "workspace": (
                     self.workspaces.default.root
                     if self.workspaces.default is not None

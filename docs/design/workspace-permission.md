@@ -132,12 +132,13 @@
 | 递归 / 强制删除 | `rm` 带 `-r`/`-R`/`-f` 的任意组合 |
 | 权限与属主 | `chmod` `chown` `chgrp`（含 `-R`） |
 | 磁盘与文件系统 | `dd` `fdisk` `parted` `mount` `umount` `losetup` `swapon/swapoff` `truncate` |
-| 系统服务与进程 | `systemctl` `service` `kill` `pkill` `killall` `crontab` `at` `systemd-run` |
+| 系统服务与进程 | `systemctl` `service` `kill` `pkill` `killall` `systemd-run` |
+| 计划任务 | `crontab` `at` |
 | 系统级包管理 | `apt` `apt-get` `dpkg` `dnf` `yum` `pacman` `snap` `brew` `zypper` `apk` |
 | 网络取回即执行 | `curl`/`wget` 管道进 `sh`/`bash`/`zsh`/`python`；`<(...)` 进程替换喂解释器 |
 | 破坏性 git | `push --force` / `push -f`、`reset --hard`、`clean -f`/`-fd`/`-fdx` |
 | 远程与容器 | `ssh` `scp` `rsync` 到远端、`docker` `podman` `kubectl` `helm` |
-| 敏感路径 | 读写 `~/.ssh/`、`~/.aws/`、`~/.gnupg/`、`/etc/shadow`、`*.pem` 私钥 |
+| 敏感路径 | 读写 `~/.ssh/`、`~/.aws/`、`~/.gnupg/`、`/etc/shadow`、任何 `.pem` 路径 |
 
 边界声明（写进模块 docstring）：**这是一个护栏，不是沙箱**。变量展开、`bash script.sh`、
 解释器内构造的路径都能绕过它。因此它只用来"把危险动作变成一次确认"，不用来声称安全。
