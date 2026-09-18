@@ -46,6 +46,21 @@ class SessionBusyError(SessionError):
     """同一个线程在变更回调里又发起变更或关闭——同步语义下这会自锁，所以直接报错。"""
 
 
+class SessionLockedError(SessionError):
+    """会话文件被**另一个进程**占着（跨进程互斥）。
+
+    同一 id 同一时刻只允许一个写入者：两个进程各自用内存里的 ``next_seq`` 追加，
+    会写出重复的 ``seq``，而重放校验拒绝非单调 ``seq``——那会让整个会话文件此后
+    不可读。所以拿不到锁时直接报错，而不是并发写。
+    """
+
+    def __init__(self, label: str) -> None:
+        super().__init__(
+            f"会话被另一个进程占用（{label}）：同一会话同一时刻只允许一个进程写入。"
+            "等那个进程结束再试，不要用两个进程同时写同一个会话。"
+        )
+
+
 class SessionInvariantError(SessionError):
     """持久化状态自相矛盾（缺 parent、重复 id、未知分支），不能继续推进。"""
 

@@ -32,6 +32,7 @@ from .errors import (
     SessionAlreadyOpenError,
     SessionClosedError,
     SessionExistsError,
+    SessionLockedError,
     SessionNotFoundError,
     SessionStorageError,
 )
@@ -238,14 +239,59 @@ def _split_complete_lines(content: str) -> tuple[list[str], bool]:
     return content[:last_newline].split("\n"), True
 
 
-def _fsync_write(path: Path, payload: str, *, append: bool) -> None:
+def _fsync_dir(path: Path) -> None:
+    """把目录项本身刷盘（rename 之后必须做）。Windows 打不开目录，直接跳过。"""
     try:
-        with path.open("a" if append else "w", encoding="utf-8") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:  # pragma: no cover - 取决于文件系统
+        pass
+    finally:
+        os.close(fd)
+
+
+def _rollback(fd: int, size: int) -> None:
+    """尽力把文件截回写入前的大小；回滚失败也不能掩盖原始错误。"""
+    try:
+        os.ftruncate(fd, size)
+    except OSError:  # pragma: no cover - 已无更好的补救
+        logger.warning("回滚短写失败，文件可能残留半行", exc_info=True)
+
+
+def _fsync_write(path: Path, payload: str, *, append: bool) -> None:
+    """写一行并 fsync。
+
+    用一次 ``os.write`` 而不是文本句柄的缓冲写：写入长度必须**校验**，短写
+    （ENOSPC、信号打断）要回滚成"这一行没写过"，否则调用方以为提交成功、
+    内存里的 seq 已经推进，磁盘上却少半行——下次打开就永久读不了这个文件。
+    """
+    data = payload.encode("utf-8")
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if append else os.O_TRUNC)
+    try:
+        fd = os.open(path, flags, 0o644)
     except OSError as exc:
         raise SessionStorageError(f"会话写入失败：{path}（{exc}）") from exc
+    try:
+        original = os.fstat(fd).st_size
+        try:
+            written = os.write(fd, data)
+        except OSError as exc:
+            _rollback(fd, original)
+            raise SessionStorageError(f"会话写入失败：{path}（{exc}）") from exc
+        if written != len(data):
+            _rollback(fd, original)
+            raise SessionStorageError(
+                f"会话写入不完整：{path}（写了 {written}/{len(data)} 字节，已回滚该行）"
+            )
+        try:
+            os.fsync(fd)
+        except OSError as exc:
+            raise SessionStorageError(f"会话刷盘失败：{path}（{exc}）") from exc
+    finally:
+        os.close(fd)
 
 
 def _publish_atomically(path: Path, payload: str) -> None:
@@ -257,51 +303,157 @@ def _publish_atomically(path: Path, payload: str) -> None:
     except OSError as exc:
         temp_path.unlink(missing_ok=True)
         raise SessionStorageError(f"会话发布失败：{path}（{exc}）") from exc
+    # rename 本身要落盘才算发布完成，否则掉电后目录项可能还指向旧文件。
+    _fsync_dir(path.parent)
+
+
+# ---------------- 跨进程互斥 ----------------
+
+try:  # POSIX
+    import fcntl
+
+    def _try_lock(fd: int) -> bool:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return False
+        return True
+
+    def _unlock(fd: int) -> None:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+except ImportError:  # pragma: no cover - Windows
+    import msvcrt
+
+    def _try_lock(fd: int) -> bool:
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return False
+        return True
+
+    def _unlock(fd: int) -> None:
+        try:
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+
+
+class SessionFileLock:
+    """一个会话文件的跨进程锁（旁挂 ``<会话文件>.lock``，不锁会话文件本身）。
+
+    为什么不锁会话文件：撕裂行修复会 ``os.replace`` 换掉 inode，锁在旧 inode 上
+    会随之失效。旁挂文件全程不动，锁的生命周期与句柄一致。
+
+    锁文件**不删除**：删除会和"另一个进程刚打开同一路径"竞态（两个进程各持
+    不同 inode 上的锁）。留下一个 0 字节的旁挂文件是更小的代价。
+    """
+
+    def __init__(self, session_path: Path) -> None:
+        self.path = session_path.with_name(session_path.name + ".lock")
+        self._fd: int | None = None
+
+    def acquire(self, label: str) -> None:
+        """拿到锁，或抛 ``SessionLockedError``。"""
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o644)
+        except OSError as exc:
+            raise SessionStorageError(f"会话锁打不开：{self.path}（{exc}）") from exc
+        if not _try_lock(fd):
+            os.close(fd)
+            raise SessionLockedError(label)
+        self._fd = fd
+
+    def release(self) -> None:
+        if self._fd is None:
+            return
+        try:
+            _unlock(self._fd)
+        except OSError:  # pragma: no cover
+            pass
+        finally:
+            os.close(self._fd)
+            self._fd = None
 
 
 class JsonlStorage:
-    """一个会话文件。写入口只有 ``commit``，所以 I1（只追加）由它一个人守。"""
+    """一个会话文件。写入口只有 ``commit``，所以 I1（只追加）由它一个人守。
 
-    def __init__(self, path: Path, header: JsonlHeader, *, now=None) -> None:
+    跨进程互斥由 ``SessionFileLock`` 在 ``create``/``open`` 时取得、``close`` 时
+    释放——**读之前**就要拿到，否则"读到别人正在写的半行 → 判为撕裂 → 原子重写"
+    会把对方刚提交的那一行覆盖掉。
+    """
+
+    def __init__(
+        self,
+        path: Path,
+        header: JsonlHeader,
+        *,
+        now=None,
+        file_lock: SessionFileLock | None = None,
+    ) -> None:
         self.path = path
         self.header = header
         self._now = now or now_ms
         self._state = SessionState()
         self._lock = threading.Lock()
+        self._file_lock = file_lock
         self._closed = False
 
     # ---------------- 构造 ----------------
 
     @classmethod
     def create(cls, path: Path, header: JsonlHeader, *, now=None) -> "JsonlStorage":
-        path.parent.mkdir(parents=True, exist_ok=True)
-        _publish_atomically(path, encode_header(header) + "\n")
-        return cls(path, header, now=now)
+        lock = SessionFileLock(path)
+        lock.acquire(header.id)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            _publish_atomically(path, encode_header(header) + "\n")
+        except Exception:
+            lock.release()
+            raise
+        return cls(path, header, now=now, file_lock=lock)
 
     @classmethod
     def open(cls, path: Path, *, now=None) -> "JsonlStorage":
+        lock = SessionFileLock(path)
+        lock.acquire(path.name)
         try:
-            content = path.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise SessionStorageError(f"会话文件读不了：{path}（{exc}）") from exc
-        lines, torn = _split_complete_lines(content)
-        if not lines or lines[0] == "":
-            raise SessionStorageError(f"会话文件缺少 header：{path}")
-        header = parse_header(lines[0])
-        storage = cls(path, header, now=now)
-        for index, line in enumerate(lines[1:], start=2):
             try:
-                writes = parse_transaction(line)
-                storage._state.validate(writes)
-                storage._state.apply(writes)
-            except Exception as exc:  # 解析、校验、应用失败都算这一行坏了
-                raise SessionStorageError(f"{path} 第 {index} 行非法：{exc}") from exc
-        if header.next_seq is not None:
-            storage._state.advance_next_seq(header.next_seq)
-        if torn:
-            logger.warning("会话文件末尾有撕裂行，已重写：%s", path)
-            _publish_atomically(path, "\n".join(lines) + "\n")
-        return storage
+                content = path.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise SessionStorageError(f"会话文件读不了：{path}（{exc}）") from exc
+            lines, torn = _split_complete_lines(content)
+            if not lines or lines[0] == "":
+                raise SessionStorageError(f"会话文件缺少 header：{path}")
+            header = parse_header(lines[0])
+            storage = cls(path, header, now=now, file_lock=lock)
+            repair_tail = torn
+            for index, line in enumerate(lines[1:], start=2):
+                try:
+                    writes = parse_transaction(line)
+                    storage._state.validate(writes)
+                    storage._state.apply(writes)
+                except Exception as exc:  # 解析、校验、应用失败都算这一行坏了
+                    if index == len(lines):
+                        # **末行**坏了：它是崩溃/短写留下的残片（或并发写留下的重复
+                        # seq），按残片丢掉并原子重写。丢掉中间某行则会静默丢历史，
+                        # 那种情况必须报错让人看。
+                        logger.warning("会话文件末行非法，按残片丢弃：%s（%s）", path, exc)
+                        lines = lines[:-1]
+                        repair_tail = True
+                        break
+                    raise SessionStorageError(f"{path} 第 {index} 行非法：{exc}") from exc
+            if header.next_seq is not None:
+                storage._state.advance_next_seq(header.next_seq)
+            if repair_tail:
+                logger.warning("会话文件末尾有残片（撕裂行或末行非法），已重写：%s", path)
+                _publish_atomically(path, "\n".join(lines) + "\n")
+            return storage
+        except Exception:
+            lock.release()
+            raise
 
     # ---------------- 数据面 ----------------
 
@@ -345,6 +497,9 @@ class JsonlStorage:
 
     def close(self) -> None:
         self._closed = True
+        if self._file_lock is not None:
+            self._file_lock.release()
+            self._file_lock = None
 
     @property
     def next_seq(self) -> int:
@@ -475,10 +630,17 @@ class JsonlSessionRepo:
         if metadata.id in self._open:
             raise SessionAlreadyOpenError(metadata.id)
         path = self._locate(metadata)
+        # 删除也是一条写路径：另一个进程正持有它时不能删（否则它下次提交会写进
+        # 一个已经被 unlink 的 inode，或把别人刚要打开的文件抽走）。
+        lock = SessionFileLock(path)
+        lock.acquire(metadata.id)
         try:
-            path.unlink()
-        except OSError as exc:
-            raise SessionStorageError(f"删除会话失败：{path}（{exc}）") from exc
+            try:
+                path.unlink()
+            except OSError as exc:
+                raise SessionStorageError(f"删除会话失败：{path}（{exc}）") from exc
+        finally:
+            lock.release()
         logger.info("会话已删除：%s", metadata.id)
 
     def close(self) -> None:

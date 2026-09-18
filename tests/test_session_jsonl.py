@@ -18,6 +18,7 @@ from avid.session import (
     JsonlSessionMetadata,
     SessionClosedError,
     SessionExistsError,
+    SessionLockedError,
     SessionStorageError,
     UuidV7Generator,
 )
@@ -255,7 +256,8 @@ def test_non_monotonic_seq_is_rejected_on_replay(tmp_path):
         path,
         encode_header(JsonlHeader("seq", 1, 100)),
         entry_line(2, "a", None),
-        entry_line(2, "b", "a"),
+        entry_line(2, "b", "a"),  # 重复 seq —— 但它在**中间**，不是尾残片
+        entry_line(3, "c", "a"),
     )
     with pytest.raises(SessionStorageError) as info:
         JsonlStorage.open(path)
@@ -268,9 +270,36 @@ def test_missing_parent_is_rejected_on_replay(tmp_path):
         path,
         encode_header(JsonlHeader("orphan", 1, 100)),
         entry_line(1, "a", "ghost"),
+        entry_line(2, "b", "a"),  # 让它落在中间：尾部的坏行按残片处理
     )
     with pytest.raises(SessionStorageError):
         JsonlStorage.open(path)
+
+
+def test_a_corrupt_tail_line_is_repaired_instead_of_killing_the_file(tmp_path):
+    """末行坏了（崩溃短写 / 并发写留下的重复 seq）时**自愈**。
+
+    以前这会让整个文件此后不可读、会话从列表里静默消失——那正是 P0 的后果。
+    中间行坏掉仍然报错：静默丢历史比拒绝打开更危险。
+    """
+    path = tmp_path / "tail.jsonl"
+    write_lines(
+        path,
+        encode_header(JsonlHeader("tail", 1, 100)),
+        entry_line(1, "a", None),
+        '{"kind": "entry", "seq": 1, "id": "dup"}',  # 坏末行：seq 重复
+    )
+
+    storage = JsonlStorage.open(path)
+    try:
+        assert storage.get_entries(["a"])["a"].message == USER
+        assert storage.next_seq == 2
+    finally:
+        storage.close()
+
+    content = path.read_text(encoding="utf-8")
+    assert content.endswith("\n")
+    assert '"dup"' not in content, "坏末行应被原子重写掉"
 
 
 def test_missing_header_is_rejected(tmp_path):
@@ -371,3 +400,90 @@ def test_open_refuses_a_session_from_another_workspace(tmp_path):
         mine2 = JsonlSessionRepo(tmp_path, workspace="w-mine")
         mine2.open(metadata)
     assert "另一个工作区" in str(exc.value)
+
+
+# ---------------- 跨进程互斥与写入完整性（P0） ----------------
+
+
+def test_a_second_opener_is_locked_out_until_the_first_closes(tmp_path):
+    """两个进程各写一行会让 seq 重复，而重放拒绝非单调 seq——整个文件此后不可读。
+
+    flock 是按 open file description 生效的，所以同一个进程里开两次也会互斥，
+    测试因此能覆盖"另一个进程"的语义。
+    """
+    repo = make_repo(tmp_path)
+    repo.create(id="demo").close()
+    repo.close()
+
+    path = only_file(tmp_path)
+    first = JsonlStorage.open(path)
+    try:
+        with pytest.raises(SessionLockedError):
+            JsonlStorage.open(path)
+    finally:
+        first.close()
+
+    # 释放之后必须能再打开（锁不能泄漏）。
+    third = JsonlStorage.open(path)
+    third.close()
+
+
+def test_delete_is_locked_out_while_another_holder_exists(tmp_path):
+    repo = make_repo(tmp_path)
+    repo.create(id="demo").close()
+    repo.close()
+
+    path = only_file(tmp_path)
+    holder = JsonlStorage.open(path)
+    try:
+        other = JsonlSessionRepo(tmp_path)
+        with pytest.raises(SessionLockedError):
+            other.delete(other.list()[0])
+        other.close()
+    finally:
+        holder.close()
+
+    after = JsonlSessionRepo(tmp_path)
+    after.delete(after.list()[0])
+    after.close()
+    assert list(tmp_path.glob("*.jsonl")) == []
+
+
+def test_a_short_write_is_rolled_back_and_reported(tmp_path, monkeypatch):
+    """短写（ENOSPC / 信号）不能留下半行，也不能让内存状态偷偷推进。"""
+    import os
+
+    repo = make_repo(tmp_path)
+    session = repo.create(id="demo")
+    branch = session.create_branch("main", None)
+    branch.append_message(USER)
+
+    path = only_file(tmp_path)
+    before = path.read_bytes()
+    next_seq_before = session.get_stats().message_count
+
+    real_write = os.write
+
+    def short_write(fd: int, data: bytes) -> int:
+        # 只截断会话事务那一行，避免影响同一进程里的其它写入。
+        if b'"seq"' in bytes(data):
+            return real_write(fd, data[: max(1, len(data) // 2)])
+        return real_write(fd, data)
+
+    monkeypatch.setattr(os, "write", short_write)
+    with pytest.raises(SessionStorageError) as info:
+        branch.append_message(ASSISTANT)
+    assert "不完整" in str(info.value)
+
+    monkeypatch.undo()
+    assert path.read_bytes() == before, "短写必须回滚，不能残留半行"
+    assert session.get_stats().message_count == next_seq_before
+    session.close()
+    repo.close()
+
+    # 文件仍然可读，且能继续追加。
+    again = make_repo(tmp_path)
+    reopened = again.open(again.list()[0])
+    assert reopened.branch("main").append_message(ASSISTANT)
+    reopened.close()
+    again.close()
