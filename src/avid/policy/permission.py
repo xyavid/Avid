@@ -23,11 +23,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger("avid.policy.permission")
@@ -57,7 +59,13 @@ DENY_PATTERNS: tuple[tuple[str, str], ...] = (
 # 与模式无关——三种模式下都要问一次；同意后按命令原文记账。只对 bash 判定。
 DANGER_PATTERNS: tuple[tuple[str, str], ...] = (
     (_CMD_START + r"(?:sudo|su|doas|pkexec)\b", "提权"),
-    (_CMD_START + r"rm\b[^|;&]*\s-[a-zA-Z]*[rRf]", "递归或强制删除"),
+    (
+        # 短选项组合（-r / -f / -rf / -Rf）与**长选项**（--recursive / --force / --dir）
+        # 都要认：只匹配 `-[a-zA-Z]*[rRf]` 时 `rm --recursive x` 会整个漏过危险层，
+        # 在 workspace/system 模式下**完全不问**就放行。
+        _CMD_START + r"rm\b[^|;&]*\s(?:--(?:recursive|force|dir)\b|-[a-zA-Z]*[rRf])",
+        "递归或强制删除",
+    ),
     (_CMD_START + r"ch(?:mod|own|grp)\b", "权限或属主变更"),
     (_CMD_START + r"(?:dd|fdisk|parted|mount|umount|losetup|swapon|swapoff|truncate)\b", "磁盘或文件系统操作"),
     (_CMD_START + r"(?:systemctl|service|kill|pkill|killall|systemd-run)\b", "系统服务或进程操作"),
@@ -73,15 +81,35 @@ DANGER_PATTERNS: tuple[tuple[str, str], ...] = (
     ),
     (_CMD_START + r"git\b[^|;&]*\bpush\b[^|;&]*(?:--force|-f)\b", "强制推送"),
     (_CMD_START + r"git\b[^|;&]*\breset\b[^|;&]*--hard\b", "丢弃工作区改动"),
-    (_CMD_START + r"git\b[^|;&]*\bclean\b[^|;&]*\s-[a-zA-Z]*f", "删除未跟踪文件"),
+    (
+        _CMD_START + r"git\b[^|;&]*\bclean\b[^|;&]*(?:\s-[a-zA-Z]*f|--force)",
+        "删除未跟踪文件",
+    ),
+    (_CMD_START + r"find\b[^|;&]*\s-delete\b", "批量删除文件"),
     (_CMD_START + r"(?:ssh|scp|rsync)\b", "远程访问或传输"),
     (_CMD_START + r"(?:docker|podman|kubectl|helm)\b", "容器或编排操作"),
 )
 
-# 敏感路径：读取或写入都算危险（提权凭据、云密钥、私钥、影子口令）。
-SENSITIVE_PATH = re.compile(
-    r"(?:~/\.(?:ssh|aws|gnupg)\b|/etc/shadow\b|\.pem\b|/\.ssh/id_)"
+# 敏感路径（提权凭据、云密钥、私钥、影子口令）：读取或写入都算危险。
+#
+# 判定用"展开 + 路径分量"而不是正则字面量：`~/.ssh/config`、`$HOME/.ssh/config`、
+# `/home/u/.ssh/config` 是同一个目标，只看字面量会漏掉后两种——而 system 模式对
+# 区外是直接放行的，漏网就是静默放行。
+#
+# 分量判定（而不是"解析后与 $HOME 比前缀"）是刻意的：$HOME 下的点目录常是符号链接
+# （WSL 里 `~/.aws -> /mnt/c/Users/...`），resolve() 之后就不再以 $HOME 为前缀，
+# 前缀比较会漏掉它。只要路径分量里出现这些点目录就判敏感——宁可多问一次。
+SENSITIVE_COMPONENTS: tuple[str, ...] = (".ssh", ".aws", ".gnupg", ".docker")
+SENSITIVE_ABSOLUTE: tuple[str, ...] = (
+    "/etc/shadow",
+    "/etc/gshadow",
+    "/etc/sudoers",
+    "/root",
 )
+SENSITIVE_SUFFIX = ".pem"
+
+# 命令里按空白与 shell 元字符切开后再逐个判路径（与 tools/workspace.py 同一套切法）。
+_SENSITIVE_SPLIT = re.compile(r"[\s;|&()<>'\"]+")
 
 # 工具名 → 需要审批的原因。不在这里的工具一律直接放行（区内只读工具）。
 APPROVAL_RULES: dict[str, str] = {
@@ -147,6 +175,45 @@ def validate_mode(value: object) -> str:
 _ASK_LOCK = threading.Lock()
 
 
+def _under(path: Path, base: Path) -> bool:
+    """path 是否在 base 之内（含 base 本身）。策略层不 import tools，自己写一份。"""
+    return path == base or base in path.parents
+
+
+def sensitive_reason(raw: str) -> str | None:
+    """一个路径字面量是不是敏感目标；是则返回类别名。
+
+    先展开 ``~`` 与 ``$HOME``；路径分量里出现敏感点目录（``.ssh`` / ``.aws`` /
+    ``.gnupg`` / ``.docker``）即命中，另外覆盖 ``/etc/shadow`` 一类绝对目标与
+    ``.pem`` 后缀。
+    """
+    text = os.path.expanduser(os.path.expandvars(raw.strip()))
+    if not text:
+        return None
+    if text.endswith(SENSITIVE_SUFFIX):
+        return "敏感路径"
+
+    candidate = Path(text)
+    if any(part in SENSITIVE_COMPONENTS for part in candidate.parts):
+        return "敏感路径"
+
+    try:
+        resolved = candidate.resolve()
+    except (OSError, RuntimeError):
+        resolved = candidate
+    for entry in SENSITIVE_ABSOLUTE:
+        if _under(resolved, Path(entry)) or _under(candidate, Path(entry)):
+            return "敏感路径"
+    return None
+
+
+def _sensitive_in_command(command: str) -> str | None:
+    for token in _SENSITIVE_SPLIT.split(command):
+        if sensitive_reason(token):
+            return "敏感路径"
+    return None
+
+
 def hard_deny(name: str, arguments: Any) -> str | None:
     """第 1 层：只对 bash 的 command 做黑名单匹配，命中返回拒绝原因。"""
     if name != "bash" or not isinstance(arguments, dict):
@@ -165,14 +232,15 @@ def hard_deny(name: str, arguments: Any) -> str | None:
 def danger_reason(name: str, arguments: Any) -> str | None:
     """第 2 层：命中危险清单返回类别名；``None`` 表示不是危险命令。
 
-    只对 bash 判定。敏感路径额外覆盖文件类工具的 path 参数。
+    只对 bash 判定。敏感路径额外覆盖文件类工具的 path 参数（按解析后的绝对路径判，
+    见 :func:`sensitive_reason`）。
     """
     if not isinstance(arguments, dict):
         return None
 
     if name != "bash":
         path = arguments.get("path")
-        if isinstance(path, str) and SENSITIVE_PATH.search(path):
+        if isinstance(path, str) and sensitive_reason(path):
             return "敏感路径"
         return None
 
@@ -180,7 +248,7 @@ def danger_reason(name: str, arguments: Any) -> str | None:
     if not isinstance(command, str):
         return None
 
-    if SENSITIVE_PATH.search(command):
+    if _sensitive_in_command(command):
         return "敏感路径"
     for pattern, category in DANGER_PATTERNS:
         if re.search(pattern, command, re.MULTILINE):
@@ -338,11 +406,15 @@ def gate(
         return Decision(True, kind, reason, key=key)
 
     logger.warning("审批拒绝 %s：%s", name, reason)
-    message = {
-        "danger": DANGER_MESSAGE,
-        "outside": OUTSIDE_MESSAGE,
-    }.get(kind, USER_MESSAGE)
-    return Decision(False, kind, reason, message.format(reason=reason), key=key)
+    if kind == "danger":
+        # 用类别名而不是 `reason`：否则回给模型的文案会变成
+        # "危险命令未获批准（危险命令（提权））"。
+        message = DANGER_MESSAGE.format(reason=danger or reason)
+    elif kind == "outside":
+        message = OUTSIDE_MESSAGE.format(reason=outside or reason)
+    else:
+        message = USER_MESSAGE
+    return Decision(False, kind, reason, message, key=key)
 
 
 def check_permission(

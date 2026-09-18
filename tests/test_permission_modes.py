@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -157,7 +158,13 @@ DANGEROUS = [
     ("sudo ls", "提权"),
     ("rm -rf build/", "递归或强制删除"),
     ("rm -f a.txt", "递归或强制删除"),
+    # 长选项必须与短选项同罪：只认 `-[a-zA-Z]*[rRf]` 时这两条会漏过危险层，
+    # 在 workspace/system 模式下完全不问就放行。
+    ("rm --recursive build/", "递归或强制删除"),
+    ("rm --force a.txt", "递归或强制删除"),
+    ("rm --recursive --force --dir build/", "递归或强制删除"),
     ("chmod 644 a.txt", "权限或属主变更"),
+    ("chmod --recursive 777 .", "权限或属主变更"),
     ("mount /dev/sda1 /mnt", "磁盘或文件系统操作"),
     ("systemctl restart nginx", "系统服务或进程操作"),
     ("apt-get install -y curl", "系统级包管理"),
@@ -167,9 +174,13 @@ DANGEROUS = [
     ("git push --force origin main", "强制推送"),
     ("git reset --hard HEAD~1", "丢弃工作区改动"),
     ("git clean -fd", "删除未跟踪文件"),
+    ("git clean --force", "删除未跟踪文件"),
+    ("find . -delete", "批量删除文件"),
     ("ssh host ls", "远程访问或传输"),
     ("docker ps", "容器或编排操作"),
     ("cat ~/.ssh/id_rsa", "敏感路径"),
+    ("cat $HOME/.aws/credentials", "敏感路径"),
+    ("cat /home/someone/.ssh/config", "敏感路径"),
 ]
 
 ORDINARY = [
@@ -180,6 +191,10 @@ ORDINARY = [
     "grep -rn reboot src/",
     "mkdir -p build",
     "echo hi",
+    # 长选项修正不能把普通命令误伤成危险：`--help` / `--dry-run` 不是递归或强制。
+    "rm --help",
+    "git clean --dry-run",
+    "npm rm --force x",
 ]
 
 
@@ -197,6 +212,29 @@ def test_sensitive_paths_are_dangerous_for_file_tools():
     assert danger_reason("read_file", {"path": "~/.aws/credentials"}) == "敏感路径"
     assert danger_reason("write_file", {"path": "/etc/shadow"}) == "敏感路径"
     assert danger_reason("read_file", {"path": "src/avid/main.py"}) is None
+
+
+def test_sensitive_paths_are_recognised_in_every_equivalent_spelling():
+    """同一个目标的不同写法必须得到同一个答案。
+
+    旧实现用正则匹配字面量，只认 `~/.ssh`——`/home/u/.ssh/config` 与
+    `$HOME/.aws/credentials` 都漏网。而 `system` 模式对区外直接放行，
+    漏网就等于静默放行凭据读取。
+    """
+    home = Path.home()
+    for raw in (
+        "~/.ssh/config",
+        "$HOME/.ssh/config",
+        str(home / ".ssh" / "config"),
+        "~/.aws/credentials",
+        "/etc/sudoers",
+        "/root/.bashrc",
+        "deploy/prod.pem",
+    ):
+        assert danger_reason("read_file", {"path": raw}) == "敏感路径", raw
+
+    for raw in ("~/notes.md", "src/avid/policy/permission.py", "/tmp/report.txt"):
+        assert danger_reason("read_file", {"path": raw}) is None, raw
 
 
 def test_danger_layer_does_not_change_the_hard_deny_list():
