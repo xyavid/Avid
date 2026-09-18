@@ -154,9 +154,11 @@ curl -s -o /dev/null -w '%{http_code} %{content_type}\n' localhost:8765/api/nope
 - **流式渲染库（streamdown 类）**：不做——delta 只到「乐观条目 + rAF 合并」这一层，
   Markdown 在 durable 消息到达时整条渲染。失效信号是接入 delta 后帧率不达标。
 - **Playwright 用例**（a11y / 视觉回归 / 键盘 / 降级）：脚手架在 `web/e2e/`，需要
-  `pnpm -C web exec playwright install chromium` 与 `AVID_E2E=1` 才跑。已落地的是
-  首屏、四条路由、提交→审批→完成、检查器、布局（含中档抽屉）、消息卡片（含两枚角色
-  标记）、交互反馈、分支旅程与流式收敛；a11y / 视觉回归 / 降级仍只有约定没有用例。
+  `pnpm -C web exec playwright install chromium` 与 `AVID_E2E=1` 才跑；用脚本模型跑时
+  先 `pnpm -C web build`（`dev/tmp/e2e_server.py` 服务 `web/dist`），细节见 `web/e2e/README.md`。
+  已落地的是首屏、四条路由、提交→审批→完成、检查器、布局（含中档抽屉）、消息卡片（含两枚
+  角色标记）、交互反馈、分支旅程、流式收敛与工作区/权限选择器；a11y / 视觉回归 / 降级仍
+  只有约定没有用例。
 
 ## 6. 布局与交互约定（别改回去）
 
