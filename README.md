@@ -2,7 +2,8 @@
 
 自建的 agent 运行时（harness）：模型调用、工具执行、多步循环、上下文与记忆、权限、评测各层都掌握在自己手里，做到可替换、可调试、可度量。
 
-**当前进度**：Agent 循环已跑通，并注册了首个工具 `read_file`（模型可自主读取工作区内的文件）。
+**当前进度**：内核（模型调用、循环、工具、会话持久化、任务图、事件层）与
+**本地 Web 界面**（会话时间线、审批队列、任务板、技能目录、设置）都已跑通。
 
 正式文档在 `docs/`，收录标准见 `docs/README.md`；开发过程文档在 `dev/`，只留本地、不入库。协作约定见 `AGENTS.md`。
 
@@ -43,8 +44,24 @@ uv run --env-file .env avid --agent "读 pyproject.toml，告诉我项目名"
 
 stdout 打印模型回复，stderr 打印逐轮 trace 与 token 用量。
 
+## Web 界面
+
+```bash
+uv sync --extra web                              # 装 Web 依赖（FastAPI/uvicorn）
+uv run --env-file .env avid web --port 8765      # API + SSE + 静态资源
+# → http://127.0.0.1:8765
+```
+
+开发期前端热更新：另起 `pnpm -C web install && pnpm -C web dev`（Vite 代理 `/api`）。
+交付形态是「分离开发、单进程交付」：`pnpm -C web build && pnpm -C web run copy:dist`
+把产物复制进 `src/avid/web/static/`，随 wheel 分发，安装者不需要 Node。
+
+页面与接口的对应关系、事件分档规则与验收命令见 `docs/guide/web-ui.md`。
+
 ## 开发
 
 ```bash
-uv run pytest    # 全部测试，不联网
+uv run pytest              # 内核与 API 全部测试，不联网
+pnpm -C web run verify     # 前端门禁：层禁令、token、i18n、体积、单测
+AVID_E2E=1 pnpm -C web test:e2e   # 浏览器冒烟（需先 playwright install chromium）
 ```
