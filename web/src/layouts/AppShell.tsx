@@ -96,9 +96,11 @@ export function AppShell(props: AppShellProps) {
                   </span>
                 </Button>
               ) : null}
-              {isMid ? (
-                // 中档不就地展开成 320px：那会吃掉 1/3 屏宽并随 uiStore 持久化，
-                // 而是把会话列表作为左侧抽屉覆盖（§8.6 的中档降级）。
+              {isMid && !isWide ? (
+                // 只有中档需要这个入口：那里 `expanded` 恒为 false（它要 isWide），
+                // 会话列表因此不挂载，只能靠抽屉。宽档不能渲染它——`isMid` 的语义是
+                // 「≥960」，宽档同样成立，于是它会在「收起」旁边多出一枚图标按钮，
+                // 点开只是把右侧已经可见的列表再盖一层（实测截图里就是这个）。
                 <Button
                   size="icon"
                   variant="secondary"

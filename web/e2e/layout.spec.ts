@@ -275,6 +275,26 @@ test('中档宽度：会话列表走左侧抽屉，选中会话后抽屉收起',
   expectComposerInsideViewport(await measure(page), '中档抽屉选中会话后')
 })
 
+test('宽档：抽屉入口不出现，导航列头部只有收起一个按钮', async ({ page, request }) => {
+  // 曾经的缺陷：中档那个抽屉入口的条件写成 `isMid`，而 `isMid` 的语义是「≥960」——
+  // 宽档同样成立，于是「收起」旁边多出一枚图标按钮（截图里就是这个），点开只是把
+  // 右侧已经可见的会话列表再盖一层。
+  const listed = await page.request.get(`${BASE}/api/sessions`)
+  const sessions: { id: string }[] = (await listed.json()).sessions
+  test.skip(!sessions[0], '需要一个会话')
+
+  await page.setViewportSize({ width: 1440, height: 800 })
+  await page.goto(`${BASE}/sessions/${sessions[0].id}`)
+
+  const nav = page.locator('nav')
+  const header = nav.locator('> div').first()
+  await expect(header.getByRole('button', { name: '收起' })).toBeVisible()
+  await expect(header.getByRole('button'), '头部只该有收起这一个按钮').toHaveCount(1)
+  await expect(nav.getByRole('button', { name: '会话列表' })).toHaveCount(0)
+  // 宽档展开时列表就在面部里，不需要覆盖层
+  await expect(page.locator('section[aria-label="工作区"]')).toBeVisible()
+})
+
 test('会话头部：常驻胶带不压标题，且没有重复与无作用的按钮', async ({ page, request }) => {
   // 自己造一个带工具调用的会话，不依赖别的用例留下的数据。
   const stamp = Date.now()
@@ -351,12 +371,17 @@ test('一级切换只有导航列：⌘K 不再打开命令面板', async ({ pag
 
   // 没有任何对话框弹出（面板已按「与导航列完全重合」删除）
   await expect(page.getByRole('dialog')).toHaveCount(0)
-  // 导航列就是唯一入口，四个工作面都在
-  const nav = page.locator('nav')
+  // 导航入口是三个工作面；「会话」不在其中——会话列表本身就长在它下面，
+  // 点「会话」只是跳到一个空占位页。
   // exact：导航列里还挂着会话列表，而「未命名会话 …」这类按钮名里也含「会话」
-  for (const label of ['会话', '任务板', '技能目录', '设置']) {
+  const nav = page.locator('nav')
+  for (const label of ['任务板', '技能目录', '设置']) {
     await expect(nav.getByRole('button', { name: label, exact: true })).toBeVisible()
   }
+  await expect(
+    nav.getByRole('button', { name: '会话', exact: true }),
+    '「会话」不再是一个导航入口',
+  ).toHaveCount(0)
 })
 
 test('其他工作面在视口内滚动，不产生页面溢出', async ({ page }) => {

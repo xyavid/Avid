@@ -44,7 +44,6 @@ export const DICTIONARY: Record<Locale, Entry> = {
     'common.notFound': '没有找到',
     'common.networkError': '网络不可用，请检查内核是否在运行',
     'common.skipToContent': '跳到主内容',
-    'common.nav.sessions': '会话',
     'common.nav.tasks': '任务板',
     'common.nav.skills': '技能目录',
     'common.nav.settings': '设置',

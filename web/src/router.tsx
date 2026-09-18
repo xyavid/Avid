@@ -7,8 +7,9 @@ import { SkillsRoute } from './routes/SkillsRoute'
 import { TaskBoardRoute } from './routes/TaskBoardRoute'
 
 /**
- * URL ↔ feature 组合。导航有两种（§8.4）：**换工作面的走路由**（会话 / 任务板 /
- * 技能 / 设置），同一个工作面里的子面板就地切换（检查器的三个视图不进 URL）。
+ * URL ↔ feature 组合。导航有两种（§8.4）：**换工作面的走路由**（任务板 / 技能 / 设置；
+ * 会话列表常驻导航列，所以「会话」不是导航项，`/sessions` 只作为根路径与未知路径的落点），
+ * 同一个工作面里的子面板就地切换（检查器的三个视图不进 URL）。
  */
 export const router = createBrowserRouter([
   {
