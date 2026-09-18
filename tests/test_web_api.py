@@ -199,7 +199,10 @@ def test_meta_matches_kernel_and_features_match_endpoints(bundle):
         assert client.get("/api/runs/run_x/approvals").status_code == 404  # 存在但 run 未知
     if FEATURES["cancel"]:
         assert client.post("/api/runs/run_x/cancel").status_code == 404
-    if FEATURES["deltas"] == 0:
+    if FEATURES["deltas"]:
+        # 声明可用就得真的可用：端点接受 ?deltas=1（未知 run 仍是 404，说明路由在）
+        assert client.get("/api/runs/run_x/events?deltas=1").status_code == 404
+    else:
         assert "assistant_delta" in meta["event_types"]  # 类型已定义，只是不投递
 
 

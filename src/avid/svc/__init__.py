@@ -35,7 +35,7 @@ FEATURES: dict[str, int] = {
     "tasks": 1,
     "sessions": 1,
     "entries": 1,
-    "deltas": 0,  # F3 未实施：内核仍非流式，故不投递 delta
+    "deltas": 1,  # F3：内核按 SSE 流式解析，delta 经事件流投递（需 ?deltas=1 订阅）
     "branches": 0,  # 前端侧分支视图是 F4
 }
 

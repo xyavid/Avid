@@ -22,7 +22,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..ai.client import LLMError, chat_completion
+from ..ai.client import LLMError, chat_completion, stream_completion
 from ..ai.config import ConfigError, load_config
 from ..runtime import events
 from ..runtime.events import RunEvent
@@ -230,18 +230,33 @@ class RunRegistry:
 
     @staticmethod
     def _trim(record: RunRecord, size: int | None = None) -> None:
-        """淘汰队首并记录「durable 已淘汰到哪」。调用方必须持有 condition。"""
+        """淘汰队首，使剩下的 **durable** 事件不超过上限。调用方必须持有 condition。
+
+        只数 durable：设计里的缓冲是「最近 512 条 **durable** 事件」（§5.1），而 delta
+        与 durable 走的是同一条实时队列。若按总条数淘汰，一次长回复的上千条 delta 会把
+        durable 事件挤出缓冲，重连的客户端就会平白收到 ``resync``（I5 的语义被 delta
+        的多少左右，这显然不对）。
+
+        淘汰必须是**连续前缀**：``absolute_index`` 用 ``dropped + len(events)`` 定位实时
+        队列，非连续删除会让这个下标算错。因此先找到第 overflow 条 durable，把包括它
+        在内的前缀整段丢掉（夹在其中的 delta 一起丢——它们本来就不参与重放）。
+        """
+
         limit = size if size is not None else 0
         if limit <= 0:
             return
-        overflow = len(record.events) - limit
+        durable_positions = [
+            index for index, event in enumerate(record.events) if event.seq is not None
+        ]
+        overflow = len(durable_positions) - limit
         if overflow <= 0:
             return
-        for dropped in record.events[:overflow]:
+        cut = durable_positions[overflow - 1] + 1
+        for dropped in record.events[:cut]:
             if dropped.seq is not None:
                 record.evicted_upto = max(record.evicted_upto, dropped.seq)
-        del record.events[:overflow]
-        record.dropped += overflow
+        del record.events[:cut]
+        record.dropped += cut
 
     def subscribe(
         self,
@@ -305,9 +320,31 @@ class RunRegistry:
         with record.condition:
             return record.evicted_upto > after
 
+    def streaming_chat(self, record: RunRecord) -> Callable[..., Any]:
+        """生产路径的 chat：流式调用，并把正文增量接到事件流上。
+
+        只在**没有注入 chat** 时使用：测试注入的脚本模型不产生增量，也不需要。
+        摘要调用不走这里——``agent_loop`` 的 ``summarize`` 参数把两者分开，否则摘要
+        文本会与真正的回复粘成同一条乐观气泡。
+        """
+
+        def chat(config: Any, messages: list[dict[str, Any]], **kwargs: Any) -> Any:
+            return stream_completion(
+                config,
+                messages,
+                on_delta=lambda text: self.emit_delta(record, self, text),
+                **kwargs,
+            )
+
+        return chat
+
     @staticmethod
     def emit_delta(record: RunRecord, registry: "RunRegistry", text: str) -> None:
-        """delta 不落缓冲、不进会话：只推给当前订阅者（I15）。"""
+        """delta 不进重放、不进会话：只让**当前**订阅者看到（I15）。
+
+        它仍走 ``record.events`` 这条实时队列（订阅者靠同一把 condition 被唤醒），但
+        游标补齐会跳过它，`_trim` 也不把它算进重放预算。
+        """
         with record.condition:
             record.events.append(
                 RunEvent(
@@ -361,10 +398,13 @@ class RunRegistry:
             )
             record.state = state
 
+            # 没有注入 chat = 生产路径：主轮次流式、摘要非流式（见 agent_loop 的 summarize）。
+            streaming = chat is None
             text = agent_loop(
                 messages,
                 config=config,
-                chat=chat or chat_completion,
+                chat=self.streaming_chat(record) if streaming else chat,
+                summarize=chat_completion if streaming else None,
                 auto_approve=auto_approve,
                 on_message=self._message_sink(record, recorder),
                 state=state,

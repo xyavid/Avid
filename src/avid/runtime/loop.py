@@ -102,6 +102,10 @@ def agent_loop(
     registry: dict[str, ToolImpl] | None = None,
     config: Config | None = None,
     chat: Callable[..., Turn] = chat_completion,
+    # 摘要类调用（压缩历史、兜底压缩）单独一个入口，默认与 chat 同一个。
+    # 为什么要能分开：主轮次的输出是**对话内容**，摘要不是。svc 把主轮次接成流式、
+    # 摘要接成非流式，delta 流里就不会混进摘要文本（否则它会与真正的回复粘成一条气泡）。
+    summarize: Callable[..., Turn] | None = None,
     auto_approve: bool = False,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     max_rounds: int = MAX_ROUNDS,
@@ -129,6 +133,7 @@ def agent_loop(
     已建好的运行状态——取消需要从另一个线程置位，所以取消路径必须能拿到它。
     """
     config = config or load_config()
+    summarize = summarize or chat
     tools = TOOLS if tools is None else tools
     registry = TOOL_IMPLS if registry is None else registry
 
@@ -165,7 +170,7 @@ def agent_loop(
         state.emit(events.RUN_STATUS, round=round_index, tokens=state.tokens, activity="model")
 
         # 上下文管线：①② 每轮跑，③④ 超限时才跑，④ 整个运行最多一次
-        context.prepare(transcript, state, config=config, summarize=chat)
+        context.prepare(transcript, state, config=config, summarize=summarize)
 
         # 模型调用；报上下文超限时兜底压缩并重试一次（整个运行最多一次）
         try:
@@ -181,7 +186,7 @@ def agent_loop(
                 raise
             state.retried = True
             logger.warning("compact: 模型报上下文超限，兜底压缩后重试一次")
-            context.reactive(transcript, state, config=config, summarize=chat)
+            context.reactive(transcript, state, config=config, summarize=summarize)
             turn = chat(
                 config,
                 transcript.as_messages(),

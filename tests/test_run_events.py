@@ -7,6 +7,8 @@ F0 的价值不依赖前端：它把「工具是否开始过」「压缩是否�
 
 from __future__ import annotations
 
+import threading
+
 from avid.runtime import events
 from avid.svc import Services
 from support import (
@@ -141,5 +143,100 @@ def test_fresh_cursor_within_buffer_does_not_resync(sandbox):
     services = build(sandbox, ScriptedChat(make_turn("直接回答")), tools)
     record = run_to_end(services)
 
+    got = collect(services, record.run_id, after=0)
+    assert events.RESYNC not in [event.type for event in got]
+
+
+# ---------------- B1（F3）：delta 通道 ----------------
+
+
+def streaming_reply(pieces: tuple[str, ...], reply: str):
+    """假的流式调用：按分片回调，最后返回一条与非流式同形的 Turn。"""
+
+    def fake_stream(config, messages, *, on_delta=None, **kwargs):
+        for piece in pieces:
+            if on_delta is not None:
+                on_delta(piece)
+        return make_turn(reply)
+
+    return fake_stream
+
+
+def test_deltas_are_opt_in_and_carry_no_seq(sandbox, monkeypatch):
+    """C13 的内核侧：同一批 delta，订阅了才投递；不参与游标补齐，也不改最终状态（I5）。
+
+    delta 不重放（I15），所以只能在**流式过程中**观察它。用一道闸门把假模型卡在模型
+    调用里，等两个订阅者（一个订阅、一个不订阅）都进入实时跟随后再放行。
+    """
+    entered = threading.Event()
+    release = threading.Event()
+
+    def fake_stream(config, messages, *, on_delta=None, **kwargs):
+        entered.set()
+        release.wait(timeout=5)
+        on_delta("你")
+        on_delta("好")
+        return make_turn("你好")
+
+    monkeypatch.setattr("avid.svc.runs.stream_completion", fake_stream)
+    services = Services(root=sandbox / ".avid" / "sessions")
+    session_id = new_session(services)
+    record = services.runs.start(session_id, "打个招呼")
+    assert entered.wait(timeout=5), "运行没走到模型调用"
+
+    def consume(*, deltas: bool):
+        got: list = []
+        attached = threading.Event()
+
+        def pump():
+            for event in services.runs.subscribe(record.run_id, deltas=deltas):
+                if event is None:
+                    continue
+                got.append(event)
+                attached.set()
+
+        thread = threading.Thread(target=pump, daemon=True)
+        thread.start()
+        assert attached.wait(timeout=5), "订阅没拿到重放的事件"
+        return got, thread
+
+    with_deltas, watcher = consume(deltas=True)
+    without_deltas, silent = consume(deltas=False)
+    release.set()
+    watcher.join(timeout=5)
+    silent.join(timeout=5)
+
+    deltas = [event for event in with_deltas if event.type == events.ASSISTANT_DELTA]
+    assert [event.data["text"] for event in deltas] == ["你", "好"]
+    assert all(event.seq is None for event in deltas), "delta 不参与游标补齐（I4）"
+    assert events.ASSISTANT_DELTA not in [event.type for event in without_deltas]
+
+    # durable 消息仍带**完整**内容：delta 全丢也不影响正确性（I5）。
+    finals = [event for event in with_deltas if event.type == events.ASSISTANT_MESSAGE]
+    assert finals[-1].data["message"]["content"] == "你好"
+
+    # delta 不重放：跑完之后从 0 补齐也拿不到它（I15）。
+    assert wait_terminal(record)
+    replayed = collect(services, record.run_id, after=0, deltas=True)
+    assert events.ASSISTANT_DELTA not in [event.type for event in replayed]
+
+
+def test_many_deltas_do_not_evict_durable_events(sandbox, monkeypatch):
+    """重放预算按 durable 计数：一次长回复的 delta 不该把 durable 挤出缓冲。
+
+    否则 delta 的**多少**会左右 I5 的语义——流得久一点，重连的客户端就平白收到
+    resync。这里 50 条 delta + 4 条 durable，缓冲上限压到 10：按总条数淘汰会丢掉
+    durable，按 durable 计数则一条都不丢。
+    """
+    monkeypatch.setattr(
+        "avid.svc.runs.stream_completion",
+        streaming_reply(tuple(f"片{index}" for index in range(50)), "".join(f"片{index}" for index in range(50))),
+    )
+    services = Services(root=sandbox / ".avid" / "sessions", buffer_size=10)
+    session_id = new_session(services)
+    record = services.runs.start(session_id, "长回复")
+    assert wait_terminal(record)
+
+    assert record.evicted_upto == 0, "delta 把 durable 挤出了重放缓冲"
     got = collect(services, record.run_id, after=0)
     assert events.RESYNC not in [event.type for event in got]
