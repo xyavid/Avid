@@ -22,7 +22,9 @@ from support import (
     wait_terminal,
 )
 
+from avid.ai.client import LLMError
 from avid.runtime import events
+from avid.session import SessionStorageError
 from avid.svc import Services, runs
 from avid.svc.errors import RunNotFound
 
@@ -343,6 +345,81 @@ def test_finished_runs_and_session_locks_are_reclaimed(sandbox):
         services.runs.get(record.run_id)
     assert record.events == [], "缓冲要一起释放"
     assert services.runs._session_locks == {}
+
+
+# ---------------- 失败路径：五种 code 都要变成可观察的终态 ----------------
+
+
+def _raising_chat(exc: Exception):
+    def chat(config, messages, **kwargs):
+        raise exc
+
+    return chat
+
+
+@pytest.mark.parametrize(
+    "exc,code",
+    [
+        (LLMError("模型挂了"), "llm_error"),
+        (RuntimeError("程序错误"), "internal"),
+    ],
+    ids=["llm_error", "internal"],
+)
+def test_chat_failures_become_a_terminal_event_with_the_right_code(sandbox, exc, code):
+    """失败必须是可观察的终态：record 上有 code，事件流里有 run_failed。
+
+    审查发现这五条失败路径**零测试**：唯一的"守护"是 test_web_boundaries 里一条
+    grep 断言（只证明字面量存在），而前端按 code 分支的错误面完全没被验证。
+    """
+    services = build(sandbox, _raising_chat(exc))
+    record = services.runs.start(new_session(services), "跑")
+
+    assert wait_terminal(record), record.status
+    assert record.status == "failed"
+    assert record.error is not None
+    assert record.error["code"] == code
+    assert str(exc) in record.error["message"]
+
+    frames = collect(services, record.run_id)
+    failed = [event for event in frames if event.type == events.RUN_FAILED]
+    assert failed, [event.type for event in frames]
+    assert failed[-1].data["code"] == code
+    assert events.RUN_FINISHED not in [event.type for event in frames]
+
+
+def test_round_limit_failure_is_mapped(sandbox):
+    """模型一直在要工具 → 轮数上限，归类为"未完成"而不是内部错误。"""
+    tools = RecordingTools().registry("read_file")
+    services = build(sandbox, many_rounds(8), tools)
+    record = services.runs.start(new_session(services), "跑")
+
+    assert wait_terminal(record), record.status
+    assert record.status == "failed"
+    assert record.error["code"] == "round_limit"
+
+
+def test_config_error_failure_is_mapped(sandbox, monkeypatch):
+    """模型配置缺失发生在运行线程里，必须是 config_error 而不是让线程裸死。"""
+    monkeypatch.delenv("AVID_API_KEY", raising=False)
+    services = build(sandbox, ScriptedChat(make_turn("答")))
+    record = services.runs.start(new_session(services), "跑")
+
+    assert wait_terminal(record), record.status
+    assert record.error["code"] == "config_error"
+
+
+def test_session_error_failure_is_mapped(sandbox, monkeypatch):
+    """会话层失败（读历史时文件坏了）映射成 session_error。"""
+
+    def boom(session, branch):
+        raise SessionStorageError("会话文件坏了")
+
+    monkeypatch.setattr(runs, "messages_for_branch", boom)
+    services = build(sandbox, ScriptedChat(make_turn("答")))
+    record = services.runs.start(new_session(services), "跑")
+
+    assert wait_terminal(record), record.status
+    assert record.error["code"] == "session_error"
 
 
 # ---------------- 缓冲边界：跟随期缺口与事件总数上限 ----------------
