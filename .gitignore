@@ -15,6 +15,9 @@ dist/
 # 复制进 src/avid/web/static/（随 wheel 分发）。构建戳也在产物里。
 web/node_modules/
 web/dist/
+# tsc -b 的增量缓存：构建产物，不入库（否则每次构建都产生无意义 diff）
+web/tsconfig.tsbuildinfo
+*.tsbuildinfo
 web/playwright-report/
 web/test-results/
 /src/avid/web/static/*
