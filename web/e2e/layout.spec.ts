@@ -165,6 +165,90 @@ test('会话区域独立滚动：输入条不动，消息区自己滚', async ({
   expect(await page.evaluate(() => window.scrollY), '页面自身不应被滚动').toBe(0)
 })
 
+test('收起导航后：轨道内的按钮不越界、不压到会话卡', async ({ page, request }) => {
+  const listed = await page.request.get(`${BASE}/api/sessions`)
+  const sessions: { id: string; message_count: number }[] = (await listed.json()).sessions
+  const target = sessions.find((item) => item.message_count > 0)
+  expect(target, '需要一个有条目的会话').toBeTruthy()
+  await page.setViewportSize({ width: 1440, height: 800 })
+  await page.goto(`${BASE}/sessions/${target?.id}`)
+  await page.waitForTimeout(400)
+
+  const nav = page.locator('nav')
+  await nav.getByRole('button', { name: '收起' }).click()
+  await page.waitForTimeout(300)
+
+  const geometry = await page.evaluate(() => {
+    const box = (element: Element) => {
+      const rect = element.getBoundingClientRect()
+      return {
+        left: rect.left,
+        right: rect.right,
+        top: rect.top,
+        bottom: rect.bottom,
+        width: rect.width,
+      }
+    }
+    const navElement = document.querySelector('nav') as HTMLElement
+    const card = document.querySelector('section.sketch-main') as HTMLElement
+    const hits = (a: ReturnType<typeof box>, b: ReturnType<typeof box>) =>
+      !(a.right <= b.left + 1 || b.right <= a.left + 1 || a.bottom <= b.top + 1 || b.bottom <= a.top + 1)
+    const cardBox = box(card)
+    return {
+      nav: box(navElement),
+      card: cardBox,
+      buttons: Array.from(navElement.querySelectorAll('button')).map((button) => ({
+        name: (button.textContent ?? '').trim().slice(0, 6),
+        box: box(button),
+      })),
+      hitsCard: Array.from(navElement.querySelectorAll('button')).filter((button) =>
+        hits(box(button), cardBox),
+      ).length,
+    }
+  })
+
+  expect(geometry.nav.width, '收起后是 64px 图标轨').toBeLessThanOrEqual(70)
+  expect(geometry.hitsCard, '收起后没有任何轨道按钮压到会话卡').toBe(0)
+  expect(geometry.card.left, '会话卡在轨道右侧').toBeGreaterThanOrEqual(geometry.nav.right - 1)
+  for (const button of geometry.buttons) {
+    expect(button.box.left, `按钮「${button.name}」左边越出轨道`).toBeGreaterThanOrEqual(
+      geometry.nav.left - 1,
+    )
+    expect(button.box.right, `按钮「${button.name}」右边越出轨道`).toBeLessThanOrEqual(
+      geometry.nav.right + 1,
+    )
+  }
+
+  // 收起态用图标按钮，但可访问名仍然来自内部文字
+  await expect(nav.getByRole('button', { name: '展开' })).toBeVisible()
+  await nav.getByRole('button', { name: '展开' }).click()
+  await page.waitForTimeout(300)
+  const expanded = await nav.evaluate((element) => element.getBoundingClientRect().width)
+  expect(expanded, '可以再展开回 320px').toBeGreaterThan(300)
+})
+
+test('一级切换只有导航列：⌘K 不再打开命令面板', async ({ page, request }) => {
+  const listed = await page.request.get(`${BASE}/api/sessions`)
+  const sessions: { id: string; message_count: number }[] = (await listed.json()).sessions
+  const target = sessions.find((item) => item.message_count > 0)
+  await page.setViewportSize({ width: 1440, height: 800 })
+  await page.goto(`${BASE}/sessions/${target?.id}`)
+  await page.waitForTimeout(300)
+
+  await page.keyboard.press('Meta+k')
+  await page.keyboard.press('Control+k')
+  await page.waitForTimeout(300)
+
+  // 没有任何对话框弹出（面板已按「与导航列完全重合」删除）
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  // 导航列就是唯一入口，四个工作面都在
+  const nav = page.locator('nav')
+  // exact：导航列里还挂着会话列表，而「未命名会话 …」这类按钮名里也含「会话」
+  for (const label of ['会话', '任务板', '技能目录', '设置']) {
+    await expect(nav.getByRole('button', { name: label, exact: true })).toBeVisible()
+  }
+})
+
 test('其他工作面在视口内滚动，不产生页面溢出', async ({ page }) => {
   // 高度链改成视口高度后，非会话页必须有**自己的**滚动容器，否则内容会被裁掉。
   for (const path of ['/tasks', '/skills', '/settings']) {

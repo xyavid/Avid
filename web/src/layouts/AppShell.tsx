@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
+import { PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 
-import { Button, Tooltip } from '../ui/primitives'
+import { Button } from '../ui/primitives'
 import { useTranslation } from '../lib/i18n'
 import { useUiStore } from '../state/uiStore'
-import { CommandPalette } from './CommandPalette'
 import { useViewport } from './useViewport'
 
 export interface NavItem {
@@ -23,26 +23,14 @@ export interface AppShellProps {
   onNavigate: (to: string) => void
 }
 
-/** L3 骨架：纸张画布 + 三栏 + 断点降级 + 键盘图（⌘K）。只依赖界面域。 */
+/** L3 骨架：纸张画布 + 三栏 + 断点降级 + 导航列收起/展开。只依赖界面域。 */
 export function AppShell(props: AppShellProps) {
   const { t } = useTranslation()
   const { isWide, isMid } = useViewport()
   const navCollapsed = useUiStore((state) => state.navCollapsed)
   const toggleNav = useUiStore((state) => state.toggleNav)
-  const [paletteOpen, setPaletteOpen] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false)
   const expanded = isWide && !navCollapsed
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
-        event.preventDefault()
-        setPaletteOpen((open) => !open)
-      }
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [])
 
   useEffect(() => {
     if (isMid) setSheetOpen(false)
@@ -89,20 +77,23 @@ export function AppShell(props: AppShellProps) {
             aria-label={t('common.appName')}
             className={`flex shrink-0 flex-col gap-2 ${expanded ? 'w-80' : 'w-16'}`}
           >
-            <div className="flex items-center gap-2">
+            <div className={expanded ? 'flex items-center gap-2' : 'flex flex-col items-center gap-2'}>
               {expanded ? <span className="font-sketch text-lg">{t('common.appName')}</span> : null}
-              <Tooltip label={t('common.nav.commandPalette')}>
-                <Button
-                  size="icon"
-                  aria-label={t('common.nav.commandPalette')}
-                  onClick={() => setPaletteOpen(true)}
-                >
-                  ⌘
-                </Button>
-              </Tooltip>
               {isWide ? (
-                <Button size="sm" variant="secondary" onClick={() => toggleNav()} aria-expanded={expanded}>
-                  {expanded ? t('common.collapse') : t('common.expand')}
+                // 收起态必须**竖排**：64px 轨道放不下「图标 + 文字」两个按钮并排，
+                // 并排时文字按钮会溢出轨道、压到会话卡上（实测溢出 44px）。
+                <Button
+                  size={expanded ? 'sm' : 'icon'}
+                  variant="secondary"
+                  aria-expanded={expanded}
+                  onClick={() => toggleNav()}
+                >
+                  <span aria-hidden="true">
+                    {expanded ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
+                  </span>
+                  <span className={expanded ? undefined : 'sr-only'}>
+                    {expanded ? t('common.collapse') : t('common.expand')}
+                  </span>
                 </Button>
               ) : null}
             </div>
@@ -131,9 +122,6 @@ export function AppShell(props: AppShellProps) {
               <Button size="sm" onClick={() => setSheetOpen(true)}>
                 {t('common.nav.toggleNav')}
               </Button>
-              <Button size="sm" onClick={() => setPaletteOpen(true)}>
-                {t('common.nav.commandPalette')}
-              </Button>
             </div>
           ) : null}
           <main
@@ -145,16 +133,6 @@ export function AppShell(props: AppShellProps) {
           </main>
         </div>
       </div>
-
-      <CommandPalette
-        open={paletteOpen}
-        onOpenChange={setPaletteOpen}
-        items={props.navItems.map((item) => ({
-          key: item.key,
-          label: item.label,
-          onSelect: () => props.onNavigate(item.to),
-        }))}
-      />
     </div>
   )
 }

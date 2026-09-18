@@ -19,6 +19,15 @@ pnpm run verify         # 以上全部（不含 build 与 e2e）
 AVID_E2E=1 pnpm test:e2e    # Playwright 14 项（需先 pnpm exec playwright install chromium）
 ```
 
+## 导航列
+
+宽档默认 320px；**收起后是 64px 图标轨**，收起态的头部必须竖排——`图标 + 文字`两个按钮
+并排放不进 64px，实测文字按钮会溢出轨道 44px 压到会话卡上（回归用例在
+`e2e/layout.spec.ts`：轨道内每个按钮都在轨道内、且没有任何按钮与会话卡相交）。
+
+一级切换**只有导航列一处入口**：曾经还有一个 ⌘K 命令面板，功能与导航列完全重合
+（只有四个工作面、没有别的命令），判定为多余后删除。
+
 ## 布局的高度链
 
 `AppShell` 外层 `h-dvh overflow-hidden`、内层行 `h-full min-h-0`，往下每级 flex 容器都带
@@ -32,7 +41,7 @@ AVID_E2E=1 pnpm test:e2e    # Playwright 14 项（需先 pnpm exec playwright in
 | L0 | `ui/tokens.css`、`ui/sketch.css`、`ui/primitives/`、`ui/sketch/` | 不得出现业务名词；六种形状与八个阴影档只在这里定义 |
 | L1 | `ui/patterns/` | 有形状无状态：只接受 props，不读 store、不发请求 |
 | L2 | `features/*` | 一个业务面一个目录；**feature 之间不得互相 import**（跨 feature 经 store 或 route 组合） |
-| L3 | `layouts/` | 三栏骨架、断点、键盘图；只依赖界面域 |
+| L3 | `layouts/` | 三栏骨架、断点、导航列收起/展开；只依赖界面域 |
 | L4 | `routes/` | URL ↔ feature 组合；**唯一**允许把查询结果与活动域拼起来的地方 |
 
 四条机械规则（`scripts/check-layers.mjs` / `check-style.mjs` 会失败）：

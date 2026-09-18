@@ -45,6 +45,7 @@ uv run avid web --port 8765      # 静态资源与 API 同源
 | 审批队列（时间线内） | `GET /api/runs/{id}/approvals`、`POST /api/runs/{id}/approvals/{aid}` | 命令流 + 事件流（`approval_requested`/`approval_resolved`） |
 | 运行状态条 / 对账 | `GET /api/runs/{id}` | 权威终止以注册表 + 已提交条目为准 |
 | 检查器（全文 / diff / 原始 JSON） | 不新增接口 | 就地切换，不进 URL 历史 |
+| 导航列（收起 / 展开） | 不新增接口 | 收起为 64px 图标轨；一级切换只有这一处入口 |
 | 任务板（`/tasks`） | `GET /api/tasks`、`GET /api/tasks/{id}` | 只读：任务写入者只有 agent 的任务工具 |
 | 技能目录（`/skills`） | `GET /api/skills` | 与 system prompt 同源 |
 | 设置（`/settings`） | `GET /api/meta`、`GET /api/health` | 只读；改配置仍走 CLI / 环境变量 |
@@ -80,7 +81,7 @@ pnpm -C web test                                   # reducer / coalescer / SSE �
 pnpm -C web build && pnpm -C web run gate:size     # 体积与纹理门禁
 
 # 浏览器（需先 pnpm -C web exec playwright install chromium）
-AVID_E2E=1 pnpm -C web test:e2e                    # 14 项：首屏 / 路由 / 会话流程 / 布局回归
+AVID_E2E=1 pnpm -C web test:e2e                    # 浏览器用例：首屏 / 路由 / 会话流程 / 布局 / 消息卡片 / 交互反馈
 
 # 手验
 curl -s localhost:8765/api/meta | head -c 300
@@ -100,6 +101,10 @@ curl -s -o /dev/null -w '%{http_code} %{content_type}\n' localhost:8765/api/nope
   会话区域独立滚动、其他工作面不溢出）；a11y / 视觉回归 / 降级仍只有约定没有用例。
 
 ## 6. 布局与交互约定（别改回去）
+
+**导航列**：宽档默认 320px，收起是 64px 图标轨；**收起态头部竖排**（图标 + 图标），
+因为「44px 图标 + 文字按钮」并排放不进 64px，会溢出并压到会话卡上（`e2e/layout.spec.ts`
+里有几何断言）。一级切换只有导航列一处入口——⌘K 命令面板因与导航列完全重合已删除。
 
 外壳的高度链是**视口高度**：`AppShell` 外层 `h-dvh overflow-hidden`，内层行 `h-full min-h-0`，
 再往下每一级 flex 容器都带 `min-h-0`。这样「时间线是唯一滚动容器」才成立：

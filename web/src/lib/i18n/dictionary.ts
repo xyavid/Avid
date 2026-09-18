@@ -49,7 +49,6 @@ export const DICTIONARY: Record<Locale, Entry> = {
     'common.nav.skills': '技能目录',
     'common.nav.settings': '设置',
     'common.nav.toggleNav': '导航',
-    'common.nav.commandPalette': '命令面板',
     'common.settings.title': '设置',
     'common.settings.appearance': '外观',
     'common.settings.textScale': '文本缩放',
