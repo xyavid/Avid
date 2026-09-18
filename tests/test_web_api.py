@@ -63,6 +63,56 @@ def finish_run(client: TestClient, chat, tools=None, prompt: str = "问题") -> 
     return session["id"], run_id
 
 
+# ---------------- 只读端点的磁盘 IO（P2-5） ----------------
+
+
+def test_meta_caches_the_skills_scan(bundle, monkeypatch):
+    """技能目录带短缓存：`/api/meta` 会被界面反复取，扫目录是磁盘 IO。"""
+    from avid.policy import skills as skills_module
+
+    scans: list[int] = []
+    real_scan = skills_module.SkillLoader.scan
+
+    def counting_scan(self):
+        scans.append(1)
+        return real_scan(self)
+
+    monkeypatch.setattr(skills_module.SkillLoader, "scan", counting_scan)
+    client, _ = bundle()
+
+    for _ in range(3):
+        assert client.get("/api/meta").status_code == 200
+    assert len(scans) == 1, f"三次 meta 扫了 {len(scans)} 次技能目录"
+
+
+def test_event_stream_does_not_read_the_meta_endpoint(bundle, monkeypatch):
+    """每条 SSE 连接以前都调 `services.meta()`，只为拿心跳常量——连带扫技能目录。"""
+    client, services = bundle(chat=ScriptedChat(make_turn("答")))
+    _, run_id = finish_run(client, None)
+
+    def forbidden(self):
+        raise AssertionError("事件流不该调 meta()")
+
+    monkeypatch.setattr(type(services), "meta", forbidden)
+
+    with client.stream("GET", f"/api/runs/{run_id}/events", params={"after": 0}) as response:
+        assert response.status_code == 200
+        assert next(response.iter_lines(), None) is not None
+
+
+def test_health_does_not_read_the_meta_endpoint(bundle, monkeypatch):
+    client, services = bundle()
+
+    def forbidden(self):
+        raise AssertionError("健康探针不该调 meta()")
+
+    monkeypatch.setattr(type(services), "meta", forbidden)
+
+    response = client.get("/api/health")
+    assert response.status_code == 200
+    assert response.json()["api_version"] == 1
+
+
 # ---------------- 信任边界（P1-21） ----------------
 
 

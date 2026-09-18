@@ -10,6 +10,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Query, Request, status
 from fastapi.responses import StreamingResponse
 
+from ...svc import STREAM_HEARTBEAT_SECONDS
 from .. import sse
 from . import current_services
 
@@ -42,7 +43,9 @@ def stream_events(
         record,
         after=cursor,
         deltas=bool(deltas),
-        heartbeat=services.meta()["stream"]["heartbeat_seconds"],
+        # 心跳是传输层常量：以前为了拿它调 services.meta()（连带扫一遍技能目录），
+        # 于是"建立一条事件流"变成一次磁盘 IO。
+        heartbeat=STREAM_HEARTBEAT_SECONDS,
     )
     return StreamingResponse(
         body,

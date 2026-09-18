@@ -11,6 +11,7 @@ FastAPI（A4），也不 import ``web/``；能力的输出（工具名、技能�
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +54,12 @@ FEATURES: dict[str, int] = {
 # 事件流相关常量对客户端可见：它据此设超时与对账阈值（I13）。
 STREAM_HEARTBEAT_SECONDS = 15.0
 TERMINAL_FALLBACK_SECONDS = 30.0
+
+# 技能目录在进程内缓存的时长。`GET /api/meta` 会被界面反复取，而"扫技能目录"是
+# 磁盘 IO（读每个 SKILL.md 的全文）——实测 5.1 ms/次，以前每条 SSE 连接也要付一次
+# （只为拿心跳常量）。TTL 很短：改了技能目录最多晚这么久生效，而 system prompt 的
+# 权威仍然是磁盘（`RunState.for_run` 每次运行重新扫描）。
+SKILLS_CACHE_SECONDS = 5.0
 
 
 class Services:
@@ -111,6 +118,8 @@ class Services:
         self.sessions = SessionService(self.workspaces, self.runs)
         self.tasks = TaskService(self.workspaces)
         self.started_at = now_ms()
+        self._skills: list[dict[str, str]] | None = None
+        self._skills_at = 0.0
 
     # ---------------- 兼容访问器 ----------------
 
@@ -160,12 +169,20 @@ class Services:
         }
 
     def skills(self) -> list[dict[str, str]]:
-        """技能目录：name + 一行描述，与 system prompt 同源（同一个 SkillLoader）。"""
-        loader = SkillLoader().scan()
-        return [
-            {"name": name, "description": loader.skills[name]["description"]}
-            for name in sorted(loader.skills)
-        ]
+        """技能目录：name + 一行描述，与 system prompt 同源（同一个 SkillLoader）。
+
+        带一个很短的进程内缓存（`SKILLS_CACHE_SECONDS`）：这是只读端点，不该每次
+        都扫一遍磁盘。
+        """
+        now = time.monotonic()
+        if self._skills is None or now - self._skills_at > SKILLS_CACHE_SECONDS:
+            loader = SkillLoader().scan()
+            self._skills = [
+                {"name": name, "description": loader.skills[name]["description"]}
+                for name in sorted(loader.skills)
+            ]
+            self._skills_at = now
+        return list(self._skills)
 
     @staticmethod
     def model_name() -> str | None:

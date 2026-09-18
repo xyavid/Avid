@@ -10,6 +10,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 
 from ...runtime.events import now_ms
+from ...svc import API_VERSION
 from ..schemas import HealthOut, MetaOut, SkillListOut
 from . import current_services
 
@@ -29,7 +30,8 @@ def get_health(request: Request) -> dict:
     services = current_services(request)
     return {
         "status": "ok",
-        "api_version": services.meta()["api_version"],
+        # 版本号是模块常量，不必为了它跑一遍 meta()（那会连带扫技能目录）。
+        "api_version": API_VERSION,
         "uptime_ms": max(0, now_ms() - services.started_at),
     }
 
