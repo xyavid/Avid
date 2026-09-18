@@ -106,8 +106,6 @@ export const DICTIONARY: Record<Locale, Entry> = {
     'chat.message.role.user': '用户',
     'chat.message.role.assistant': 'Avid',
     'chat.message.role.tool': '工具结果',
-    'chat.notice.todo': 'TODO 提醒',
-    'chat.notice.nudge': '继续推进',
     'chat.notice.compaction': '上下文压缩',
     'chat.error.title': '运行失败',
     'chat.error.incompatible': '界面与内核版本不兼容，请重新构建 web/',

@@ -301,10 +301,8 @@ export function applyEvent(view: RunView, event: EventEnvelope): RunView {
         ],
       }
     }
-    case 'todo_reminder':
-      return { ...next, entries: [...next.entries, noticeEntry(event, 'todo', String(event.data.content ?? ''))] }
-    case 'stop_nudge':
-      return { ...next, entries: [...next.entries, noticeEntry(event, 'nudge', String(event.data.content ?? ''))] }
+    // 注入的提醒（todo_reminder / stop_nudge）**不画进时间线**：它们说的是内核做了什么，
+    // 不是对话内容。事件照旧在流里（可观察、可回放），只是没有对应的条目视图。
     case 'run_status':
       return {
         ...next,
@@ -368,6 +366,9 @@ export function viewFromEntries(view: RunView, entries: Entry[]): RunView {
   const byToolCall = new Map<string, ToolRun>()
 
   for (const entry of ordered) {
+    // 内核注入的提醒（NOTICE_ENTRY）不进时间线：它的 role 是 user，但说的不是用户的话。
+    // 只能靠条目类型分辨——文本上认不出来（Stop nudge 的文本由 hook 任意给定）。
+    if (entry.type === 'notice') continue
     if (entry.type !== 'message' || !entry.message) continue
     const message = entry.message as unknown as MessagePayload
     const kind: TimelineEntry['kind'] =

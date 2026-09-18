@@ -32,7 +32,7 @@
 
 | 项 | 约定 |
 | --- | --- |
-| **状态** | 四种 `kind`：`user` 是右侧便签、`assistant` 是左侧对话框，**两者是同一族 `sketch-card`**（墨框 4px + 手绘形状 + `--sticker-4` 硬阴影，方向相反、角色标记不同，照 purrcat 的对话框外壳语言）；`assistant` 正文走 `Markdown`，卡片头是手绘小标记 `AvidMark` + 角色名；`user` 卡片头是 `UserMark` + 角色名；只声明工具调用、正文为空的回合退化成 `sketch-chip`（标记 + 角色名），不为它撑一张空卡；`tool` 是 `term` 等宽块 + `chat.message.role.tool` 徽标；`notice` 是 `sketch-chip`（文案取 `chat.notice.{todo,nudge,compaction}`）。unknown kind 一律按 assistant 处理，保证新增 kind 不会渲染成空白。 |
+| **状态** | 四种 `kind`：`user` 是右侧便签、`assistant` 是左侧对话框，**两者是同一族 `sketch-card`**（墨框 4px + 手绘形状 + `--sticker-4` 硬阴影，方向相反、角色标记不同，照 purrcat 的对话框外壳语言）；`assistant` 正文走 `Markdown`，卡片头是手绘小标记 `AvidMark` + 角色名；`user` 卡片头是 `UserMark` + 角色名；`tool` 是 `term` 等宽块 + `chat.message.role.tool` 徽标；`notice` 是 `sketch-chip`（文案取 `chat.notice.compaction`）。unknown kind 一律按 assistant 处理，保证新增 kind 不会渲染成空白。**这里拿到的 assistant 条目一定有正文**：只声明工具调用、正文为空的回合由 `conversation/lib/groupTimeline` 直接跳过（否则每轮工具调用都多出一个只有角色名的空框），注入的提醒同理不进时间线。 |
 | **密度** | `compact` → 内边距 `p-2`，`comfy` → `p-3`；只作用于用户便签与 assistant 正文容器。 |
 | **折叠默认值** | 无折叠。notice 文案用 `truncate` + `max-w-[32rem]` 收敛长度，完整内容留给 inspector（`onInspect`）。 |
 | **形状轮换** | 消息卡的形状由 `shapeIndex` 决定（`ui/sketch/shapes.ts` 的 `shapeFor`），序号按**全部**条目计算而不是当前窗口，所以「加载更早」不会让已渲染的卡片换形；相邻卡片不同形（§8.1 ①，C15）。 |

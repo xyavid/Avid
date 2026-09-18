@@ -157,8 +157,17 @@ describe('viewFromEntries：条目是权威视图', () => {
         type: 'message',
         message: { role: 'user', content: '问题' },
       },
-      // 非 message 条目不进时间线。
-      { entry_id: 'entry-c', parent_id: null, seq: 3, timestamp: 300, type: 'notice', message: null },
+      // 内核注入的提醒：role 是 user，但类型不是 message，所以不进时间线。
+      {
+        entry_id: 'entry-reminder',
+        parent_id: null,
+        seq: 3,
+        timestamp: 300,
+        type: 'notice',
+        message: { role: 'user', content: '[提醒] 该更新计划了' },
+      },
+      // 没有 message 的条目同样跳过。
+      { entry_id: 'entry-c', parent_id: null, seq: 4, timestamp: 400, type: 'notice', message: null },
     ]
 
     const detached = applyEvent(emptyView(SESSION), ev('resync', 9))
@@ -169,6 +178,19 @@ describe('viewFromEntries：条目是权威视图', () => {
     expect(rebuilt.detached).toBe(false)
     expect(rebuilt.entries.map((entry) => entry.id)).toEqual(['entry-a', 'entry-b'])
     expect(timeline(rebuilt)).toEqual(['user:问题', 'assistant:回答'])
+  })
+
+  it('注入的提醒即使只有事件、没有条目，也不画进时间线', () => {
+    // 事件仍在流里（可观察、可回放），但时间线只放「用户输入 / Avid 的回答 / 工具调用」。
+    const view = applyEvent(
+      applyEvent(emptyView(SESSION), userMessage),
+      ev('todo_reminder', 7, { content: '[提醒] 该更新计划了', entry_id: 'entry-reminder' }),
+    )
+    const nudged = applyEvent(view, ev('stop_nudge', 8, { content: '还有一步' }))
+
+    expect(timeline(nudged)).toEqual(['user:问题'])
+    // seq 照常推进：提醒仍是 durable 事件，游标不能停在它前面。
+    expect(nudged.seq).toBe(8)
   })
 })
 

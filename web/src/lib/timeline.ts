@@ -21,7 +21,8 @@ export interface ToolCallRef {
 export interface TimelineEntry {
   id: string
   kind: 'user' | 'assistant' | 'tool' | 'notice'
-  notice?: 'compaction' | 'todo' | 'nudge'
+  /** 现在只剩压缩：注入的提醒（TODO / nudge）不画进时间线，所以不必再分三种。 */
+  notice?: 'compaction'
   text: string
   entryId?: string
   toolCallId?: string

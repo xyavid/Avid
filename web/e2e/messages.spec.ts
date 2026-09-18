@@ -4,7 +4,7 @@ import type { Locator, Page } from '@playwright/test'
 /**
  * 消息卡片回归：模型回复与用户消息是**同一族对话框**（墨框 + 手绘形状 + `--sticker-4`
  * 硬阴影），差别只在方向与角色标记；模型卡片带一枚手绘小标记（装饰性，不进无障碍树）；
- * 形状按条目序号轮换、相邻卡片不同形；只声明工具调用的空回合退化成 chip。
+ * 形状按条目序号轮换、相邻卡片不同形；只声明工具调用的空回合不占卡片（工具卡承担）。
  *
  * 需要 AVID_E2E=1 且内核已起（脚本模型即可）。
  */
@@ -188,18 +188,24 @@ test('形状按条目轮换：相邻消息卡片不同形', async ({ page }) => 
   expect(new Set(radii).size, '形状确实在三种之间轮换').toBeGreaterThan(1)
 })
 
-test('只声明工具调用的空回合退化成 chip，不撑一张空卡', async ({ page }) => {
+test('只声明工具调用的空回合不再占卡片，工具调用由工具卡承担', async ({ page }) => {
   await openSession(page)
   await expandAll(page)
-  expect(await assistantChips(page).count(), '空回合用 chip 标记').toBeGreaterThan(0)
+
+  // 以前空回合会渲染成「Avid + 动作按钮」的空 chip；现在它完全不出现。
+  expect(await assistantChips(page).count(), '不再为空回合撑卡片').toBe(0)
   expect(await assistantCards(page).count(), '有正文的回复用整张卡').toBeGreaterThan(0)
+  // 那次调用仍然看得见——由工具卡承担，不是被静默丢掉
+  expect(
+    await page.getByRole('log').getByText('CALL').count(),
+    '工具调用仍有自己的卡片',
+  ).toBeGreaterThan(0)
 })
 
 test('durable 的模型回复才挂 aria-live', async ({ page }) => {
+  // 乐观 delta 每帧都在变，播报等于噪音；durable 消息才是完整的一句话。
+  // （正文为空的回合已经不渲染卡片，所以不再有「空卡不播报」这半条。）
   await openSession(page)
   const model = assistantCards(page).first()
   await expect(model).toHaveAttribute('aria-live', 'polite')
-  // 空回合的 chip 不播报（它没有正文）
-  await expandAll(page)
-  expect(await assistantChips(page).first().getAttribute('aria-live')).toBeNull()
 })

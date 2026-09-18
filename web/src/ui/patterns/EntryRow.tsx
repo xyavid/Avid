@@ -6,8 +6,9 @@
  * （`bg-paper` + `border-4 border-ink` + 大硬阴影 + 小角度倾斜），这里把它的外壳
  * 语言用在消息上，尺寸按消息收敛。形状按 `shapeIndex` 轮换，相邻卡片不同形。
  *
- * 只有确实有正文的模型回复才用整张卡；只声明工具调用、正文为空的那一轮退化成
- * 一枚 chip（图标 + 角色名），免得每轮工具调用都多出一个空框。
+ * 没有正文的模型回复**不归这里管**：只声明工具调用、正文为空的那一轮由
+ * `conversation/lib/groupTimeline` 直接跳过（它的工具调用本来就有工具卡），所以这个
+ * 组件拿到的 assistant 条目一定有正文。注入的提醒（TODO / nudge）同理不进时间线。
  *
  * 角色标记按作者分两枚：模型是 `AvidMark`（角形笔画），用户是 `UserMark`（歪头 +
  * 肩弧）。两者笔触语言一致（`stroke-width 4.5` + `currentColor` + −2deg 倾斜），
@@ -40,11 +41,7 @@ export interface EntryRowProps {
   onFork?: (entry: TimelineEntry) => void
 }
 
-const NOTICE_KEY = {
-  compaction: 'chat.notice.compaction',
-  todo: 'chat.notice.todo',
-  nudge: 'chat.notice.nudge',
-} as const
+const NOTICE_KEY = { compaction: 'chat.notice.compaction' } as const
 
 const ACTION = 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100'
 
@@ -137,16 +134,7 @@ export const EntryRow = memo(function EntryRow({
     )
   }
 
-  // 只是一个工具调用的「空回合」：用 chip 标记，别为它撑起一张空卡
-  if (!entry.text.trim()) {
-    return (
-      <article className="group sketch-chip flex w-fit items-center gap-2 px-3 py-1">
-        <Role label={t('chat.message.role.assistant')} />
-        {actions}
-      </article>
-    )
-  }
-
+  // 正文为空的 assistant 回合不会走到这里（groupTimeline 已跳过它，工具调用由工具卡承担）。
   return (
     <article
       aria-live={entry.optimistic ? undefined : 'polite'}

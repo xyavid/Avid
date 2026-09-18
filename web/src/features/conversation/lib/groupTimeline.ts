@@ -14,6 +14,9 @@ function groupable(run: ToolRun | undefined): boolean {
 /**
  * 把「条目 + 工具运行」编织成可渲染的顺序：
  * assistant 条目后面跟它声明的工具调用；连续 ≥2 个正常调用收进一个组。
+ *
+ * 正文为空的 assistant 回合不渲染卡片，但它声明的工具调用照旧落在原位——
+ * 这类回合是「只声明调用、没有说话」，真实会话里占相当比例。
  */
 export function groupTimeline(
   entries: TimelineEntry[],
@@ -31,8 +34,17 @@ export function groupTimeline(
 
   for (const entry of entries) {
     if (entry.kind === 'tool') continue
-    blocks.push({ kind: 'entry', id: entry.id, entry, shapeIndex: entryOrdinal })
-    entryOrdinal += 1
+    // 只声明工具调用、正文为空的 assistant 回合**不占一张卡**：那张卡除了一个角色名
+    // 什么都没有（真实会话里 21 条条目有 8 条是这种），而这次调用由下面的工具卡承担。
+    // 但它必须留在 entries 里——工具卡是挂到「声明它的那个条目」上的，条目一删，工具卡
+    // 就会掉到时间线末尾（见文件末尾那条兜底）。
+    const silent = entry.kind === 'assistant' && entry.text.trim() === ''
+    if (!silent) {
+      blocks.push({ kind: 'entry', id: entry.id, entry, shapeIndex: entryOrdinal })
+      // 形状计数只对**真正渲染出来的**卡片递增：跳过的条目若也占号，相邻两张可见
+      // 卡片可能拿到同一个形状（连续跳过两个就撞上了）。
+      entryOrdinal += 1
+    }
     const calls = entry.toolCalls ?? []
     const runs = calls
       .map((call) => byId.get(call.toolCallId))
