@@ -69,6 +69,7 @@ from .types import (
     Write,
 )
 from .values import (
+    DEFAULT_BRANCH,
     branch_tip,
     delete_value,
     entry_label,
@@ -119,6 +120,7 @@ __all__ = [
     "session_name",
     "entry_label",
     "branch_tip",
+    "DEFAULT_BRANCH",
     "set_value",
     "delete_value",
     "STORAGE_VERSION",

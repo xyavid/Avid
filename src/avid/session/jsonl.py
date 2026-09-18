@@ -318,6 +318,10 @@ class JsonlStorage:
         self._assert_open()
         return self._state.get_value(address)
 
+    def scan_values(self, namespace: str) -> list[StoredValue]:
+        self._assert_open()
+        return self._state.values_in(namespace)
+
     def scan_branch(self, query: BranchScan) -> list[Entry]:
         self._assert_open()
         return self._state.scan_branch(query)

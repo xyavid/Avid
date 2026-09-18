@@ -147,6 +147,16 @@ class SessionState:
     def get_value(self, address: ValueAddress) -> StoredValue | None:
         return self._values.get((address.namespace, address.key))
 
+    def values_in(self, namespace: str) -> list[StoredValue]:
+        """某个 namespace 下的全部值，按 seq 升序。
+
+        只做命名空间级枚举，不做 prefix 扫描：分支列表是它的第一个使用者——分支头
+        就是 ``BRANCH_TIP_NS`` 下的一组值，除此之外没有别的办法回答「有哪些分支」。
+        """
+        found = [item for item in self._values.values() if item.namespace == namespace]
+        found.sort(key=lambda item: item.seq)
+        return found
+
     def scan_branch(self, query: BranchScan) -> list[Entry]:
         """从 ``start`` 沿 parent_id 往回走，得到这条链。"""
         if query.start is None:

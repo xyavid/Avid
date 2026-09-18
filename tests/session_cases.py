@@ -337,6 +337,36 @@ def _values_roundtrip(repo) -> None:
     session.close()
 
 
+def _value_namespace_scan_is_ordered_and_isolated(repo) -> None:
+    """``scan_values`` 只按命名空间枚举，且按 seq 升序（分支列表依赖这两条）。"""
+    session = repo.create(id="s")
+    first = value("test.a", "one")
+    other = value("test.b", "elsewhere")
+    second = value("test.a", "two")
+
+    assert session.scan_values("test.a") == []
+    session.set_value(first, 1)
+    session.set_value(other, 2)
+    session.set_value(second, 3)
+
+    found = session.scan_values("test.a")
+    assert [item.key for item in found] == ["one", "two"]
+    assert [item.value for item in found] == [1, 3]
+    # 升序而不是插入顺序的巧合：seq 必须严格递增
+    assert found[0].seq < found[1].seq
+
+    session.delete_value(first)
+    assert [item.key for item in session.scan_values("test.a")] == ["two"]
+    assert [item.key for item in session.scan_values("test.b")] == ["elsewhere"]
+    assert session.scan_values("test.missing") == []
+
+    # 分支头就是这个机制的第一个真实消费者：main 建好之后必须能被枚举出来
+    assert session.branch_names() == ["main"]
+    session.create_branch("b2", None)
+    assert session.branch_names() == ["main", "b2"]
+    session.close()
+
+
 # ---------------- 查询 ----------------
 
 
@@ -409,6 +439,7 @@ def all_cases() -> list[Case]:
         Case("mutation", "嵌套变更报错而不是自锁", _nested_mutation_reports_instead_of_deadlocking),
         Case("mutation", "失败的提交什么都不消耗", _failed_commits_consume_nothing),
         Case("values", "值的读写删除与标签", _values_roundtrip),
+        Case("values", "命名空间枚举有序且互不串门", _value_namespace_scan_is_ordered_and_isolated),
         Case("queries", "条目查询的翻页与过滤", _entry_queries_page_and_filter),
         Case("queries", "分支扫描的顺序、上限与翻页", _branch_scan_orders_limits_and_pages),
     ]

@@ -50,6 +50,8 @@ from .types import (
     Write,
 )
 from .values import (
+    BRANCH_TIP_NS,
+    DEFAULT_BRANCH,
     ValueAddress,
     branch_tip,
     delete_value,
@@ -226,6 +228,10 @@ class StorageBackedSession:
         self._assert_open()
         return self._storage.get_value(address)
 
+    def scan_values(self, namespace: str) -> list[StoredValue]:
+        self._assert_open()
+        return self._storage.scan_values(namespace)
+
     def scan_branch(self, query: BranchScan) -> list[Entry]:
         self._assert_open()
         return self._storage.scan_branch(query)
@@ -261,6 +267,17 @@ class StorageBackedSession:
         return found[0] if found else None
 
     # ---------------- 分支 ----------------
+
+    def branch_names(self) -> list[str]:
+        """有值的分支名（按建分支的先后），默认分支永远排在第一个。
+
+        分支头就是 ``BRANCH_TIP_NS`` 下的一组值，所以「有哪些分支」只能靠枚举这个
+        命名空间回答。新建会话在第一次落库之前没有任何分支值，但读侧必须把 main
+        视作隐式默认——否则新会话会显示成「没有分支」，而它随时可以往 main 写。
+        """
+        self._assert_open()
+        stored = [item.key for item in self.scan_values(BRANCH_TIP_NS)]
+        return [DEFAULT_BRANCH, *(name for name in stored if name != DEFAULT_BRANCH)]
 
     def branch(self, name: str) -> SessionBranch | None:
         self._assert_open()

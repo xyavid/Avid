@@ -20,6 +20,11 @@ SESSION_NAME_NS = "avid.session.name"
 ENTRY_LABEL_NS = "avid.entry.label"
 BRANCH_TIP_NS = "avid.branch.tip"
 
+# 默认分支名。单点定义在这里（值的地址就是分支的表示），recorder 与读侧都引用它。
+# 会话 `create` 不隐式建分支，所以「还没有任何分支值」的会话由读侧把 main 视作
+# 隐式默认——否则新建会话在界面上会显示成「没有分支」，而它随时可以往 main 写。
+DEFAULT_BRANCH = "main"
+
 
 @dataclass(frozen=True)
 class ValueAddress:

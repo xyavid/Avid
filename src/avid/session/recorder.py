@@ -13,10 +13,9 @@ import logging
 from typing import Any
 
 from .session import SessionBranch, StorageBackedSession
+from .values import DEFAULT_BRANCH
 
 logger = logging.getLogger("avid.session.recorder")
-
-DEFAULT_BRANCH = "main"
 
 
 class SessionRecorder:
