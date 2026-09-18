@@ -11,12 +11,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from ..policy.permission import AskUser
 from ..policy.skills import SkillLoader
 from ..policy.todo import TodoList, build_reminder
 from .events import RunObserver, event
+
+if TYPE_CHECKING:  # 与 loop.py 同理：AskUser 只出现在注解里
+    from ..policy.permission import AskUser
 
 # TODO 提醒阈值：连续多少轮没更新就提醒一次。
 # 它是**运行级配置**（循环的节奏）而不是策略层的规则，所以放这里——

@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from . import context
 from ..ai.config import Config, load_config
@@ -33,7 +33,9 @@ from ..ai.client import DEFAULT_MAX_TOKENS, PromptTooLongError, Turn, chat_compl
 from ..tools import TOOL_IMPLS, TOOLS, ToolImpl
 from .state import TODO_REMINDER_AFTER_ROUNDS, RunState
 from ..ai.transcript import Transcript
-from ..policy.permission import AskUser
+
+if TYPE_CHECKING:  # 只有类型标注用它：注解是惰性的，运行时不必跨层 import 策略层
+    from ..policy.permission import AskUser
 
 logger = logging.getLogger("avid.runtime.loop")
 
