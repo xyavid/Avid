@@ -34,10 +34,20 @@
 
 **「新建会话必须先选择工作区」落在哪一层**：
 
-- 协议层 `SessionRepo.create(workspace: str | None = None)`：`None` 表示「由仓库位置派生」，内存后端与老测试因此不受影响；
-- 服务层 `svc` / `web`：**必填**，缺失返回 400（`WorkspaceRequiredError`）；这是"必须先选"的强制点；
+- 协议层 `SessionRepo.create(workspace: str | None = None)`：`None` 表示「由仓库归属派生」，内存后端与既有测试因此不受影响；
+- 服务层 `svc` 的**两种装配模式**（落地时的细化，`WorkspaceService.resolve`）：
+  - **多工作区模式**（`avid web` 的默认）：没有默认工作区，`POST /api/sessions` 缺 `workspace`
+    返回 400 `workspace_required`——这是"必须先选"的强制点；
+  - **单工作区模式**（`Services(root=...)` 或 `avid web --workspace X`）：那一个就是默认值，
+    省略时归属照样写进会话 header，因此不存在"归属不明的会话"。选这一档是因为
+    "只有一个候选时还强制显式传参"是仪式而非保护；
 - CLI：`--workspace PATH|ID` 可省，省时取**当前目录**并把解析结果打进 stderr（不是"没选"，是"命令行上下文替你选了"）；
-- Web 前端：新建会话前必须选，选择器默认预选**最近使用的工作区**（`last_used_at` 最大），但请求体必须显式带上 `workspace`。
+- Web 前端：请求体**总是**显式带上 `workspace`（选择器默认预选 `is_default`、否则最近使用的那一个）。
+
+**运行时的归属落地**：`RunRegistry.start` 先跨库定位会话所属工作区，再把
+`workspace_root` 交给 `RunState`、把 `permission`（缺省取该工作区的 `default_permission`）
+交给权限层；`run_started` 事件同时带上 `workspace` / `workspace_root` / `permission`，
+刷新页面后的界面重建不必依赖内存里的 `RunRecord`。
 
 **跨工作区读会话的护栏**（调查发现的真实陷阱）：`JsonlSessionRepo._locate` 会优先使用
 `metadata.path`，而 `open()` 只校验 `header.id`。因此把 A 工作区 `list()` 得到的 metadata 交给
@@ -57,7 +67,7 @@
 - **默认值**：`strict`。选它是因为「状态一 = 现有行为」，默认值变化会静默放宽所有既有用户的权限。
 - **优先级**（高到低）：本次运行的 `--permission` / 请求体 `permission` > 工作区默认权限（注册表字段） > `strict`。
 - **切换方式**：
-  - 单次运行：CLI `avid --permission workspace …`；Web `POST /api/runs {permission:"workspace"}`（选择器随每次运行发出）；
+  - 单次运行：CLI `avid --permission workspace …`；Web `POST /api/sessions/{id}/runs {permission:"workspace"}`（选择器随每次运行发出，值不持久化）；
   - 工作区长期默认：`avid workspace permission <id|path> <mode>`（唯一写入口，落在注册表）；
   - 工作区注册：`avid workspace add <path> [--name N] [--permission M]` / `list` / `remove <id|path>`。
 - **`--yes` 不是模式，是"回答者"**：它表示"本次运行对**所有**审批请求代答『是』"，
@@ -196,18 +206,16 @@
 
 ### 5.3 Web 审批载荷
 
-现有审批载荷增加两个字段，`kind` 从 `hard|user` 扩为 `hard|danger|outside|user`：
-
-| 字段 | 内容 | 用途 |
-|---|---|---|
-| `kind` | `hard` / `danger` / `outside` / `user` | 卡片配色与图标；`user` 沿用既有取值，避免改动前端既有分支 |
-| `warning` | 危险命令的警告文案（非危险时为 `null`） | 卡片上的红框提示 |
-| `target` | 越界目标的绝对路径（非越界时为 `null`） | 卡片上显示"要去哪里" |
-| `remember_key` | 已同意的键（仅用于回显"同意后本运行内不再问"） | 说明按钮后果 |
-
-事件类型集合不变（`tool_call_denied` 的 `kind` 取值从 `hard|user` 扩为 `hard|danger|outside|user`），
-两侧契约文件同步改。**取值里没有 `rule`**：常规规则的拒绝就是"用户这次没批准"，沿用 `user`，
+`tool_call_denied` 的 `kind` 从 `hard|user` 扩为 `hard|danger|outside|user`，
+事件类型集合不变。**取值里没有 `rule`**：常规规则的拒绝就是"用户这次没批准"，沿用 `user`，
 既有前端分支与既有断言（`test_hooks.py` 的 `denied_kind == "user"`）因此不必改。
+
+警告与目标写进 `reason` 文本（`危险命令（提权）` / `越界操作：目标 X 在工作区之外`），
+于是 `AskUser` 的三参数签名不变，Web 的审批表与 CLI 的 stdin 回答者都不必改。
+
+**没有**为它们加结构化的 `warning` / `target` / `remember_key` 字段。触发条件：审批卡片需要
+按风险分色或按目标分组时再加——那时才需要动 `AnswerApprovalIn` 与 `ApprovalTable.request`，
+现在加只是让三处（hook context / 审批表 / DTO）同步维护一个没人读的字段。
 
 ## 6. 不变量与失败模型
 
@@ -219,12 +227,32 @@
 | I-P4 | 文件工具越界**失败关闭**：没有账本记录就不放行 | 账本只由 `gate` 写、工具只读 | 工具若自行放行 → `tools/paths.py` 的 `outside_ok` 缺省为假 |
 | I-P5 | 运行级权限开关不漏传给子 agent | `tools/subagent.py` 逐字段前传 + 一条"父 strict 则子 strict"的用例 | 漏传 → 最严一档被静默绕过；现有测试只覆盖 `auto_approve`/`ask` |
 | I-P6 | 会话的归属不可变且可查 | 会话 header（只写一次） | 无其它写入路径 |
+| I-P7 | 跨工作区不会静默读到别人的会话 | `JsonlSessionRepo.open` 的归属校验 | 调查发现的真实陷阱：`_locate` 优先用 `metadata.path`，而 `open` 只校验 id |
+| I-P8 | 运行级工作区根在每个落点都一致 | `RunState.workspace_root` + 六个读取点（文件工具 / `bash` 的 cwd / 任务库 / 系统提示 / 压缩落盘 / hook 注入） | 漏一处就是"模型看到的路径"与"实际写入的路径"两套答案；`tests/test_run_workspace.py` 逐个盯 |
 
 **失败模型**：问不到人（EOF / 无回答者 / 审批超时）→ 拒绝；`gate` 自身抛异常 → 按拒绝处理（
 `trigger_hooks` 的既有"失败关闭"约定）；注册表文件损坏 → 读出空的已知列表并给出可执行的修复提示，
 不阻断运行（会话数据不依赖注册表）。
 
-## 7. 未验证假设与"重新考虑"的信号
+## 7. 接口与前端落地决策
+
+- **请求 DTO 加 `extra="forbid"`**（`CreateSessionIn` / `StartRunIn` / `CreateWorkspaceIn`）：
+  pydantic 默认静默丢弃未知字段，于是"前端加了字段、服务端漏加"会变成 201 正常返回、
+  却按默认值跑的模式错配，而且没有任何机械检查覆盖 REST DTO（只有事件类型名集合有）。
+  代价是以后给这两个端点加字段必须两边同改——这正是想要的失败方向。
+- **两个选择器的摆放**：工作区选择器放 `features/sessions/` 内、权限模式选择器放
+  `features/composer/` 内，值经 L4 route 的 `useState` 下发。理由是机械门禁第 2 条
+  （feature 之间不得互相 import）：做成独立 feature 再被消费方 import 会当场失败，
+  而"消费方内联 + L4 持状态"不需要新增抽象（判据 2 的删除测试：删掉这层摆放规则后
+  跨 feature 依赖重新出现，因此保留）。
+- **权限模式不持久化在前端**：`uiStore` 只存纯界面偏好（它的模块注释已立此规矩）。
+  "上次选了系统级，下次打开浏览器继续全放行"属于安全默认值问题，所以模式是会话视图的
+  瞬时状态，缺省值来自服务端（工作区默认权限）。
+- **特性开关**：`workspaces` 是端点型（声明即可断言 `GET /api/workspaces` 200），
+  `permission_modes` 是参数型（用"非法值 422"证明它真的被读）——参数型开关没有端点可断言，
+  不写这条守护就会变成"声明了却没人读"。
+
+## 8. 未验证假设与"重新考虑"的信号
 
 | 假设 | 条件 | 出现什么信号时重新考虑 |
 |---|---|---|
@@ -233,3 +261,6 @@
 | 危险清单覆盖够用 | 10 类，均可测 | 评测/真实使用中抓到一个造成不可逆损失却未被问的命令 |
 | 工作区默认权限存注册表 | 唯一写入口在 CLI | 需要按会话或按分支给不同模式时 |
 | 内存后端也能表达归属 | 字段进 `SessionMetadata` | 内存后端要跑跨工作区一致性用例时，再把 root 提上协议 |
+| 会话 id 全局唯一，可以跨库逐个找 | 每次按会话操作要扫各工作区的 `repo.list()`（只读 header，代价与工作区数×会话数成正比） | 工作区或会话数量上去后，定位明显变慢 → 把工作区 id 放进会话 id 或加一层索引 |
+| 单工作区模式下省略 `workspace` 是安全的 | 那一个候选就是默认值，归属照样落 header | 出现"以为建在 A、实际建在 B"的事故 → 取消单工作区默认，一律必填 |
+| 危险/越界的警告只在 `reason` 文本里 | 不加结构化的 `warning` / `target` 字段 | 审批卡片要按风险分色或按目标分组时 |

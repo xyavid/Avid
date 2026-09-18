@@ -12,6 +12,10 @@ uv sync --extra web
 # 2) 起服务（API + SSE + 静态资源）
 uv run --env-file .env avid web --port 8765
 # → http://127.0.0.1:8765
+
+# 可选：把这个进程绑到一个工作区（单工作区模式）。缺省是多工作区模式——
+# 界面上的工作区选择器列出 `avid workspace list` 里的候选，新建会话必须选一个。
+uv run --env-file .env avid web --port 8765 --workspace /path/to/project
 ```
 
 开发期（前端热更新）两个进程：
@@ -38,7 +42,9 @@ uv run avid web --port 8765      # 静态资源与 API 同源
 
 | 页面 / 交互（URL） | 主要接口 | 数据流 |
 |---|---|---|
-| 导航列（`/sessions` 左侧） | `GET /api/sessions`、`POST /api/sessions`、`PATCH /api/sessions/{id}`、`DELETE /api/sessions/{id}` | 查询流（TanStack Query） |
+| 导航列（`/sessions` 左侧） | `GET /api/sessions`、`POST /api/sessions`、`PATCH /api/sessions/{id}`、`DELETE /api/sessions/{id}` | 查询流（TanStack Query）；列表项带归属工作区 |
+| 工作区选择器（新建会话前） | `GET /api/workspaces`、`POST /api/workspaces` | 查询流；选中的 id 随 `POST /api/sessions` 发出（多工作区模式下必填，缺了是 400 `workspace_required`） |
+| 权限模式选择器（输入条旁） | 不新增接口 | 随 `POST /api/sessions/{id}/runs` 的 `permission` 发出；缺省取会话所属工作区的 `default_permission` |
 | 会话时间线（`/sessions/{id}`） | `GET /api/sessions/{id}/entries`（分页，带 `branch`）、`GET /api/runs/{id}/events`（SSE） | 历史来自条目（权威），实时来自事件 |
 | 提交一次运行（输入条） | `POST /api/sessions/{id}/runs`（`branch` 决定接哪条链尾） | 命令流 → 201 `{run_id}` |
 | 分支选择器（会话头部下方） | `GET /api/sessions/{id}/branches`、`POST /api/sessions/{id}/branches` | 查询流 + 命令流；「切换」只是本地选择——服务端没有「当前分支」，它只有一组链尾值 |
@@ -83,6 +89,29 @@ durable `assistant_message` 带完整内容并把它替换掉。**delta 不落�
 - 活动 run 期间服务端拒绝分叉（409 `branch_exists` / `session_busy`），界面先把入口禁用。
 - 重名分支 409 `branch_exists`；未知分叉点 400 `invalid_request`；未给名字时自动取
   `b2`、`b3`…（跳过已占用的）。
+
+## 3.2 工作区与权限模式（阶段 18）
+
+**工作区**是一个本地目录，同时是权限边界、会话归属与干活的地点。界面上它出现在两处：
+新建会话前必须选（列表来自注册表，`is_default` 或最近使用的那一个被预选），
+会话卡与详情显示归属名字。归属是**创建时的静态事实**，写在会话 header 里，
+所以注册表被删掉也不影响已有会话的归属查询。
+
+**权限模式**决定"哪些动作会打问号"，三档是信任边界：
+
+| 档 | 值 | 行为 |
+|---|---|---|
+| 严格 | `strict` | 每个受管动作都要问（默认） |
+| 工作区 | `workspace` | 区内常规操作免问；危险命令仍问；越界需同意一次 |
+| 系统级 | `system` | 默认免问；仅危险命令仍问 |
+
+- 优先级：本次请求的 `permission` > 工作区默认权限（`avid workspace permission <id> <mode>`）> `strict`。
+- 越界（工作区之外的目标）在严格与工作区档都会问一次，同意后**本次运行内**不再问同一目标；
+  系统级档直接放行。
+- 危险命令（提权、递归删除、系统包管理、`curl | sh` 等）在三档里都要问，理由会写明类别；
+  硬拒绝清单（`rm -rf /` 这类不可恢复的破坏）任何档、任何回答都不放行。
+- 界面上的选择**不持久化**：它是这次会话视图的瞬时状态，缺省值来自服务端。理由是
+  "上次选了系统级，下次打开浏览器继续全放行"属于安全默认值问题。
 
 ## 4. 验证
 

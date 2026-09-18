@@ -90,13 +90,13 @@ class WorkspaceRef(BaseModel):
     id: str | None = None
     root: str | None = None
     name: str | None = None
+    default_permission: str | None = None
 
 
 class WorkspaceOut(WorkspaceRef):
     id: str
     created_at: int = 0
     last_used_at: int = 0
-    default_permission: str = "strict"
     is_default: bool = False
 
 

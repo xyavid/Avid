@@ -37,7 +37,6 @@ from ..session import (
     SessionRecorder,
     messages_for_branch,
 )
-from ..tools import workspace
 from .approvals import APPROVAL_TIMEOUT_SECONDS, ApprovalTable
 from .errors import RunBusy, RunFinished, RunNotFound, SessionNotFound
 from .workspaces import WorkspaceService

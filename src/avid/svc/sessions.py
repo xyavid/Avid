@@ -113,6 +113,10 @@ class SessionService:
             "id": workspace_id,
             "root": owner.root if owner is not None else None,
             "name": owner.name if owner is not None else None,
+            # 界面据此预选权限模式：会话的默认档来自它的工作区。
+            "default_permission": (
+                owner.default_permission if owner is not None else None
+            ),
         }
 
     def get(self, session_id: str) -> dict[str, Any]:
