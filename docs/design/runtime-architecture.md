@@ -443,7 +443,7 @@ D1–D8 里，D3/D5/D6/D7 是**能力差异**（我们没做），D1/D2/D4 是**
 | 6 | **结构不变量由所有者保证**：非法的 `replace_all` / `splice` 抛错且不改状态 | 新增测试：构造会产生孤立 tool 结果的候选 → 断言抛 `TranscriptError` 且 `transcript.validate() == []` |
 | 7 | **一次性标志各只有一个写入点** | `grep -rn "compacted = True" src/avid` → 1 处；`grep -rn "retried = True" src/avid` → 1 处 |
 | 8 | **①②③ 在类型上无法调用模型** | `inspect.signature(prepare)` 有 `summarize`，且 `policy/compaction.py` 的 `tool_result_budget` / `snip_compact` / `micro_compact` 三个函数签名中无 `chat` |
-| 9 | **依赖方向单向**：`runtime/` 不 import `policy/` 的具体实现 | `grep -rn "from \.\.policy" src/avid/runtime/*.py` → 只出现在 `context.py`（调 compaction）、`state.py`（持有 todo / skills）、`hooks.py`（注册默认回调）。**初稿漏了 hooks.py**：它是扩展点的注册处，默认回调必须有人注册；把注册搬去别处只换 import 位置、不换隔离效果。`loop.py` 与 `execution.py` 对 policy **零依赖** |
+| 9 | **依赖方向单向**：`runtime/` 不 import `policy/` 的具体实现 | `grep -rn "^from \.\.policy" src/avid/runtime/*.py`（**只匹配顶层 import**）→ 只出现在 `context.py`（调 compaction）、`state.py`（持有 todo / skills）、`hooks.py`（注册默认回调）。**两处措辞修正**：① 初稿漏了 `hooks.py`——它是扩展点的注册处，默认回调必须有人注册；把注册搬去别处只换 import 位置、不换隔离效果。② `loop.py` / `state.py` 里 `AskUser` 这类**只用于注解**的类型别名走 `if TYPE_CHECKING:` 导入（缩进的那一行），不算运行时依赖——注解是惰性的，跨层只为标注而 import 会让断言从"可 grep 的事实"退化成"文档说没有、代码里有"。`loop.py` 与 `execution.py` 对 policy **零运行时依赖** |
 | 10 | **压缩日志与计数不减少** | 现有 `test_compaction_is_logged` / `test_compaction_count_reaches_the_stop_hook` 通过 |
 | 11 | **端到端不变**：同一脚本化对话在重构前后产出相同 messages 序列 | 录制-回放测试：固定 `chat` 返回值序列，断言最终 `transcript.as_messages()` 与快照一致 |
 | 12 | 测试总数不减 | `uv run pytest -q` 的 passed 数 ≥ 295 |
@@ -521,7 +521,7 @@ D1–D8 里，D3/D5/D6/D7 是**能力差异**（我们没做），D1/D2/D4 是**
 | 4 | 无旧路径残留 | `grep "avid.agent\|avid.compact\|avid.llm\|avid.skill_loader\|avid.tools.todo\|avid.transcript\|from avid import"` → 测试与源码无匹配 |
 | 5 | messages 只有一个所有者 | 仍只在 `ai/transcript.py` |
 | 6 | 一次性标志各一个赋值点 | `compacted` 在 `runtime/context.py`、`retried` 在 `runtime/loop.py` |
-| 7 | 判据 9 | `runtime/` 的 policy import 只在 `context.py` / `state.py` / `hooks.py`；`loop.py` 与 `execution.py` 零依赖 |
+| 7 | 判据 9 | `runtime/` 的 policy import 只在 `context.py` / `state.py` / `hooks.py`；`loop.py` 与 `execution.py` 零依赖（阶段 15 一度给 `loop.py` 加了 `AskUser` 的运行时 import，已改回 `TYPE_CHECKING`，见 §12 判据 9 的第 ② 条修正） |
 | 8 | 行为不变 | black-box 脚本在分包前后产出的 messages 序列与返回值**逐字节一致** |
 | 9 | 真实运行 | 通过；logger 名已随模块路径更新（`avid.runtime.loop` / `avid.policy.skills`） |
 
