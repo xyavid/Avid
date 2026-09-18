@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, get_args
 
 # ---- 事件名：durable ----
 
@@ -72,13 +72,8 @@ TRANSIENT_EVENT_TYPES: tuple[str, ...] = (RUN_STATUS,)
 
 DELTA_EVENT_TYPES: tuple[str, ...] = (ASSISTANT_DELTA,)
 
-#: 完整清单。顺序不影响语义，但前端类型联合按它生成/比对。
-EVENT_TYPES: tuple[str, ...] = (
-    *DURABLE_EVENT_TYPES,
-    *TRANSIENT_EVENT_TYPES,
-    *DELTA_EVENT_TYPES,
-)
-
+#: 事件名的**唯一手写清单**。`EVENT_TYPES` 由它派生（`get_args`），所以"联合类型
+#: 里有一个、清单里没有"这种分叉不可能出现——以前是两份字面量靠人对齐。
 EventType = Literal[
     "run_started",
     "user_message",
@@ -100,12 +95,27 @@ EventType = Literal[
     "assistant_delta",
 ]
 
+#: 完整清单（顺序 = `EventType` 的书写顺序）。前端类型联合按它比对。
+EVENT_TYPES: tuple[EventType, ...] = get_args(EventType)
+
 #: 终态事件：前端据此 cancel 待处理 delta（不变量 I12）。
 TERMINAL_EVENT_TYPES: frozenset[str] = frozenset(
     {RUN_FINISHED, RUN_FAILED, RUN_CANCELLED}
 )
 
 DURABLE_SET: frozenset[str] = frozenset(DURABLE_EVENT_TYPES)
+
+# ---- 客户端可见的时间常量 ----
+#
+# 三处各写一份 15.0 / 30.0 的时代结束了：`/api/meta` 公布的
+# `stream.heartbeat_seconds`、SSE 生成器的心跳、前端据此设的超时必须是同一个数，
+# 否则"客户端等得比心跳久"或"服务端发得比客户端耐心"这类错位只能靠人发现。
+# 放在 events.py：它已经是"传输契约"的单点模块（事件名也在这里）。
+
+#: SSE 心跳间隔：这么久没有真事件就发一个注释帧，客户端据此判断连接还活着。
+STREAM_HEARTBEAT_SECONDS = 15.0
+#: 静默兜底：客户端这么久没收到东西后应与注册表对账（不变量 I13）。
+TERMINAL_FALLBACK_SECONDS = 30.0
 
 
 def now_ms() -> int:

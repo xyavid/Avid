@@ -18,13 +18,13 @@ import hashlib
 import json
 import logging
 import os
-import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 from .policy.permission import DEFAULT_MODE, validate_mode
+from .runtime.events import now_ms
 
 logger = logging.getLogger("avid.workspaces")
 
@@ -47,10 +47,6 @@ class WorkspaceNotFound(WorkspaceError):
 
 class WorkspaceRegistryCorrupt(WorkspaceError):
     pass
-
-
-def now_ms() -> int:
-    return int(time.time() * 1000)
 
 
 def home_dir() -> Path:

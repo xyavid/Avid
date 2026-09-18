@@ -26,7 +26,7 @@ from typing import Any
 from ..ai.client import LLMError, chat_completion, stream_completion
 from ..ai.config import ConfigError, load_config
 from ..runtime import events
-from ..runtime.events import RunEvent
+from ..runtime.events import STREAM_HEARTBEAT_SECONDS, RunEvent
 from ..runtime.loop import RoundLimitExceeded, RunCancelled, agent_loop
 from ..runtime.state import RunState
 from ..session import (
@@ -67,9 +67,6 @@ MAX_EVENT_BUFFER = 4096
 # 条数兜底时**不允许**动刚结束的记录：订阅者可能还在消费它的缓冲（I5 不允许
 # 静默缺口）。只有结束超过这么久的才在兜底范围内。
 SWEEP_MIN_AGE_SECONDS = 30.0
-
-# 事件流静默兜底：客户端这么久没收到东西后应与注册表对账（I13）。
-TERMINAL_HARD_FALLBACK_SECONDS = 30.0
 
 # 消息角色 → durable 消息事件
 _MESSAGE_EVENTS = {
@@ -384,7 +381,7 @@ class RunRegistry:
         *,
         after: int = 0,
         deltas: bool = False,
-        heartbeat: float = 15.0,
+        heartbeat: float = STREAM_HEARTBEAT_SECONDS,
         stop: Callable[[], bool] | None = None,
     ) -> Iterator[RunEvent | None]:
         """按游标补齐 + 实时跟随。``None`` 表示一次心跳。
@@ -738,7 +735,6 @@ __all__ = [
     "MAX_RETAINED_RUNS",
     "REPLAY_BUFFER_SIZE",
     "SESSION_DIR",
-    "TERMINAL_HARD_FALLBACK_SECONDS",
     "RunRecord",
     "RunRegistry",
 ]

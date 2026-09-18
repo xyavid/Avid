@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+from ..runtime.events import STREAM_HEARTBEAT_SECONDS
+
 import json
 import logging
 from collections.abc import Iterator
@@ -16,8 +18,10 @@ from .schemas import event_payload
 
 logger = logging.getLogger("avid.web.sse")
 
-# 每 15s 一行注释帧穿透中间代理（比 Flowise 的 30s 更保守）。
-HEARTBEAT_SECONDS = 15.0
+# 每 HEARTBEAT_SECONDS 一行注释帧穿透中间代理（比 Flowise 的 30s 更保守）。
+# 心跳间隔与后端同源（`runtime/events.py`）：客户端据 /api/meta 的值设超时，
+# 两边各写一份 15.0 迟早错位。
+HEARTBEAT_SECONDS = STREAM_HEARTBEAT_SECONDS
 
 PING = ": ping\n\n"
 

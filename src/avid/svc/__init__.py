@@ -18,7 +18,12 @@ from typing import Any
 
 from ..ai.config import ConfigError, load_config
 from ..policy.skills import SkillLoader, default_skills_dir
-from ..runtime.events import EVENT_TYPES, now_ms
+from ..runtime.events import (
+    EVENT_TYPES,
+    STREAM_HEARTBEAT_SECONDS,
+    TERMINAL_FALLBACK_SECONDS,
+    now_ms,
+)
 from ..session import JsonlSessionRepo
 from ..tools import TOOLS, workspace
 from ..workspaces import WorkspaceRegistry
@@ -53,9 +58,8 @@ FEATURES: dict[str, int] = {
     "workspace_picker": 1,  # 新增工作区：POST /workspaces/pick 弹宿主机文件夹选择器
 }
 
-# 事件流相关常量对客户端可见：它据此设超时与对账阈值（I13）。
-STREAM_HEARTBEAT_SECONDS = 15.0
-TERMINAL_FALLBACK_SECONDS = 30.0
+# 事件流相关常量对客户端可见（`/api/meta` 公布它们，前端据此设超时与对账阈值）。
+# 定义在 `runtime/events.py`：SSE 生成器、runs 注册表、meta 必须用同一个数。
 
 # 同时打开的 SSE 事件流上限。为什么需要这个数：Starlette 对**同步**生成器是
 # `iterate_in_threadpool`，而我们的生成器 `next()` 会阻塞到下一个事件或心跳——
