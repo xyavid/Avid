@@ -169,7 +169,9 @@ def test_list_sessions_shows_name_and_count(sandbox, model, capsys):
     row = out.strip().splitlines()[0].split("\t")
     assert row[0] == created
     assert row[2] == "2"
-    assert row[3] == "演示会话"
+    # 阶段 18 起列表多一列归属工作区，名字后移一位。
+    assert row[3].startswith("w-")
+    assert row[4] == "演示会话"
 
 
 def test_list_sessions_when_empty(sandbox, capsys):
@@ -205,3 +207,93 @@ def test_argument_errors_exit_2(sandbox, argv):
     with pytest.raises(SystemExit) as info:
         cli.main(argv)
     assert info.value.code == 2
+
+
+# ---------------- 工作区（阶段 18） ----------------
+
+
+def test_new_session_records_the_selected_workspace(sandbox, model, capsys, tmp_path):
+    other = tmp_path.parent / f"other-{tmp_path.name}"
+    other.mkdir()
+    model.answer("答")
+
+    assert cli.main(["--agent", "--new-session", "--workspace", str(other), "问"]) == 0
+
+    err = capsys.readouterr().err
+    assert "工作区 w-" in err
+    assert str(other) in err
+    assert session_files(sandbox) == []  # 会话落在被选中的工作区里
+    assert len(session_files(other)) == 1
+
+
+def test_session_list_shows_the_workspace_column(sandbox, model, capsys):
+    model.answer("答")
+    cli.main(["--agent", "--new-session", "问"])
+    capsys.readouterr()
+
+    assert cli.main(["--list-sessions"]) == 0
+
+    row = capsys.readouterr().out.strip().splitlines()[0].split("\t")
+    assert row[3].startswith("w-")
+
+
+def test_permission_default_comes_from_the_workspace(sandbox, model, monkeypatch, capsys):
+    """运行级旗标 > 工作区默认权限 > strict：这里验中间那一档。"""
+    registry = cli.WorkspaceRegistry()
+    ws = registry.add(sandbox, permission="workspace")
+    seen = {}
+
+    def fake_loop(messages, **kwargs):
+        seen.update(kwargs)
+        return "答"
+
+    monkeypatch.setattr(cli, "agent_loop", fake_loop)
+
+    assert cli.main(["--agent", "--new-session", "问"]) == 0
+
+    assert seen["permission_mode"] == "workspace"
+    assert seen["workspace_root"] == ws.root
+    capsys.readouterr()
+
+
+def test_run_flag_overrides_the_workspace_default(sandbox, model, monkeypatch, capsys):
+    cli.WorkspaceRegistry().add(sandbox, permission="workspace")
+    seen = {}
+
+    def fake_loop(messages, **kwargs):
+        seen.update(kwargs)
+        return "答"
+
+    monkeypatch.setattr(cli, "agent_loop", fake_loop)
+
+    assert cli.main(["--agent", "--new-session", "--permission", "system", "问"]) == 0
+
+    assert seen["permission_mode"] == "system"
+    capsys.readouterr()
+
+
+def test_workspace_subcommand_add_list_permission_remove(sandbox, capsys, tmp_path):
+    other = tmp_path.parent / f"ws-{tmp_path.name}"
+    other.mkdir()
+
+    assert cli.main(["workspace", "add", str(other), "--name", "另一个"]) == 0
+    added = capsys.readouterr().out.strip().split("\t")
+    assert added[1] == str(other.resolve())
+    assert added[2] == "另一个"
+
+    assert cli.main(["workspace", "list"]) == 0
+    assert "另一个" in capsys.readouterr().out
+
+    assert cli.main(["workspace", "permission", added[0], "system"]) == 0
+    assert capsys.readouterr().out.strip().split("\t")[1] == "system"
+
+    assert cli.main(["workspace", "remove", added[0]]) == 0
+    assert "磁盘上的会话数据未动" in capsys.readouterr().out
+    assert cli.main(["workspace", "list"]) == 0
+    assert "另一个" not in capsys.readouterr().out
+
+
+def test_workspace_subcommand_reports_unknown(monkeypatch, capsys, tmp_path):
+    assert cli.main(["workspace", "add", str(tmp_path / "missing")]) == 1
+
+    assert "工作区错误" in capsys.readouterr().err

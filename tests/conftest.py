@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from avid.tools import workspace
+from avid.workspaces import AVID_HOME_ENV
 
 
 @pytest.fixture(autouse=True)
@@ -13,6 +14,12 @@ def model_env(monkeypatch):
     monkeypatch.setenv("AVID_API_KEY", "test-key")
     monkeypatch.setenv("AVID_MODEL", "test-model")
     monkeypatch.delenv("AVID_BASE_URL", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def avid_home(tmp_path, monkeypatch):
+    """用户级目录 → tmp_path：工作区注册表绝不写进真实的 ~/.avid。"""
+    monkeypatch.setenv(AVID_HOME_ENV, str(tmp_path / "avid-home"))
 
 
 @pytest.fixture
