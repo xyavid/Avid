@@ -95,7 +95,7 @@ def test_tool_round_trip_is_persisted(no_hooks, session):
         messages,
         config=CONFIG,
         chat=chat,
-        registry={"read_file": lambda args: "文件内容"},
+        registry={"read_file": lambda args, **kwargs: "文件内容"},
         on_message=recorder.on_message,
     )
 

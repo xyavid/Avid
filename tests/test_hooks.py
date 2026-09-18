@@ -132,18 +132,22 @@ def test_context_inject_hook_reports_environment(clean):
     assert "bash" in context["injected"][0]
 
 
-def test_permission_hook_blocks_and_records_reason(clean, monkeypatch):
-    monkeypatch.setattr(hooks, "check_permission", lambda name, arguments, **kwargs: False)
-    context = {"tool": "bash", "arguments": {"command": "ls"}}
+def test_permission_hook_blocks_and_records_reason(clean):
+    """严格模式下的常规拒绝：分类是 user，理由里带工具名与规则原文。"""
+    context = {
+        "tool": "bash",
+        "arguments": {"command": "ls"},
+        "permission_mode": "strict",
+        "ask": lambda name, arguments, reason: False,
+    }
 
     assert hooks.permission_hook(context) == BLOCK
     assert context["denied_kind"] == "user"
-    assert context["denied_reason"].startswith("bash：")
+    assert context["denied_reason"] == "bash：执行 shell 命令"
     assert "本次未获用户批准" in context["denied_content"]
 
 
-def test_permission_hook_allows_and_stays_quiet(clean, monkeypatch):
-    monkeypatch.setattr(hooks, "check_permission", lambda name, arguments, **kwargs: True)
+def test_permission_hook_allows_and_stays_quiet(clean):
     context = {"tool": "read_file", "arguments": {"path": "a"}}
 
     assert hooks.permission_hook(context) is None
@@ -160,12 +164,14 @@ def test_permission_hook_reports_hard_deny_reason(clean):
     assert "永久禁止" in context["denied_content"]
 
 
-def test_hard_deny_and_user_refusal_give_different_guidance(clean, monkeypatch):
+def test_hard_deny_and_user_refusal_give_different_guidance(clean):
     """两种拒绝必须让模型看到不同的话，否则它分不清"永远不许"和"这次不行"。"""
-    monkeypatch.setattr(hooks, "check_permission", lambda name, arguments, **kwargs: False)
-
     hard = {"tool": "bash", "arguments": {"command": "rm -rf /"}}
-    user = {"tool": "bash", "arguments": {"command": "ls"}}
+    user = {
+        "tool": "bash",
+        "arguments": {"command": "ls"},
+        "ask": lambda name, arguments, reason: False,
+    }
 
     hooks.permission_hook(hard)
     hooks.permission_hook(user)
@@ -175,45 +181,34 @@ def test_hard_deny_and_user_refusal_give_different_guidance(clean, monkeypatch):
     assert hard["denied_content"] != user["denied_content"]
 
 
-def test_permission_hook_routes_to_auto_approve(clean, monkeypatch):
-    calls = []
-    monkeypatch.setattr(
-        hooks, "check_permission", lambda n, a: calls.append("interactive") or True
-    )
-    monkeypatch.setattr(
-        hooks, "_auto_approve", lambda n, a: calls.append("auto") or True
-    )
+def test_permission_hook_routes_auto_approve_to_the_answerer(clean):
+    """``--yes`` 只换回答者：注入的 ask 不被调用，硬拒绝仍被拦住。"""
+    asked = []
+    auto = {
+        "tool": "bash",
+        "arguments": {"command": "sudo apt-get install -y x"},
+        "auto_approve": True,
+        "ask": lambda *args: asked.append(args) or False,
+    }
 
-    hooks.permission_hook({"tool": "bash", "arguments": {}, "auto_approve": True})
+    assert hooks.permission_hook(auto) is None
+    assert asked == []
 
-    assert calls == ["auto"]
+    hard = {"tool": "bash", "arguments": {"command": "rm -rf /"}, "auto_approve": True}
 
-
-def test_permission_hook_goes_interactive_without_the_run_flag(clean, monkeypatch):
-    calls = []
-    monkeypatch.setattr(
-        hooks, "check_permission", lambda n, a, **kwargs: calls.append("interactive") or True
-    )
-    monkeypatch.setattr(
-        hooks, "_auto_approve", lambda n, a: calls.append("auto") or True
-    )
-
-    hooks.permission_hook({"tool": "bash", "arguments": {}})
-
-    assert calls == ["interactive"]
+    assert hooks.permission_hook(hard) == BLOCK
+    assert hard["denied_kind"] == "hard"
 
 
-def test_permission_hook_forwards_injected_ask(clean, monkeypatch):
+def test_permission_hook_uses_the_injected_ask_without_the_run_flag(clean):
     """注入了 ask 就必须用它——Web 路径的审批不能落到 stdin 上（§7.2）。"""
     seen = []
-    monkeypatch.setattr(
-        hooks, "check_permission", lambda n, a, ask=None: seen.append(ask) or True
-    )
-    ask = lambda name, arguments, reason: True  # noqa: E731 - 只关心它被原样传递
+    ask = lambda name, arguments, reason: seen.append((name, reason)) or True  # noqa: E731
 
-    hooks.permission_hook({"tool": "bash", "arguments": {}, "ask": ask})
+    context = {"tool": "bash", "arguments": {"command": "ls"}, "ask": ask}
 
-    assert seen == [ask]
+    assert hooks.permission_hook(context) is None
+    assert seen == [("bash", "执行 shell 命令")]
 
 
 def test_log_hook_never_blocks(clean):

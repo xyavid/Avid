@@ -74,7 +74,7 @@ def test_returns_text_and_appends_assistant_when_no_tool_calls(no_hooks):
 def test_executes_tool_call_then_finishes():
     seen = []
 
-    def read_file(args):
+    def read_file(args, **kwargs):
         seen.append(args)
         return "文件内容"
 
@@ -134,7 +134,7 @@ def test_unknown_tool_is_reported_back_to_the_model():
 
 
 def test_tool_exception_becomes_a_result_not_a_crash():
-    def boom(args):
+    def boom(args, **kwargs):
         raise ValueError("权限不足")
 
     chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
@@ -183,7 +183,7 @@ def test_round_limit_raises_instead_of_returning_partial_text():
 def test_pre_tool_use_block_skips_the_handler(no_hooks):
     executed = []
 
-    def read_file(args):
+    def read_file(args, **kwargs):
         executed.append(args)
         return "内容"
 
@@ -315,7 +315,7 @@ def test_post_tool_use_can_rewrite_the_result(no_hooks):
     chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
     messages = [{"role": "user", "content": "读"}]
 
-    agent_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a: "原始"})
+    agent_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a, **kwargs: "原始"})
 
     assert messages[2]["content"] == "改写过的结果"
 
@@ -327,7 +327,7 @@ def test_post_tool_use_sees_the_raw_content(no_hooks):
     chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
     messages = [{"role": "user", "content": "读"}]
 
-    agent_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a: "原始"})
+    agent_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a, **kwargs: "原始"})
 
     assert seen == ["原始"]
 

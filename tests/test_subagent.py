@@ -107,7 +107,7 @@ def test_validation_happens_before_any_subagent_runs():
 def test_runs_every_task_and_labels_the_results():
     seen = []
 
-    def runner(prompt, *, config, auto_approve, ask=None):
+    def runner(prompt, *, config, auto_approve, ask=None, **kwargs):
         seen.append(prompt)
         return f"摘要：{prompt}"
 
@@ -192,7 +192,7 @@ def test_auto_approve_comes_from_the_run_state():
     """免审批开关从 RunState 读，显式传给子运行——不是隐式的全局状态。"""
     seen = []
 
-    def runner(prompt, *, auto_approve, config, ask=None):
+    def runner(prompt, *, auto_approve, config, ask=None, **kwargs):
         seen.append(auto_approve)
         return "ok"
 
@@ -204,7 +204,7 @@ def test_auto_approve_comes_from_the_run_state():
 def test_auto_approve_defaults_to_false(monkeypatch):
     seen = []
 
-    def runner(prompt, *, auto_approve, config, ask=None):
+    def runner(prompt, *, auto_approve, config, ask=None, **kwargs):
         seen.append(auto_approve)
         return "ok"
 

@@ -61,7 +61,7 @@ class RecordingTools:
         return {name: self._handler(name) for name in names}
 
     def _handler(self, name: str) -> Callable[[dict], str]:
-        def run(arguments: dict) -> str:
+        def run(arguments: dict, **kwargs) -> str:
             self.calls.append((name, arguments))
             return self.results.get(name, f"{name} ok")
 
