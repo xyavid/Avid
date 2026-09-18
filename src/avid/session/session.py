@@ -153,7 +153,13 @@ class SessionBranch:
         self._session = session
 
     def get_tip_id(self) -> str | None:
-        return self._session._branch_tip(self.name, required=True)
+        """链尾条目 id；空分支（含还没写过的默认分支）返回 None。
+
+        不再 `required=True`：默认分支是隐式存在的空链，把"没有链尾值"当成错误会
+        让"空 main"这个合法状态变成异常。非默认分支的对象只能由 `create_branch`
+        或 `branch()`（要求存在）拿到，所以这里也不需要额外校验。
+        """
+        return self._session._branch_tip(self.name)
 
     def find_entries(self, query: BranchScan | None = None) -> list[Entry]:
         query = query or BranchScan()
@@ -280,9 +286,15 @@ class StorageBackedSession:
         return [DEFAULT_BRANCH, *(name for name in stored if name != DEFAULT_BRANCH)]
 
     def branch(self, name: str) -> SessionBranch | None:
+        """取一条分支。默认分支**隐式存在**（可能为空），其余分支没建过就是 None。
+
+        以前这里对空会话返回 None，而 `branch_names()` 同时宣称有 main——同一个问题
+        两个答案。空 main 是合法状态（第一条消息的 parent 是 None），所以给它一个
+        空分支对象，与 `branch_names()`、`messages_for_branch()` 的说法一致。
+        """
         self._assert_open()
         self._assert_valid_branch(name)
-        if self._storage.get_value(branch_tip(name)) is None:
+        if self._storage.get_value(branch_tip(name)) is None and name != DEFAULT_BRANCH:
             return None
         return self._branch_object(name)
 
@@ -309,16 +321,19 @@ class StorageBackedSession:
 
         def job(mutator: SessionMutation) -> None:
             tip = mutator.get_value(branch_tip(branch))
-            if tip is None:
+            if tip is None and branch != DEFAULT_BRANCH:
+                # 非默认分支必须显式建过：名字敲错时不该悄悄建一条新链。
                 raise SessionInvariantError(
                     f"未知分支：{branch}（先 create_branch 建它再写入）"
                 )
+            # 默认分支还没有分支头值时，第一条消息的 parent 就是 None。
+            parent_id = None if tip is None else tip.value
             mutator.commit(
                 [
                     EntryWrite(
                         NewEntry(
                             id=entry_id,
-                            parent_id=tip.value,
+                            parent_id=parent_id,
                             message=message,
                         )
                     ),

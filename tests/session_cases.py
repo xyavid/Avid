@@ -57,11 +57,28 @@ def _create_has_no_branch(repo) -> None:
     assert session.metadata.id == "s1"
     assert session.metadata.created_at > 0
     assert session.metadata.storage_version == STORAGE_VERSION
-    # create 不隐式建分支：要写内容必须先显式建一条。
-    assert session.branch("main") is None
+    # create 不写任何分支值；但默认分支是**隐式存在**的（空链），所以读侧拿到的
+    # 是一个空分支而不是 None——与 `branch_names()` 的说法保持一致。
+    implicit = session.branch("main")
+    assert implicit is not None
+    assert implicit.get_tip_id() is None
+    assert implicit.find_entries() == []
     assert session.get_value(branch_tip("main")) is None
     with pytest.raises(SessionExistsError):
         repo.create(id="s1")
+    session.close()
+
+
+def _first_message_into_an_empty_main_roots_the_chain(repo) -> None:
+    session = repo.create(id="empty-main")
+    branch = session.branch("main")
+    assert branch is not None
+
+    entry_id = branch.append_message(USER)
+
+    entry = session.get_entry(entry_id)
+    assert entry is not None and entry.parent_id is None, "第一条消息没有父条目"
+    assert session.branch("main").get_tip_id() == entry_id
     session.close()
 
 
@@ -154,11 +171,18 @@ def _invalid_ids_rejected(repo) -> None:
 
 
 def _append_requires_branch(repo) -> None:
+    """**非默认**分支必须先建：名字敲错时不该悄悄建出一条新链。
+
+    默认分支 main 是隐式存在的空链（`branch_names()` 一直宣称它），所以往 main
+    直接写第一条消息是合法的——那正是"默认分支"的含义；以前这里要求先显式
+    `create_branch("main")`，与读侧的说法相反（审查里的 P2-15）。
+    """
     session = repo.create(id="s")
     with pytest.raises(SessionInvariantError):
-        session.append_message("main", USER)
+        session.append_message("never-created", USER)
 
-    branch = session.create_branch("main", None)
+    branch = session.branch("main")
+    assert branch is not None
     assert branch.get_tip_id() is None
     assert branch.find_entries() == []
 
@@ -445,7 +469,7 @@ def all_cases() -> list[Case]:
         Case("lifecycle", "非法 id 被拒", _invalid_ids_rejected),
         Case("ownership", "同一会话只允许一个打开中的句柄", _open_is_exclusive),
         Case("ownership", "仓库关闭后不再接受任何操作", _repo_close_seals),
-        Case("messages", "写入前必须先建分支", _append_requires_branch),
+        Case("messages", "非默认分支写入前必须先建分支", _append_requires_branch),
         Case("messages", "分支之间互不干扰", _branches_are_independent),
         Case("messages", "非法消息被拒且不改动状态", _invalid_messages_are_rejected),
         Case("messages", "条目与分支头同事务", _append_is_atomic_with_the_branch_tip),
