@@ -51,12 +51,34 @@ test('delta 真的到达浏览器，且最终收敛成一条消息（不重复�
     // 乐观 assistant 气泡的稳定特征：assistant 卡片带 `mr-auto`，而 `aria-live`
     // **只加在 durable** 的那张上（EntryRow 的刻意设计）。所以
     // `article.mr-auto:not([aria-live])` 就是正在生成的那一条。
+    //
+    // 「durable 到了没」必须**从 DOM 判断**，不能拿网络侧的帧代替：脚本模型两点一次、
+    // 间隔 10ms 就把整段吐完，网络侧先看到 durable 时 React 往往还没提交任何 DOM，
+    // 用它当开关会把这个窗口整个跳过去（本用例曾经因此稳定失败）。
     const sample = () => {
-      if (state.__durableReply) return
-      const bubble = document.querySelector(
-        '[role="log"] article.mr-auto:not([aria-live])',
-      )
+      const log = document.querySelector('[role="log"]')
+      if (!log) return
+      if (log.querySelector('article[aria-live]')) {
+        state.__durableReply = true
+        return
+      }
+      const bubble = log.querySelector('article.mr-auto:not([aria-live])')
       if (bubble && (bubble.textContent ?? '').trim()) state.__sawStreamingBubble = true
+    }
+
+    // DOM 一变就采一次：delta 的可见性靠 React 提交之后才成立，而两次 delta 可能整个
+    // 落在同一帧里（rAF 每 16ms 才跑一次）——观察提交、不轮询时钟，才没有采样窗口。
+    let observer: MutationObserver | null = null
+    const watchDom = () => {
+      if (observer === null) {
+        observer = new MutationObserver(() => sample())
+        observer.observe(document.body, {
+          childList: true,
+          subtree: true,
+          characterData: true,
+        })
+      }
+      sample()
     }
 
     window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -93,11 +115,7 @@ test('delta 真的到达浏览器，且最终收敛成一条消息（不重复�
         }
       })()
 
-      const pump = () => {
-        sample()
-        if (!state.__durableReply) requestAnimationFrame(pump)
-      }
-      requestAnimationFrame(pump)
+      watchDom()
 
       // 交回给应用的是 tee 出来的另一支，内容与状态码、头都保持一致。
       return new Response(app, {
