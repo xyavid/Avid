@@ -98,7 +98,8 @@ def bundle(tmp_path):
         chat=ScriptedChat([make_turn("答")]),
     )
     client = TestClient(
-        create_app(services=services, static_dir=tmp_path / "unbuilt")
+        create_app(services=services, static_dir=tmp_path / "unbuilt"),
+        base_url="http://127.0.0.1:8765",
     )
     yield client, services, tmp_path
     services.close()

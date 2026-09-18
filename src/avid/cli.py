@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import socket
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -36,6 +37,7 @@ from .session import (
 )
 from .svc.workspaces import WorkspaceInvalid, bound_workspace
 from .tools import TOOLS, workspace
+from .web.app import LOOPBACK_HOSTS, trusted_hosts
 from .workspaces import (
     SESSION_DIR,
     Workspace,
@@ -413,6 +415,7 @@ def _run_web(argv: list[str]) -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    allowed_hosts = _allowed_hosts(args.host)
     print(
         f"Avid Web 正在监听 http://{args.host}:{args.port}\n"
         "开发期前端：pnpm -C web dev（Vite 代理 /api → 本进程）",
@@ -430,9 +433,41 @@ def _run_web(argv: list[str]) -> int:
         )
     else:
         uvicorn.run(
-            create_app(workspace_root=args.workspace), host=args.host, port=args.port
+            create_app(workspace_root=args.workspace, allowed_hosts=allowed_hosts),
+            host=args.host,
+            port=args.port,
         )
     return 0
+
+
+def _allowed_hosts(host: str) -> frozenset[str]:
+    """这次监听允许哪些 Host / Origin 主机名（信任边界，见 `web/app.py`）。
+
+    回环之外要显式放行：绑 `0.0.0.0` 时用户通常用本机 IP 访问，所以把本机地址也
+    加进来，并打印一条警告——那不是"只在本地"了。`AVID_ALLOWED_HOSTS`（逗号分隔）
+    是给反向代理/自定义域名的逃生口。
+    """
+    if host in LOOPBACK_HOSTS:
+        return trusted_hosts()
+    print(
+        f"⚠ 正在监听非回环地址 {host}：本机其它用户与局域网都能访问这个进程。"
+        "\n  Host/Origin 白名单已加入本机地址；需要额外域名请设 AVID_ALLOWED_HOSTS。",
+        file=sys.stderr,
+    )
+    extra = {_host_of(host)}
+    try:
+        _, _, addresses = socket.gethostbyname_ex(socket.gethostname())
+        extra.update(addresses)
+    except OSError:  # pragma: no cover - 取不到本机地址时只信显式给的那些
+        pass
+    return trusted_hosts(frozenset(item for item in extra if item))
+
+
+def _host_of(value: str) -> str:
+    text = (value or "").strip().lower()
+    if text.startswith("["):
+        return text[1:].split("]", 1)[0]
+    return text.rsplit(":", 1)[0]
 
 
 def _peek(repo: JsonlSessionRepo, meta: JsonlSessionMetadata) -> tuple[str | None, int]:

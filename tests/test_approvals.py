@@ -55,7 +55,9 @@ def make_client(sandbox):
             **kwargs,
         )
         clients.append(services)
-        return TestClient(create_app(services=services)), services
+        return TestClient(
+            create_app(services=services), base_url="http://127.0.0.1:8765"
+        ), services
 
     yield build
     for services in clients:

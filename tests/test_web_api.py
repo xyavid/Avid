@@ -43,7 +43,8 @@ def bundle(sandbox):
         # 静态目录显式指向一个不存在的路径：否则默认目录里一旦有构建产物，
         # 断言就会随环境变化（现在是「未构建 → 503」的确定性用例）。
         return TestClient(
-            create_app(services=instance, static_dir=sandbox / "static-not-built")
+            create_app(services=instance, static_dir=sandbox / "static-not-built"),
+            base_url="http://127.0.0.1:8765",
         ), instance
 
     yield build
@@ -60,6 +61,52 @@ def finish_run(client: TestClient, chat, tools=None, prompt: str = "问题") -> 
     run_id = response.json()["run_id"]
     assert wait_for(lambda: client.get(f"/api/runs/{run_id}").json()["status"] == "finished")
     return session["id"], run_id
+
+
+# ---------------- 信任边界（P1-21） ----------------
+
+
+def test_host_outside_the_allowlist_is_rejected(bundle):
+    """DNS rebinding：恶意域名解析到 127.0.0.1 时，浏览器认为它同源——Host 会露馅。"""
+    client, _ = bundle()
+    response = client.get("/api/meta", headers={"Host": "evil.example.com"})
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "host_rejected"
+
+
+def test_cross_site_origin_is_rejected_even_without_a_body(bundle):
+    """CSRF：无 body 的 POST 是"简单请求"，不做预检就能打到写端点。
+
+    真实后果：任意网站都能让本机弹文件夹选择器（`/workspaces/pick`）或取消正在跑
+    的任务（`/runs/{id}/cancel`）。跨源请求一定带 Origin，白名单外拒掉。
+    """
+    client, _ = bundle()
+
+    rejected = client.post(
+        "/api/workspaces/pick", headers={"Origin": "https://evil.example.com"}
+    )
+    assert rejected.status_code == 403
+    assert rejected.json()["error"]["code"] == "origin_rejected"
+
+    # 回环来源（界面自己的源）放行；命令行不带 Origin 也放行。
+    # 用"不存在的 run"当探针：404 说明过了信任边界，而不是被 403 拦下。
+    allowed = client.post(
+        "/api/runs/run_nope/cancel",
+        headers={"Origin": "http://127.0.0.1:8765"},
+    )
+    assert allowed.status_code == 404, allowed.text
+    assert allowed.json()["error"]["code"] == "run_not_found"
+
+
+def test_an_extra_host_can_be_allowed_explicitly(bundle, monkeypatch):
+    """非回环部署的逃生口：`AVID_ALLOWED_HOSTS` 显式放行。"""
+    monkeypatch.setenv("AVID_ALLOWED_HOSTS", "avid.internal:8765")
+    client, _ = bundle()
+
+    response = client.get("/api/meta", headers={"Host": "avid.internal:8765"})
+
+    assert response.status_code == 200
 
 
 # ---------------- B10 ----------------
@@ -528,7 +575,10 @@ def test_spa_fallback_serves_index_but_missing_assets_are_404(sandbox):
     (static / "assets" / "app-abc123.js").write_text("export const x = 1\n", encoding="utf-8")
 
     services = Services(root=sandbox / ".avid" / "sessions")
-    client = TestClient(create_app(services=services, static_dir=static))
+    client = TestClient(
+        create_app(services=services, static_dir=static),
+        base_url="http://127.0.0.1:8765",
+    )
     try:
         # 深链接回落到 SPA 外壳（前端路由接管）
         deep = client.get("/settings")

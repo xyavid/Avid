@@ -40,7 +40,10 @@ def client(multi, sandbox):
     from fastapi.testclient import TestClient
 
     services, registry = multi
-    return TestClient(create_app(services=services, static_dir=sandbox / "unbuilt"))
+    return TestClient(
+        create_app(services=services, static_dir=sandbox / "unbuilt"),
+        base_url="http://127.0.0.1:8765",
+    )
 
 
 def test_direct_sessions_root_still_binds_one_workplace(tmp_path):
@@ -58,7 +61,10 @@ def test_direct_sessions_root_still_binds_one_workplace(tmp_path):
     # 自己的注册表文件：同一测试里另一个 Services 不该出现在这份候选里。
     services = Services(root=root, registry=WorkspaceRegistry(tmp_path / "registry.json"))
     try:
-        single = TestClient(create_app(services=services, static_dir="/tmp/unbuilt"))
+        single = TestClient(
+            create_app(services=services, static_dir="/tmp/unbuilt"),
+            base_url="http://127.0.0.1:8765",
+        )
         listed = single.get("/api/workspaces").json()["workspaces"]
 
         assert len(listed) == 1

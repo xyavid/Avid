@@ -14,13 +14,16 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from ..svc import API_VERSION, Services
 from ..svc.errors import ServiceError
@@ -31,6 +34,70 @@ from .schemas import ErrorBody, ErrorOut
 logger = logging.getLogger("avid.web.app")
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+# 信任边界（I-P10 / architecture-criteria §12）：这不是鉴权（本地单用户工具没有
+# 账号体系），而是把两类"浏览器替别人发请求"的路堵掉。
+#
+# * **DNS rebinding**：恶意页面把某个域名解析到 127.0.0.1，浏览器的同源策略就
+#   认为它在跟自己的源说话——此时 Host 头是那个域名，白名单外直接拒。
+# * **CSRF**：跨站表单与 `fetch` 的"简单请求"不做预检就能打到无 body 的写端点
+#   （`POST /api/workspaces/pick` 会在宿主机弹文件夹选择器、`POST
+#   /api/runs/{id}/cancel` 会取消任务）。浏览器对跨源请求一定带 Origin，白名单外
+#   拒掉即可；命令行与测试不带 Origin，因此不受影响。
+#
+# `AVID_ALLOWED_HOSTS`（逗号分隔）是给非回环部署的显式逃生口，见 `cli._run_web`。
+LOOPBACK_HOSTS: frozenset[str] = frozenset({"127.0.0.1", "localhost", "::1"})
+ALLOWED_HOSTS_ENV = "AVID_ALLOWED_HOSTS"
+
+
+def _hostname_of(value: str) -> str:
+    """从 Host / Origin 里取出主机名：去掉端口、方括号、大小写。"""
+    if not value:
+        return ""
+    text = value.strip()
+    if "//" in text:  # Origin 形态
+        text = urlsplit(text).netloc or ""
+    if text.startswith("["):  # IPv6 字面量 [::1]:8765
+        return text[1:].split("]", 1)[0].lower()
+    return text.rsplit(":", 1)[0].lower()
+
+
+def trusted_hosts(extra: frozenset[str] | None = None) -> frozenset[str]:
+    """允许的 Host / Origin 主机名：回环 + 环境变量追加 + 装配时显式给的那些。"""
+    allowed = set(LOOPBACK_HOSTS)
+    for item in os.environ.get(ALLOWED_HOSTS_ENV, "").split(","):
+        if item.strip():
+            allowed.add(_hostname_of(item.strip()))
+    if extra:
+        allowed.update(extra)
+    return frozenset(allowed)
+
+
+class TrustBoundaryMiddleware(BaseHTTPMiddleware):
+    """Host 白名单 + Origin 校验。放行要两条都过。"""
+
+    def __init__(self, app: Any, allowed_hosts: frozenset[str]) -> None:
+        super().__init__(app)
+        self.allowed_hosts = allowed_hosts
+
+    async def dispatch(self, request: Request, call_next: Any) -> Any:
+        host = _hostname_of(request.headers.get("host", ""))
+        if host not in self.allowed_hosts:
+            logger.warning("拒绝 Host 不在白名单内的请求：%s", host)
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=_envelope(
+                    "host_rejected", f"Host 不在允许列表内：{host or '(空)'}"
+                ),
+            )
+        origin = request.headers.get("origin")
+        if origin and _hostname_of(origin) not in self.allowed_hosts:
+            logger.warning("拒绝跨站来源：%s", origin)
+            return JSONResponse(
+                status_code=status.HTTP_403_FORBIDDEN,
+                content=_envelope("origin_rejected", f"Origin 不在允许列表内：{origin}"),
+            )
+        return await call_next(request)
 
 # 未知 /api 路径的兜底 JSON 404。绝不回落 SPA（B10）。
 UNKNOWN_API = ErrorOut(
@@ -63,11 +130,15 @@ def create_app(
     services: Services | None = None,
     static_dir: str | Path | None = None,
     workspace_root: str | Path | None = None,
+    allowed_hosts: frozenset[str] | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title="Avid",
         version=f"api-v{API_VERSION}",
         description="自建 agent 运行时（harness）的 Web API 与事件流",
+    )
+    app.add_middleware(
+        TrustBoundaryMiddleware, allowed_hosts=trusted_hosts(allowed_hosts)
     )
     # ``workspace_root`` 只在自装配时有用：指定它就是单工作区模式，
     # 不给则是多工作区模式（建会话必须指定归属）。
@@ -150,4 +221,12 @@ def create_app(
     return app
 
 
-__all__ = ["STATIC_DIR", "create_app", "load_build_info"]
+__all__ = [
+    "ALLOWED_HOSTS_ENV",
+    "LOOPBACK_HOSTS",
+    "STATIC_DIR",
+    "TrustBoundaryMiddleware",
+    "create_app",
+    "load_build_info",
+    "trusted_hosts",
+]
