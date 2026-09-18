@@ -1,8 +1,22 @@
+import copy
+import json
+
 import httpx
 import pytest
 
 from avid.ai.config import Config
-from avid.ai.client import LLMError, PromptTooLongError, ask, build_payload, parse_reply
+from avid.ai.client import (
+    LLMError,
+    PromptTooLongError,
+    StreamState,
+    ask,
+    build_payload,
+    iter_sse_events,
+    merge_stream_chunk,
+    parse_reply,
+    parse_turn,
+    stream_completion,
+)
 
 CONFIG = Config(api_key="test-key", base_url="https://api.test/v1", model="test-model")
 
@@ -113,3 +127,212 @@ def test_server_error_with_overflow_wording_is_not_treated_as_overflow():
             ask(CONFIG, "你好", client=client)
 
     assert not isinstance(exc.value, PromptTooLongError)
+
+
+# ---------- 流式（F3） ----------
+
+# 同一份内容的两种线格式：非流式 JSON 与流式 SSE 分片。
+# tool_calls 的分片**故意交错**（0 的第一片、1 的第一片、0 的第二片、1 的第二片）：
+# 「按 index 归并」与「按到达顺序拼接」在这种输入上结果不同，后者是错的。
+NON_STREAM_TURN = {
+    "model": "test-model",
+    "choices": [
+        {
+            "message": {
+                "role": "assistant",
+                "content": "我先看两个文件。",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": '{"path":"a.py"}'},
+                    },
+                    {
+                        "id": "call_2",
+                        "type": "function",
+                        "function": {"name": "bash", "arguments": '{"command":"ls -la"}'},
+                    },
+                ],
+            },
+            "finish_reason": "tool_calls",
+        }
+    ],
+    "usage": {"prompt_tokens": 12, "completion_tokens": 34, "total_tokens": 46},
+}
+
+
+def _frame(delta, finish=None):
+    return {"model": "test-model", "choices": [{"delta": delta, "finish_reason": finish}]}
+
+
+def _call(index, **fields):
+    return {"index": index, **fields}
+
+
+STREAM_FRAMES = [
+    _frame({"role": "assistant", "content": ""}),
+    _frame({"content": "我先看"}),
+    _frame({"content": "两个文件。"}),
+    _frame(
+        {
+            "tool_calls": [
+                _call(0, id="call_1", type="function", function={"name": "read_file", "arguments": ""})
+            ]
+        }
+    ),
+    _frame(
+        {
+            "tool_calls": [
+                _call(1, id="call_2", type="function", function={"name": "bash", "arguments": ""})
+            ]
+        }
+    ),
+    _frame({"tool_calls": [_call(0, function={"arguments": '{"path":'})]}),
+    _frame({"tool_calls": [_call(1, function={"arguments": '{"command":'})]}),
+    _frame({"tool_calls": [_call(0, function={"arguments": '"a.py"}'})]}),
+    _frame({"tool_calls": [_call(1, function={"arguments": '"ls -la"}'})]}),
+    _frame({}, finish="tool_calls"),
+    {"model": "test-model", "choices": [], "usage": NON_STREAM_TURN["usage"]},
+]
+
+
+def sse_payload(frames) -> str:
+    """帧列表 → SSE 文本，带一行注释心跳与结尾的 `[DONE]`。"""
+    blocks = [": ping", ""]
+    for frame in frames:
+        blocks += ["event: message", "data: " + json.dumps(frame, ensure_ascii=False), ""]
+    blocks += ["data: [DONE]", ""]
+    return "\n".join(blocks) + "\n"
+
+
+def fold(frames) -> StreamState:
+    """帧 → 累加器状态。先编成 SSE 文本再解析，于是 `iter_sse_events` 与
+    `merge_stream_chunk` 两个纯函数走的是与 `stream_completion` 完全相同的路径。"""
+    state = StreamState()
+    for chunk in iter_sse_events(sse_payload(frames).splitlines()):
+        state = merge_stream_chunk(state, chunk)
+    return state
+
+
+def test_stream_and_non_stream_turns_are_field_equal():
+    """B9：同一段 mock SSE 与同一份非流式 JSON 必须产出逐字段相等的 Turn。"""
+    from_stream = fold(STREAM_FRAMES).to_turn()
+    from_json = parse_turn(NON_STREAM_TURN)
+
+    assert from_stream == from_json
+    assert from_stream.usage.total_tokens == 46
+    assert from_stream.finish_reason == "tool_calls"
+
+
+def test_interleaved_tool_call_fragments_merge_by_index():
+    """分片交错时按 index 归并；按到达顺序拼会把两个调用的参数搅在一起。"""
+    state = fold(STREAM_FRAMES)
+    arguments = [call["function"]["arguments"] for call in state.tool_calls]
+
+    assert arguments == ['{"path":"a.py"}', '{"command":"ls -la"}']
+    # 拼出来的必须真是合法 JSON —— 「拼完再 loads」这条约束的落点。
+    assert [json.loads(item) for item in arguments] == [
+        {"path": "a.py"},
+        {"command": "ls -la"},
+    ]
+    # 归并产物不带流式的 index 字段：要与 parse_turn 的产物同形（B9 逐字段相等的前提）。
+    assert all("index" not in call for call in state.tool_calls)
+
+
+def test_merge_stream_chunk_is_pure():
+    """fold 不得就地改入参：否则重放或重试会累加出双倍文本。"""
+    first = merge_stream_chunk(
+        StreamState(),
+        _frame(
+            {
+                "tool_calls": [
+                    _call(0, id="c", function={"name": "bash", "arguments": '{"a":'})
+                ]
+            }
+        ),
+    )
+    before = copy.deepcopy(first)
+
+    second = merge_stream_chunk(
+        first,
+        _frame({"content": "hi", "tool_calls": [_call(0, function={"arguments": "1}"})]}),
+    )
+
+    assert first == before, "入参状态被就地改了"
+    assert first.tool_calls[0]["function"]["arguments"] == '{"a":'
+    assert second.tool_calls[0]["function"]["arguments"] == '{"a":1}'
+    assert second.content == "hi"
+
+
+def test_sse_reader_skips_heartbeat_empty_and_done():
+    lines = [
+        ": ping",
+        "",
+        "event: message",
+        'data: {"choices":[{"delta":{"content":"a"}}]}',
+        "",
+        "data:",
+        "",
+        "data: [DONE]",
+        "",
+    ]
+
+    assert [chunk["choices"][0]["delta"]["content"] for chunk in iter_sse_events(lines)] == ["a"]
+
+
+def test_sse_reader_keeps_last_frame_without_trailing_blank_line():
+    assert len(list(iter_sse_events(['data: {"choices":[]}']))) == 1
+
+
+def test_sse_reader_rejects_broken_frame():
+    with pytest.raises(LLMError) as exc:
+        list(iter_sse_events(["data: {not json}", ""]))
+
+    assert "不是合法 JSON" in str(exc.value)
+
+
+def test_stream_completion_returns_turn_and_reports_deltas():
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.read())
+        assert body["stream"] is True
+        assert body["stream_options"] == {"include_usage": True}
+        assert body["model"] == "test-model"
+        return httpx.Response(
+            200,
+            content=sse_payload(STREAM_FRAMES).encode("utf-8"),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        turn = stream_completion(
+            CONFIG,
+            [{"role": "user", "content": "看两个文件"}],
+            on_delta=seen.append,
+            client=client,
+        )
+
+    # 回调只送正文分片：工具参数的片段不该出现在给人看的增量里。
+    assert seen == ["我先看", "两个文件。"]
+    assert turn == parse_turn(NON_STREAM_TURN)
+
+
+def test_stream_completion_http_error_carries_status_and_body():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, text="invalid api key")
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(LLMError) as exc:
+            stream_completion(CONFIG, [{"role": "user", "content": "hi"}], client=client)
+
+    assert "401" in str(exc.value)
+    assert "invalid api key" in str(exc.value)
+
+
+def test_stream_without_usage_frame_falls_back_to_zero():
+    turn = fold([_frame({"content": "hi"}, finish="stop")]).to_turn()
+
+    assert turn.text == "hi"
+    assert turn.usage.total_tokens == 0
+    assert turn.finish_reason == "stop"
