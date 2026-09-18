@@ -11,6 +11,7 @@ FastAPI（A4），也不 import ``web/``；能力的输出（工具名、技能�
 
 from __future__ import annotations
 
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,7 @@ from ..session import JsonlSessionRepo
 from ..tools import TOOLS, workspace
 from ..workspaces import WorkspaceRegistry
 from .approvals import APPROVAL_TIMEOUT_SECONDS
+from .errors import TooManyStreams
 from .picker import available_backend
 from .runs import (
     MAX_EVENT_BUFFER,
@@ -55,11 +57,53 @@ FEATURES: dict[str, int] = {
 STREAM_HEARTBEAT_SECONDS = 15.0
 TERMINAL_FALLBACK_SECONDS = 30.0
 
+# 同时打开的 SSE 事件流上限。为什么需要这个数：Starlette 对**同步**生成器是
+# `iterate_in_threadpool`，而我们的生成器 `next()` 会阻塞到下一个事件或心跳——
+# 一条连接因此长期占住 anyio 默认线程池（40）里的一个线程。40 条流同时开着，
+# REST 请求就没有线程可用了（审查里的 P2-13）。
+#
+# 我们没有把订阅路径改成异步：那要在 60fps 的 delta 投递（线程 + Condition 的
+# 阻塞迭代器）与 anyio 之间加一层队列桥，收益（本地单用户工具）不抵风险。改为
+# **把占用封顶**：最多 24 条流，剩下的 16 个线程保证 REST/静态资源不会被饿死；
+# 超出的连接立刻回 503 `too_many_streams`，而不是悄悄把整个服务拖慢。
+# 这不是"解决"了线程池耦合，而是把它变成一个有界、可见的约束。
+MAX_CONCURRENT_STREAMS = 24
+
 # 技能目录在进程内缓存的时长。`GET /api/meta` 会被界面反复取，而"扫技能目录"是
 # 磁盘 IO（读每个 SKILL.md 的全文）——实测 5.1 ms/次，以前每条 SSE 连接也要付一次
 # （只为拿心跳常量）。TTL 很短：改了技能目录最多晚这么久生效，而 system prompt 的
 # 权威仍然是磁盘（`RunState.for_run` 每次运行重新扫描）。
 SKILLS_CACHE_SECONDS = 5.0
+
+
+class StreamSlots:
+    """SSE 连接的并发额度（见 `MAX_CONCURRENT_STREAMS` 的说明）。
+
+    计数与释放都在生成器的 `finally` 里：连接断掉、迭代器被关闭、正常结束都会归还。
+    额度耗尽时 `acquire()` 返回 False——路由据此回 503，而不是排队占线程。
+    """
+
+    def __init__(self, limit: int = MAX_CONCURRENT_STREAMS) -> None:
+        self.limit = limit
+        self._lock = threading.Lock()
+        self._active = 0
+
+    @property
+    def active(self) -> int:
+        with self._lock:
+            return self._active
+
+    def acquire(self) -> bool:
+        with self._lock:
+            if self._active >= self.limit:
+                return False
+            self._active += 1
+            return True
+
+    def release(self) -> None:
+        with self._lock:
+            if self._active:
+                self._active -= 1
 
 
 class Services:
@@ -117,6 +161,8 @@ class Services:
         )
         self.sessions = SessionService(self.workspaces, self.runs)
         self.tasks = TaskService(self.workspaces)
+        # 事件流的并发额度：进程级一份（每个进程一个线程池）。
+        self.streams = StreamSlots()
         self.started_at = now_ms()
         self._skills: list[dict[str, str]] | None = None
         self._skills_at = 0.0
@@ -200,7 +246,10 @@ class Services:
 __all__ = [
     "API_VERSION",
     "FEATURES",
+    "MAX_CONCURRENT_STREAMS",
     "STREAM_HEARTBEAT_SECONDS",
     "TERMINAL_FALLBACK_SECONDS",
     "Services",
+    "StreamSlots",
+    "TooManyStreams",
 ]

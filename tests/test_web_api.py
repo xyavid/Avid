@@ -63,6 +63,66 @@ def finish_run(client: TestClient, chat, tools=None, prompt: str = "问题") -> 
     return session["id"], run_id
 
 
+# ---------------- 事件流的并发额度（P2-13） ----------------
+
+
+def test_stream_slots_refuse_over_the_limit_and_release(bundle):
+    """额度用尽回 503，释放后能再开。
+
+    为什么是"限额"而不是"异步化"：同步生成器的 `next()` 会阻塞到下一个事件或心跳，
+    Starlette 因此长期占住一个池线程。改成异步要在 60fps 的 delta 投递与 anyio 之间
+    加一层队列桥，本地单用户工具不值这个风险——于是把占用封顶、超出的显式拒绝。
+    """
+    from avid.svc import StreamSlots
+
+    slots = StreamSlots(limit=2)
+    assert slots.acquire() and slots.acquire()
+    assert slots.active == 2
+    assert not slots.acquire(), "额度用尽必须拒绝"
+    assert slots.active == 2, "被拒的请求不该占额度"
+
+    slots.release()
+    assert slots.active == 1
+    assert slots.acquire()
+
+    slots.release()
+    slots.release()
+    slots.release()  # 多release不该把计数带成负数
+    assert slots.active == 0
+
+
+def test_an_over_limit_event_stream_gets_a_503(bundle, monkeypatch):
+    """额度为 0 时任何事件流都回 503 `too_many_streams`（而不是排队占线程）。"""
+    from avid.svc import TooManyStreams
+
+    client, services = bundle(chat=ScriptedChat(make_turn("答")))
+    _, run_id = finish_run(client, None)
+
+    services.streams.limit = 0
+    response = client.get(f"/api/runs/{run_id}/events")
+
+    assert response.status_code == 503, response.text
+    assert response.json()["error"]["code"] == TooManyStreams.code
+
+
+def test_a_finished_stream_gives_its_slot_back(bundle):
+    """流跑完（或断连）必须归还额度：否则连接泄漏会把额度耗光。"""
+    client, services = bundle(chat=ScriptedChat(make_turn("答")))
+    _, run_id = finish_run(client, None)
+    services.streams.limit = 1
+
+    # 第一条：读到底，生成器走完 finally。
+    with client.stream("GET", f"/api/runs/{run_id}/events") as response:
+        assert response.status_code == 200
+        list(response.iter_lines())
+    assert services.streams.active == 0, "流结束后额度没归还"
+
+    # 因此第二条还能开（额度只有 1）。
+    with client.stream("GET", f"/api/runs/{run_id}/events") as response:
+        assert response.status_code == 200
+        assert next(response.iter_lines(), None) is not None
+
+
 # ---------------- 错误面不外泄细节（P2-10） ----------------
 
 

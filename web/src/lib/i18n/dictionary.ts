@@ -267,6 +267,7 @@ export const DICTIONARY: Record<Locale, Entry> = {
     'errors.round_limit': '达到轮数上限，模型仍在请求工具，未收敛',
     'errors.session_error': '会话文件读写出错',
     'errors.internal': '内核内部错误',
+    'errors.too_many_streams': '同时打开的事件流太多，稍后重试',
     'errors.aborted': '请求已取消',
     'errors.bad_json': '响应不是合法 JSON',
   },

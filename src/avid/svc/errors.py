@@ -149,3 +149,14 @@ class PickerFailed(ServiceError):
 
     code = "picker_failed"
     status = 500
+
+
+class TooManyStreams(ServiceError):
+    """同时打开的事件流太多（上限见 `svc.MAX_CONCURRENT_STREAMS`）。
+
+    为什么值得一个错误码：SSE 用同步生成器时会长期占住线程池里的线程，额度耗尽
+    意味着"再开就要开始饿死 REST"——这必须是一个显式的 503，而不是悄悄变慢。
+    """
+
+    code = "too_many_streams"
+    status = 503
