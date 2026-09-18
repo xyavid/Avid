@@ -71,7 +71,10 @@ export function AppShell(props: AppShellProps) {
   )
 
   return (
-    <div className="relative min-h-screen w-full">
+    // 高度链的根：视口高度 + 不溢出。用 min-h-screen 时容器高度由内容决定，
+    // 下面的 flex-1 / h-full 全部失去参照，于是消息区把整页撑高、输入条被推到
+    // 视口之外（页面自己变成滚动容器）。h-dvh 在移动端地址栏伸缩时也用可视高度。
+    <div className="relative h-dvh w-full overflow-hidden">
       <div className="paper-canvas" aria-hidden="true" />
       <a
         href="#main"
@@ -80,7 +83,7 @@ export function AppShell(props: AppShellProps) {
         {t('common.skipToContent')}
       </a>
 
-      <div className="relative z-base mx-auto flex min-h-screen w-full max-w-[1800px] gap-3 p-3">
+      <div className="relative z-base mx-auto flex h-full min-h-0 w-full max-w-[1800px] gap-3 p-3">
         {isMid ? (
           <nav
             aria-label={t('common.appName')}

@@ -79,6 +79,9 @@ pnpm -C web run lint                               # 样式/token/裸元素/i18n
 pnpm -C web test                                   # reducer / coalescer / SSE 解析单测
 pnpm -C web build && pnpm -C web run gate:size     # 体积与纹理门禁
 
+# 浏览器（需先 pnpm -C web exec playwright install chromium）
+AVID_E2E=1 pnpm -C web test:e2e                    # 14 项：首屏 / 路由 / 会话流程 / 布局回归
+
 # 手验
 curl -s localhost:8765/api/meta | head -c 300
 curl -s -o /dev/null -w '%{http_code} %{content_type}\n' localhost:8765/api/nope   # 404 application/json
@@ -92,4 +95,16 @@ curl -s -o /dev/null -w '%{http_code} %{content_type}\n' localhost:8765/api/nope
 - **前端写文件 / Web 终端 / 桌面壳**：不做（§5.5）；人类要改文件或改任务状态，走
   `/api/runs` 让 agent 调用工具，权限闸门与审计因此不被绕过。
 - **Playwright 用例**（a11y / 视觉回归 / 键盘 / 降级）：脚手架在 `web/e2e/`，需要
-  `pnpm -C web exec playwright install chromium` 与 `AVID_E2E=1` 才跑。
+  `pnpm -C web exec playwright install chromium` 与 `AVID_E2E=1` 才跑。已落地的是
+  首屏、四条路由、提交→审批→完成、检查器与 `e2e/layout.spec.ts`（输入条始终在视口内、
+  会话区域独立滚动、其他工作面不溢出）；a11y / 视觉回归 / 降级仍只有约定没有用例。
+
+## 6. 布局约定（别改回去）
+
+外壳的高度链是**视口高度**：`AppShell` 外层 `h-dvh overflow-hidden`，内层行 `h-full min-h-0`，
+再往下每一级 flex 容器都带 `min-h-0`。这样「时间线是唯一滚动容器」才成立：
+`ConversationView` 的 `h-full` 有确定的高度参照，输入条永远留在视口内，页面自身不滚动。
+
+用 `min-h-screen` 代替 `h-dvh` 会让容器高度由内容决定，`flex-1` / `h-full` 全部失去参照，
+消息区会把整页撑高、输入条被推到视口之外（`web/e2e/layout.spec.ts` 就是这条的回归用例）。
+非会话工作面（任务板 / 技能目录 / 设置）由各自的 route 容器 `scroll-area` 承担滚动。

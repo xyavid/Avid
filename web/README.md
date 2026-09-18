@@ -16,8 +16,14 @@ pnpm run check:tokens   # C22：字体声明即加载、z-index 只用 --z-*
 pnpm lint               # A9/C11/C14/C15/C18：token、裸元素、i18n key 完整性、空 catch
 pnpm run gate:size      # C1/P9/C17：体积预算 + 显式豁免 + 字体/纹理字节
 pnpm run verify         # 以上全部（不含 build 与 e2e）
-AVID_E2E=1 pnpm test:e2e    # Playwright（需先 pnpm exec playwright install chromium）
+AVID_E2E=1 pnpm test:e2e    # Playwright 14 项（需先 pnpm exec playwright install chromium）
 ```
+
+## 布局的高度链
+
+`AppShell` 外层 `h-dvh overflow-hidden`、内层行 `h-full min-h-0`，往下每级 flex 容器都带
+`min-h-0`：只有高度链确定，「时间线是唯一滚动容器」与「输入条常驻视口内」才成立。
+改回 `min-h-screen` 会让内容撑高整页（回归用例 `e2e/layout.spec.ts`）。
 
 ## 分层（单向依赖，越往上越知道业务）
 
