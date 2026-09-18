@@ -120,7 +120,8 @@ class CreateWorkspaceIn(BaseModel):
 
     path: str
     name: str | None = None
-    permission: str | None = None
+    # 枚举而不是自由字符串：非法模式在 schema 层就是 422，不会走到"先落盘再 500"。
+    permission: Literal["strict", "workspace", "system"] | None = None
 
 
 class SessionSummary(BaseModel):

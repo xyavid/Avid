@@ -260,6 +260,30 @@ def test_explicit_registration_is_the_only_writer(tmp_path):
         services.close()
 
 
+def test_an_invalid_permission_does_not_register_the_workspace(client, tmp_path):
+    """非法模式在 schema 层就被拒，不能留下"先落盘、再 500"的副作用。
+
+    以前路由先 `require_new(path)` 写一次、再 `registry.add(..., permission=...)`
+    写第二次：非法 permission 于是 500 + 工作区已登记 + 重试变 409（一次请求既没
+    成功又留下了副作用）。
+    """
+    target = tmp_path.parent / f"invalid-{tmp_path.name}"
+    target.mkdir()
+
+    rejected = client.post(
+        "/api/workspaces", json={"path": str(target), "permission": "banana"}
+    )
+    assert rejected.status_code == 422, rejected.text
+    listed = client.get("/api/workspaces").json()["workspaces"]
+    assert all(item["root"] != str(target) for item in listed), "被拒的请求不该留下登记"
+
+    accepted = client.post(
+        "/api/workspaces", json={"path": str(target), "permission": "workspace"}
+    )
+    assert accepted.status_code == 201, accepted.text
+    assert accepted.json()["default_permission"] == "workspace"
+
+
 # ---------------- 任务板跟着工作区走 ----------------
 
 

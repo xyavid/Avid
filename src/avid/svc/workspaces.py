@@ -156,9 +156,20 @@ class WorkspaceService:
             raise WorkspaceInvalid(str(exc)) from exc
         return created, existing is None
 
-    def require_new(self, path: str) -> Workspace:
-        """``register`` 的严格版：已存在就 409，且带上已存在的那个（界面据此切过去）。"""
-        workspace, created = self.register(path)
+    def require_new(
+        self,
+        path: str,
+        *,
+        name: str | None = None,
+        permission: str | None = None,
+    ) -> Workspace:
+        """``register`` 的严格版：已存在就 409，且带上已存在的那个（界面据此切过去）。
+
+        name / permission 走**这一次** register：以前路由先 ``require_new(path)``
+        写一次、再 ``registry.add(..., permission=...)`` 写第二次，于是非法模式
+        会先落盘再失败（500 + 工作区已登记，重试变 409）。
+        """
+        workspace, created = self.register(path, name=name, permission=permission)
         if not created:
             raise WorkspaceExists(
                 f"这个文件夹已经在工作区列表里：{workspace.name}（{workspace.root}）",

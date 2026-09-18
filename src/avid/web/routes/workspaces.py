@@ -30,12 +30,11 @@ def list_workspaces(request: Request) -> dict:
 def create_workspace(request: Request, body: CreateWorkspaceIn) -> dict:
     """登记一个工作区。已在列表里（含进程绑定的那个）→ 409 ``workspace_exists``，
     ``detail`` 带上已存在的 id/名字，界面据此直接切过去而不是报错卡住。"""
-    workspace = current_services(request).workspaces.require_new(body.path)
-    if body.name is not None or body.permission is not None:
-        workspace = current_services(request).workspaces.registry.add(
-            workspace.root, name=body.name, permission=body.permission
-        )
-    return current_services(request).workspaces.describe(workspace)
+    services = current_services(request)
+    workspace = services.workspaces.require_new(
+        body.path, name=body.name, permission=body.permission
+    )
+    return services.workspaces.describe(workspace)
 
 
 @router.post("/workspaces/pick", response_model=PickFolderOut)
