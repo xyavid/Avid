@@ -58,10 +58,11 @@ describe('applyEvent：durable 是权威，delta 是易失的', () => {
 
   it('delta 流在任意点被切断，durable 补齐后文本不重复（渲染前 flush）', () => {
     let interrupted = fold([started, userMessage, deltaOne, deltaTwo])
-    // 切断时只有 deltaText 与已落地的 user 条目，没有乐观的 assistant 条目。
-    expect(interrupted.deltaText).toBe('回答')
-    expect(interrupted.entries).toHaveLength(1)
-    expect(interrupted.entries.filter((entry) => entry.optimistic)).toHaveLength(0)
+    // 切断时乐观条目已带全部增量（delta 必须当帧可见），durable 条目尚未到达。
+    expect(interrupted.deltaText).toBe('')
+    expect(interrupted.entries).toHaveLength(2)
+    expect(interrupted.entries[1]?.text).toBe('回答')
+    expect(interrupted.entries[1]?.optimistic).toBe(true)
 
     interrupted = applyEvent(interrupted, assistantMessage)
     interrupted = applyEvent(interrupted, finished)
@@ -69,6 +70,23 @@ describe('applyEvent：durable 是权威，delta 是易失的', () => {
     expect(timeline(interrupted)).toEqual(['user:问题', 'assistant:回答'])
     expect(interrupted.phase).toBe('done')
     expect(interrupted.deltaText).toBe('')
+    expect(interrupted.entries.filter((entry) => entry.optimistic)).toHaveLength(0)
+  })
+
+  it('每个 delta 到达时都可见：乐观条目逐次增长，不等 durable', () => {
+    let view = applyEvent(emptyView(SESSION), started)
+
+    view = applyDelta(view, '你')
+    expect(view.entries).toHaveLength(1)
+    expect(view.entries[0]?.text).toBe('你')
+    expect(view.entries[0]?.optimistic).toBe(true)
+
+    view = applyDelta(view, '好')
+    expect(view.entries).toHaveLength(1)
+    expect(view.entries[0]?.text).toBe('你好')
+
+    // 空 delta 不产生新引用（合并器每帧都可能调一次）。
+    expect(applyDelta(view, '')).toBe(view)
   })
 
   it('(run_id, seq) 幂等：同一事件应用两次，第二次返回同一引用', () => {
@@ -87,8 +105,11 @@ describe('applyEvent：durable 是权威，delta 是易失的', () => {
   it('durable 渲染前 flush：乐观条目被 durable 条目就地替换', () => {
     let view = applyEvent(emptyView(SESSION), started)
     view = applyDelta(view, '半句')
-    expect(view.entries).toHaveLength(0)
-    expect(view.deltaText).toBe('半句')
+    // delta 已当帧可见（乐观条目），durable 到达后就地替换它。
+    expect(view.entries).toHaveLength(1)
+    expect(view.entries[0]?.optimistic).toBe(true)
+    expect(view.entries[0]?.text).toBe('半句')
+    expect(view.deltaText).toBe('')
 
     view = applyEvent(
       view,

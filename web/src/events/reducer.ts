@@ -7,6 +7,10 @@
  *     旧内容盖住最终结果。因此 delta 全丢也不影响正确性（I5：durable 带完整内容）。
  *   · **幂等**：按 `(run_id, seq)` 去重，重放与重复消费都不改变最终状态。
  *
+ * delta 的可见性：`applyDelta` **立刻**把增量合成成乐观条目（不等 durable），
+ * 否则纯文本回答期间界面在整轮结束前完全不动。乐观条目在 durable 消息到达时
+ * 被就地替换、在终止事件时被丢弃。
+ *
  * 权威视图来自条目（服务端持久层），这里只维护「已知历史 + 正在到达的步骤」。
  */
 
@@ -151,13 +155,18 @@ export function flushDelta(view: RunView): RunView {
 
 /** delta 丢掉：终止类事件到达时用，避免旧内容盖住最终结果。 */
 export function cancelDelta(view: RunView): RunView {
-  if (!view.deltaText) return view
+  // 乐观条目与 deltaText 都要清。applyDelta 已经把 delta 落进 entries，
+  // 只判 deltaText 会漏掉那些条目——终止事件后它们会继续显示旧内容。
+  if (!view.deltaText && !view.entries.some((entry) => entry.optimistic)) return view
   return { ...view, deltaText: '', entries: view.entries.filter((e) => !e.optimistic) }
 }
 
 export function applyDelta(view: RunView, text: string): RunView {
   if (!text) return view
-  return { ...view, deltaText: view.deltaText + text }
+  // **立刻**合成乐观条目，而不是攒到下一个 durable 事件：纯文本回答期间一个
+  // durable 事件都没有，攒着等于整轮结束时才一次性出现——delta 的流式收益为 0
+  // （首屏可见 token 的目标也就不可达）。`flushDelta` 仍是唯一的合成点。
+  return flushDelta({ ...view, deltaText: view.deltaText + text })
 }
 
 function toolCallsOf(message: MessagePayload | undefined): ToolCallRef[] {
