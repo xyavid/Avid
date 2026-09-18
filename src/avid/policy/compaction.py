@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from ..ai.config import Config
-from ..ai.client import chat_completion
+from ..ai.client import LLMError, chat_completion
 from ..ai.transcript import Transcript
 
 logger = logging.getLogger("avid.policy.compaction")
@@ -142,7 +142,11 @@ def _summarize(
         turn = chat(
             config, request, system=SUMMARY_SYSTEM, max_tokens=SUMMARY_MAX_TOKENS
         )
-    except Exception as exc:  # 摘要失败不该让整个运行崩掉
+    except (LLMError, OSError, ValueError) as exc:
+        # 摘要失败不该让整个运行崩掉：调用超限、网络断、响应不是合法 JSON 都算
+        # "这一步没做成"，降级成保留原历史。**程序错误不许吞**——AssertionError /
+        # TypeError / AttributeError 是代码 bug，吞掉只会把 bug 藏进压缩路径
+        # （测试里的"不该调用模型"哨兵正是被原来那条 Exception 吞掉的）。
         logger.warning("compact: 摘要调用失败：%s", exc)
         return None
 

@@ -188,7 +188,13 @@ def test_default_budget_references_the_compact_constants():
 
 
 def test_budget_is_injectable_so_orchestration_is_testable(monkeypatch):
-    """阈值可注入：测编排时不必改全局常量，也就不必建一个巨大的 transcript。"""
+    """阈值可注入：测编排时不必改全局常量，也就不必建一个巨大的 transcript。
+
+    免费三步都换掉之后仍然超限（500 > 100），所以第 ④ 步一定会被走到——它也必须
+    被换掉，否则这个用例会真的去调模型。`summarize` 哨兵现在会真的炸出来
+    （`_summarize` 只吞调用类失败，不再吞 AssertionError），这正是我们要的：
+    以前它被宽 except 吞掉，用例"绿着"却发生了模型调用。
+    """
     monkeypatch.setattr(compact, "tool_result_budget", lambda t, **k: None)
     monkeypatch.setattr(compact, "snip_compact", lambda t, **k: None)
 
@@ -197,6 +203,12 @@ def test_budget_is_injectable_so_orchestration_is_testable(monkeypatch):
         compact,
         "micro_compact",
         lambda t, **k: seen.append(k["limit"]) or None,
+    )
+    expensive = []
+    monkeypatch.setattr(
+        compact,
+        "compact_history",
+        lambda t, **k: expensive.append(k["limit"]) or None,
     )
 
     context.prepare(
@@ -208,3 +220,4 @@ def test_budget_is_injectable_so_orchestration_is_testable(monkeypatch):
     )
 
     assert seen == [100]
+    assert expensive == [100], "整理后仍超限时第 ④ 步应当被走到（且阈值同样可注入）"

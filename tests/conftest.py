@@ -22,8 +22,13 @@ def avid_home(tmp_path, monkeypatch):
     monkeypatch.setenv(AVID_HOME_ENV, str(tmp_path / "avid-home"))
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def sandbox(tmp_path, monkeypatch):
-    """工作区根目录 → tmp_path：会话、任务、压缩落盘都跟着走。"""
+    """工作区根目录 → tmp_path：会话、任务、压缩落盘都跟着走。
+
+    **autouse**：隔离必须是失败关闭的。以前它是可选夹具，于是漏掉它的用例会
+    直接写进真实工作目录——实测把 `.avid/context/transcript-0001.json` 覆盖成了
+    测试数据，而落盘目录又是按进程内序号命名的，正好和真实使用的文件同名。
+    """
     monkeypatch.setattr(workspace, "WORKSPACE_ROOT", tmp_path)
     return tmp_path
