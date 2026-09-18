@@ -102,7 +102,7 @@ class Services:
 
     @property
     def repo(self) -> JsonlSessionRepo:
-        """默认工作区的会话仓库（单工作区模式下的旧访问点）。
+        """进程绑定的工作地点的会话仓库（旧访问点；新代码请用 `workspaces.repo_for`）。
 
         多工作区模式没有"唯一仓库"这种东西，所以显式报错而不是随便挑一个——
         "挑错了库"正是阶段 18 要消灭的那类静默错误。
@@ -126,9 +126,9 @@ class Services:
                 "tools": [item["function"]["name"] for item in TOOLS],
                 "skills": self.skills(),
                 "model": self.model_name(),
-                # 单工作区模式给那一个的根；多工作区模式回落到进程默认根
-                # （只是给界面的文本提示，**候选列表**一律走 GET /api/workspaces，
-                # 避免同一概念两种拼写）。
+                # 进程绑定的工作地点根；它总是存在（`Services` 必绑定一个），
+                # 所以这里只是给界面的文本提示，**候选列表**一律走
+                # GET /api/workspaces，避免同一概念两种拼写。
                 "workspace": (
                     self.workspaces.default.root
                     if self.workspaces.default is not None

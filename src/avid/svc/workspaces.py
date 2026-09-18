@@ -60,8 +60,8 @@ class WorkspaceService:
     ) -> None:
         self.registry = registry
         self.default = default
-        # 单工作区模式下调用方直接给会话库路径（测试与 `--workspace` 都不必
-        # 先造出 `<root>/.avid/sessions` 这层目录）。
+        # 调用方直接给会话库路径时用它（测试与 `Services(root=...)` 不必先造出
+        # `<root>/.avid/sessions` 这层目录）。
         self.default_sessions_root = (
             Path(default_sessions_root) if default_sessions_root is not None else None
         )
@@ -159,7 +159,7 @@ class WorkspaceService:
 
 
 def single_workspace(root: str | Path) -> Workspace:
-    """单工作区模式的记录：``Services(root=...)`` 传的是**会话库路径**。
+    """``Services(root=...)`` 专用：它传的的是**会话库路径**，工作地点由形状推出来。
 
     兼容两种形状：``<工作区>/.avid/sessions``（正常装配）与任意目录（测试直接给一个
     临时目录当会话库）。id 仍由工作区根派生，于是它和注册表里的同一目录一致。

@@ -13,8 +13,9 @@ uv sync --extra web
 uv run --env-file .env avid web --port 8765
 # → http://127.0.0.1:8765
 
-# 可选：把这个进程绑到一个工作区（单工作区模式）。缺省是多工作区模式——
-# 界面上的工作区选择器列出 `avid workspace list` 里的候选，新建会话必须选一个。
+# 可选：指定这个进程绑定的工作地点（缺省就是当前目录的）。
+# 界面上的选择器列出绑定值 + `avid workspace list` 的候选；新建会话**必须**选一个，
+# 省略 workspace 一律 400 workspace_required（绑定值只做预选）。
 uv run --env-file .env avid web --port 8765 --workspace /path/to/project
 ```
 
@@ -43,7 +44,7 @@ uv run avid web --port 8765      # 静态资源与 API 同源
 | 页面 / 交互（URL） | 主要接口 | 数据流 |
 |---|---|---|
 | 导航列（`/sessions` 左侧） | `GET /api/sessions`、`POST /api/sessions`、`PATCH /api/sessions/{id}`、`DELETE /api/sessions/{id}` | 查询流（TanStack Query）；列表项带归属工作区 |
-| 工作区选择器（新建会话前） | `GET /api/workspaces`、`POST /api/workspaces` | 查询流；选中的 id 随 `POST /api/sessions` 发出（多工作区模式下必填，缺了是 400 `workspace_required`） |
+| 工作区选择器（新建会话前） | `GET /api/workspaces`、`POST /api/workspaces` | 查询流；选中的 id 随 `POST /api/sessions` 发出（**必填**，缺了是 400 `workspace_required`） |
 | 权限模式选择器（输入条旁） | 不新增接口 | 随 `POST /api/sessions/{id}/runs` 的 `permission` 发出；缺省取会话所属工作区的 `default_permission` |
 | 会话时间线（`/sessions/{id}`） | `GET /api/sessions/{id}/entries`（分页，带 `branch`）、`GET /api/runs/{id}/events`（SSE） | 历史来自条目（权威），实时来自事件 |
 | 提交一次运行（输入条） | `POST /api/sessions/{id}/runs`（`branch` 决定接哪条链尾） | 命令流 → 201 `{run_id}` |
@@ -93,7 +94,7 @@ durable `assistant_message` 带完整内容并把它替换掉。**delta 不落�
 ## 3.2 工作区与权限模式（阶段 18）
 
 **工作区**是一个本地目录，同时是权限边界、会话归属与干活的地点。界面上它出现在两处：
-新建会话前必须选（列表来自注册表，`is_default` 或最近使用的那一个被预选），
+新建会话前必须选（列表 = 进程绑定的工作地点 + 注册表，`is_default` 或最近使用的那一个被预选；绑定值只做预选，不能替代选择），
 会话卡与详情显示归属名字。归属是**创建时的静态事实**，写在会话 header 里，
 所以注册表被删掉也不影响已有会话的归属查询。
 
