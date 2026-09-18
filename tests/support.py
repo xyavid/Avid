@@ -94,5 +94,22 @@ def collect(services: Any, run_id: str, after: int = 0, deltas: bool = False) ->
     ]
 
 
+def create_session(client: Any, **fields: Any):
+    """经 HTTP 新建会话——**总是带上工作区**。
+
+    建会话必须显式指定归属，所以测试也要先问服务端"这个进程绑定了哪个工作地点"
+    （`GET /api/workspaces` 的第一项就是它，`is_default=true`），再显式传回去。
+    """
+    listed = client.get("/api/workspaces").json()["workspaces"]
+    assert listed, "服务端必须至少绑定一个工作地点"
+    workspace = next((ws for ws in listed if ws.get("is_default")), listed[0])
+    return client.post("/api/sessions", json={"workspace": workspace["id"], **fields})
+
+
+def bound_workspace(services: Any) -> str:
+    """进程绑定的工作区 id（测试里的"工作地点"）。"""
+    return services.workspaces.default.id
+
+
 def new_session(services: Any, name: str | None = None) -> str:
-    return services.sessions.create(name=name)["id"]
+    return services.sessions.create(workspace=bound_workspace(services), name=name)["id"]

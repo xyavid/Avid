@@ -162,9 +162,9 @@ export function useTask(taskId: string | null) {
 export function useCreateSession() {
   const client = useQueryClient()
   return useMutation({
-    // 多工作区模式下 `workspace` 必填（服务端缺它会 400 workspace_required）；
-    // 单工作区模式省略也行，但 UI 总是把选中的那个显式发出去，归属不靠默认值猜。
-    mutationFn: (input: { name?: string | null; workspace?: string }) =>
+    // `workspace` 必填（服务端缺它一律 400 workspace_required）：归属是会话的不可变
+    // 事实，不该由服务端状态决定，所以"进程绑定的工作区"只做预选，不能替代这一次选择。
+    mutationFn: (input: { workspace: string; name?: string | null }) =>
       request<SessionDetail>('/sessions', { method: 'POST', body: input }),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: queryKeys.sessions })

@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { createSession } from './helpers'
 import type { APIRequestContext, Page } from '@playwright/test'
 
 /**
@@ -52,7 +53,7 @@ test('从某一轮分叉、在分支上继续、再切回主线', async ({ page,
   const stamp = Date.now()
   const first = `主线第一句-${stamp}`
   const second = `主线第二句-${stamp}`
-  const created = await request.post(`${BASE}/api/sessions`, { data: { name: `分支-${stamp}` } })
+  const created = await createSession(request, { name: `分支-${stamp}` })
   const sessionId = (await created.json()).id as string
   await runToIdle(request, sessionId, first)
   await runToIdle(request, sessionId, second)

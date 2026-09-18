@@ -17,10 +17,18 @@ from support import ScriptedChat, make_turn
 
 
 @pytest.fixture
-def multi(sandbox):
-    """多工作区模式：没有默认工作区，所以建会话必须指定归属。"""
+def multi(tmp_path):
+    """一个与仓库无关的工作地点 + 空注册表：建会话必须指定归属。
+
+    ``workspace_root`` 指到临时目录是必须的：没有它 ``Services`` 会把进程默认根
+    （跑测试时就是仓库根）当成工作地点登记进来，测试就会往仓库里写会话文件。
+    """
+    home = tmp_path.parent / f"bound-{tmp_path.name}"
+    home.mkdir()
     registry = WorkspaceRegistry()
-    services = Services(registry=registry, chat=ScriptedChat([make_turn("答")]))
+    services = Services(
+        workspace_root=home, registry=registry, chat=ScriptedChat([make_turn("答")])
+    )
     yield services, registry
     services.close()
 
@@ -33,14 +41,20 @@ def client(multi, sandbox):
     return TestClient(create_app(services=services, static_dir=sandbox / "unbuilt"))
 
 
-def test_single_workspace_mode_lists_the_default(client):
-    """单工作区模式（测试与 `avid web --workspace`）下，列表里就有那一个。"""
+def test_direct_sessions_root_still_binds_one_workplace(tmp_path):
+    """显式给会话库路径（测试与 `avid web --workspace` 之外的装配）也要有工作地点。
+
+    进程永远绑定一个工作地点，并且它可被解析（因此在候选列表里、标着 is_default）。
+    """
     from fastapi.testclient import TestClient
 
     from avid.svc import Services
     from avid.web import create_app
 
-    services = Services(root="/tmp/does-not-matter/sessions")
+    root = tmp_path.parent / f"direct-{tmp_path.name}" / ".avid" / "sessions"
+    root.mkdir(parents=True)
+    # 自己的注册表文件：同一测试里另一个 Services 不该出现在这份候选里。
+    services = Services(root=root, registry=WorkspaceRegistry(tmp_path / "registry.json"))
     try:
         single = TestClient(create_app(services=services, static_dir="/tmp/unbuilt"))
         listed = single.get("/api/workspaces").json()["workspaces"]
@@ -48,15 +62,30 @@ def test_single_workspace_mode_lists_the_default(client):
         assert len(listed) == 1
         assert listed[0]["is_default"] is True
         assert listed[0]["id"].startswith("w-")
+        # 归属可解析：用它建会话是 201，且会话落在给的那个库里。
+        created = single.post("/api/sessions", json={"workspace": listed[0]["id"]})
+        assert created.status_code == 201, created.text
+        assert list(root.glob("*.jsonl"))
     finally:
         services.close()
 
 
-def test_create_session_requires_a_workspace_in_multi_mode(client):
+def test_create_session_always_names_a_workspace(client):
+    """进程自己绑定了工作地点，但**建会话仍必须显式指定**——绑定值只是预选项。
+
+    省略会让归属取决于服务端状态而不是请求，而归属是会话的不可变事实。
+    """
+    listed = client.get("/api/workspaces").json()["workspaces"]
+    assert any(ws["is_default"] for ws in listed)
+
     response = client.post("/api/sessions", json={"name": "没有归属"})
 
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "workspace_required"
+
+    bound = next(ws for ws in listed if ws["is_default"])
+    explicit = client.post("/api/sessions", json={"workspace": bound["id"]})
+    assert explicit.status_code == 201, explicit.text
 
 
 def test_create_session_rejects_an_unknown_field(client):
@@ -79,7 +108,8 @@ def test_register_then_create_a_session_in_that_workspace(client, sandbox, tmp_p
     assert workspace["default_permission"] == "workspace"
 
     listed = client.get("/api/workspaces").json()["workspaces"]
-    assert [item["id"] for item in listed] == [workspace["id"]]
+    # 进程自己绑定的工作地点也在候选里（is_default），所以断言"包含"而不是"只有它"。
+    assert workspace["id"] in {item["id"] for item in listed}
 
     session = client.post("/api/sessions", json={"workspace": workspace["id"]})
     assert session.status_code == 201, session.text

@@ -35,12 +35,12 @@
 **「新建会话必须先选择工作区」落在哪一层**：
 
 - 协议层 `SessionRepo.create(workspace: str | None = None)`：`None` 表示「由仓库归属派生」，内存后端与既有测试因此不受影响；
-- 服务层 `svc` 的**两种装配模式**（落地时的细化，`WorkspaceService.resolve`）：
-  - **多工作区模式**（`avid web` 的默认）：没有默认工作区，`POST /api/sessions` 缺 `workspace`
-    返回 400 `workspace_required`——这是"必须先选"的强制点；
-  - **单工作区模式**（`Services(root=...)` 或 `avid web --workspace X`）：那一个就是默认值，
-    省略时归属照样写进会话 header，因此不存在"归属不明的会话"。选这一档是因为
-    "只有一个候选时还强制显式传参"是仪式而非保护；
+- 服务层 `svc`：`POST /api/sessions` 缺 `workspace` **一律** 400 `workspace_required`，
+  `SessionService.create(workspace=...)` 的 `workspace` 是必填参数。没有任何"用服务端
+  默认值兜住"的路径——归属是会话的**不可变事实**，省略会让它取决于服务端状态而不是请求；
+- 进程**总是**绑定一个工作地点（`Services()` 取进程默认根、`workspace_root=` 指定、
+  `root=` 直接给会话库路径）：`avid web` 启动即登记它，界面因此永远有至少一个候选，
+  但绑定值只是**预选项**（`is_default=true`），不是可以省略的参数；
 - CLI：`--workspace PATH|ID` 可省，省时取**当前目录**并把解析结果打进 stderr（不是"没选"，是"命令行上下文替你选了"）；
 - Web 前端：请求体**总是**显式带上 `workspace`（选择器默认预选 `is_default`、否则最近使用的那一个）。
 
@@ -263,5 +263,5 @@
 | 工作区默认权限存注册表 | 唯一写入口在 CLI | 需要按会话或按分支给不同模式时 |
 | 内存后端也能表达归属 | 字段进 `SessionMetadata` | 内存后端要跑跨工作区一致性用例时，再把 root 提上协议 |
 | 会话 id 全局唯一，可以跨库逐个找 | 每次按会话操作要扫各工作区的 `repo.list()`（只读 header，代价与工作区数×会话数成正比） | 工作区或会话数量上去后，定位明显变慢 → 把工作区 id 放进会话 id 或加一层索引 |
-| 单工作区模式下省略 `workspace` 是安全的 | 那一个候选就是默认值，归属照样落 header | 出现"以为建在 A、实际建在 B"的事故 → 取消单工作区默认，一律必填 |
+| 进程绑定值只做预选、不做默认 | 建会话总是显式指定归属（含测试与 e2e 造数据） | 界面为了省一次点击而预选错工作区 → 预选规则（`is_default` → 最近使用）要能解释给用户看 |
 | 危险/越界的警告只在 `reason` 文本里 | 不加结构化的 `warning` / `target` 字段 | 审批卡片要按风险分色或按目标分组时 |

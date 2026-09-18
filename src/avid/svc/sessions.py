@@ -140,11 +140,12 @@ class SessionService:
     def create(
         self,
         *,
+        workspace: str,
         id: str | None = None,
         name: str | None = None,
-        workspace: str | None = None,
     ) -> dict[str, Any]:
-        """新建会话：**必须先有归属**（多工作区模式下缺 workspace 直接 400）。"""
+        """新建会话：**必须先有归属**。``workspace`` 是必填参数——缺失是 400，
+        不存在"用服务端默认值兜住"的路径（归属是会话的不可变事实，不该由环境决定）。"""
         owner = self.workspaces.resolve(workspace)
         repo = self.workspaces.repo_for(owner)
         try:

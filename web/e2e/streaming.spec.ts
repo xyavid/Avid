@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { createSession } from './helpers'
 import type { Page } from '@playwright/test'
 
 /**
@@ -70,9 +71,7 @@ test('delta 真的到达浏览器，且最终收敛成一条消息（不重复�
     }
   })
 
-  const created = await request.post(`${BASE}/api/sessions`, {
-    data: { name: `流式验证-${Date.now()}` },
-  })
+  const created = await createSession(request, { name: `流式验证-${Date.now()}` })
   const sessionId = (await created.json()).id as string
 
   await page.goto(`${BASE}/sessions/${sessionId}`)

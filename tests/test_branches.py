@@ -12,7 +12,7 @@ import pytest
 
 from avid.svc import Services
 from avid.svc.errors import BranchExists, InvalidRequest, SessionBusy
-from support import ScriptedChat, make_turn, wait_terminal
+from support import ScriptedChat, bound_workspace, make_turn, wait_terminal
 
 
 def build(root, chat, **kwargs) -> Services:
@@ -33,7 +33,7 @@ def entry_ids(services: Services, session_id: str, branch: str = "main") -> list
 def test_fresh_session_exposes_main_as_implicit_default(sandbox):
     """`create` 不隐式建分支，但读侧必须把 main 当默认——否则新会话显示成「没有分支」。"""
     services = build(sandbox, ScriptedChat(make_turn("你好")))
-    session_id = services.sessions.create(name="分支")["id"]
+    session_id = services.sessions.create(workspace=bound_workspace(services), name="分支")["id"]
 
     listed = services.sessions.list_branches(session_id)
     assert [item["name"] for item in listed["branches"]] == ["main"]
@@ -46,7 +46,7 @@ def test_fresh_session_exposes_main_as_implicit_default(sandbox):
 def test_fork_copies_the_prefix_and_keeps_the_rest_private(sandbox):
     chats = ScriptedChat(make_turn("第一轮"), make_turn("第二轮"), make_turn("分支上的第三轮"))
     services = build(sandbox, chats)
-    session_id = services.sessions.create(name="分叉")["id"]
+    session_id = services.sessions.create(workspace=bound_workspace(services), name="分叉")["id"]
     run(services, session_id, "第一次")
     run(services, session_id, "第二次")
 
@@ -80,7 +80,7 @@ def test_fork_copies_the_prefix_and_keeps_the_rest_private(sandbox):
 
 def test_auto_names_skip_taken_ones(sandbox):
     services = build(sandbox, ScriptedChat(make_turn("x")))
-    session_id = services.sessions.create()["id"]
+    session_id = services.sessions.create(workspace=bound_workspace(services))["id"]
 
     services.sessions.create_branch(session_id, name="b2")
     third = services.sessions.create_branch(session_id)
@@ -92,7 +92,7 @@ def test_auto_names_skip_taken_ones(sandbox):
 
 def test_duplicate_name_and_unknown_fork_point_are_rejected(sandbox):
     services = build(sandbox, ScriptedChat(make_turn("x")))
-    session_id = services.sessions.create()["id"]
+    session_id = services.sessions.create(workspace=bound_workspace(services))["id"]
     services.sessions.create_branch(session_id, name="dup")
 
     with pytest.raises(BranchExists):
@@ -104,7 +104,7 @@ def test_duplicate_name_and_unknown_fork_point_are_rejected(sandbox):
 def test_run_creates_a_missing_branch_and_keeps_it_isolated(sandbox):
     """在一条还不存在的分支上运行 = 从零开一条空分支（recorder 的 ensure_branch）。"""
     services = build(sandbox, ScriptedChat(make_turn("主线答复"), make_turn("只在分支上")))
-    session_id = services.sessions.create()["id"]
+    session_id = services.sessions.create(workspace=bound_workspace(services))["id"]
     run(services, session_id, "第一句")
     main_entries = entry_ids(services, session_id, "main")
 
@@ -129,7 +129,7 @@ def test_fork_is_refused_while_a_run_is_active(sandbox):
         return make_turn("完事")
 
     services = build(sandbox, blocking_chat)
-    session_id = services.sessions.create()["id"]
+    session_id = services.sessions.create(workspace=bound_workspace(services))["id"]
     record = services.runs.start(session_id, "占住会话")
     assert entered.wait(timeout=5), "运行没走到模型调用"
 

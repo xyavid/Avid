@@ -62,18 +62,24 @@ class Services:
         approval_timeout: float = APPROVAL_TIMEOUT_SECONDS,
         registry: WorkspaceRegistry | None = None,
     ) -> None:
-        """``root`` = 单工作区模式下的**会话库路径**（测试与 `avid web --workspace` 用）；
-        两者都不给 = 多工作区模式，工作区由注册表回答，建会话必须指定归属。
+        """任何装配都先绑定一个**工作地点**，并且登记好（于是它可被解析、会出现在候选里）。
+
+        * ``root``：直接给会话库路径（测试用）；工作地点由路径形状推出来。
+        * ``workspace_root``：给工作区根（`avid web --workspace`）。
+        * 都不给：取进程默认根（正常就是 cwd）——**没有"没有工作地点"的进程**。
+
+        ``default`` 只是**预选项**（`capabilities` 与界面预选用），不是建会话时可以省略的
+        默认值：建会话永远要显式指定 workspace。
         """
         self.registry = registry or WorkspaceRegistry()
         if root is not None:
-            default = single_workspace(root)
+            default = self.registry.add(single_workspace(root).root)
             sessions_root: Path | None = Path(root)
         elif workspace_root is not None:
             default = self.registry.add(workspace_root)
             sessions_root = None  # 用 `<root>/.avid/sessions`
         else:
-            default = None
+            default = self.registry.add(workspace.WORKSPACE_ROOT)
             sessions_root = None
         self.workspaces = WorkspaceService(
             self.registry, default=default, default_sessions_root=sessions_root

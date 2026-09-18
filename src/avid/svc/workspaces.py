@@ -3,11 +3,14 @@
 一个进程要能服务多个工作区：会话库不再是进程级的一个目录，而是每个工作区各自的
 ``<root>/.avid/sessions``。这里集中回答两个问题——**有哪些工作区**、**这个会话属于哪一个**。
 
-两种装配模式，区别只在"没有指定工作区时怎么办"：
+两个概念分开：
 
-* **多工作区模式**（``avid web`` 的默认）：必须显式指定工作区，否则 ``WorkspaceRequired``；
-* **单工作区模式**（``Services(root=...)`` 或 ``avid web --workspace X``）：那一个就是默认，
-  省略时的归属仍被写进会话 header，因此不存在"归属不明的会话"。
+* **进程绑定一个工作地点**（``default``）：服务启动时就登记好，``capabilities`` 与界面
+  的预选值都取自它。任何装配方式（``Services(root=...)`` / ``workspace_root=...`` /
+  默认的当前目录）都必然有一个——不存在"没有工作地点"的进程。
+* **建会话必须显式指定工作区**：``resolve(None)`` 一律 ``WorkspaceRequired``（400）。
+  进程自己的绑定值只是**预选项**，不是"可以省略"的默认值：省略会让归属取决于
+  服务端状态而不是请求，而归属是会话的不可变事实，不该那样决定。
 
 仓库按工作区缓存：同一个工作区里的会话句柄独占由 ``JsonlSessionRepo`` 自己保证，
 缓存只是让"运行中刷新页面"复用同一个仓库实例（阶段 15 的 I3 前提）。
@@ -77,22 +80,21 @@ class WorkspaceService:
         return [self.describe(ws) for ws in self.workspaces()]
 
     def resolve(self, selection: str | None) -> Workspace:
-        """把请求里的工作区选择解析成记录。``None`` 只在单工作区模式下合法。"""
-        if selection:
-            try:
-                found = self.registry.find(selection)
-            except WorkspaceError as exc:  # 注册表损坏：读已降级为空表
-                raise WorkspaceInvalid(str(exc)) from exc
-            if found is None:
-                raise WorkspaceMissing(
-                    f"没有这个工作区：{selection}（用 GET /api/workspaces 看可选值）"
-                )
-            return found
-        if self.default is not None:
-            return self.default
-        raise WorkspaceRequired(
-            "新建会话必须指定 workspace（多工作区模式下没有默认值）"
-        )
+        """把请求里的工作区选择解析成记录。**不接受省略。**"""
+        text = (selection or "").strip()
+        if not text:
+            raise WorkspaceRequired(
+                "新建会话必须指定 workspace（进程的绑定工作区只是预选项，不是默认值）"
+            )
+        try:
+            found = self.registry.find(text)
+        except WorkspaceError as exc:  # 注册表损坏：读已降级为空表
+            raise WorkspaceInvalid(str(exc)) from exc
+        if found is None:
+            raise WorkspaceMissing(
+                f"没有这个工作区：{text}（用 GET /api/workspaces 看可选值）"
+            )
+        return found
 
     def register(
         self, path: str, *, name: str | None = None, permission: str | None = None

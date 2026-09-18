@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { createSession } from './helpers'
 import type { APIRequestContext, Page } from '@playwright/test'
 
 /**
@@ -64,7 +65,7 @@ async function openSession(page: Page, sessionId: string): Promise<void> {
 }
 
 async function longSession(request: APIRequestContext): Promise<string> {
-  const created = await request.post(`${BASE}/api/sessions`, { data: { name: '布局验证' } })
+  const created = await createSession(request, { name: '布局验证' })
   const sessionId = (await created.json()).id as string
   for (let round = 0; round < 12; round += 1) {
     await runToIdle(
@@ -233,13 +234,11 @@ test('中档宽度：会话列表走左侧抽屉，选中会话后抽屉收起',
   // 处置是把它做成覆盖式抽屉，而不是就地展开成 320px（那会吃掉 1/3 屏宽）。
   // 名字带时间戳：会话不会被清理，固定名字会让第二次跑出两个匹配。
   const stamp = Date.now()
-  const current = await request.post(`${BASE}/api/sessions`, {
-    data: { name: `中档当前会话-${stamp}` },
-  })
+  const current = await createSession(request, { name: `中档当前会话-${stamp}` })
   const currentId = (await current.json()).id as string
   await runToIdle(request, currentId, '中档抽屉：先垫一条消息')
   const targetName = `中档抽屉目标-${stamp}`
-  const target = await request.post(`${BASE}/api/sessions`, { data: { name: targetName } })
+  const target = await createSession(request, { name: targetName })
   const targetId = (await target.json()).id as string
 
   await page.setViewportSize({ width: 1100, height: 700 })

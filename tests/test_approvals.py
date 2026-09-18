@@ -15,6 +15,7 @@ from avid.runtime import events
 from avid.svc import Services
 from avid.web import create_app
 from support import (
+    create_session,
     RecordingTools,
     ScriptedChat,
     collect,
@@ -62,7 +63,7 @@ def make_client(sandbox):
 
 
 def start_run(client: TestClient, prompt: str = "跑一下", **body) -> tuple[str, str]:
-    session = client.post("/api/sessions", json={}).json()
+    session = create_session(client).json()
     response = client.post(
         f"/api/sessions/{session['id']}/runs", json={"prompt": prompt, **body}
     )

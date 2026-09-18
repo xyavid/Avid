@@ -53,8 +53,8 @@ export function SessionList({ activeId, onSelect }: SessionListProps) {
           size="sm"
           variant="primary"
           loading={create.isPending}
-          // 没有可选工作区时禁用：多工作区模式下这个请求必然 400 workspace_required，
-          // 让按钮点出一个已知会失败的请求不如先说清为什么不能点。
+          // 没有可选工作区时禁用：服务端一律要求显式指定归属（缺了是 400），
+          // 让按钮点出一个已知会失败的请求，不如先说清为什么不能点。
           disabled={chosen === null || workspaces.isLoading}
           onClick={() => {
             if (!chosen) return

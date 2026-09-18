@@ -17,7 +17,15 @@ from avid.session import SessionRecorder
 from avid.svc import API_VERSION, FEATURES, Services
 from avid.web import create_app
 from avid.web.schemas import classify_tool_status
-from support import RecordingTools, ScriptedChat, collect, make_turn, tool_call, wait_for
+from support import (
+    RecordingTools,
+    ScriptedChat,
+    collect,
+    create_session,
+    make_turn,
+    tool_call,
+    wait_for,
+)
 
 
 @pytest.fixture
@@ -44,7 +52,7 @@ def bundle(sandbox):
 
 
 def finish_run(client: TestClient, chat, tools=None, prompt: str = "问题") -> tuple[str, str]:
-    session = client.post("/api/sessions", json={}).json()
+    session = create_session(client).json()
     response = client.post(
         f"/api/sessions/{session['id']}/runs", json={"prompt": prompt, "auto_approve": True}
     )
@@ -82,7 +90,7 @@ def test_one_run_per_session(bundle):
         return make_turn("结束")
 
     client, _ = bundle(blocking_chat)
-    session = client.post("/api/sessions", json={}).json()
+    session = create_session(client).json()
 
     first = client.post(f"/api/sessions/{session['id']}/runs", json={"prompt": "一"})
     assert entered.wait(5.0)
@@ -109,12 +117,12 @@ def test_run_for_unknown_session_is_404(bundle):
 
 def test_session_lifecycle(bundle):
     client, _ = bundle()
-    created = client.post("/api/sessions", json={"name": "演示会话"})
+    created = create_session(client, name="演示会话")
     assert created.status_code == 201
     session_id = created.json()["id"]
     assert created.json()["name"] == "演示会话"
 
-    duplicate = client.post("/api/sessions", json={"id": session_id})
+    duplicate = create_session(client, id=session_id)
     assert duplicate.status_code == 409
     assert duplicate.json()["error"]["code"] == "session_exists"
 
@@ -140,7 +148,7 @@ def test_delete_is_blocked_by_active_run(bundle):
         return make_turn("结束")
 
     client, _ = bundle(blocking_chat)
-    session = client.post("/api/sessions", json={}).json()
+    session = create_session(client).json()
     client.post(f"/api/sessions/{session['id']}/runs", json={"prompt": "一"})
     assert entered.wait(5.0)
 
@@ -212,7 +220,7 @@ def test_meta_matches_kernel_and_features_match_endpoints(bundle):
     if FEATURES["permission_modes"]:
         # 权限模式是**参数型**特性，没有新端点可断言；用"非法值被拒"证明它真的生效
         # （声明了却没人读，就会连非法值都照收）。
-        session = client.post("/api/sessions", json={}).json()
+        session = create_session(client).json()
         rejected = client.post(
             f"/api/sessions/{session['id']}/runs",
             json={"prompt": "x", "permission": "yolo"},
@@ -233,7 +241,7 @@ def test_health(bundle):
 
 def test_branch_endpoints_list_fork_and_reject_conflicts(bundle):
     client, _ = bundle(chat=ScriptedChat(make_turn("主线"), make_turn("分支上")))
-    session_id = client.post("/api/sessions", json={"name": "分支"}).json()["id"]
+    session_id = create_session(client, name="分支").json()["id"]
 
     fresh = client.get(f"/api/sessions/{session_id}/branches").json()
     assert [item["name"] for item in fresh["branches"]] == ["main"]
@@ -312,7 +320,7 @@ def fill(sandbox, services: Services, session_id: str, count: int) -> None:
 
 def test_entries_are_bounded_by_default_and_by_cap(bundle):
     client, services = bundle()
-    session_id = client.post("/api/sessions", json={}).json()["id"]
+    session_id = create_session(client).json()["id"]
     fill(None, services, session_id, 600)
 
     default = client.get(f"/api/sessions/{session_id}/entries").json()
@@ -336,7 +344,7 @@ def test_entries_are_bounded_by_default_and_by_cap(bundle):
 
 def test_entries_pagination_walks_the_chain(bundle):
     client, services = bundle()
-    session_id = client.post("/api/sessions", json={}).json()["id"]
+    session_id = create_session(client).json()["id"]
     fill(None, services, session_id, 150)
 
     first = client.get(f"/api/sessions/{session_id}/entries").json()
@@ -363,7 +371,7 @@ def test_entries_pagination_walks_the_chain(bundle):
 
 def test_truncated_tail_is_derived_not_persisted(bundle):
     client, services = bundle()
-    session_id = client.post("/api/sessions", json={}).json()["id"]
+    session_id = create_session(client).json()["id"]
     metadata = services.runs.find_metadata(session_id)
     session = services.repo.open(metadata)
     try:
