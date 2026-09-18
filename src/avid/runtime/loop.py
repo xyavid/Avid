@@ -30,7 +30,7 @@ from ..tools import TOOL_IMPLS, TOOLS, ToolImpl
 from . import context, events
 from .events import RunObserver
 from .execution import execute_batch
-from .hooks import BLOCK, trigger_hooks
+from .hooks import BLOCK, HookRegistry
 from .state import TODO_REMINDER_AFTER_ROUNDS, RunState
 
 if TYPE_CHECKING:  # 只有类型标注用它：注解是惰性的，运行时不必跨层 import 策略层
@@ -82,7 +82,7 @@ def _submit_input(transcript: Transcript, state: RunState) -> int | None:
         "workspace_root": state.workspace_root,
         "permission_mode": state.permission_mode,
     }
-    if trigger_hooks("UserPromptSubmit", submit) == BLOCK:
+    if state.hooks.trigger("UserPromptSubmit", submit) == BLOCK:
         logger.warning("UserPromptSubmit 被拦截，未调用模型")
         return None
 
@@ -123,6 +123,7 @@ def agent_loop(
     ask: AskUser | None = None,
     on_event: RunObserver | None = None,
     state: RunState | None = None,
+    hooks: HookRegistry | None = None,
 ) -> str:
     """跑到模型不再要工具为止，返回最后一轮的 assistant 文本。
 
@@ -136,6 +137,9 @@ def agent_loop(
 
     ``on_event`` 是**步骤级事实**的通道（轮次、TODO 提醒、Stop nudge、取消），
     不是第二个消息通道：``on_message`` 仍然是消息的唯一出口。两者都不改调度。
+
+    ``hooks`` 注入这次运行的 hook 注册表（None = 进程级默认）：以前注册表是模块级
+    字典，一次注册会漏到同进程所有运行。
 
     ``ask`` 注入审批回调（None = 回落到 stdin）；``state`` 允许调用方传入一份
     已建好的运行状态——取消需要从另一个线程置位，所以取消路径必须能拿到它。
@@ -160,6 +164,7 @@ def agent_loop(
         permission_mode=permission_mode,
         ledger=ledger,
         workspace_root=workspace_root,
+        hooks=hooks,
     )
     system_prompt = state.system_prompt(system)
 
@@ -243,7 +248,7 @@ def agent_loop(
                 "nudge": None,
                 **state.snapshot(),
             }
-            blocked = trigger_hooks("Stop", stop) == BLOCK
+            blocked = state.hooks.trigger("Stop", stop) == BLOCK
             if blocked and state.stop_blocks < max_stop_blocks:
                 state.stop_blocks += 1
                 nudge = stop.get("nudge")

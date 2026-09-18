@@ -17,6 +17,12 @@
 * 回调之间靠同一个 ``context`` 字典传数据：前一个回调写入的字段，后一个回调
   与循环本身都能读到。``trigger_hooks`` 会往 context 里写入 ``event``。
 * 回调抛异常按 ``"block"`` 处理（失败关闭），日志里带上回调名。
+
+**注册表是显式对象，不是模块级字典**（审查里的 P2-19）：`HookRegistry` 由
+`RunState` 持有、由循环的 `hooks` 参数注入，默认用进程级的 `DEFAULT_HOOKS`。
+以前是模块级的 `HOOKS` 字典 + `register_hook()`：任何 import 本模块的代码都能改它，
+一次注册会漏到同一进程里所有运行（含子 agent），测试也只能靠 monkeypatch 全局字典
+来隔离。现在"每个运行用哪份注册表"是一个能看见、能替换的值。
 """
 
 from __future__ import annotations
@@ -86,55 +92,75 @@ Hook = Callable[[dict[str, Any]], "str | None"]
 ALLOW = "allow"
 BLOCK = "block"
 
-HOOKS: dict[str, list[Hook]] = {event: [] for event in EVENTS}
-
 # 工具输出进入上下文前的预算上限。比工具自身的截断更严：工具层管
 # "单次输出别太大"，这一层管"塞进上下文的别太多"。
 MAX_TOOL_OUTPUT_CHARS = 8000
 
 
-def register_hook(event: str, hook: Hook | None = None):
-    """注册回调。既可直接调用，也能当装饰器用。
+class HookRegistry:
+    """一个运行用的事件回调表。可注册、可触发、可整体替换。
 
-        register_hook("PreToolUse", my_hook)
-
-        @register_hook("PreToolUse")
-        def my_hook(context): ...
+    默认那份是进程级的 `DEFAULT_HOOKS`（里面是下面那几个默认回调）；要隔离
+    （测试、或"这次运行不要默认回调"）就自己建一份，通过循环的 `hooks` 参数传进去。
     """
-    if event not in EVENTS:
-        raise ValueError(f"未知事件名 {event!r}；可用：{'、'.join(EVENTS)}")
 
-    if hook is None:
-        return lambda fn: register_hook(event, fn)
+    def __init__(self) -> None:
+        self._hooks: dict[str, list[Hook]] = {event: [] for event in EVENTS}
 
-    HOOKS.setdefault(event, []).append(hook)
-    return hook
+    def register(self, event: str, hook: Hook | None = None):
+        """注册回调。既可直接调用，也能当装饰器用。
+
+            registry.register("PreToolUse", my_hook)
+
+            @registry.register("PreToolUse")
+            def my_hook(context): ...
+        """
+        if event not in EVENTS:
+            raise ValueError(f"未知事件名 {event!r}；可用：{'、'.join(EVENTS)}")
+        if hook is None:
+            return lambda fn: self.register(event, fn)
+        self._hooks.setdefault(event, []).append(hook)
+        return hook
+
+    def registered(self, event: str) -> list[Hook]:
+        """某个事件上注册了哪些回调（按注册顺序）。诊断与测试用。"""
+        return list(self._hooks.get(event, []))
+
+    def trigger(self, event: str, context: dict[str, Any]) -> str:
+        """触发某事件的全部回调，返回 ALLOW 或 BLOCK。
+
+        ``context`` 会被原地修改；调用方在返回后读其中的字段决定下一步动作。
+        """
+        if event not in EVENTS:
+            raise ValueError(f"未知事件名 {event!r}；可用：{'、'.join(EVENTS)}")
+
+        context["event"] = event
+        blocked = False
+
+        for hook in list(self._hooks.get(event, [])):
+            name = getattr(hook, "__name__", repr(hook))
+            try:
+                result = hook(context)
+            except Exception:
+                logger.exception("回调 %s 在 %s 抛出异常，按 block 处理", name, event)
+                blocked = True
+                continue
+            if result == BLOCK:
+                logger.info("%s 被 %s 拦截", event, name)
+                blocked = True
+
+        return BLOCK if blocked else ALLOW
+
+    def copy(self) -> "HookRegistry":
+        """复制一份（回调本身是共享的）：给子运行一份可独立追加的注册表。"""
+        clone = HookRegistry()
+        for event, callbacks in self._hooks.items():
+            clone._hooks[event] = list(callbacks)
+        return clone
 
 
-def trigger_hooks(event: str, context: dict[str, Any]) -> str:
-    """触发某事件的全部回调，返回 ALLOW 或 BLOCK。
-
-    ``context`` 会被原地修改；调用方在返回后读其中的字段决定下一步动作。
-    """
-    if event not in EVENTS:
-        raise ValueError(f"未知事件名 {event!r}；可用：{'、'.join(EVENTS)}")
-
-    context["event"] = event
-    blocked = False
-
-    for hook in list(HOOKS.get(event, [])):
-        name = getattr(hook, "__name__", repr(hook))
-        try:
-            result = hook(context)
-        except Exception:
-            logger.exception("回调 %s 在 %s 抛出异常，按 block 处理", name, event)
-            blocked = True
-            continue
-        if result == BLOCK:
-            logger.info("%s 被 %s 拦截", event, name)
-            blocked = True
-
-    return BLOCK if blocked else ALLOW
+# 进程级默认注册表：下面把默认回调注册进去。循环没有显式给注册表时用它。
+DEFAULT_HOOKS = HookRegistry()
 
 
 # ---------------- 默认回调 ----------------
@@ -279,9 +305,9 @@ def summary_hook(context: dict[str, Any]) -> str | None:
 
 # 注册顺序有意义：permission_hook 先跑，log_hook 才能看到 denied_reason；
 # large_output_hook 先跑，log_hook 才能报出"已被截断"。
-register_hook("UserPromptSubmit", context_inject_hook)
-register_hook("PreToolUse", permission_hook)
-register_hook("PreToolUse", log_hook)
-register_hook("PostToolUse", large_output_hook)
-register_hook("PostToolUse", log_hook)
-register_hook("Stop", summary_hook)
+DEFAULT_HOOKS.register("UserPromptSubmit", context_inject_hook)
+DEFAULT_HOOKS.register("PreToolUse", permission_hook)
+DEFAULT_HOOKS.register("PreToolUse", log_hook)
+DEFAULT_HOOKS.register("PostToolUse", large_output_hook)
+DEFAULT_HOOKS.register("PostToolUse", log_hook)
+DEFAULT_HOOKS.register("Stop", summary_hook)

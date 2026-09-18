@@ -15,7 +15,6 @@ import pytest
 
 from avid import cli
 from avid.ai.client import Turn, Usage
-from avid.runtime import hooks
 from avid.runtime.loop import agent_loop as real_agent_loop
 from avid.tools import workspace
 
@@ -58,9 +57,8 @@ class Model:
 
 
 @pytest.fixture
-def sandbox(monkeypatch, tmp_path: Path) -> Path:
+def sandbox(monkeypatch, tmp_path: Path, hook_registry) -> Path:
     monkeypatch.setattr(workspace, "WORKSPACE_ROOT", tmp_path)
-    monkeypatch.setattr(hooks, "HOOKS", {event: [] for event in hooks.EVENTS})
     monkeypatch.setenv("AVID_API_KEY", "test-key")
     monkeypatch.setenv("AVID_MODEL", "test-model")
     return tmp_path

@@ -22,6 +22,22 @@ def avid_home(tmp_path, monkeypatch):
     monkeypatch.setenv(AVID_HOME_ENV, str(tmp_path / "avid-home"))
 
 
+@pytest.fixture
+def hook_registry(monkeypatch):
+    """本用例专用的 hook 注册表（P2-19）。
+
+    `agent_loop` 默认取 `hooks.DEFAULT_HOOKS`；这里换上一份空的并把它返回，于是
+    "注册回调 → 跑循环 → 断言"全发生在这份局部对象上：不再改模块级字典，也不会
+    漏到别的用例（以前靠 monkeypatch `HOOKS` 来隔离）。
+    """
+    from avid.runtime import hooks as hooks_module
+    from avid.runtime.hooks import HookRegistry
+
+    registry = HookRegistry()
+    monkeypatch.setattr(hooks_module, "DEFAULT_HOOKS", registry)
+    return registry
+
+
 @pytest.fixture(autouse=True)
 def sandbox(tmp_path, monkeypatch):
     """工作区根目录 → tmp_path：会话、任务、压缩落盘都跟着走。

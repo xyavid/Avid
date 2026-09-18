@@ -44,16 +44,10 @@ class FakeChat:
         return self.turns[len(self.requests) - 1]
 
 
-@pytest.fixture
-def no_hooks(monkeypatch):
-    """清空注册表：只测循环本身，不掺默认回调的影响。"""
-    monkeypatch.setattr(hooks, "HOOKS", {event: [] for event in hooks.EVENTS})
-
-
 # ---------- 循环基本行为 ----------
 
 
-def test_returns_text_and_appends_assistant_when_no_tool_calls(no_hooks):
+def test_returns_text_and_appends_assistant_when_no_tool_calls(hook_registry):
     chat = FakeChat(make_turn("你好"))
     messages = [{"role": "user", "content": "hi"}]
 
@@ -180,14 +174,14 @@ def test_round_limit_raises_instead_of_returning_partial_text():
 # ---------- ② PreToolUse ----------
 
 
-def test_pre_tool_use_block_skips_the_handler(no_hooks):
+def test_pre_tool_use_block_skips_the_handler(hook_registry):
     executed = []
 
     def read_file(args, **kwargs):
         executed.append(args)
         return "内容"
 
-    hooks.register_hook("PreToolUse", lambda ctx: hooks.BLOCK)
+    hook_registry.register("PreToolUse", lambda ctx: hooks.BLOCK)
     chat = FakeChat(
         make_turn("", [tool_call("read_file", '{"path": "a.txt"}')]),
         make_turn("好的"),
@@ -206,8 +200,8 @@ def test_pre_tool_use_block_skips_the_handler(no_hooks):
     }
 
 
-def test_pre_tool_use_block_does_not_stop_the_loop(no_hooks):
-    hooks.register_hook("PreToolUse", lambda ctx: hooks.BLOCK)
+def test_pre_tool_use_block_does_not_stop_the_loop(hook_registry):
+    hook_registry.register("PreToolUse", lambda ctx: hooks.BLOCK)
     chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("那我换个说法"))
     messages = [{"role": "user", "content": "读"}]
 
@@ -219,9 +213,9 @@ def test_pre_tool_use_block_does_not_stop_the_loop(no_hooks):
     assert len(chat.requests) == 2
 
 
-def test_pre_tool_use_receives_name_and_parsed_arguments(no_hooks):
+def test_pre_tool_use_receives_name_and_parsed_arguments(hook_registry):
     seen = []
-    hooks.register_hook("PreToolUse", lambda ctx: seen.append((ctx["tool"], ctx["arguments"])))
+    hook_registry.register("PreToolUse", lambda ctx: seen.append((ctx["tool"], ctx["arguments"])))
 
     chat = FakeChat(
         make_turn("", [tool_call("read_file", '{"path": "a.txt"}')]), make_turn("好的")
@@ -233,9 +227,9 @@ def test_pre_tool_use_receives_name_and_parsed_arguments(no_hooks):
     assert seen == [("read_file", {"path": "a.txt"})]
 
 
-def test_pre_tool_use_sees_the_round_number(no_hooks):
+def test_pre_tool_use_sees_the_round_number(hook_registry):
     rounds = []
-    hooks.register_hook("PreToolUse", lambda ctx: rounds.append(ctx["round"]))
+    hook_registry.register("PreToolUse", lambda ctx: rounds.append(ctx["round"]))
 
     chat = FakeChat(
         make_turn("", [tool_call("read_file")]),
@@ -249,11 +243,11 @@ def test_pre_tool_use_sees_the_round_number(no_hooks):
     assert rounds == [1, 2]
 
 
-def test_unknown_tool_never_reaches_pre_tool_use(no_hooks):
+def test_unknown_tool_never_reaches_pre_tool_use(hook_registry):
     def spy(ctx):
         raise AssertionError("未知工具不该触发 PreToolUse")
 
-    hooks.register_hook("PreToolUse", spy)
+    hook_registry.register("PreToolUse", spy)
     chat = FakeChat(make_turn("", [tool_call("nope")]), make_turn("好的"))
     messages = [{"role": "user", "content": "x"}]
 
@@ -262,11 +256,11 @@ def test_unknown_tool_never_reaches_pre_tool_use(no_hooks):
     assert messages[2]["content"] == "未知工具：nope"
 
 
-def test_unparsable_arguments_never_reach_pre_tool_use(no_hooks):
+def test_unparsable_arguments_never_reach_pre_tool_use(hook_registry):
     def spy(ctx):
         raise AssertionError("JSON 解析失败不该触发 PreToolUse")
 
-    hooks.register_hook("PreToolUse", spy)
+    hook_registry.register("PreToolUse", spy)
     chat = FakeChat(make_turn("", [tool_call("read_file", "{坏 json")]), make_turn("好的"))
     messages = [{"role": "user", "content": "x"}]
 
@@ -275,11 +269,11 @@ def test_unparsable_arguments_never_reach_pre_tool_use(no_hooks):
     assert "不是合法 JSON" in messages[2]["content"]
 
 
-def test_non_object_arguments_never_reach_pre_tool_use(no_hooks):
+def test_non_object_arguments_never_reach_pre_tool_use(hook_registry):
     def spy(ctx):
         raise AssertionError("非对象参数不该触发 PreToolUse")
 
-    hooks.register_hook("PreToolUse", spy)
+    hook_registry.register("PreToolUse", spy)
     chat = FakeChat(make_turn("", [tool_call("read_file", "[1, 2]")]), make_turn("好的"))
     messages = [{"role": "user", "content": "x"}]
 
@@ -288,8 +282,8 @@ def test_non_object_arguments_never_reach_pre_tool_use(no_hooks):
     assert "JSON 对象" in messages[2]["content"]
 
 
-def test_denials_still_count_towards_the_round_limit(no_hooks):
-    hooks.register_hook("PreToolUse", lambda ctx: hooks.BLOCK)
+def test_denials_still_count_towards_the_round_limit(hook_registry):
+    hook_registry.register("PreToolUse", lambda ctx: hooks.BLOCK)
     chat = FakeChat(*[make_turn("", [tool_call("read_file")]) for _ in range(3)])
     messages = [{"role": "user", "content": "读"}]
 
@@ -306,12 +300,12 @@ def test_denials_still_count_towards_the_round_limit(no_hooks):
 # ---------- ③ PostToolUse ----------
 
 
-def test_post_tool_use_can_rewrite_the_result(no_hooks):
+def test_post_tool_use_can_rewrite_the_result(hook_registry):
     def rewrite(ctx):
         ctx["content"] = "改写过的结果"
         return
 
-    hooks.register_hook("PostToolUse", rewrite)
+    hook_registry.register("PostToolUse", rewrite)
     chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
     messages = [{"role": "user", "content": "读"}]
 
@@ -320,9 +314,9 @@ def test_post_tool_use_can_rewrite_the_result(no_hooks):
     assert messages[2]["content"] == "改写过的结果"
 
 
-def test_post_tool_use_sees_the_raw_content(no_hooks):
+def test_post_tool_use_sees_the_raw_content(hook_registry):
     seen = []
-    hooks.register_hook("PostToolUse", lambda ctx: seen.append(ctx["content"]))
+    hook_registry.register("PostToolUse", lambda ctx: seen.append(ctx["content"]))
 
     chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
     messages = [{"role": "user", "content": "读"}]
@@ -332,9 +326,9 @@ def test_post_tool_use_sees_the_raw_content(no_hooks):
     assert seen == ["原始"]
 
 
-def test_large_output_hook_truncates_real_tool_output(no_hooks, monkeypatch):
+def test_large_output_hook_truncates_real_tool_output(hook_registry, monkeypatch):
     monkeypatch.setattr(hooks, "MAX_TOOL_OUTPUT_CHARS", 100)
-    hooks.register_hook("PostToolUse", hooks.large_output_hook)
+    hook_registry.register("PostToolUse", hooks.large_output_hook)
     chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
     messages = [{"role": "user", "content": "读"}]
 
@@ -347,8 +341,8 @@ def test_large_output_hook_truncates_real_tool_output(no_hooks, monkeypatch):
 # ---------- ① UserPromptSubmit ----------
 
 
-def test_user_prompt_submit_injects_context(no_hooks):
-    hooks.register_hook(
+def test_user_prompt_submit_injects_context(hook_registry):
+    hook_registry.register(
         "UserPromptSubmit", lambda ctx: ctx["injected"].append("[环境] 测试注入")
     )
     chat = FakeChat(make_turn("好的"))
@@ -360,17 +354,17 @@ def test_user_prompt_submit_injects_context(no_hooks):
     assert chat.requests[0]["messages"][0]["content"] == "[环境] 测试注入\n\n原始问题"
 
 
-def test_user_prompt_submit_receives_the_prompt(no_hooks):
+def test_user_prompt_submit_receives_the_prompt(hook_registry):
     seen = []
-    hooks.register_hook("UserPromptSubmit", lambda ctx: seen.append(ctx["prompt"]))
+    hook_registry.register("UserPromptSubmit", lambda ctx: seen.append(ctx["prompt"]))
 
     agent_loop([{"role": "user", "content": "问题"}], config=CONFIG, chat=FakeChat(make_turn("好")))
 
     assert seen == ["问题"]
 
 
-def test_user_prompt_submit_can_block_the_model_call(no_hooks):
-    hooks.register_hook("UserPromptSubmit", lambda ctx: hooks.BLOCK)
+def test_user_prompt_submit_can_block_the_model_call(hook_registry):
+    hook_registry.register("UserPromptSubmit", lambda ctx: hooks.BLOCK)
     chat = FakeChat(make_turn("不该被调用"))
     messages = [{"role": "user", "content": "问题"}]
 
@@ -378,9 +372,9 @@ def test_user_prompt_submit_can_block_the_model_call(no_hooks):
     assert chat.requests == []
 
 
-def test_user_prompt_submit_skipped_without_a_user_message(no_hooks):
+def test_user_prompt_submit_skipped_without_a_user_message(hook_registry):
     fired = []
-    hooks.register_hook("UserPromptSubmit", lambda ctx: fired.append(1))
+    hook_registry.register("UserPromptSubmit", lambda ctx: fired.append(1))
     messages = [{"role": "assistant", "content": "之前的话"}]
 
     agent_loop(messages, config=CONFIG, chat=FakeChat(make_turn("嗯")))
@@ -391,17 +385,17 @@ def test_user_prompt_submit_skipped_without_a_user_message(no_hooks):
 # ---------- ④ Stop ----------
 
 
-def test_stop_is_triggered_before_returning(no_hooks):
+def test_stop_is_triggered_before_returning(hook_registry):
     seen = []
-    hooks.register_hook("Stop", lambda ctx: seen.append((ctx["rounds"], ctx["final_text"])))
+    hook_registry.register("Stop", lambda ctx: seen.append((ctx["rounds"], ctx["final_text"])))
 
     agent_loop([{"role": "user", "content": "x"}], config=CONFIG, chat=FakeChat(make_turn("答案")))
 
     assert seen == [(1, "答案")]
 
 
-def test_stop_hook_can_block_exit_once(no_hooks):
-    hooks.register_hook("Stop", lambda ctx: hooks.BLOCK)
+def test_stop_hook_can_block_exit_once(hook_registry):
+    hook_registry.register("Stop", lambda ctx: hooks.BLOCK)
     chat = FakeChat(make_turn("第一次"), make_turn("第二次"))
     messages = [{"role": "user", "content": "x"}]
 
@@ -411,8 +405,8 @@ def test_stop_hook_can_block_exit_once(no_hooks):
     assert len(chat.requests) == 2
 
 
-def test_stop_block_is_capped(no_hooks):
-    hooks.register_hook("Stop", lambda ctx: hooks.BLOCK)
+def test_stop_block_is_capped(hook_registry):
+    hook_registry.register("Stop", lambda ctx: hooks.BLOCK)
     chat = FakeChat(*[make_turn(f"第{i}次") for i in range(5)])
     messages = [{"role": "user", "content": "x"}]
 
@@ -422,12 +416,12 @@ def test_stop_block_is_capped(no_hooks):
     assert len(chat.requests) == 2
 
 
-def test_stop_nudge_is_appended_and_redirects_the_model(no_hooks):
+def test_stop_nudge_is_appended_and_redirects_the_model(hook_registry):
     def stop(ctx):
         ctx["nudge"] = "别忘了给出结论"
         return hooks.BLOCK
 
-    hooks.register_hook("Stop", stop)
+    hook_registry.register("Stop", stop)
     chat = FakeChat(make_turn("草稿"), make_turn("结论"))
     messages = [{"role": "user", "content": "x"}]
 
@@ -437,8 +431,8 @@ def test_stop_nudge_is_appended_and_redirects_the_model(no_hooks):
     assert messages[2] == {"role": "user", "content": "别忘了给出结论"}
 
 
-def test_stop_block_disabled_when_budget_is_zero(no_hooks):
-    hooks.register_hook("Stop", lambda ctx: hooks.BLOCK)
+def test_stop_block_disabled_when_budget_is_zero(hook_registry):
+    hook_registry.register("Stop", lambda ctx: hooks.BLOCK)
     chat = FakeChat(make_turn("唯一一轮"))
 
     result = agent_loop(
@@ -452,10 +446,10 @@ def test_stop_block_disabled_when_budget_is_zero(no_hooks):
     assert len(chat.requests) == 1
 
 
-def test_stop_receives_run_statistics(no_hooks):
+def test_stop_receives_run_statistics(hook_registry):
     seen = []
-    hooks.register_hook("Stop", lambda ctx: seen.append((ctx["tool_calls"], ctx["denials"])))
-    hooks.register_hook("PreToolUse", lambda ctx: None)
+    hook_registry.register("Stop", lambda ctx: seen.append((ctx["tool_calls"], ctx["denials"])))
+    hook_registry.register("PreToolUse", lambda ctx: None)
     chat = FakeChat(
         make_turn("", [tool_call("read_file")]),
         make_turn("好的"),
@@ -470,8 +464,8 @@ def test_stop_receives_run_statistics(no_hooks):
 # ---------- 拒绝信息回传给模型 ----------
 
 
-def test_hard_deny_message_reaches_the_model(no_hooks):
-    hooks.register_hook("PreToolUse", hooks.permission_hook)
+def test_hard_deny_message_reaches_the_model(hook_registry):
+    hook_registry.register("PreToolUse", hooks.permission_hook)
     executed = []
     chat = FakeChat(
         make_turn("", [tool_call("bash", '{"command": "rm -rf /"}')]),
@@ -491,12 +485,12 @@ def test_hard_deny_message_reaches_the_model(no_hooks):
     assert "永久禁止" in messages[2]["content"]
 
 
-def test_hook_supplied_denied_content_is_used(no_hooks):
+def test_hook_supplied_denied_content_is_used(hook_registry):
     def blocker(ctx):
         ctx["denied_content"] = "自定义拒绝文案"
         return hooks.BLOCK
 
-    hooks.register_hook("PreToolUse", blocker)
+    hook_registry.register("PreToolUse", blocker)
     chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
     messages = [{"role": "user", "content": "读"}]
 
@@ -505,8 +499,8 @@ def test_hook_supplied_denied_content_is_used(no_hooks):
     assert messages[2]["content"] == "自定义拒绝文案"
 
 
-def test_block_without_denied_content_falls_back_to_the_default(no_hooks):
-    hooks.register_hook("PreToolUse", lambda ctx: hooks.BLOCK)
+def test_block_without_denied_content_falls_back_to_the_default(hook_registry):
+    hook_registry.register("PreToolUse", lambda ctx: hooks.BLOCK)
     chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
     messages = [{"role": "user", "content": "读"}]
 
@@ -518,7 +512,7 @@ def test_block_without_denied_content_falls_back_to_the_default(no_hooks):
 # ---------- todo_write 与 reminder ----------
 
 
-def test_system_prompt_asks_for_a_plan_first(no_hooks):
+def test_system_prompt_asks_for_a_plan_first(hook_registry):
     chat = FakeChat(make_turn("好的"))
 
     agent_loop([{"role": "user", "content": "x"}], config=CONFIG, chat=chat)
@@ -526,7 +520,7 @@ def test_system_prompt_asks_for_a_plan_first(no_hooks):
     assert "todo_write" in chat.requests[0]["system"]
 
 
-def test_todo_write_result_is_returned_to_the_model(no_hooks):
+def test_todo_write_result_is_returned_to_the_model(hook_registry):
     chat = FakeChat(
         make_turn(
             "",
@@ -547,7 +541,7 @@ def test_todo_write_result_is_returned_to_the_model(no_hooks):
     assert "第一步" in messages[2]["content"]
 
 
-def test_todo_state_does_not_leak_between_runs(no_hooks):
+def test_todo_state_does_not_leak_between_runs(hook_registry):
     first = FakeChat(
         make_turn(
             "",
@@ -581,7 +575,7 @@ def test_todo_state_does_not_leak_between_runs(no_hooks):
     assert "列表为空" in reminder  # 上一次运行的"任务A"没有泄漏过来
 
 
-def test_todo_write_resets_the_silence_counter(no_hooks):
+def test_todo_write_resets_the_silence_counter(hook_registry):
     chat = FakeChat(
         *[
             make_turn("", [tool_call("todo_write", '{"todos": []}', f"c{i}")])
@@ -596,7 +590,7 @@ def test_todo_write_resets_the_silence_counter(no_hooks):
     assert not [m for m in messages if str(m.get("content", "")).startswith("[提醒]")]
 
 
-def test_reminder_is_injected_before_the_next_model_call(no_hooks):
+def test_reminder_is_injected_before_the_next_model_call(hook_registry):
     chat = FakeChat(
         make_turn("", [tool_call("read_file")]),
         make_turn("", [tool_call("read_file", "{}", "c2")]),
@@ -622,7 +616,7 @@ def test_reminder_is_injected_before_the_next_model_call(no_hooks):
     )
 
 
-def test_reminder_fires_once_per_silent_streak(no_hooks):
+def test_reminder_fires_once_per_silent_streak(hook_registry):
     chat = FakeChat(
         *[make_turn("", [tool_call("read_file", "{}", f"c{i}")]) for i in range(6)],
         make_turn("好了"),
@@ -643,7 +637,7 @@ def test_reminder_fires_once_per_silent_streak(no_hooks):
     )
 
 
-def test_reminder_rearms_after_a_todo_write(no_hooks):
+def test_reminder_rearms_after_a_todo_write(hook_registry):
     chat = FakeChat(
         make_turn("", [tool_call("read_file")]),
         make_turn(
@@ -673,7 +667,7 @@ def test_reminder_rearms_after_a_todo_write(no_hooks):
     )
 
 
-def test_default_threshold_does_not_fire_on_short_runs(no_hooks):
+def test_default_threshold_does_not_fire_on_short_runs(hook_registry):
     chat = FakeChat(make_turn("直接答"))
     messages = [{"role": "user", "content": "x"}]
 
@@ -703,7 +697,7 @@ def write_skill(root, directory, text):
     (path / "SKILL.md").write_text(text, encoding="utf-8")
 
 
-def test_skill_catalog_reaches_the_model(no_hooks, tmp_path, monkeypatch):
+def test_skill_catalog_reaches_the_model(hook_registry, tmp_path, monkeypatch):
     root = point_skills_at(tmp_path, monkeypatch)
     write_skill(root, "demo", "---\ndescription: 演示技能\n---\n正文")
 
@@ -713,7 +707,7 @@ def test_skill_catalog_reaches_the_model(no_hooks, tmp_path, monkeypatch):
     assert "- demo: 演示技能" in chat.requests[0]["system"]
 
 
-def test_catalog_changes_are_picked_up_on_the_next_run(no_hooks, tmp_path, monkeypatch):
+def test_catalog_changes_are_picked_up_on_the_next_run(hook_registry, tmp_path, monkeypatch):
     root = point_skills_at(tmp_path, monkeypatch)
 
     first = FakeChat(make_turn("好的"))
@@ -727,7 +721,7 @@ def test_catalog_changes_are_picked_up_on_the_next_run(no_hooks, tmp_path, monke
     assert "- demo: 新加的" in second.requests[0]["system"]
 
 
-def test_load_skill_returns_the_full_text_as_tool_result(no_hooks, tmp_path, monkeypatch):
+def test_load_skill_returns_the_full_text_as_tool_result(hook_registry, tmp_path, monkeypatch):
     root = point_skills_at(tmp_path, monkeypatch)
     write_skill(root, "demo", "---\ndescription: 演示\n---\n这是技能的全文。")
 
@@ -743,13 +737,13 @@ def test_load_skill_returns_the_full_text_as_tool_result(no_hooks, tmp_path, mon
     assert "这是技能的全文。" in messages[2]["content"]
 
 
-def test_load_skill_is_not_in_the_permission_gate(no_hooks, tmp_path, monkeypatch):
+def test_load_skill_is_not_in_the_permission_gate(hook_registry, tmp_path, monkeypatch):
     from avid.policy.permission import APPROVAL_RULES
 
     assert "load_skill" not in APPROVAL_RULES
 
 
-def test_unknown_skill_returns_error_text_without_raising(no_hooks, tmp_path, monkeypatch):
+def test_unknown_skill_returns_error_text_without_raising(hook_registry, tmp_path, monkeypatch):
     """验收项：未知技能名返回错误文本且不抛出异常。"""
     point_skills_at(tmp_path, monkeypatch)
 
@@ -771,7 +765,7 @@ def test_unknown_skill_returns_error_text_without_raising(no_hooks, tmp_path, mo
 # 这里只验循环确实把管线接上了、兜底重试只做一次、以及状态不跨运行泄漏。
 
 
-def test_context_pipeline_runs_before_every_model_call(no_hooks, monkeypatch):
+def test_context_pipeline_runs_before_every_model_call(hook_registry, monkeypatch):
     rounds = []
     monkeypatch.setattr(
         "avid.runtime.context.prepare",
@@ -789,7 +783,7 @@ def test_context_pipeline_runs_before_every_model_call(no_hooks, monkeypatch):
     assert rounds == [1, 2]
 
 
-def test_prompt_too_long_triggers_one_reactive_retry(no_hooks, monkeypatch):
+def test_prompt_too_long_triggers_one_reactive_retry(hook_registry, monkeypatch):
     from avid.ai.client import PromptTooLongError
 
     calls = {"chat": 0, "reactive": 0}
@@ -815,7 +809,7 @@ def test_prompt_too_long_triggers_one_reactive_retry(no_hooks, monkeypatch):
     assert "历史摘要" in messages[0]["content"]
 
 
-def test_reactive_is_not_retried_twice(no_hooks, monkeypatch):
+def test_reactive_is_not_retried_twice(hook_registry, monkeypatch):
     from avid.ai.client import PromptTooLongError
 
     calls = {"chat": 0, "reactive": 0}
@@ -838,7 +832,7 @@ def test_reactive_is_not_retried_twice(no_hooks, monkeypatch):
     assert calls == {"chat": 2, "reactive": 1}
 
 
-def test_reactive_retry_sends_the_compressed_history(no_hooks, monkeypatch):
+def test_reactive_retry_sends_the_compressed_history(hook_registry, monkeypatch):
     """重试必须拿压缩后的历史再发一次，不能把旧的原样重发。"""
     from avid.ai.client import PromptTooLongError
 
@@ -862,7 +856,7 @@ def test_reactive_retry_sends_the_compressed_history(no_hooks, monkeypatch):
     assert seen[1] == ["压缩后的历史"]
 
 
-def test_compaction_is_logged(no_hooks, monkeypatch, caplog):
+def test_compaction_is_logged(hook_registry, monkeypatch, caplog):
     monkeypatch.setattr(
         "avid.policy.compaction.tool_result_budget",
         lambda transcript, **kwargs: CompactReport(
@@ -882,7 +876,7 @@ def test_compaction_is_logged(no_hooks, monkeypatch, caplog):
     )
 
 
-def test_compaction_count_reaches_the_stop_hook(no_hooks, monkeypatch):
+def test_compaction_count_reaches_the_stop_hook(hook_registry, monkeypatch):
     monkeypatch.setattr(
         "avid.policy.compaction.snip_compact",
         lambda transcript, **kwargs: CompactReport(
@@ -890,7 +884,7 @@ def test_compaction_count_reaches_the_stop_hook(no_hooks, monkeypatch):
         ),
     )
     seen = []
-    hooks.register_hook("Stop", lambda ctx: seen.append(ctx["compactions"]))
+    hook_registry.register("Stop", lambda ctx: seen.append(ctx["compactions"]))
 
     agent_loop(
         [{"role": "user", "content": "x"}],
@@ -901,7 +895,7 @@ def test_compaction_count_reaches_the_stop_hook(no_hooks, monkeypatch):
     assert seen == [1]
 
 
-def test_run_state_is_created_per_run(no_hooks, monkeypatch):
+def test_run_state_is_created_per_run(hook_registry, monkeypatch):
     """两次运行各有自己的 RunState——状态不跨运行泄漏。"""
     states = []
 

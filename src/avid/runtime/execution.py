@@ -20,7 +20,7 @@ from typing import Any
 
 from ..tools import ToolImpl, workspace
 from . import events
-from .hooks import BLOCK, brief, trigger_hooks
+from .hooks import BLOCK, brief
 from .state import RunState
 
 logger = logging.getLogger("avid.runtime.execution")
@@ -114,7 +114,7 @@ def execute_one(
         round=round_index,
         tool_call_id=tool_call_id,
     )
-    if trigger_hooks("PreToolUse", before) == BLOCK:
+    if state.hooks.trigger("PreToolUse", before) == BLOCK:
         state.denials += 1
         logger.info("  ✗ 已拦截 %s", name)
         state.emit(
@@ -145,7 +145,7 @@ def execute_one(
         "content": content,
         "truncated": False,
     }
-    trigger_hooks("PostToolUse", after)
+    state.hooks.trigger("PostToolUse", after)
     final = str(after["content"])
     state.emit(
         events.TOOL_CALL_FINISHED,

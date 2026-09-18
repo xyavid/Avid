@@ -17,7 +17,6 @@ import pytest
 
 from avid.ai.client import Turn, Usage
 from avid.ai.config import Config
-from avid.runtime import hooks
 from avid.runtime.execution import STATEFUL_TOOLS
 from avid.runtime.loop import agent_loop
 from avid.tools import TOOL_IMPLS, TOOLS, workspace
@@ -39,8 +38,9 @@ def sandbox(monkeypatch, tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def no_hooks(monkeypatch):
-    monkeypatch.setattr(hooks, "HOOKS", {event: [] for event in hooks.EVENTS})
+def no_hooks(hook_registry):
+    """只测循环与任务工具本身：默认回调不掺进来（注册表由 conftest 换成空的）。"""
+    return hook_registry
 
 
 def task_dir(root: Path) -> Path:

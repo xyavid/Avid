@@ -84,7 +84,9 @@ def test_a1_svc_is_also_checked_for_web_framework_imports():
 
 def test_a3_loop_is_still_only_a_scheduler():
     loop = (SRC / "runtime" / "loop.py").read_text(encoding="utf-8")
-    assert loop.count("trigger_hooks(") == 2, "循环只该有 UserPromptSubmit 与 Stop 两个 hook 调用点"
+    assert loop.count("state.hooks.trigger(") == 2, (
+        "循环只该有 UserPromptSubmit 与 Stop 两个 hook 调用点"
+    )
     assert "while " not in loop, "循环里不该出现手写 while"
 
     # 没有第二份 agent 循环：agent_loop 的调用点固定为「三个接线点 + 自身定义」。

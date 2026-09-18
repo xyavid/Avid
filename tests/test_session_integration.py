@@ -13,7 +13,6 @@ import pytest
 from avid.ai.client import Turn, Usage
 from avid.ai.config import Config
 from avid.ai.transcript import Transcript
-from avid.runtime import hooks
 from avid.runtime.hooks import BLOCK
 from avid.runtime.loop import agent_loop
 from avid.session import (
@@ -59,11 +58,6 @@ def tool_call(name="read_file", arguments="{}", call_id="call_1"):
 
 
 @pytest.fixture
-def no_hooks(monkeypatch):
-    monkeypatch.setattr(hooks, "HOOKS", {event: [] for event in hooks.EVENTS})
-
-
-@pytest.fixture
 def session():
     counter = itertools.count(1_700_000_000_000, 1_000)
     tick = lambda: next(counter)  # noqa: E731
@@ -75,7 +69,7 @@ def session():
     repo.close()
 
 
-def test_every_settled_message_is_persisted_in_order(no_hooks, session):
+def test_every_settled_message_is_persisted_in_order(hook_registry, session):
     recorder = SessionRecorder(session)
     messages = [{"role": "user", "content": "你好"}]
     chat = FakeChat(make_turn("答"))
@@ -86,7 +80,7 @@ def test_every_settled_message_is_persisted_in_order(no_hooks, session):
     assert messages_for_branch(session) == messages
 
 
-def test_tool_round_trip_is_persisted(no_hooks, session):
+def test_tool_round_trip_is_persisted(hook_registry, session):
     recorder = SessionRecorder(session)
     messages = [{"role": "user", "content": "读文件"}]
     chat = FakeChat(make_turn("", [tool_call()]), make_turn("读完"))
@@ -105,7 +99,7 @@ def test_tool_round_trip_is_persisted(no_hooks, session):
     assert Transcript(stored).validate() == []
 
 
-def test_second_run_continues_from_the_session(no_hooks, session):
+def test_second_run_continues_from_the_session(hook_registry, session):
     recorder = SessionRecorder(session)
     first = [{"role": "user", "content": "第一问"}]
     agent_loop(first, config=CONFIG, chat=FakeChat(make_turn("第一答")), on_message=recorder.on_message)
@@ -130,13 +124,12 @@ def test_second_run_continues_from_the_session(no_hooks, session):
     ]
 
 
-def test_trigger_message_is_recorded_after_injection(monkeypatch, session):
-    monkeypatch.setattr(hooks, "HOOKS", {event: [] for event in hooks.EVENTS})
+def test_trigger_message_is_recorded_after_injection(hook_registry, session):
 
     def inject(context):
         context.setdefault("injected", []).append("[环境] 测试注入")
 
-    hooks.register_hook("UserPromptSubmit", inject)
+    hook_registry.register("UserPromptSubmit", inject)
     recorder = SessionRecorder(session)
     messages = [{"role": "user", "content": "原始问题"}]
 
@@ -148,8 +141,7 @@ def test_trigger_message_is_recorded_after_injection(monkeypatch, session):
     assert stored == messages
 
 
-def test_stop_nudge_is_persisted(monkeypatch, session):
-    monkeypatch.setattr(hooks, "HOOKS", {event: [] for event in hooks.EVENTS})
+def test_stop_nudge_is_persisted(hook_registry, session):
 
     def stop_hook(context):
         if context["rounds"] == 1:
@@ -157,7 +149,7 @@ def test_stop_nudge_is_persisted(monkeypatch, session):
             return BLOCK
         return None
 
-    hooks.register_hook("Stop", stop_hook)
+    hook_registry.register("Stop", stop_hook)
     recorder = SessionRecorder(session)
     messages = [{"role": "user", "content": "问题"}]
     chat = FakeChat(make_turn("第一答"), make_turn("第二答"))
@@ -172,14 +164,14 @@ def test_stop_nudge_is_persisted(monkeypatch, session):
     ]
 
 
-def test_without_recorder_the_session_stays_empty(no_hooks, session):
+def test_without_recorder_the_session_stays_empty(hook_registry, session):
     messages = [{"role": "user", "content": "你好"}]
     agent_loop(messages, config=CONFIG, chat=FakeChat(make_turn("答")))
     assert session.get_stats().message_count == 0
     assert session.find_entries() == []
 
 
-def test_recording_failure_stops_the_run_before_calling_the_model(no_hooks, session):
+def test_recording_failure_stops_the_run_before_calling_the_model(hook_registry, session):
     recorder = SessionRecorder(session)
     session.close()
     chat = FakeChat(make_turn("答"))
@@ -190,7 +182,7 @@ def test_recording_failure_stops_the_run_before_calling_the_model(no_hooks, sess
     assert chat.requests == []
 
 
-def test_history_is_not_re_recorded(no_hooks, session):
+def test_history_is_not_re_recorded(hook_registry, session):
     recorder = SessionRecorder(session)
     recorder.on_message({"role": "user", "content": "旧的"})
     recorder.on_message({"role": "assistant", "content": "旧的答"})

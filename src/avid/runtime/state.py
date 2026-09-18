@@ -22,6 +22,7 @@ from ..policy.permission import (
 )
 from ..policy.skills import SkillLoader, default_skills_dir
 from ..policy.todo import TodoList, build_reminder
+from . import hooks as hooks_module
 from .events import RunObserver, event
 
 if TYPE_CHECKING:  # 与 loop.py 同理：AskUser 只出现在注解里
@@ -82,6 +83,14 @@ class RunState:
     # 运行期实例
     todo: TodoList = field(default_factory=TodoList)
     skills: SkillLoader = field(default_factory=SkillLoader)
+    # hook 注册表归运行所有（以前是 `hooks.HOOKS` 模块级字典）：`agent_loop(hooks=…)`
+    # 能注入一份，不注入就用进程级默认。子 agent 用父运行那一份（`copy()`）。
+    # 通过模块取默认值（而不是 `from .hooks import DEFAULT_HOOKS`）：默认注册表只有
+    # 一个拥有者，替换 `hooks.DEFAULT_HOOKS` 就必须生效——`from ... import` 会把名字
+    # 绑进本模块的命名空间，替换源头反而不生效（这个坑当场被 25 个用例照出来）。
+    hooks: "hooks_module.HookRegistry" = field(
+        default_factory=lambda: hooks_module.DEFAULT_HOOKS
+    )
 
     @classmethod
     def for_run(
@@ -93,6 +102,7 @@ class RunState:
         permission_mode: str | None = None,
         ledger: ApprovalLedger | None = None,
         workspace_root: str | None = None,
+        hooks: "hooks_module.HookRegistry | None" = None,
     ) -> "RunState":
         """建一份运行状态，并**重新扫描一次技能目录**——磁盘变了，下次运行就生效。"""
         return cls(
@@ -104,6 +114,7 @@ class RunState:
             workspace_root=workspace_root,
             # 技能目录跟着运行级工作区根（没有工作区根时回落到 cwd）。
             skills=SkillLoader(default_skills_dir(workspace_root)).scan(),
+            hooks=hooks if hooks is not None else hooks_module.DEFAULT_HOOKS,
         )
 
     # ---------------- 权限 ----------------

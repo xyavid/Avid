@@ -21,6 +21,7 @@ from ..ai.config import Config, load_config
 from ..policy.permission import DEFAULT_MODE
 
 if TYPE_CHECKING:  # 运行时导入会成环（state.py 要 import 本模块所在的包）
+    from ..runtime.hooks import HookRegistry
     from ..runtime.state import RunState
 
 logger = logging.getLogger("avid.subagent")
@@ -55,6 +56,7 @@ def run_subagent(
     permission_mode: str = DEFAULT_MODE,
     ledger: Any = None,
     workspace_root: str | None = None,
+    hooks: "HookRegistry | None" = None,
 ) -> str:
     """跑一个子 agent，返回它的结论摘要。
 
@@ -85,6 +87,7 @@ def run_subagent(
             permission_mode=permission_mode,
             ledger=ledger,
             workspace_root=workspace_root,
+            hooks=hooks,
         )
     except RoundLimitExceeded:
         return (
@@ -167,6 +170,9 @@ def subagent(
     permission_mode = state.permission_mode
     ledger = state.ledger
     workspace_root = state.workspace_root
+    # 子运行用父注册表的一份副本：用户注册的 hook 对子 agent 同样生效，而子运行
+    # 自己追加的回调不会漏回父运行。
+    hooks = state.hooks.copy()
 
     executor = ThreadPoolExecutor(max_workers=min(len(tasks), MAX_PARALLEL))
     try:
@@ -180,6 +186,7 @@ def subagent(
                 permission_mode=permission_mode,
                 ledger=ledger,
                 workspace_root=workspace_root,
+                hooks=hooks,
             )
             for task in tasks
         ]
