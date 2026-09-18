@@ -9,6 +9,10 @@
  * 只有确实有正文的模型回复才用整张卡；只声明工具调用、正文为空的那一轮退化成
  * 一枚 chip（图标 + 角色名），免得每轮工具调用都多出一个空框。
  *
+ * 角色标记按作者分两枚：模型是 `AvidMark`（角形笔画），用户是 `UserMark`（歪头 +
+ * 肩弧）。两者笔触语言一致（`stroke-width 4.5` + `currentColor` + −2deg 倾斜），
+ * 但形状不同——标记的职责就是区分作者。
+ *
  * `aria-live` 只加在 durable（非乐观）的 assistant 条目上：乐观 delta 每帧都在变，读屏器
  * 会把它念成一串噪音，而 durable 消息才是完整的一句话。动作行默认透明，鼠标悬停或键盘
  * 聚焦时显形——`focus-visible` 直接写在按钮上，这样键盘用户 tab 到哪个按钮哪个就可见
@@ -21,7 +25,7 @@ import { Markdown } from '../../lib/markdown'
 import type { TimelineEntry } from '../../events/reducer'
 import type { Density } from '../../state/uiStore'
 import { Badge, Button } from '../../ui/primitives'
-import { AvidMark, shapeFor } from '../../ui/sketch'
+import { AvidMark, UserMark, shapeFor } from '../../ui/sketch'
 
 export interface EntryRowProps {
   entry: TimelineEntry
@@ -40,10 +44,14 @@ const NOTICE_KEY = {
 
 const ACTION = 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100'
 
-function Role({ label }: { label: string }) {
+/**
+ * 角色标记：两种角色各一枚专属手绘小标记（`avid` 是角形笔画，`user` 是歪头 + 肩弧）。
+ * 不复用同一枚：标记的作用就是标明作者，模型卡与用户卡共用一个形状等于没标。
+ */
+function Role({ label, mark = 'avid' }: { label: string; mark?: 'avid' | 'user' }) {
   return (
     <p className="flex items-center gap-1 font-sketch text-xs text-ink/70">
-      <AvidMark className="text-ink" />
+      {mark === 'user' ? <UserMark className="text-ink" /> : <AvidMark className="text-ink" />}
       {label}
     </p>
   )
@@ -84,7 +92,7 @@ export function EntryRow({
       <article
         className={clsx('group sketch-card ml-auto w-fit max-w-[80%]', shapeFor(shapeIndex), pad)}
       >
-        <p className="font-sketch text-xs text-ink/70">{t('chat.message.role.user')}</p>
+        <Role label={t('chat.message.role.user')} mark="user" />
         <p className="whitespace-pre-wrap break-anywhere text-sm">{entry.text}</p>
         {actions}
       </article>

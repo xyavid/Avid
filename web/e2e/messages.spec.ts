@@ -129,6 +129,38 @@ test('模型卡片带手绘小标记，且它是装饰性的', async ({ page }) 
   expect(stroke.effect, '描边不随缩放变细').toBe('non-scaling-stroke')
 })
 
+test('用户卡片也带手绘标记，且与模型卡片的标记不同形', async ({ page }) => {
+  await openSession(page)
+  const user = userCards(page).first()
+  const model = assistantCards(page).first()
+  await expect(user).toBeVisible()
+  await expect(model).toBeVisible()
+
+  const userMark = user.locator('svg')
+  await expect(userMark, '用户卡也有一枚标记').toHaveCount(1)
+  expect(await userMark.getAttribute('aria-hidden'), '装饰不进无障碍树').toBe('true')
+
+  const pathsOf = (locator: Locator) =>
+    locator.locator('path').evaluateAll((paths) => paths.map((path) => path.getAttribute('d')))
+  const userPaths = await pathsOf(userMark)
+  const modelPaths = await pathsOf(model.locator('svg'))
+  expect(userPaths.length, '用户标记是两条笔画').toBe(2)
+  expect(userPaths, '两枚标记必须不同形，否则等于没标作者').not.toEqual(modelPaths)
+
+  // 形状不同，但笔触语言必须一致（同一套涂鸦契约，不是两套风格）
+  const stroke = await userMark.locator('path').first().evaluate((path) => ({
+    stroke: path.getAttribute('stroke'),
+    width: path.getAttribute('stroke-width'),
+    effect: path.getAttribute('vector-effect'),
+  }))
+  expect(stroke.stroke, '颜色来自 currentColor').toBe('currentColor')
+  expect(stroke.width, '粗笔画（涂鸦感）').toBe('4.5')
+  expect(stroke.effect, '描边不随缩放变细').toBe('non-scaling-stroke')
+
+  // 角色名仍由文字承担：图标 aria-hidden，所以读屏器只念一次「用户」
+  await expect(user.getByText('用户', { exact: true })).toBeVisible()
+})
+
 test('角色名与图标同在一行，accessible name 由文字承担', async ({ page }) => {
   await openSession(page)
   const model = assistantCards(page).first()
