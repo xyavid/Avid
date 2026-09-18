@@ -240,17 +240,6 @@ class WorkspaceRegistry:
         self._write([*items, created])
         return created
 
-    def touch(self, root: str | Path) -> Workspace | None:
-        """记一次"最近使用"。没登记过就顺手登记（默认权限取默认模式）。"""
-        resolved = Path(root).expanduser().resolve()
-        found = self.find(str(resolved))
-        if found is None:
-            try:
-                return self.add(resolved)
-            except WorkspaceError:
-                return None
-        return self._update(found.id, last_used_at=self._now())
-
     def set_permission(self, selection: str, permission: str) -> Workspace:
         mode = validate_mode(permission)
         found = self.get(selection)

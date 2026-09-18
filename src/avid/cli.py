@@ -35,6 +35,7 @@ from .session import (
     messages_for_branch,
 )
 from .tools import TOOLS, workspace
+from .svc.workspaces import WorkspaceInvalid, bound_workspace
 from .workspaces import (
     SESSION_DIR,
     Workspace,
@@ -48,13 +49,16 @@ from .workspaces import (
 AGENT_TOOL_HELP = "（" + " / ".join(item["function"]["name"] for item in TOOLS) + "）"
 
 
-def _resolve_workspace(selection: str | None, *, register: bool) -> Workspace:
-    """解析这次命令用哪个工作区。
+def _local_time(timestamp_ms: int) -> str:
+    return datetime.fromtimestamp(timestamp_ms / 1000).strftime("%Y-%m-%d %H:%M:%S")
 
-    ``--workspace`` 可以给路径也可以给 id。缺省是**当前目录**——命令行上下文替你
-    选了它，不是"没选"；解析结果会打印出来，所以不存在"归属不明"的会话。
 
-    ``register=False``（只读命令：列会话、看任务）不写注册表：读操作不该留下副作用。
+def _resolve_workspace(selection: str | None) -> Workspace:
+    """解析这次命令用哪个工作区。**只读**——注册表只由 `avid workspace` 写。
+
+    ``--workspace`` 可以给已登记的 id/路径，也可以直接给一个目录（那就是这个进程的
+    工作地点，当场生效但不登记）。缺省是**当前目录**——命令行上下文替你选了它，
+    不是"没选"；解析结果会打印，所以不存在"归属不明"的会话。
     """
     registry = WorkspaceRegistry()
     if selection:
@@ -62,30 +66,16 @@ def _resolve_workspace(selection: str | None, *, register: bool) -> Workspace:
         if found is not None:
             return found
         try:
-            return registry.add(Path(selection))
-        except WorkspaceError as exc:
-            raise WorkspaceNotFound(f"没有这个工作区：{selection}（{exc}）") from exc
+            return bound_workspace(selection)
+        except WorkspaceInvalid as exc:
+            raise WorkspaceNotFound(
+                f"没有这个工作区：{selection}（{exc}；"
+                "用 `avid workspace list` 看已登记的，或直接给一个存在的目录）"
+            ) from exc
 
     root = Path(workspace.WORKSPACE_ROOT)
     found = registry.find(str(root))
-    if found is not None:
-        return registry.touch(root) or found
-    if register:
-        return registry.add(root)
-    # 只读且未登记：临时视图，不落注册表。
-    from .workspaces import derive_id
-
-    return Workspace(
-        id=derive_id(root),
-        root=str(root.resolve()),
-        name=root.name or "workspace",
-        created_at=0,
-        last_used_at=0,
-    )
-
-
-def _local_time(timestamp_ms: int) -> str:
-    return datetime.fromtimestamp(timestamp_ms / 1000).strftime("%Y-%m-%d %H:%M:%S")
+    return found if found is not None else bound_workspace(root)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -214,7 +204,7 @@ def main(argv: list[str] | None = None) -> int:
 def _run_session(args: argparse.Namespace, config) -> int:
     """续接或新建会话跑一次循环：历史来自会话，本轮消息逐条写回会话。"""
     try:
-        target = _resolve_workspace(args.workspace, register=True)
+        target = _resolve_workspace(args.workspace)
     except WorkspaceNotFound as exc:
         print(f"工作区错误：{exc}", file=sys.stderr)
         return 2
@@ -277,7 +267,7 @@ def _run_session(args: argparse.Namespace, config) -> int:
 def _session_admin(args: argparse.Namespace) -> int:
     """查看与销毁：都不调模型，所以不需要先校验模型配置。"""
     try:
-        target = _resolve_workspace(args.workspace, register=False)
+        target = _resolve_workspace(args.workspace)
     except WorkspaceNotFound as exc:
         print(f"工作区错误：{exc}", file=sys.stderr)
         return 2

@@ -85,11 +85,10 @@ def test_list_is_newest_used_first(registry, tmp_path):
     old.mkdir()
     new.mkdir()
 
-    stamps = iter([1000, 2000, 3000])
+    stamps = iter([1000, 2000])
     registry = WorkspaceRegistry(registry.path, now=lambda: next(stamps))
     registry.add(old)
     registry.add(new)
-    registry.touch(new)
 
     assert [ws.root for ws in registry.list()] == [
         str(new.resolve()),
@@ -97,12 +96,20 @@ def test_list_is_newest_used_first(registry, tmp_path):
     ]
 
 
-def test_touch_registers_an_unknown_root(registry, workspace_dir):
-    touched = registry.touch(workspace_dir)
+def test_registry_only_changes_on_explicit_writes(registry, workspace_dir):
+    """读路径不写盘：列一次、找一个、打开都别生成或改动文件。
 
-    assert touched is not None
-    assert touched.default_permission == MODE_STRICT
-    assert registry.find(workspace_dir) is not None
+    启动与日常使用都不写盘是阶段 18 的收尾裁决——"看一眼注册表"与"起过服务"
+    必须可区分。写入口只有 add / set_permission / remove。
+    """
+    registry.add(workspace_dir)
+    before = registry.path.read_text(encoding="utf-8")
+
+    registry.list()
+    registry.find(workspace_dir)
+    registry.get(str(workspace_dir))
+
+    assert registry.path.read_text(encoding="utf-8") == before
 
 
 def test_set_permission(registry, workspace_dir):

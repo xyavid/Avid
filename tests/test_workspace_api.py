@@ -204,3 +204,46 @@ def test_run_rejects_an_unknown_permission(client, tmp_path):
     )
 
     assert response.status_code == 422
+
+
+def test_startup_writes_nothing_to_the_registry(tmp_path):
+    """启动（含默认根）不写盘：注册表只由用户显式动作写入。
+
+    绑定值照常出现在候选里、照常可解析（id 由根派生），只是没被登记——于是
+    "看一眼注册表"与"起过服务"仍是可区分的两件事。
+    """
+    home = tmp_path.parent / f"quiet-{tmp_path.name}"
+    home.mkdir()
+    registry_file = tmp_path / "registry.json"
+    registry = WorkspaceRegistry(registry_file)
+    services = Services(workspace_root=home, registry=registry)
+    try:
+        listed = services.workspaces.list()
+
+        assert not registry_file.exists()
+        assert [ws["id"] for ws in listed] == [services.workspaces.default.id]
+        assert listed[0]["is_default"] is True
+
+        # 未登记但可解析：显式指定它的 id 就能建会话，会话落在它自己的会话库里。
+        created = services.sessions.create(workspace=listed[0]["id"])
+        assert created["workspace"]["id"] == listed[0]["id"]
+        assert list((home / ".avid" / "sessions").glob("*.jsonl"))
+        assert not registry_file.exists()  # 建会话也不写注册表
+    finally:
+        services.close()
+
+
+def test_explicit_registration_is_the_only_writer(tmp_path):
+    home = tmp_path.parent / f"explicit-{tmp_path.name}"
+    home.mkdir()
+    registry_file = tmp_path / "registry.json"
+    services = Services(workspace_root=home, registry=WorkspaceRegistry(registry_file))
+    try:
+        assert not registry_file.exists()
+
+        services.workspaces.register(str(home), name="显式登记")
+
+        assert registry_file.exists()
+        assert services.registry.get(str(home)).name == "显式登记"
+    finally:
+        services.close()

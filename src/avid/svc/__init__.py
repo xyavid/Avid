@@ -25,7 +25,7 @@ from .approvals import APPROVAL_TIMEOUT_SECONDS
 from .runs import REPLAY_BUFFER_SIZE, RunRegistry
 from .sessions import SessionService
 from .tasks import TaskService
-from .workspaces import WorkspaceService, single_workspace
+from .workspaces import WorkspaceService, bound_workspace, single_workspace
 
 # 破坏性变更时 +1。客户端只在**不兼容**时失败收敛；加可选事件不改它（§6.3）。
 API_VERSION = 1
@@ -62,24 +62,25 @@ class Services:
         approval_timeout: float = APPROVAL_TIMEOUT_SECONDS,
         registry: WorkspaceRegistry | None = None,
     ) -> None:
-        """任何装配都先绑定一个**工作地点**，并且登记好（于是它可被解析、会出现在候选里）。
+        """任何装配都先绑定一个**工作地点**，但**不写盘**（注册表只由用户显式动作写入）。
 
         * ``root``：直接给会话库路径（测试用）；工作地点由路径形状推出来。
-        * ``workspace_root``：给工作区根（`avid web --workspace`）。
+        * ``workspace_root``：给工作区根（`avid web --workspace`），目录必须存在。
         * 都不给：取进程默认根（正常就是 cwd）——**没有"没有工作地点"的进程**。
 
-        ``default`` 只是**预选项**（`capabilities` 与界面预选用），不是建会话时可以省略的
-        默认值：建会话永远要显式指定 workspace。
+        绑定值可能是**未登记**的：它照常出现在 `GET /api/workspaces`（`is_default=true`）、
+        也照常可被 `POST /api/sessions` 解析（id 由根目录派生）。启动写盘会让"看一眼注册表"
+        与"起过服务"变成不可区分的两件事，而用户只想知道自己登记过哪些。
         """
         self.registry = registry or WorkspaceRegistry()
         if root is not None:
-            default = self.registry.add(single_workspace(root).root)
+            default = single_workspace(root)
             sessions_root: Path | None = Path(root)
         elif workspace_root is not None:
-            default = self.registry.add(workspace_root)
+            default = bound_workspace(workspace_root)
             sessions_root = None  # 用 `<root>/.avid/sessions`
         else:
-            default = self.registry.add(workspace.WORKSPACE_ROOT)
+            default = bound_workspace(workspace.WORKSPACE_ROOT)
             sessions_root = None
         self.workspaces = WorkspaceService(
             self.registry, default=default, default_sessions_root=sessions_root

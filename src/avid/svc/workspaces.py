@@ -5,9 +5,11 @@
 
 两个概念分开：
 
-* **进程绑定一个工作地点**（``default``）：服务启动时就登记好，``capabilities`` 与界面
-  的预选值都取自它。任何装配方式（``Services(root=...)`` / ``workspace_root=...`` /
-  默认的当前目录）都必然有一个——不存在"没有工作地点"的进程。
+* **进程绑定一个工作地点**（``default``）：``capabilities`` 与界面的预选值都取自它。
+  任何装配方式（``Services(root=...)`` / ``workspace_root=...`` / 默认的当前目录）都
+  必然有一个——不存在"没有工作地点"的进程。它**不进注册表**：启动与日常使用都不写盘，
+  注册表只由用户的显式动作写入（``avid workspace add`` / ``POST /api/workspaces``）。
+  未登记不影响可解析——id 由根目录派生，``resolve`` 先认绑定值再看注册表。
 * **建会话必须显式指定工作区**：``resolve(None)`` 一律 ``WorkspaceRequired``（400）。
   进程自己的绑定值只是**预选项**，不是"可以省略"的默认值：省略会让归属取决于
   服务端状态而不是请求，而归属是会话的不可变事实，不该那样决定。
@@ -23,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from ..session import JsonlSessionRepo, SessionMetadata
-from ..workspaces import Workspace, WorkspaceError, WorkspaceRegistry
+from ..workspaces import Workspace, WorkspaceError, WorkspaceRegistry, derive_id
 from .errors import ServiceError, SessionNotFound
 
 logger = logging.getLogger("avid.svc.workspaces")
@@ -86,6 +88,10 @@ class WorkspaceService:
             raise WorkspaceRequired(
                 "新建会话必须指定 workspace（进程的绑定工作区只是预选项，不是默认值）"
             )
+        # 绑定值可能没登记（我们不在启动时写盘），所以要显式认它——按 id 或按路径。
+        for workspace in self.workspaces():
+            if workspace.id == text or workspace.root == self._as_root(text):
+                return workspace
         try:
             found = self.registry.find(text)
         except WorkspaceError as exc:  # 注册表损坏：读已降级为空表
@@ -95,6 +101,13 @@ class WorkspaceService:
                 f"没有这个工作区：{text}（用 GET /api/workspaces 看可选值）"
             )
         return found
+
+    @staticmethod
+    def _as_root(text: str) -> str:
+        try:
+            return str(Path(text).expanduser().resolve())
+        except (OSError, RuntimeError):
+            return text
 
     def register(
         self, path: str, *, name: str | None = None, permission: str | None = None
@@ -158,6 +171,27 @@ class WorkspaceService:
         self._repos.clear()
 
 
+def bound_workspace(root: str | Path) -> Workspace:
+    """进程绑定但不登记的工作地点。目录必须存在——否则早点报错，别等到写文件时。
+
+    id 由根目录派生，所以它与"以后用 `avid workspace add` 登记同一个目录"得到的是
+    同一个 id：绑定值与注册表项天然是同一份真相，不会出现两个工作区。
+    """
+    path = Path(root).expanduser()
+    if not path.exists():
+        raise WorkspaceInvalid(f"工作区目录不存在：{path}")
+    if not path.is_dir():
+        raise WorkspaceInvalid(f"不是目录：{path}")
+    resolved = path.resolve()
+    return Workspace(
+        id=derive_id(resolved),
+        root=str(resolved),
+        name=resolved.name or "workspace",
+        created_at=0,
+        last_used_at=0,
+    )
+
+
 def single_workspace(root: str | Path) -> Workspace:
     """``Services(root=...)`` 专用：它传的的是**会话库路径**，工作地点由形状推出来。
 
@@ -182,6 +216,7 @@ def single_workspace(root: str | Path) -> Workspace:
 
 
 __all__ = [
+    "bound_workspace",
     "WorkspaceInvalid",
     "WorkspaceMissing",
     "WorkspaceRequired",

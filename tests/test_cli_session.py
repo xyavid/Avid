@@ -297,3 +297,22 @@ def test_workspace_subcommand_reports_unknown(monkeypatch, capsys, tmp_path):
     assert cli.main(["workspace", "add", str(tmp_path / "missing")]) == 1
 
     assert "工作区错误" in capsys.readouterr().err
+
+
+def test_cli_never_writes_the_registry(sandbox, model, capsys, tmp_path):
+    """CLI 的读与跑都不写注册表：只有 `avid workspace add` 会写。
+
+    启动/日常使用写盘会让"注册表里有什么"取决于你用没用过它，而不是你登记了什么。
+    """
+    registry_file = tmp_path / "avid-home" / "workspaces.json"
+    model.answer("答")
+
+    assert cli.main(["--agent", "--new-session", "问"]) == 0
+    capsys.readouterr()
+    assert cli.main(["--list-sessions"]) == 0
+    capsys.readouterr()
+
+    assert not registry_file.exists()
+
+    assert cli.main(["workspace", "add", str(sandbox)]) == 0
+    assert registry_file.exists()

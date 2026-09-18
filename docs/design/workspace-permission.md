@@ -39,8 +39,11 @@
   `SessionService.create(workspace=...)` 的 `workspace` 是必填参数。没有任何"用服务端
   默认值兜住"的路径——归属是会话的**不可变事实**，省略会让它取决于服务端状态而不是请求；
 - 进程**总是**绑定一个工作地点（`Services()` 取进程默认根、`workspace_root=` 指定、
-  `root=` 直接给会话库路径）：`avid web` 启动即登记它，界面因此永远有至少一个候选，
-  但绑定值只是**预选项**（`is_default=true`），不是可以省略的参数；
+  `root=` 直接给会话库路径），但**启动与日常使用都不写盘**：绑定值不登记，也不影响
+  可解析（id 由根目录派生，`resolve` 先认绑定值再看注册表），界面因此永远有至少一个
+  候选（`is_default=true`）。注册表的**写入口只有用户的显式动作**——`avid workspace
+  add/permission/remove` 与 `POST /api/workspaces`；
+- 绑定值只是**预选项**，不是可以省略的参数；
 - CLI：`--workspace PATH|ID` 可省，省时取**当前目录**并把解析结果打进 stderr（不是"没选"，是"命令行上下文替你选了"）；
 - Web 前端：请求体**总是**显式带上 `workspace`（选择器默认预选 `is_default`、否则最近使用的那一个）。
 
@@ -228,8 +231,9 @@
 | I-P4 | 文件工具越界**失败关闭**：没有账本记录就不放行 | 账本只由 `gate` 写、工具只读 | 工具若自行放行 → `tools/paths.py` 的 `outside_ok` 缺省为假 |
 | I-P5 | 运行级权限开关不漏传给子 agent | `tools/subagent.py` 逐字段前传 + 一条"父 strict 则子 strict"的用例 | 漏传 → 最严一档被静默绕过；现有测试只覆盖 `auto_approve`/`ask` |
 | I-P6 | 会话的归属不可变且可查 | 会话 header（只写一次） | 无其它写入路径 |
-| I-P7 | 跨工作区不会静默读到别人的会话 | `JsonlSessionRepo.open` 的归属校验 | 调查发现的真实陷阱：`_locate` 优先用 `metadata.path`，而 `open` 只校验 id |
-| I-P8 | 运行级工作区根在每个落点都一致 | `RunState.workspace_root` + 运行内六个落点（文件工具 / `bash` 的 cwd / 任务库 / 系统提示 / 压缩落盘 / hook 注入）与装配期两处（会话库、`capabilities`） | 漏一处就是"模型看到的路径"与"实际写入的路径"两套答案；`tests/test_run_workspace.py` 逐个盯 |
+| I-P7 | 注册表只由用户的显式动作改变 | `WorkspaceRegistry` 的三个写方法，调用者只有 `avid workspace` 与 `POST /api/workspaces` | 启动/列举/解析/建会话都不写；`tests/test_cli_session.py` 与 `test_workspace_api.py` 各有一条"跑完文件仍不存在"的断言 |
+| I-P8 | 跨工作区不会静默读到别人的会话 | `JsonlSessionRepo.open` 的归属校验 | 调查发现的真实陷阱：`_locate` 优先用 `metadata.path`，而 `open` 只校验 id |
+| I-P9 | 运行级工作区根在每个落点都一致 | `RunState.workspace_root` + 运行内六个落点（文件工具 / `bash` 的 cwd / 任务库 / 系统提示 / 压缩落盘 / hook 注入）与装配期两处（会话库、`capabilities`） | 漏一处就是"模型看到的路径"与"实际写入的路径"两套答案；`tests/test_run_workspace.py` 逐个盯 |
 
 **失败模型**：问不到人（EOF / 无回答者 / 审批超时）→ 拒绝；`gate` 自身抛异常 → 按拒绝处理（
 `trigger_hooks` 的既有"失败关闭"约定）；注册表文件损坏 → 读出空的已知列表并给出可执行的修复提示，
