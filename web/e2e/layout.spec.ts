@@ -246,8 +246,9 @@ test('中档宽度：会话列表走左侧抽屉，选中会话后抽屉收起',
   await expect(page.getByLabel(COMPOSER_LABEL)).toBeVisible()
 
   const nav = page.locator('nav')
-  // exact 必须给：会话名标题（h1）里也含「会话」二字，子串匹配会把当前会话名一起算进来。
-  const listHeading = page.getByRole('heading', { name: '会话', exact: true })
+  // 导航面板的标题是「工作区」（阶段 18 起会话按工作区分组）：exact 必须给，
+  // 否则会与别处含这两个字的文本混淆。
+  const listHeading = page.getByRole('heading', { name: '工作区', exact: true })
   expect(
     await nav.evaluate((element) => element.getBoundingClientRect().width),
     '中档是 64px 图标轨',
@@ -259,7 +260,7 @@ test('中档宽度：会话列表走左侧抽屉，选中会话后抽屉收起',
   await expect(opener).toHaveAttribute('aria-expanded', 'true')
   await expect(listHeading).toBeVisible()
 
-  // 可访问名 = 会话名 + id + 时间，所以用锚定前缀只命中本次造的那一条。
+  // 可访问名 = 会话名 + 相对时间，所以用锚定前缀只命中本次造的那一条。
   await page.getByRole('button', { name: new RegExp(`^${targetName}`) }).click()
 
   // 选中必须既切过去、又把抽屉收起来：75vh 的抽屉留着会盖住刚选中的会话。

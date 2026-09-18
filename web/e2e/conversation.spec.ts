@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test'
 
+import { newSessionIn } from './helpers'
+
 /**
  * 交互冒烟：起一个会话 → 提交 → UI 上批准 → 看到最终答复。
  *
@@ -13,7 +15,7 @@ test.describe.configure({ mode: 'serial' })
 
 const BASE = process.env.AVID_BASE_URL ?? 'http://127.0.0.1:8765'
 
-test('提交 → 审批 → 完成：键盘可完成主任务且无页面错误', async ({ page }) => {
+test('提交 → 审批 → 完成：键盘可完成主任务且无页面错误', async ({ page, request }) => {
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
   page.on('console', (message) => {
@@ -22,8 +24,8 @@ test('提交 → 审批 → 完成：键盘可完成主任务且无页面错误'
 
   await page.goto(`${BASE}/sessions`)
 
-  // 新建一个会话（导航列的按钮）
-  await page.getByRole('button', { name: '新建会话' }).click()
+  // 在导航树的工作区文件夹里新建会话（在哪个文件夹点 ＋ 就建在哪个工作区）
+  await newSessionIn(page, request)
   await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
 
   // 输入并发送

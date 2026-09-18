@@ -44,9 +44,9 @@ uv run avid web --port 8765      # 静态资源与 API 同源
 
 | 页面 / 交互（URL） | 主要接口 | 数据流 |
 |---|---|---|
-| 导航列（`/sessions` 左侧） | `GET /api/sessions`、`POST /api/sessions`、`PATCH /api/sessions/{id}`、`DELETE /api/sessions/{id}` | 查询流（TanStack Query）；列表项带归属工作区 |
-| 工作区选择器（新建会话前） | `GET /api/workspaces`、`POST /api/workspaces` | 查询流；选中的 id 随 `POST /api/sessions` 发出（**必填**，缺了是 400 `workspace_required`） |
-| 「新增工作区…」（选择器旁） | `POST /api/workspaces/pick`（弹宿主机文件夹选择器）→ `POST /api/workspaces`（登记） | 命令流；成功后刷新候选并**切到新工作区**。取消 → 什么都不做；已在列表里 → 409 `workspace_exists` + 切到已有的那个，不重复添加 |
+| 导航列（`/sessions` 左侧） | `GET /api/workspaces`（文件夹）+ `GET /api/sessions`（里面的会话）、`POST /api/sessions`、`PATCH /api/sessions/{id}`、`DELETE /api/sessions/{id}` | 查询流（TanStack Query）；两份查询在客户端按 `workspace.id` 归拢成树，服务端接口不变 |
+| 工作区文件夹（导航列的一项） | `GET /api/workspaces` + `GET /api/sessions` | 点标题折叠/展开；点 ＋ 在该工作区建会话（id 随 `POST /api/sessions` 发出，**必填**，缺了是 400 `workspace_required`） |
+| 「新增工作区…」（导航列右上角 ＋） | `POST /api/workspaces/pick`（弹宿主机文件夹选择器）→ `POST /api/workspaces`（登记） | 命令流；成功后刷新候选并**展开新工作区**。取消 → 什么都不做；已在列表里 → 409 `workspace_exists` + 展开已有的那个，不重复添加 |
 | 权限模式选择器（输入条旁） | 不新增接口 | 随 `POST /api/sessions/{id}/runs` 的 `permission` 发出；缺省取会话所属工作区的 `default_permission` |
 | 会话时间线（`/sessions/{id}`） | `GET /api/sessions/{id}/entries`（分页，带 `branch`）、`GET /api/runs/{id}/events`（SSE） | 历史来自条目（权威），实时来自事件 |
 | 提交一次运行（输入条） | `POST /api/sessions/{id}/runs`（`branch` 决定接哪条链尾） | 命令流 → 201 `{run_id}` |
@@ -107,10 +107,16 @@ zenity/kdialog → Windows（WSL 互操作）→ osascript 依次探测，`GET /
 **路径不存在** → 400 `workspace_invalid`。成功后新工作区立刻出现在候选列表里、
 注册表里也写下来了（`~/.avid/workspaces.json`），并成为当前选中的那个。
 
-**工作区**是一个本地目录，同时是权限边界、会话归属与干活的地点。界面上它出现在两处：
-新建会话前必须选（列表 = 进程绑定的工作地点 + 已登记的，`is_default` 或最近使用的那一个
-被预选；绑定值只做预选，不能替代选择）。进程绑定的那个**不写进注册表**，所以"注册表里
-有什么"只取决于你登记过什么，不取决于你起过几次服务。
+**工作区**是一个本地目录，同时是权限边界、会话归属与干活的地点。界面上它就是一个
+**文件夹**：导航列按工作区分组，展开后是它的会话（每行右侧是相对时间），一个工作区里
+会话多于 5 条时给「展开其余 N 个会话」。
+
+- **建会话 = 在某个文件夹上点 ＋**。没有"先选下拉再点新建"这一步：归属永远是点出来的
+  那一下，不会出现"下拉忘了改"的错建。点完会展开那个文件夹并跳到新会话。
+- **默认展开**：装着当前会话的那个文件夹；没有当前会话时展开第一个有会话的；都没有就
+  展开第一个（空文件夹也要露出"还没有会话 + ＋"，否则新机器上界面看着像空的）。
+- 进程绑定的工作地点**不写进注册表**，所以"注册表里有什么"只取决于你登记过什么，
+  不取决于你起过几次服务。
 会话卡与详情显示归属名字。归属是**创建时的静态事实**，写在会话 header 里，
 所以注册表被删掉也不影响已有会话的归属查询。
 

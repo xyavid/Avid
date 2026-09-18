@@ -184,7 +184,6 @@ export const DICTIONARY: Record<Locale, Entry> = {
 
     // ---------------- sessions ----------------
     'sessions.title': '会话',
-    'sessions.new': '新建会话',
     'sessions.empty': '还没有会话',
     'sessions.count': '{count} 条消息',
     'branches.current': '当前分支',
@@ -200,15 +199,22 @@ export const DICTIONARY: Record<Locale, Entry> = {
     'sessions.created': '已新建会话',
     'sessions.unnamed': '未命名会话',
     'sessions.entriesEmpty': '这个会话还没有条目',
-    'sessions.workspace.label': '工作区',
-    'sessions.workspace.hint': '新建的会话归到这个工作区，权限边界与文件位置都由它决定',
-    'sessions.workspace.loading': '正在读取工作区…',
+    'sessions.workspacesTitle': '工作区',
+    'sessions.newIn': '在「{name}」新建会话',
+    'sessions.emptyIn': '还没有会话',
+    'sessions.orphans': '未归属的会话',
+    'sessions.showMore': '展开其余 {count} 个会话',
+    'sessions.collapse': '收起',
+    'sessions.total': '共 {count} 条',
+    'sessions.time.now': '刚刚',
+    'sessions.time.minute': '{count}分钟',
+    'sessions.time.hour': '{count}小时',
+    'sessions.time.day': '{count}天',
     'sessions.workspace.add': '新增工作区…',
     'sessions.workspace.added': '已添加工作区：{name}，并切换到它',
     'sessions.workspace.none':
-      '还没有工作区。点上面的「新增工作区…」挑一个本地文件夹，或在终端里用 `avid workspace add <路径>` 登记一个。',
+      '还没有工作区。点右上角的 ＋ 挑一个本地文件夹，或在终端里用 `avid workspace add <路径>` 登记一个。',
     'sessions.workspace.failed': '工作区列表没取回来',
-    'sessions.workspace.belongs': '工作区：{name}',
 
     // ---------------- permission ----------------
     'permission.label': '权限模式',

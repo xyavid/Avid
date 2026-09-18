@@ -1,6 +1,7 @@
 import { Badge, Button, Input } from '../../../ui/primitives'
 import { useTranslation } from '../../../lib/i18n'
 import type { SessionSummary } from '../../../api/types'
+import { formatRelative } from '../lib/relativeTime'
 
 export interface SessionItemProps {
   session: SessionSummary
@@ -15,7 +16,13 @@ export interface SessionItemProps {
   onRequestDelete: () => void
 }
 
-/** 会话卡：形状按索引轮换（相邻同级卡片不同形）。 */
+/**
+ * 会话行：一行两段——名字在左、相对时间在右（工作区已经是它的父文件夹，不再重复显示
+ * 归属，也不再显示会话 id：那些信息在详情页与检查器里）。
+ *
+ * 标题本身是个 `Button`（保留墨线方框，与「改名 / 删除」同族），并且带
+ * `aria-current` —— 既是"当前会话"的语义标记，也是 e2e 定位它的稳定锚点。
+ */
 export function SessionItem({
   session,
   active,
@@ -29,6 +36,19 @@ export function SessionItem({
   onRequestDelete,
 }: SessionItemProps) {
   const { t, locale } = useTranslation()
+  const relative = formatRelative(session.created_at, Date.now(), locale)
+  // 逐档取词条（而不是拼 `sessions.time.${unit}`）：拼出来的键绕过 check-style 的
+  // i18n 完整性检查，漏词条要到运行时才看得见。
+  const timeLabel =
+    relative.unit === 'now'
+      ? t('sessions.time.now')
+      : relative.unit === 'minute'
+        ? t('sessions.time.minute', { count: relative.value })
+        : relative.unit === 'hour'
+          ? t('sessions.time.hour', { count: relative.value })
+          : relative.unit === 'day'
+            ? t('sessions.time.day', { count: relative.value })
+            : relative.text
 
   return (
     <div
@@ -56,26 +76,16 @@ export function SessionItem({
       ) : (
         <Button
           variant="secondary"
-          className="h-auto w-full flex-col items-start gap-0.5 px-2 py-1 text-left"
+          className="h-auto w-full justify-between gap-2 px-2 py-1 text-left"
           onClick={onSelect}
           aria-current={active ? 'true' : undefined}
         >
-          <span className="font-sketch text-sm">
+          <span className="truncate font-sketch text-sm">
             {session.name ?? t('sessions.unnamed')}
           </span>
-          <span className="font-mono text-[10px] text-ink/70">
-            {session.id.slice(0, 8)} ·{' '}
-            {new Date(session.created_at).toLocaleString(locale, { hour12: false })}
-          </span>
+          <span className="shrink-0 font-mono text-[10px] text-ink/70">{timeLabel}</span>
         </Button>
       )}
-
-      {/* 归属的工作区名：可能为 null（更早的会话 header 里没有归属），那就整行不显示。 */}
-      {session.workspace?.name ? (
-        <p className="truncate font-mono text-[10px] text-ink/70">
-          {t('sessions.workspace.belongs', { name: session.workspace.name })}
-        </p>
-      ) : null}
 
       <div className="flex items-center justify-between gap-1">
         <Badge tone="neutral" count={session.message_count}>

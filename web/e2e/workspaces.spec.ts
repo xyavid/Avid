@@ -1,22 +1,23 @@
 import { expect, test } from '@playwright/test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+
+import { workspaceFolder } from './helpers'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 
 /**
- * 阶段 18 前端的端到端：新建会话前选工作区、提交前选权限模式，两者都真的进了请求体。
+ * 工作区的端到端：导航树里按文件夹建会话、提交前选权限模式、以及界面新增工作区。
  *
- * 前置：`AVID_E2E=1`，且内核以 `dev/tmp/e2e_server.py` 起（**单工作区模式**，注册表被
- * `AVID_HOME` 隔离到临时目录）。只有单工作区时这个用例也要能过：它会先登记第二个
- * 工作区（临时目录），于是「选中的是不是我选的那个」才有意义。
+ * 前置：`AVID_E2E=1`，且内核以 `dev/tmp/e2e_server.py` 起（注册表被 `AVID_HOME` 隔离到
+ * 临时目录）。只有单工作区时这些用例也要能过：它们会先登记第二个工作区（临时目录），
+ * 于是「建在哪个工作区」才有意义。
  *
- * 断言的是**请求体**而不是页面文案：这两个选择器的价值全在「值有没有跟着请求走」，
+ * 断言的是**请求体**而不是页面文案：这些交互的价值全在「值有没有跟着请求走」，
  * 页面显示成什么都可能对。
  */
 test.skip(!process.env.AVID_E2E, '需要 AVID_E2E=1 且内核已启动')
 
 const BASE = process.env.AVID_BASE_URL ?? 'http://127.0.0.1:8765'
-const WORKSPACE_LABEL = '工作区'
 const PERMISSION_LABEL = '权限模式'
 const COMPOSER_LABEL = '输入指令，Enter 发送，Shift+Enter 换行'
 
@@ -37,19 +38,23 @@ test('选工作区建会话、选权限模式提交，两个值都进请求体',
   try {
     await page.goto(`${BASE}/sessions`)
 
-    // ---- 1. 新建会话必须先选工作区 ----
-    const selector = page.getByLabel(WORKSPACE_LABEL)
-    await expect(selector).toBeVisible({ timeout: 10_000 })
-    await expect(selector.locator('option', { hasText: extraName })).toHaveCount(1)
+    // ---- 1. 工作区像文件夹：在它的文件夹里点 ＋ 建会话 ----
+    const folder = workspaceFolder(page, extraName)
+    await expect(folder, '新登记的工作区要出现在导航树里').toBeVisible({ timeout: 10_000 })
+    await expect(folder).toHaveAttribute('aria-expanded', 'false') // 空文件夹默认收起
+    await folder.click()
+    await expect(folder).toHaveAttribute('aria-expanded', 'true')
+    // 空文件夹里给出可执行提示（scope 到这一行：别的文件夹与主区也都有这句话）
+    const row = page.getByRole('listitem').filter({ has: folder })
+    await expect(row.getByText('还没有会话')).toBeVisible()
 
     const createResponse = page.waitForResponse(
       (res) => res.request().method() === 'POST' && res.url().endsWith('/api/sessions'),
     )
-    await selector.selectOption(extraId)
-    await page.getByRole('button', { name: '新建会话' }).click()
+    await page.getByRole('button', { name: `在「${extraName}」新建会话` }).click()
     const created = await createResponse
 
-    // 选中的那个工作区必须跟着 POST /api/sessions 走（服务端 extra=forbid，字段名也不能错）。
+    // 点的是哪个文件夹，POST /api/sessions 就带哪个工作区（服务端 extra=forbid，字段名不能错）。
     expect(created.request().postDataJSON()).toMatchObject({ workspace: extraId })
     expect(created.status(), `建会话失败：${await created.text()}`).toBe(201)
     const sessionId = ((await created.json()) as { id: string }).id
@@ -114,7 +119,7 @@ test('新增工作区：取消不变更，选择后登记并切过去，重复�
 
   const folder = mkdtempSync(join(tmpdir(), 'avid-e2e-pick-'))
   await page.goto(`${BASE}/sessions`)
-  const addButton = page.getByRole('button', { name: '新增工作区…' })
+  const addButton = page.getByRole('button', { name: '新增工作区…' }) // 导航面板右上角的 ＋
   await expect(addButton).toBeVisible({ timeout: 10_000 })
 
   try {
@@ -145,7 +150,10 @@ test('新增工作区：取消不变更，选择后登记并切过去，重复�
 
     const added = (await workspacesOf(request)).find((item) => item.root === folder)
     expect(added, '新增的工作区必须出现在服务端列表里').toBeTruthy()
-    await expect(page.getByLabel(WORKSPACE_LABEL)).toHaveValue(added!.id)
+    // 切到它 = 在导航树里展开它（新加进来的文件夹默认展开，好让人看见结果）。
+    const addedFolder = workspaceFolder(page, basename(folder))
+    await expect(addedFolder).toBeVisible({ timeout: 10_000 })
+    await expect(addedFolder).toHaveAttribute('aria-expanded', 'true')
 
     // ---- 3. 重复：明确提示、不重复添加、仍切到已有的那个 ----
     writeFileSync(pickFile!, folder)
@@ -153,7 +161,7 @@ test('新增工作区：取消不变更，选择后登记并切过去，重复�
     await expect(page.getByText(/已经在工作区列表里/)).toBeVisible({ timeout: 10_000 })
     const again = (await workspacesOf(request)).filter((item) => item.root === folder)
     expect(again).toHaveLength(1)
-    await expect(page.getByLabel(WORKSPACE_LABEL)).toHaveValue(again[0].id)
+    await expect(addedFolder).toHaveAttribute('aria-expanded', 'true')
   } finally {
     rmSync(folder, { recursive: true, force: true })
   }

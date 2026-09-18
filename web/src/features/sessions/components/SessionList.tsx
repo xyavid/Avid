@@ -14,16 +14,29 @@ import {
   useSessionList,
   useWorkspaces,
 } from '../../../api/queries'
-import { pickWorkspace } from '../lib/workspaceChoice'
-import { SessionItem } from './SessionItem'
-import { WorkspaceSelector } from './WorkspaceSelector'
+import {
+  defaultExpandedWorkspace,
+  groupByWorkspace,
+  isExpanded,
+} from '../lib/navTree'
+import type { SessionSummary } from '../../../api/types'
+import { WorkspaceFolder } from './WorkspaceFolder'
 
 export interface SessionListProps {
   activeId: string | null
   onSelect: (sessionId: string) => void
 }
 
-/** 导航列：会话列表 + 新建 + 改名 + 销毁。删除要求无活动 run（服务端 409）。 */
+/**
+ * 导航列：**工作区像文件夹，会话装在它里面**。
+ *
+ * 结构上不再有"新建会话 + 工作区下拉"这一对：在哪个文件夹上点 ＋ 就在哪个工作区建会话，
+ * 于是"归属"永远是点出来的那一下，不靠一个可能忘了改的下拉框。
+ *
+ * 分组的规则、可见条数、默认展开谁都在 `lib/navTree.ts`（纯函数，有单测）；这里只管
+ * 状态与副作用：折叠覆盖表、新建/改名/删除、以及"新增工作区"那条宿主机选择器链路。
+ * 后端接口一行没改：`GET /api/workspaces` 给文件夹，`GET /api/sessions` 给里面的会话。
+ */
 export function SessionList({ activeId, onSelect }: SessionListProps) {
   const { t } = useTranslation()
   const errorText = useErrorText()
@@ -41,12 +54,12 @@ export function SessionList({ activeId, onSelect }: SessionListProps) {
   const [alert, setAlert] = useState<string | null>(null)
   // 成功/提示类消息（错误走 alert）：用一句人话说明"刚刚发生了什么"。
   const [notice, setNotice] = useState<string | null>(null)
-  // 用户选过的那个（null = 还没选，按服务端排序回落）。**不进界面域**：它是这次
-  // 新建动作的选择，不是用户偏好——服务端状态不在本地留副本（uiStore 开头那条）。
-  const [preferredWorkspace, setPreferredWorkspace] = useState<string | null>(null)
+  // 折叠覆盖表：用户点过的那些记在这里，没点过的按默认规则展开（数据是异步来的，
+  // 默认值不能写进 state 初值）。它是纯界面展开态，不进 uiStore（服务端状态不留副本）。
+  const [toggled, setToggled] = useState<Record<string, boolean>>({})
 
-  const workspaceList = workspaces.data ?? []
-  const chosen = pickWorkspace(workspaceList, preferredWorkspace)
+  const groups = groupByWorkspace(workspaces.data ?? [], list.data ?? [])
+  const defaultId = defaultExpandedWorkspace(groups, activeId)
 
   const failure = (error: unknown) =>
     setAlert(
@@ -56,13 +69,29 @@ export function SessionList({ activeId, onSelect }: SessionListProps) {
   // 老内核没有这个端点：能力表里没声明就不显示按钮，而不是点出一个 404。
   const canAddWorkspace = meta.data?.features.workspace_picker === 1
 
+  /** 在某个工作区建会话：展开它（用户显然想看到结果）并选中新会话。 */
+  const handleNewSession = (workspaceId: string) => {
+    setAlert(null)
+    setNotice(null)
+    create.mutate(
+      { name: null, workspace: workspaceId },
+      {
+        onSuccess: (session) => {
+          setToggled((previous) => ({ ...previous, [workspaceId]: true }))
+          onSelect(session.id)
+        },
+        onError: failure,
+      },
+    )
+  }
+
   /**
-   * 新增工作区：弹**宿主机**的文件选择器 → 登记 → 切过去。
+   * 新增工作区：弹**宿主机**的文件选择器 → 登记 → 展开它。
    *
    * 三条路径都要有明确结果，且都不该悄悄发生：
    *   · 取消（`path === null`）→ 什么都不做，也不报错（取消不是故障）；
-   *   · 已在列表里（409 `workspace_exists`）→ 切到那个已有的，提示已经在了，**不重复添加**；
-   *   · 成功 → 切到新的，提示已添加。路径不存在/没有可用后端等错误照常走 `failure`。
+   *   · 已在列表里（409 `workspace_exists`）→ 展开那个已有的，提示已经在了，**不重复添加**；
+   *   · 成功 → 展开新的，提示已添加。路径不存在/没有可用后端等错误照常走 `failure`。
    */
   const handleAddWorkspace = () => {
     setAlert(null)
@@ -75,7 +104,7 @@ export function SessionList({ activeId, onSelect }: SessionListProps) {
           { path: result.path },
           {
             onSuccess: (workspace) => {
-              setPreferredWorkspace(workspace.id)
+              setToggled((previous) => ({ ...previous, [workspace.id]: true }))
               setNotice(
                 t('sessions.workspace.added', {
                   name: workspace.name ?? workspace.root,
@@ -88,7 +117,7 @@ export function SessionList({ activeId, onSelect }: SessionListProps) {
                   ? error.detail.id
                   : undefined
               if (typeof existingId === 'string') {
-                setPreferredWorkspace(existingId)
+                setToggled((previous) => ({ ...previous, [existingId]: true }))
                 setNotice(error.message)
                 return
               }
@@ -101,51 +130,46 @@ export function SessionList({ activeId, onSelect }: SessionListProps) {
   }
 
   return (
-    <section className="flex h-full flex-col gap-3 p-3" aria-label={t('sessions.title')}>
+    <section
+      className="flex h-full flex-col gap-3 p-3"
+      aria-label={t('sessions.workspacesTitle')}
+    >
       <div className="flex items-center justify-between">
-        <h2 className="font-sketch text-lg">{t('sessions.title')}</h2>
-        <Button
-          size="sm"
-          variant="primary"
-          loading={create.isPending}
-          // 没有可选工作区时禁用：服务端一律要求显式指定归属（缺了是 400），
-          // 让按钮点出一个已知会失败的请求，不如先说清为什么不能点。
-          disabled={chosen === null || workspaces.isLoading}
-          onClick={() => {
-            if (!chosen) return
-            create.mutate(
-              { name: null, workspace: chosen.id },
-              {
-                onSuccess: (session) => {
-                  setAlert(null)
-                  onSelect(session.id)
-                },
-                onError: failure,
-              },
-            )
-          }}
-        >
-          {t('sessions.new')}
-        </Button>
+        <h2 className="font-sketch text-lg">{t('sessions.workspacesTitle')}</h2>
+        {canAddWorkspace ? (
+          <Button
+            size="icon"
+            variant="secondary"
+            aria-label={t('sessions.workspace.add')}
+            title={t('sessions.workspace.add')}
+            loading={pick.isPending || addWorkspace.isPending}
+            onClick={handleAddWorkspace}
+          >
+            <span aria-hidden="true">＋</span>
+          </Button>
+        ) : null}
       </div>
-
-      <WorkspaceSelector
-        workspaces={workspaceList}
-        value={chosen?.id ?? null}
-        onChange={setPreferredWorkspace}
-        loading={workspaces.isLoading}
-        failed={workspaces.isError}
-        onRetry={() => void workspaces.refetch()}
-        disabled={create.isPending}
-        onAdd={handleAddWorkspace}
-        adding={pick.isPending || addWorkspace.isPending}
-        canAdd={canAddWorkspace}
-      />
 
       {notice ? <p className="empty-note">{notice}</p> : null}
       {alert ? <p className="empty-note text-danger">{alert}</p> : null}
 
-      {list.isLoading ? <p className="text-sm text-ink/70">{t('common.loading')}</p> : null}
+      {workspaces.isError ? (
+        <div className="empty-note">
+          <p>{t('sessions.workspace.failed')}</p>
+          <Button size="sm" className="mt-2" onClick={() => void workspaces.refetch()}>
+            {t('common.retry')}
+          </Button>
+        </div>
+      ) : null}
+
+      {workspaces.isLoading ? (
+        <p className="text-sm text-ink/70">{t('common.loading')}</p>
+      ) : null}
+
+      {workspaces.data && workspaces.data.length === 0 ? (
+        <p className="empty-note">{t('sessions.workspace.none')}</p>
+      ) : null}
+
       {list.isError ? (
         <div className="empty-note">
           <p>{t('errors.title')}</p>
@@ -154,35 +178,47 @@ export function SessionList({ activeId, onSelect }: SessionListProps) {
           </Button>
         </div>
       ) : null}
-      {list.data && list.data.length === 0 ? (
-        <p className="empty-note">{t('sessions.empty')}</p>
-      ) : null}
 
       <ul className="scroll-area flex-1 space-y-2 pr-1">
-        {(list.data ?? []).map((session) => (
-          <li key={session.id}>
-            <SessionItem
-              session={session}
-              active={session.id === activeId}
-              editing={editing === session.id}
-              name={name}
-              busy={rename.isPending}
-              onSelect={() => onSelect(session.id)}
-              onStartRename={() => {
-                setEditing(session.id)
-                setName(session.name ?? '')
-              }}
-              onNameChange={setName}
-              onSubmitRename={() =>
-                rename.mutate(
-                  { id: session.id, name },
-                  { onSuccess: () => setEditing(null), onError: failure },
-                )
-              }
-              onRequestDelete={() => setPendingDelete(session.id)}
-            />
-          </li>
-        ))}
+        {groups.map((group) => {
+          const id = group.workspace?.id
+          // 归属查不到的兜底组没有 id：它永远是展开的（否则会话就彻底看不见了）。
+          const expanded = id === undefined ? true : isExpanded(id, toggled, defaultId)
+          return (
+            <li key={id ?? 'orphans'}>
+              <WorkspaceFolder
+                group={group}
+                expanded={expanded}
+                onToggle={() => {
+                  if (id === undefined) return
+                  setToggled((previous) => ({ ...previous, [id]: !expanded }))
+                }}
+                activeId={activeId}
+                creating={create.isPending}
+                onNewSession={() => {
+                  if (id === undefined) return
+                  handleNewSession(id)
+                }}
+                editing={editing}
+                name={name}
+                renamePending={rename.isPending}
+                onSelectSession={onSelect}
+                onStartRename={(session: SessionSummary) => {
+                  setEditing(session.id)
+                  setName(session.name ?? '')
+                }}
+                onNameChange={setName}
+                onSubmitRename={(sessionId: string) =>
+                  rename.mutate(
+                    { id: sessionId, name },
+                    { onSuccess: () => setEditing(null), onError: failure },
+                  )
+                }
+                onRequestDelete={setPendingDelete}
+              />
+            </li>
+          )
+        })}
       </ul>
 
       <Dialog

@@ -176,7 +176,9 @@ test('时间线动作：静止（未悬停）时就已带方框，悬停只负�
 
 test('会话标题也有框，与「改名 / 删除」同族', async ({ page }) => {
   await openSession(page)
-  const title = page.locator('section[aria-label="会话"] ul li').first().locator('button').first()
+  // 用 aria-current 定位"当前会话的标题"：导航树是嵌套的（工作区 → 会话），
+  // 按结构取 `first button` 会取到工作区文件夹的折叠按钮。
+  const title = page.locator('section[aria-label="工作区"] [aria-current="true"]').first()
   const remove = page.getByRole('button', { name: '删除' }).first()
 
   const rest = await styleOf(title)
