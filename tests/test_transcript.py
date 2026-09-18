@@ -195,3 +195,45 @@ def test_estimate_counts_content_and_tool_calls():
     assert Transcript([user("a")]).estimate_chars() < Transcript(
         [user("a"), user("b")]
     ).estimate_chars()
+
+
+# ---------------- 成本量是增量维护的（P2-4） ----------------
+
+TOOL = {"role": "tool", "tool_call_id": "c1", "content": "z" * 300}
+CALL = {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "bash", "arguments": "{}"}}],
+}
+
+
+def test_incremental_costs_match_a_full_recompute_after_every_mutation():
+    """缓存值必须与全量算法逐次相等——记账写错就会让压缩阈值判断失真。"""
+    transcript = Transcript([{"role": "user", "content": "初始"}])
+    cases = [
+        ("append assistant", lambda t: t.append(CALL)),
+        ("append tool", lambda t: t.append(TOOL)),
+        ("set_content", lambda t: t.set_content(0, "改过的内容" * 10)),
+        ("splice", lambda t: t.splice(1, 3, [{"role": "user", "content": "替换"}])),
+        ("replace_all", lambda t: t.replace_all([{"role": "user", "content": "只剩这一条"}])),
+        ("append_many", lambda t: t.append_many([TOOL, TOOL])),
+    ]
+    for label, mutate in cases:
+        mutate(transcript)
+        assert transcript.estimate_chars() == estimate_chars(transcript.as_messages()), label
+        assert transcript.tool_chars() == sum(
+            len(transcript.text_at(index)) for index in transcript.tool_indexes()
+        ), label
+
+
+def test_reads_do_not_recompute(monkeypatch):
+    """读取必须走缓存：每轮 `context.prepare` 至少算三次，全量扫是 O(消息数 × 轮数)。"""
+    transcript = Transcript([{"role": "user", "content": "一"}])
+    recomputes: list[int] = []
+    monkeypatch.setattr(transcript, "_recompute_costs", lambda: recomputes.append(1))
+
+    for _ in range(5):
+        transcript.estimate_chars()
+        transcript.tool_chars()
+
+    assert recomputes == [], "读路径不该重算全表"

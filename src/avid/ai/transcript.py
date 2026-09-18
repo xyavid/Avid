@@ -52,15 +52,26 @@ def validate(messages: list[dict[str, Any]]) -> list[str]:
     return problems
 
 
-def estimate_chars(messages: list[dict[str, Any]]) -> int:
-    """粗估上下文字符数：正文 + tool_calls 序列化 + 每条的结构开销。"""
-    total = 0
-    for message in messages:
-        total += len(text_of(message.get("content"))) + 16
-        calls = message.get("tool_calls")
-        if calls:
-            total += len(json.dumps(calls, ensure_ascii=False, default=str))
+# 每条消息的固定结构开销（role / 花括号 / 分隔符的粗估）。
+_MESSAGE_OVERHEAD = 16
+
+
+def message_chars(message: dict[str, Any]) -> int:
+    """单条消息的粗估字符数：正文 + tool_calls 序列化 + 结构开销。"""
+    total = len(text_of(message.get("content"))) + _MESSAGE_OVERHEAD
+    calls = message.get("tool_calls")
+    if calls:
+        total += len(json.dumps(calls, ensure_ascii=False, default=str))
     return total
+
+
+def estimate_chars(messages: list[dict[str, Any]]) -> int:
+    """粗估上下文字符数：正文 + tool_calls 序列化 + 每条的结构开销。
+
+    这是**全量**算法（改完 5 处调用点前只用于对照）。`Transcript` 自己维护增量值，
+    每轮跑多次的编排（`context.prepare` 一轮至少算 3 次）不再重复扫全表。
+    """
+    return sum(message_chars(message) for message in messages)
 
 
 class Transcript:
@@ -71,6 +82,13 @@ class Transcript:
         problems = validate(self._messages)
         if problems:
             raise TranscriptError("初始 messages 结构非法：" + "；".join(problems))
+        # 增量维护的两个成本量：改动时按差量更新，读取是 O(1)。
+        # 为什么值得维护：`context.prepare` 每轮至少算三次字符数（③④ 各自判断），
+        # `micro_compact` 还在循环里每次落盘后重算——全量扫描是 O(消息数 × 轮数)，
+        # 而内容其实只在 append / set_content / 结构改动时变。
+        self._chars = 0
+        self._tool_chars = 0
+        self._recompute_costs()
 
     # ---------- 读 ----------
 
@@ -98,10 +116,25 @@ class Transcript:
         return None
 
     def tool_chars(self) -> int:
-        return sum(len(self.text_at(index)) for index in self.tool_indexes())
+        """工具结果正文总字符数（① 的预算依据）。O(1)：随写入增量维护。"""
+        return self._tool_chars
 
     def estimate_chars(self) -> int:
-        return estimate_chars(self._messages)
+        """整份上下文的粗估字符数（③④ 的阈值依据）。O(1)。"""
+        return self._chars
+
+    def _recompute_costs(self) -> None:
+        """结构改动后重算（append/set_content 走差量，只有整体替换类才需要它）。"""
+        self._chars = estimate_chars(self._messages)
+        self._tool_chars = sum(
+            len(self.text_at(index)) for index in self.tool_indexes()
+        )
+
+    def _track(self, message: dict[str, Any], sign: int = 1) -> None:
+        """把一条消息的成本计入/移出缓存。"""
+        self._chars += sign * message_chars(message)
+        if message.get("role") == "tool":
+            self._tool_chars += sign * len(text_of(message.get("content")))
 
     def validate(self) -> list[str]:
         return validate(self._messages)
@@ -118,21 +151,29 @@ class Transcript:
 
     def append(self, message: dict[str, Any]) -> None:
         self._messages.append(message)
+        self._track(message)
 
     def append_many(self, messages: Iterable[dict[str, Any]]) -> None:
-        self._messages.extend(messages)
+        incoming = list(messages)
+        self._messages.extend(incoming)
+        for message in incoming:
+            self._track(message)
 
     def set_content(self, index: int, content: str) -> None:
         """改单条内容（落盘留路径、输入注入用）。不改结构，因此无需校验。"""
         if not 0 <= index < len(self._messages):
             raise TranscriptError(f"消息下标越界：{index}")
-        self._messages[index]["content"] = content
+        message = self._messages[index]
+        self._track(message, sign=-1)
+        message["content"] = content
+        self._track(message)
 
     def replace_all(self, messages: list[dict[str, Any]]) -> None:
         """整体替换（摘要替换历史用）。会破坏结构就抛错，不改动现状。"""
         candidate = list(messages)
         self._accept(candidate, "整体替换")
         self._messages[:] = candidate
+        self._recompute_costs()
 
     def splice(
         self,
@@ -146,6 +187,7 @@ class Transcript:
         candidate = self._messages[:start] + list(replacement) + self._messages[stop:]
         self._accept(candidate, f"裁剪 {start}..{stop}")
         self._messages[:] = candidate
+        self._recompute_costs()
 
     @staticmethod
     def _accept(candidate: list[dict[str, Any]], what: str) -> None:
