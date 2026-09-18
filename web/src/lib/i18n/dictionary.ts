@@ -179,7 +179,9 @@ export const DICTIONARY: Record<Locale, Entry> = {
 
     // ---------------- sessions ----------------
     'sessions.title': '会话',
-    'sessions.empty': '还没有会话',
+    // 落点页的指路文案。**不是**「还没有会话」——导航列里可能正列着一堆会话，
+    // 那句话说出口就是错的（「空文件夹」用的是 sessions.emptyIn）。
+    'sessions.choose': '从左侧选一个会话开始；左侧还没有工作区时，先用导航列右上角的 ＋ 添加。',
     'sessions.count': '{count} 条消息',
     'branches.current': '当前分支',
     'branches.fork': '从链尾分叉',

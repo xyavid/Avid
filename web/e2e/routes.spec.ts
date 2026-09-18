@@ -37,6 +37,15 @@ test('根路径与未知路径都落到会话页', async ({ page }) => {
   await expect(page).toHaveURL(/\/sessions$/)
 })
 
+test('会话落点页给的是指路文案，不是「还没有会话」', async ({ page }) => {
+  // 导航列里可能正列着一堆会话（「会话」不是导航项之后，这个页面只作为根路径与未知
+  // 路径的落点），所以「还没有会话」说出口就是错的——那句是空工作区文件夹的文案。
+  await page.goto(`${BASE}/sessions`)
+  const landing = page.locator('section.sketch-main')
+  await expect(landing.getByText('从左侧选一个会话开始')).toBeVisible()
+  await expect(landing.getByText('还没有会话')).toHaveCount(0)
+})
+
 test('检查器的三个视图就地切换，不进 URL 历史', async ({ page }) => {
   const listed = await page.request.get(`${BASE}/api/sessions`)
   const sessions: { id: string; message_count: number }[] = (await listed.json()).sessions
