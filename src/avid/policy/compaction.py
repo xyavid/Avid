@@ -25,6 +25,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -59,7 +62,24 @@ SUMMARY_SYSTEM = (
     "只输出摘要正文。"
 )
 
+# 落盘文件名的组成：<kind>-<tag>-<seq>.ext
+#
+# 只用进程内自增序号是不够的：`_spill_seq` 重启归零，于是同一个工作区里两次运行
+# 都写 `tool-result-0001.txt`，后一次**静默覆盖**前一次——而旧摘要里还写着
+# "完整记录：.avid/context/tool-result-0001.txt，需要时用 read_file 读回"，
+# 那条恢复通道就断了。所以名字里要带一个跨进程、跨重启都不同的标识。
+_PROCESS_TAG = f"{os.getpid():x}{int(time.time() * 1000) & 0xFFFFF:05x}"
 _spill_seq = 0
+_SPILL_LOCK = threading.Lock()
+
+
+def _next_spill_path(root: Path, kind: str, suffix: str, tag: str = "") -> Path:
+    """下一个落盘路径。``tag`` 由 RunState 提供（每次运行一个），没有则用进程标识。"""
+    global _spill_seq
+    with _SPILL_LOCK:  # 并行 subagent 会同时压缩，序号必须原子地取
+        _spill_seq += 1
+        seq = _spill_seq
+    return root / f"{kind}-{tag or _PROCESS_TAG}-{seq:04d}{suffix}"
 
 
 @dataclass(frozen=True)
@@ -90,13 +110,10 @@ def _spill_root(root: Path | None = None) -> Path:
     return Path(workspace.WORKSPACE_ROOT) / SPILL_DIR
 
 
-def _spill(text: str, kind: str, root: Path | None = None) -> str | None:
+def _spill(text: str, kind: str, root: Path | None = None, tag: str = "") -> str | None:
     """写盘并返回工作区相对路径。压缩不是关键路径，落盘失败就跳过、不抛。"""
-    global _spill_seq
-
     root = _spill_root(root)
-    _spill_seq += 1
-    path = root / f"{kind}-{_spill_seq:04d}.txt"
+    path = _next_spill_path(root, kind, ".txt", tag)
     try:
         root.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
@@ -114,12 +131,11 @@ def _is_spilled(content: str) -> bool:
     return content.startswith(SPILL_PREFIX)
 
 
-def _save_transcript(messages: list[dict[str, Any]], workdir: Path | None = None) -> str:
-    global _spill_seq
-
+def _save_transcript(
+    messages: list[dict[str, Any]], workdir: Path | None = None, tag: str = ""
+) -> str:
     root = _spill_root(workdir)
-    _spill_seq += 1
-    path = root / f"transcript-{_spill_seq:04d}.json"
+    path = _next_spill_path(root, "transcript", ".json", tag)
     try:
         root.mkdir(parents=True, exist_ok=True)
         path.write_text(
@@ -171,6 +187,7 @@ def tool_result_budget(
     budget: int = TOOL_RESULT_CHAR_BUDGET,
     keep_recent: int = TOOL_RESULT_KEEP_RECENT,
     workdir: Path | None = None,
+    tag: str = "",
 ) -> CompactReport | None:
     """工具结果字符总量超预算：把最大的一项落盘。
 
@@ -206,7 +223,7 @@ def tool_result_budget(
     if size == 0:
         return None
 
-    path = _spill(transcript.text_at(index), "tool-result", workdir)
+    path = _spill(transcript.text_at(index), "tool-result", workdir, tag)
     if path is None:
         return None
 
@@ -268,6 +285,7 @@ def micro_compact(
     keep_recent: int = MICRO_COMPACT_KEEP_RECENT,
     target_ratio: float = MICRO_COMPACT_TARGET_RATIO,
     workdir: Path | None = None,
+    tag: str = "",
 ) -> CompactReport | None:
     """上下文超限：把较早的工具结果落盘，保留最近若干条。不调用模型。"""
     before = transcript.estimate_chars()
@@ -287,7 +305,7 @@ def micro_compact(
         if _is_spilled(content):
             continue
 
-        path = _spill(content, "tool-result", workdir)
+        path = _spill(content, "tool-result", workdir, tag)
         if path is None:
             break
 
@@ -314,13 +332,14 @@ def compact_history(
     chat: Any = chat_completion,
     limit: int = CONTEXT_CHAR_LIMIT,
     workdir: Path | None = None,
+    tag: str = "",
 ) -> CompactReport | None:
     """整理之后仍然超限：存完整记录，用一次模型调用换摘要，替换历史。"""
     before = transcript.estimate_chars()
     if before <= limit:
         return None
 
-    path = _save_transcript(transcript.as_messages(), workdir)
+    path = _save_transcript(transcript.as_messages(), workdir, tag)
     summary = _summarize(transcript.as_messages(), config=config, chat=chat)
     if summary is None:
         logger.warning("compact: 摘要生成失败，保留原历史")
@@ -347,6 +366,7 @@ def reactive_compact(
     chat: Any = chat_completion,
     keep_recent: int = REACTIVE_KEEP_RECENT,
     workdir: Path | None = None,
+    tag: str = "",
 ) -> CompactReport | None:
     """兜底：模型已经报超限，总结更早历史、保留最近若干条，供重试。"""
     before = transcript.estimate_chars()
@@ -361,7 +381,7 @@ def reactive_compact(
         logger.warning("compact: 没有可总结的更早历史，兜底压缩放弃")
         return None
 
-    path = _save_transcript(messages, workdir)
+    path = _save_transcript(messages, workdir, tag)
     summary = _summarize(earlier, config=config, chat=chat)
     if summary is None:
         return None

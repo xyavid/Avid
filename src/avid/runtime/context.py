@@ -97,6 +97,7 @@ def prepare(
             budget=limits.tool_result_chars,
             keep_recent=limits.tool_result_keep_recent,
             workdir=workdir,
+            tag=state.run_tag,
         )
     )
     run(
@@ -117,6 +118,7 @@ def prepare(
                 keep_recent=limits.micro_keep_recent,
                 target_ratio=limits.micro_target_ratio,
                 workdir=workdir,
+                tag=state.run_tag,
             )
         )
 
@@ -131,6 +133,7 @@ def prepare(
                 chat=summarize,
                 limit=limits.context_chars,
                 workdir=workdir,
+                tag=state.run_tag,
             )
             if report is not None:
                 state.compacted = True
@@ -159,6 +162,7 @@ def reactive(
         chat=summarize,
         workdir=Path(state.workspace_root) if state.workspace_root else None,
         keep_recent=limits.reactive_keep_recent,
+        tag=state.run_tag,
     )
     announce(report, state)
     return report

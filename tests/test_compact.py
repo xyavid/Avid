@@ -131,6 +131,62 @@ def test_budget_spills_the_largest_among_the_older_ones(spill_root):
     assert (spill_root / path).read_text(encoding="utf-8") == "x" * 500
 
 
+def test_spill_names_are_unique_per_run_and_never_reused(spill_root):
+    """落盘文件名必须带运行标识。
+
+    只用进程内自增序号时，`_spill_seq` 重启归零 → 同一个工作区里两次运行都写
+    `tool-result-0001.txt`，后一次静默覆盖前一次；而旧摘要里还写着"完整记录：
+    …-0001.txt，需要时用 read_file 读回"，那条恢复通道就断了。
+    """
+    messages = [user()]
+    for index, size in enumerate([100, 500, 50, 60, 10]):
+        messages.append(assistant("", [call(f"c{index}")]))
+        messages.append(tool(f"c{index}", "x" * size))
+    transcript = Transcript(messages)
+
+    tool_result_budget(transcript, budget=50, keep_recent=3, tag="runAAAAA")
+    first = messages[4]["content"].split("已存至 ")[1].split("；")[0]
+    assert "runAAAAA" in first
+
+    # 同一份对话再来一次（另一个 run_tag，且序号从同一个进程内计数器继续）：
+    messages2 = [user()]
+    for index, size in enumerate([100, 500, 50, 60, 10]):
+        messages2.append(assistant("", [call(f"c{index}")]))
+        messages2.append(tool(f"c{index}", "x" * size))
+    tool_result_budget(Transcript(messages2), budget=50, keep_recent=3, tag="runBBBBB")
+    second = messages2[4]["content"].split("已存至 ")[1].split("；")[0]
+
+    assert first != second
+    assert (spill_root / first).read_text(encoding="utf-8") == "x" * 500
+    assert (spill_root / second).read_text(encoding="utf-8") == "x" * 500
+
+
+def test_concurrent_spills_produce_distinct_files(spill_root):
+    """并行 subagent 会同时压缩：序号必须原子地取，不能两个线程拿到同一个名字。"""
+    import threading
+
+    from avid.policy.compaction import _spill
+
+    paths: list[str] = []
+    lock = threading.Lock()
+
+    def worker(index: int) -> None:
+        path = _spill(f"payload-{index}", "tool-result", spill_root, "shared1")
+        assert path is not None
+        with lock:
+            paths.append(path)
+
+    threads = [threading.Thread(target=worker, args=(index,)) for index in range(32)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert len(paths) == 32
+    assert len(set(paths)) == 32, "序号竞态会让两个线程写同一个文件"
+    assert len(list((spill_root / ".avid" / "context").glob("*.txt"))) == 32
+
+
 def test_budget_never_spills_the_newest_results(spill_root):
     """模型刚读到的结果正是下一步要用的，落掉它会让模型重读，然后又被落掉。"""
     messages = [user()]

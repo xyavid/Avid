@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -73,6 +74,10 @@ class RunState:
     denials: int = 0
     compactions: int = 0
     tokens: int = 0
+
+    # 本次运行的短标识：压缩落盘的文件名里带上它，否则两次运行（哪怕进程重启后）
+    # 会写同一个 `tool-result-0001.txt`，把上一次的上下文记录静默覆盖掉。
+    run_tag: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
 
     # 运行期实例
     todo: TodoList = field(default_factory=TodoList)
