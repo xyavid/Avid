@@ -1,5 +1,6 @@
 import pytest
 
+from avid.cli import AGENT_TOOL_HELP, build_parser
 from avid.tools import TOOLS, TOOL_IMPLS
 from avid.tools.schemas import tool
 
@@ -78,3 +79,16 @@ def test_builder_defaults_required_to_empty():
     built = tool("demo", "说明", {"x": {"type": "string", "description": "参数"}})
 
     assert built["function"]["parameters"]["required"] == []
+
+
+def test_agent_help_lists_exactly_the_registered_tools():
+    """help 曾两次与注册表脱节（写 8 个时实际 14 个），钉住「派生而非手抄」。
+
+    argparse 会在空白处折行，所以比较前先去掉全部空白：这样既要求每个工具都在
+    help 里，也要求它不多列任何已有工具之外的名字。
+    """
+    help_text = "".join(build_parser().format_help().split())
+
+    assert "".join(AGENT_TOOL_HELP.split()) in help_text
+    for name in NAMES:
+        assert name in help_text, name

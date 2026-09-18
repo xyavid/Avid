@@ -33,9 +33,13 @@ from .session import (
     SessionRecorder,
     messages_for_branch,
 )
-from .tools import workspace
+from .tools import TOOLS, workspace
 
 SESSION_DIR = ".avid/sessions"
+
+# 工具清单从注册表派生：硬编码过两次，两次都漏（写 8 个时实际已有 14 个）。
+# cli 已经是「认识 tools 包」的接线处，这里不新增模块边。
+AGENT_TOOL_HELP = "（" + " / ".join(item["function"]["name"] for item in TOOLS) + "）"
 
 
 def _session_root() -> Path:
@@ -56,9 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--agent",
         action="store_true",
-        help="走 agent 循环，模型可调用已注册的工具"
-        "（bash / read_file / write_file / edit_file / glob / todo_write"
-        " / subagent / load_skill）",
+        help="走 agent 循环，模型可调用已注册的工具" + AGENT_TOOL_HELP,
     )
     parser.add_argument(
         "--yes",
