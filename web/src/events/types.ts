@@ -6,6 +6,8 @@
  * 加一个事件要同时改两侧，否则测试失败——这就是不上生成器时代的漂移检查。
  */
 
+import type { PermissionMode } from '../api/types'
+
 // EVENTS:BEGIN
 export type AvidEventType =
   | 'run_started'
@@ -116,6 +118,10 @@ export interface EventData {
   text?: string
   code?: string
   after_seq?: number
+  // run_started 带归属与权限模式（阶段 18）：刷新页面后重建界面靠它。
+  workspace?: string
+  workspace_root?: string
+  permission?: PermissionMode
 }
 
 export function isDurable(event: EventEnvelope): boolean {

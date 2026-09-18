@@ -9,8 +9,11 @@ import {
   useDeleteSession,
   useRenameSession,
   useSessionList,
+  useWorkspaces,
 } from '../../../api/queries'
+import { pickWorkspace } from '../lib/workspaceChoice'
 import { SessionItem } from './SessionItem'
+import { WorkspaceSelector } from './WorkspaceSelector'
 
 export interface SessionListProps {
   activeId: string | null
@@ -22,6 +25,7 @@ export function SessionList({ activeId, onSelect }: SessionListProps) {
   const { t } = useTranslation()
   const errorText = useErrorText()
   const list = useSessionList()
+  const workspaces = useWorkspaces()
   const create = useCreateSession()
   const rename = useRenameSession()
   const remove = useDeleteSession()
@@ -29,6 +33,12 @@ export function SessionList({ activeId, onSelect }: SessionListProps) {
   const [name, setName] = useState('')
   const [pendingDelete, setPendingDelete] = useState<string | null>(null)
   const [alert, setAlert] = useState<string | null>(null)
+  // 用户选过的那个（null = 还没选，按服务端排序回落）。**不进界面域**：它是这次
+  // 新建动作的选择，不是用户偏好——服务端状态不在本地留副本（uiStore 开头那条）。
+  const [preferredWorkspace, setPreferredWorkspace] = useState<string | null>(null)
+
+  const workspaceList = workspaces.data ?? []
+  const chosen = pickWorkspace(workspaceList, preferredWorkspace)
 
   const failure = (error: unknown) =>
     setAlert(
@@ -43,9 +53,13 @@ export function SessionList({ activeId, onSelect }: SessionListProps) {
           size="sm"
           variant="primary"
           loading={create.isPending}
-          onClick={() =>
+          // 没有可选工作区时禁用：多工作区模式下这个请求必然 400 workspace_required，
+          // 让按钮点出一个已知会失败的请求不如先说清为什么不能点。
+          disabled={chosen === null || workspaces.isLoading}
+          onClick={() => {
+            if (!chosen) return
             create.mutate(
-              { name: null },
+              { name: null, workspace: chosen.id },
               {
                 onSuccess: (session) => {
                   setAlert(null)
@@ -54,11 +68,21 @@ export function SessionList({ activeId, onSelect }: SessionListProps) {
                 onError: failure,
               },
             )
-          }
+          }}
         >
           {t('sessions.new')}
         </Button>
       </div>
+
+      <WorkspaceSelector
+        workspaces={workspaceList}
+        value={chosen?.id ?? null}
+        onChange={setPreferredWorkspace}
+        loading={workspaces.isLoading}
+        failed={workspaces.isError}
+        onRetry={() => void workspaces.refetch()}
+        disabled={create.isPending}
+      />
 
       {list.isLoading ? <p className="text-sm text-ink/70">{t('common.loading')}</p> : null}
       {list.isError ? (

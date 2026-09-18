@@ -30,6 +30,7 @@ import type {
   Skill,
   StartRunInput,
   Task,
+  WorkspaceSummary,
 } from './types'
 
 export const ENTRY_PAGE_SIZE = 100
@@ -37,6 +38,7 @@ export const ENTRY_PAGE_SIZE = 100
 export const queryKeys = {
   meta: ['meta'] as const,
   skills: ['skills'] as const,
+  workspaces: ['workspaces'] as const,
   sessions: ['sessions'] as const,
   session: (id: string) => ['session', id] as const,
   entries: (id: string, branch: string) => ['entries', id, branch] as const,
@@ -60,6 +62,21 @@ export function useSkills() {
     queryKey: queryKeys.skills,
     queryFn: () => request<{ skills: Skill[] }>('/skills').then((page) => page.skills),
     staleTime: 60_000,
+  })
+}
+
+/**
+ * 已知工作区候选（阶段 18）。排序由服务端给：单工作区模式下默认那个排在最前，
+ * 其余按最近使用。
+ */
+export function useWorkspaces() {
+  return useQuery({
+    queryKey: queryKeys.workspaces,
+    queryFn: () =>
+      request<{ workspaces: WorkspaceSummary[] }>('/workspaces').then(
+        (page) => page.workspaces,
+      ),
+    staleTime: 5_000,
   })
 }
 
@@ -145,7 +162,9 @@ export function useTask(taskId: string | null) {
 export function useCreateSession() {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: (input: { name?: string | null }) =>
+    // 多工作区模式下 `workspace` 必填（服务端缺它会 400 workspace_required）；
+    // 单工作区模式省略也行，但 UI 总是把选中的那个显式发出去，归属不靠默认值猜。
+    mutationFn: (input: { name?: string | null; workspace?: string }) =>
       request<SessionDetail>('/sessions', { method: 'POST', body: input }),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: queryKeys.sessions })

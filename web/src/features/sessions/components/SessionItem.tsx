@@ -70,6 +70,13 @@ export function SessionItem({
         </Button>
       )}
 
+      {/* 归属的工作区名：可能为 null（更早的会话 header 里没有归属），那就整行不显示。 */}
+      {session.workspace?.name ? (
+        <p className="truncate font-mono text-[10px] text-ink/70">
+          {t('sessions.workspace.belongs', { name: session.workspace.name })}
+        </p>
+      ) : null}
+
       <div className="flex items-center justify-between gap-1">
         <Badge tone="neutral" count={session.message_count}>
           {t('sessions.count', { count: session.message_count })}

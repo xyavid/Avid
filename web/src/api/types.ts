@@ -21,6 +21,36 @@ export interface Skill {
   description: string
 }
 
+/**
+ * 权限三态（阶段 18）：模式名就是信任边界，`strict ⊇ workspace ⊇ system`。
+ * 服务端 `StartRunIn.permission` 是 `Literal[...] | None`，非法值 422。
+ */
+export type PermissionMode = 'strict' | 'workspace' | 'system'
+
+/** 会话归属的线格式（`SessionSummary.workspace`）：`id` 来自会话 header。 */
+export interface WorkspaceRef {
+  id: string | null
+  root: string | null
+  name: string | null
+  default_permission: PermissionMode | null
+}
+
+/**
+ * `GET /api/workspaces` 的一项。
+ *
+ * `is_default` 只有单工作区模式才可能为 true；`name` 与 `default_permission` 在
+ * pydantic DTO 里都是可空字段（`WorkspaceOut` 继承 `WorkspaceRef`），所以这里也按可空接。
+ */
+export interface WorkspaceSummary {
+  id: string
+  root: string
+  name: string | null
+  created_at: number
+  last_used_at: number
+  default_permission: PermissionMode | null
+  is_default: boolean
+}
+
 export interface Capabilities {
   tools: string[]
   skills: Skill[]
@@ -55,6 +85,8 @@ export interface SessionSummary {
   created_at: number
   storage_version: number
   parent_session_id: string | null
+  /** 归属的工作区；由会话 header 决定，客户端只读。 */
+  workspace: WorkspaceRef | null
   message_count: number
   active_run_id: string | null
   truncated_tail: boolean
@@ -168,4 +200,6 @@ export interface StartRunInput {
   auto_approve?: boolean
   /** 这次运行接在哪条链尾上；缺省 = main。 */
   branch?: string
+  /** 这次运行的权限模式；缺省由服务端按会话所属工作区的默认权限回落。 */
+  permission?: PermissionMode
 }

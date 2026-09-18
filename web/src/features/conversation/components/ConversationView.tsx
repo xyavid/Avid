@@ -13,6 +13,8 @@ import { Timeline } from './Timeline'
 export interface ConversationViewProps {
   sessionId: string | null
   sessionName: string | null
+  /** 归属工作区名（可能为 null）：route 以字符串传入，不引入 features/sessions。 */
+  workspaceName?: string | null
   truncatedTail: boolean
   view: RunView
   density: Density
@@ -52,6 +54,7 @@ export function ConversationView(props: ConversationViewProps) {
     <section className="sketch-main flex h-full min-h-0 flex-col overflow-hidden">
       <ConversationHeader
         sessionName={props.sessionName}
+        workspaceName={props.workspaceName ?? null}
         sessionId={props.sessionId}
         runId={view.runId}
         phase={view.phase}

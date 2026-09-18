@@ -9,10 +9,10 @@ import {
   useSession,
   useStartRun,
 } from '../api/queries'
-import type { Entry } from '../api/types'
+import type { Entry, PermissionMode } from '../api/types'
 import { ApprovalQueue } from '../features/approvals'
 import { BranchSelector } from '../features/branches'
-import { Composer } from '../features/composer'
+import { buildStartRunInput, Composer, resolvePermissionMode } from '../features/composer'
 import { ConversationView } from '../features/conversation'
 import type { InspectorSelection } from '../features/inspector'
 import { Inspector } from '../features/inspector'
@@ -53,17 +53,28 @@ export function ConversationRoute() {
 
   const [startedRunId, setStartedRunId] = useState<string | null>(null)
   const [selection, setSelection] = useState<InspectorSelection | null>(null)
+  // 权限模式：本次会话视图的瞬时选择（null = 还没选过）。不是偏好，不进 uiStore——
+  // 「上次选了 system，下次打开浏览器仍自动全放行」是安全默认值问题。
+  const [permission, setPermission] = useState<PermissionMode | null>(null)
+
+  // 缺省取当前会话所属工作区的默认权限，取不到就是 strict（与服务端的回落同值）。
+  const permissionMode = resolvePermissionMode(
+    permission,
+    session.data?.workspace?.default_permission,
+  )
 
   const runId = startedRunId ?? session.data?.active_run_id ?? null
   const refetchEntries = entries.refetch
   const refetchSession = session.refetch
 
-  // 切换会话：活动域清空、胶带与选择一起换，分支回到默认那条。
+  // 切换会话：活动域清空、胶带与选择一起换，分支回到默认那条，权限重新按新会话
+  // 所属工作区回落（上一个会话里选的档不跨会话复用——那是另一个权限边界的决定）。
   useEffect(() => {
     runStoreActions.reset(sessionId)
     setStartedRunId(null)
     setSelection(null)
     setBranch(DEFAULT_BRANCH)
+    setPermission(null)
   }, [sessionId])
 
   // 换分支 = 换历史：活动域清空，等该分支的条目到达后重建。服务端没有「当前分支」
@@ -155,14 +166,20 @@ export function ConversationRoute() {
       <ConversationBody
         sessionId={sessionId}
         sessionName={session.data?.name ?? null}
+        workspaceName={session.data?.workspace?.name ?? null}
         truncatedTail={Boolean(session.data?.truncated_tail)}
         entriesLoading={entries.isLoading}
         branch={branch}
+        permission={permissionMode}
         hasActiveRun={Boolean(session.data?.active_run_id)}
         onSwitchBranch={switchBranch}
+        onPermissionChange={setPermission}
         onSend={(prompt) => {
           startRun.mutate(
-            { sessionId, run: { prompt, auto_approve: autoApprove, branch } },
+            {
+              sessionId,
+              run: buildStartRunInput({ prompt, branch, autoApprove, permission: permissionMode }),
+            },
             {
               onSuccess: (created) => {
                 runStoreActions.reset(sessionId)
@@ -202,10 +219,14 @@ export function ConversationRoute() {
 interface BodyProps {
   sessionId: string
   sessionName: string | null
+  /** 会话归属的工作区名（可能为 null）；route 从会话详情取，feature 之间不互相 import。 */
+  workspaceName: string | null
   truncatedTail: boolean
   entriesLoading: boolean
   /** 当前查看的分支（本地视图状态，服务端没有「当前分支」）。 */
   branch: string
+  /** 这次运行的权限模式（已按工作区默认回落，不是 null）。 */
+  permission: PermissionMode
   /** 服务端说这个会话有活动 run：切换与分叉都会失败，先把入口禁掉。 */
   hasActiveRun: boolean
   density: 'compact' | 'comfy'
@@ -220,6 +241,7 @@ interface BodyProps {
   onInspectTool: (run: ToolRun) => void
   onFork: (entry: TimelineEntry) => void
   onSwitchBranch: (name: string) => void
+  onPermissionChange: (mode: PermissionMode) => void
   onToggleInspector: () => void
   setInspectorTab: (tab: 'content' | 'diff' | 'json') => void
   onCloseInspector: () => void
@@ -236,6 +258,7 @@ function ConversationBody(props: BodyProps) {
         <ConversationView
           sessionId={props.sessionId}
           sessionName={props.sessionName}
+          workspaceName={props.workspaceName}
           truncatedTail={props.truncatedTail}
           view={view}
           density={props.density}
@@ -269,6 +292,8 @@ function ConversationBody(props: BodyProps) {
               busy={busy}
               canSend={true}
               stopping={view.phase === 'cancelling'}
+              permission={props.permission}
+              onPermissionChange={props.onPermissionChange}
               onSend={props.onSend}
               onStop={props.onStop}
             />

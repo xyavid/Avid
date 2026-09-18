@@ -7,6 +7,8 @@ import type { RunPhase } from '../../../events/reducer'
 
 export interface ConversationHeaderProps {
   sessionName: string | null
+  /** 归属工作区名；null = 这个会话 header 里没有归属（更早创建的会话）。 */
+  workspaceName: string | null
   sessionId: string | null
   runId: string | null
   phase: RunPhase
@@ -54,6 +56,12 @@ export function ConversationHeader(props: ConversationHeaderProps) {
               {t('chat.tokens', { tokens: props.tokens })}
             </span>
           </div>
+
+          {props.workspaceName ? (
+            <p className="truncate font-sketch text-[11px] text-ink/70">
+              {t('chat.workspace', { name: props.workspaceName })}
+            </p>
+          ) : null}
 
           <div className="flex items-center gap-3">
             <span className="shrink-0 font-sketch text-[11px] text-ink/70">{t('chat.memory')}</span>

@@ -23,6 +23,24 @@ AVID_E2E=1 pnpm test:e2e
 
 没有 `AVID_E2E=1` 时 `e2e/smoke.spec.ts` 会整体 `test.skip`——它属于交付前的自检，不属于 `pnpm test`。
 
+### 用脚本模型跑（不需要真模型与密钥）
+
+`dev/tmp/e2e_server.py` 起的是同一套 svc/web，只把模型与工具换成脚本。它服务
+**`web/dist`**（当前 checkout 构建出来的前端），所以先构建：
+
+```bash
+pnpm -C web build                                  # 必须；缺 index.html 会直接报错退出
+AVID_API_KEY=test AVID_MODEL=test-model AVID_PORT=8877 \
+  uv run --extra web python dev/tmp/e2e_server.py  # 终端 1
+cd web && AVID_E2E=1 AVID_BASE_URL=http://127.0.0.1:8877 pnpm test:e2e   # 终端 2
+```
+
+两个环境变量值得知道：
+
+* `AVID_E2E_STREAM=1`：走**生产路径**（不注入 chat），delta 会真的经 SSE 到浏览器。
+  `streaming.spec.ts` 需要它——脚本模型在非流式路径下不产生 delta，那条会失败（其余 35 项两种模式都过）。
+* `AVID_PORT` / `AVID_BASE_URL`：本机 8765 常被别的进程占着，换端口即可，两边要一致。
+
 只跑某个文件 / 带 UI 调试：
 
 ```bash

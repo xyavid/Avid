@@ -102,6 +102,7 @@ export const DICTIONARY: Record<Locale, Entry> = {
     'chat.scrollToBottom': '回到最新',
     'chat.truncatedTail': '上次运行在此中断',
     'chat.sessionLabel': '会话',
+    'chat.workspace': '工作区：{name}',
     'chat.runLabel': '运行',
     'chat.noRun': '没有活动运行',
     'chat.message.copy': '复制文本',
@@ -199,6 +200,22 @@ export const DICTIONARY: Record<Locale, Entry> = {
     'sessions.created': '已新建会话',
     'sessions.unnamed': '未命名会话',
     'sessions.entriesEmpty': '这个会话还没有条目',
+    'sessions.workspace.label': '工作区',
+    'sessions.workspace.hint': '新建的会话归到这个工作区，权限边界与文件位置都由它决定',
+    'sessions.workspace.loading': '正在读取工作区…',
+    'sessions.workspace.none':
+      '还没有登记任何工作区。先在终端里用 `avid workspace add <路径>` 登记一个，或用 `avid web --workspace <路径>` 起单工作区模式。',
+    'sessions.workspace.failed': '工作区列表没取回来',
+    'sessions.workspace.belongs': '工作区：{name}',
+
+    // ---------------- permission ----------------
+    'permission.label': '权限模式',
+    'permission.mode.strict': '严格',
+    'permission.mode.workspace': '工作区',
+    'permission.mode.system': '系统级',
+    'permission.hint.strict': '严格：每个受管动作都要问',
+    'permission.hint.workspace': '工作区：区内动作免问，越界需同意一次',
+    'permission.hint.system': '系统级：默认免问，仅危险命令问',
 
     // ---------------- skills ----------------
     'skills.title': '技能目录',
