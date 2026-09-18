@@ -1,4 +1,3 @@
-import { useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 
 import { useTranslation } from '../../../lib/i18n'
@@ -18,14 +17,12 @@ export interface ConversationViewProps {
   truncatedTail: boolean
   view: RunView
   density: Density
-  inspectorOpen: boolean
   loading: boolean
   degraded: boolean
   reconnectAttempt: number | null
   onInspect: (entry: TimelineEntry) => void
   onInspectTool: (run: ToolRun) => void
   onFork?: (entry: TimelineEntry) => void
-  onToggleInspector: () => void
   onRefetch: () => void
   /** 审批队列、输入条与分支选择器由 route 组合进来：feature 之间不得互相 import（§3.4）。 */
   approvalsSlot?: ReactNode
@@ -38,17 +35,9 @@ const BUSY_PHASES = new Set(['submitting', 'streaming', 'awaiting_approval', 'ca
 /** 主表面：对话卡。头部 + 提示条 + 审批队列 + 时间线 + 处理中卡片 + 输入条。 */
 export function ConversationView(props: ConversationViewProps) {
   const { t } = useTranslation()
-  const approvalsRef = useRef<HTMLDivElement | null>(null)
-  const [jumpToken, setJumpToken] = useState(0)
   const { view } = props
   const busy = BUSY_PHASES.has(view.phase)
-  const pending = view.approvals.filter((item) => item.decision === null)
   const activeTool = view.tools.find((tool) => tool.status === 'running')?.tool ?? null
-  const lastCompaction = view.compactions[view.compactions.length - 1]
-  const memoryRatio =
-    lastCompaction && lastCompaction.before > 0
-      ? lastCompaction.after / lastCompaction.before
-      : null
 
   return (
     <section className="sketch-main flex h-full min-h-0 flex-col overflow-hidden">
@@ -60,14 +49,6 @@ export function ConversationView(props: ConversationViewProps) {
         phase={view.phase}
         round={view.round}
         tokens={view.tokens}
-        pendingApprovals={pending.length}
-        memoryRatio={memoryRatio}
-        inspectorOpen={props.inspectorOpen}
-        onToggleInspector={props.onToggleInspector}
-        onFocusApprovals={() =>
-          approvalsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-        }
-        onScrollToBottom={() => setJumpToken((token) => token + 1)}
       />
 
       {props.branchSlot ? <div className="px-3 pt-2">{props.branchSlot}</div> : null}
@@ -83,7 +64,7 @@ export function ConversationView(props: ConversationViewProps) {
       />
 
       {view.approvals.length > 0 && props.approvalsSlot ? (
-        <div ref={approvalsRef} className="px-3 pt-2">
+        <div className="px-3 pt-2">
           {props.approvalsSlot}
         </div>
       ) : null}
@@ -98,7 +79,6 @@ export function ConversationView(props: ConversationViewProps) {
         onFork={props.onFork}
         onCopy={(text) => void navigator.clipboard?.writeText(text)}
         resetKey={props.sessionId ?? 'none'}
-        jumpToken={jumpToken}
       />
 
       {busy ? (

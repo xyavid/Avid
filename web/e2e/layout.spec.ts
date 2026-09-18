@@ -160,6 +160,12 @@ test('会话区域独立滚动：输入条不动，消息区自己滚', async ({
   })
   expect(scrolled, '会话区域应当可以独立滚动到顶部').toBe(0)
 
+  // 滚上去时时间线自己给出「回到最新」——头部那顆重复的 ↓ 已删，所以这一个必须好使。
+  const backToLatest = page.getByRole('button', { name: '回到最新' })
+  await expect(backToLatest).toBeVisible()
+  await backToLatest.click()
+  await expect(backToLatest, '贴底后它自己消失').toHaveCount(0)
+
   const after = await measure(page)
   expectComposerInsideViewport(after, '滚动后')
   expect(Math.abs(after.composerBottom - before.composerBottom)).toBeLessThanOrEqual(1)
@@ -269,18 +275,26 @@ test('中档宽度：会话列表走左侧抽屉，选中会话后抽屉收起',
   expectComposerInsideViewport(await measure(page), '中档抽屉选中会话后')
 })
 
-test('会话头部：常驻胶带不压工具按钮，三个按钮语义明确', async ({ page, request }) => {
-  const listed = await page.request.get(`${BASE}/api/sessions`)
-  const sessions: { id: string; message_count: number }[] = (await listed.json()).sessions
-  const target = sessions.find((item) => item.message_count > 0)
+test('会话头部：常驻胶带不压标题，且没有重复与无作用的按钮', async ({ page, request }) => {
+  // 自己造一个带工具调用的会话，不依赖别的用例留下的数据。
+  const stamp = Date.now()
+  const created = await createSession(request, { name: `头部-${stamp}` })
+  const sessionId = ((await created.json()) as { id: string }).id
+  await runToIdle(request, sessionId, '头部：先跑一轮')
+
   await page.setViewportSize({ width: 1440, height: 800 })
-  await page.goto(`${BASE}/sessions/${target?.id}`)
+  await page.goto(`${BASE}/sessions/${sessionId}`)
   await page.waitForTimeout(400)
 
-  // 三种卡片宽度：默认、开检查器后（宽档检查器占 26rem）、关掉导航再开检查器
+  // 「上下文占用」已删：那条只反映"最后一次压缩的 after/before"，平时恒为空，
+  // 显示的不是实时占用。
+  await expect(page.getByText('上下文占用')).toHaveCount(0)
+
+  // 三种卡片宽度：默认、开检查器后（宽档检查器占 26rem）、再收起导航
   for (const step of ['默认', '开检查器', '再收起导航'] as const) {
     if (step === '开检查器') {
-      await page.getByRole('button', { name: '检查器' }).click()
+      // 检查器由条目的「查看」打开——头部那个开关已删（与「查看」完全重复）。
+      await page.getByRole('button', { name: '查看' }).first().click()
     }
     if (step === '再收起导航') {
       await page.locator('nav').getByRole('button', { name: '收起' }).click()
@@ -295,11 +309,11 @@ test('会话头部：常驻胶带不压工具按钮，三个按钮语义明确',
       const intersects = (a: ReturnType<typeof box>, b: ReturnType<typeof box>) =>
         !(a.right <= b.left + 1 || b.right <= a.left + 1 || a.bottom <= b.top + 1 || b.bottom <= a.top + 1)
       const header = document.querySelector('section.sketch-main header') as HTMLElement
-      const tapeClass = 'tape'
       const tapes = Array.from(header.querySelectorAll('[title]')).filter((element) =>
-        element.className.includes(tapeClass),
+        element.className.includes('tape'),
       )
       const buttons = Array.from(header.querySelectorAll('button'))
+      const title = header.querySelector('h1') as HTMLElement
       return {
         cardWidth: Math.round(
           (document.querySelector('section.sketch-main') as HTMLElement).getBoundingClientRect()
@@ -308,28 +322,19 @@ test('会话头部：常驻胶带不压工具按钮，三个按钮语义明确',
         tapes: tapes.length,
         buttons: buttons.length,
         collisions: tapes
-          .flatMap((tape) =>
-            buttons
-              .filter((button) => intersects(box(tape), box(button)))
-              .map(() => (tape.textContent ?? '').trim().slice(0, 8)),
-          )
-          .filter(Boolean),
+          .filter((tape) => intersects(box(tape), box(title)))
+          .map((tape) => (tape.textContent ?? '').trim().slice(0, 8)),
       }
     })
 
     expect(geometry.tapes, `${step}：两张常驻胶带都在`).toBe(2)
-    expect(geometry.buttons, `${step}：三个工具按钮都在`).toBe(3)
-    expect(geometry.collisions, `${step}（卡片 ${geometry.cardWidth}px）：胶带不该压到按钮`).toEqual(
-      [],
-    )
+    // 头部不再有工具按钮：↓ 与「回到最新」重复，检查器/待决审批两颗没有实际作用。
+    expect(geometry.buttons, `${step}：头部不该再有工具按钮`).toBe(0)
+    expect(
+      geometry.collisions,
+      `${step}（卡片 ${geometry.cardWidth}px）：胶带不该压到标题`,
+    ).toEqual([])
   }
-
-  // 三个按钮的可访问名各自独立，不再互相混淆（此前「检查器」与条目动作同名）
-  for (const name of ['回到最新', '检查器', '待决审批']) {
-    await expect(page.getByRole('button', { name, exact: true }).first()).toBeVisible()
-  }
-  // 没有活动 run 时，运行胶带显示空态文案而不是压住按钮
-  await expect(page.getByText('没有活动运行').first()).toBeVisible()
 })
 
 test('一级切换只有导航列：⌘K 不再打开命令面板', async ({ page, request }) => {

@@ -1,5 +1,4 @@
 import { Button, Tooltip } from '../../../ui/primitives'
-import { useEffect } from 'react'
 
 import { useTranslation } from '../../../lib/i18n'
 import { EntryRow, StepGroup, ToolCallCard } from '../../../ui/patterns'
@@ -21,8 +20,6 @@ export interface TimelineProps {
   /** 初次加载（还没有任何事件到达）时的占位。 */
   loading?: boolean
   resetKey: string
-  /** 命令序号：同值重复点击也要真的触发贴底（照 purrcat 的命令对象做法）。 */
-  jumpToken?: number
 }
 
 /** 时间线：**唯一滚动容器**（导航与检查器各自滚动）。 */
@@ -36,16 +33,11 @@ export function Timeline({
   onFork,
   loading = false,
   resetKey,
-  jumpToken = 0,
 }: TimelineProps) {
   const { t } = useTranslation()
   const blocks = useGroupedTimeline(entries, tools)
   const windowState = useTimelineWindow(blocks.length, resetKey)
-  const { scrollToBottom } = windowState
 
-  useEffect(() => {
-    if (jumpToken > 0) scrollToBottom('smooth')
-  }, [jumpToken, scrollToBottom])
   const visible = blocks.slice(Math.max(0, blocks.length - windowState.visibleCount))
 
   return (

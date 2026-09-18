@@ -201,7 +201,6 @@ export function ConversationRoute() {
         onInspect={inspect}
         onInspectTool={inspectTool}
         onFork={forkEntry}
-        onToggleInspector={() => toggleInspector()}
         inspectorOpen={inspectorOpen}
         inspectorTab={inspectorTab}
         setInspectorTab={setInspectorTab}
@@ -242,7 +241,6 @@ interface BodyProps {
   onFork: (entry: TimelineEntry) => void
   onSwitchBranch: (name: string) => void
   onPermissionChange: (mode: PermissionMode) => void
-  onToggleInspector: () => void
   setInspectorTab: (tab: 'content' | 'diff' | 'json') => void
   onCloseInspector: () => void
 }
@@ -262,14 +260,12 @@ function ConversationBody(props: BodyProps) {
           truncatedTail={props.truncatedTail}
           view={view}
           density={props.density}
-          inspectorOpen={props.inspectorOpen}
           loading={props.entriesLoading}
           degraded={degraded}
           reconnectAttempt={reconnectAttempt}
           onInspect={props.onInspect}
           onInspectTool={props.onInspectTool}
           onFork={props.onFork}
-          onToggleInspector={props.onToggleInspector}
           onRefetch={refresh}
           branchSlot={
             <BranchSelector
