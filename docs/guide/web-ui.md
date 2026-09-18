@@ -14,9 +14,9 @@ uv run --env-file .env avid web --port 8765
 # → http://127.0.0.1:8765
 
 # 可选：指定这个进程绑定的工作地点（缺省就是当前目录的）。**启动不写盘**：
-# 注册表只由 `avid workspace add` / POST /api/workspaces 改。界面上的选择器列出
-# 绑定值 + 已登记的候选；新建会话**必须**选一个（省略一律 400 workspace_required，
-# 绑定值只做预选）。
+# 注册表只由 `avid workspace add` / POST /api/workspaces 改。界面按工作区分组
+# （导航列）列出绑定值 + 已登记的候选；新建会话**必须**选一个——点哪个文件夹的 ＋
+# 就归哪个（省略一律 400 workspace_required，绑定值只做预选）。
 uv run --env-file .env avid web --port 8765 --workspace /path/to/project
 ```
 
@@ -121,7 +121,7 @@ durable `assistant_message` 带完整内容并把它替换掉。**delta 不落�
 
 ## 3.2 工作区与权限模式（阶段 18）
 
-**新增工作区**（选择器旁的按钮）：点击后由**服务端**在宿主机上弹出系统文件夹选择器——
+**新增工作区**（导航列右上角的 ＋）：点击后由**服务端**在宿主机上弹出系统文件夹选择器——
 浏览器拿不到目录的绝对路径（`webkitdirectory` 只给相对路径、File System Access API 只给
 handle），所以这一步只能由跑在本机的后端做。后端按 `AVID_PICKER_CMD` → tkinter →
 zenity/kdialog → Windows（WSL 互操作）→ osascript 依次探测，`GET /api/meta` 的
@@ -199,7 +199,6 @@ AVID_E2E=1 pnpm -C web test:e2e                    # 首屏 / 路由 / 会话流
 # dev/tmp/e2e_server.py 会把 stream_completion 换成「按脚本产出再分片」的假实现。
 AVID_PORT=8877 AVID_E2E_STREAM=1 uv run --extra web python dev/tmp/e2e_server.py
 AVID_BASE_URL=http://127.0.0.1:8877 AVID_E2E=1 pnpm -C web test:e2e
-```
 
 # 手验
 curl -s localhost:8765/api/meta | head -c 300

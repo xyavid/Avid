@@ -18,14 +18,14 @@
 ```
 docs/
 ├── README.md              本文件：收录标准
-├── guide/                 使用手册      docs/guide/getting-started.md
-├── api/                   API 文档      docs/api/tool-protocol.md
-├── deploy/                部署与配置    docs/deploy/configuration.md
-└── design/                设计与规格    docs/design/agent-loop.md
+├── guide/                 使用手册      docs/guide/getting-started.md、web-ui.md
+└── design/                设计与规格    docs/design/runtime-architecture.md、workspace-permission.md…
 ```
 
 - 命名全小写 `kebab-case.md`，**不加日期前缀**——正式文档描述当前状态，不按时间归档。
-- 一级目录固定为以上四类；新增类别必须同时改 `.gitignore` 白名单，否则文件会被静默忽略。
+- 一级目录固定为四类：`guide/`、`api/`、`deploy/`、`design/`。**当前只有前两类与第四类
+  有内容**（`api/`、`deploy/` 已白名单放行但还没有文档——工具协议与配置说明目前住在
+  `guide/` 里）。新增类别必须同时改 `.gitignore` 白名单，否则文件会被静默忽略。
 
 ## 过程文档放哪
 

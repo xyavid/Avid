@@ -40,7 +40,17 @@ agent 循环（模型可自主调用工具）：
 uv run --env-file .env avid --agent "读 pyproject.toml，告诉我项目名"
 ```
 
-`bash` / `write_file` / `edit_file` 在执行前会请求确认，提示写在 stderr。非交互场景加 `--yes` 跳过审批——**硬拒绝闸门仍然生效**，黑名单里的命令一律不执行。`read_file` / `glob` 是只读的，不弹确认。
+工具执行前过一道四层裁决（硬拒绝 → 危险命令 → 越界 → 常规规则），配合三档权限模式
+（`--mode strict|workspace|system`，见 `docs/design/workspace-permission.md` 的决策表）：
+
+- **硬拒绝**（`rm -rf /` 这类）三种模式一律不执行；
+- **危险命令**（提权、递归删除、系统级包管理、`~/.ssh` 这类敏感路径等 15 类）三种模式
+  一律问一次，按规范化命令原文记账，同一次运行内不再重复问；
+- **越界**（目标在工作区之外）在 `strict` / `workspace` 问一次、`system` 放行；
+- 区内常规操作在 `workspace` / `system` 免问。
+
+提示写在 stderr；非交互场景加 `--yes` 跳过询问（**硬拒绝仍然生效**）。`subagent` 的审批
+由父运行前传（子 agent 在别的线程跑），账本共用一本。
 
 stdout 打印模型回复，stderr 打印逐轮 trace 与 token 用量。
 

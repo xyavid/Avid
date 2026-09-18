@@ -54,7 +54,7 @@
 | 运行时 | `runtime/loop.py` | **只表达调度顺序**：一轮里先做什么、什么条件做什么 | 隔离"轮次"这个概念本身 | runtime 其它 + ai + tools |
 ~~`runtime/transcript.py`~~ → 见下方修正：**`ai/transcript.py`**。`messages` 的**唯一所有者**；写入时保证结构不变量；字符估算。工具调用与结果的配对是**协议要求**（OpenAI 兼容端点会拒绝不配对请求），不是运行时策略，所以归协议层 | 隔离"消息结构合法性" | 无（纯数据结构） |
 | 运行时 | `runtime/context.py` | 上下文管线的**编排**：调用哪些压缩步骤、什么顺序、什么条件 | 隔离"上下文策略的组合方式" | policy.compaction |
-| 运行时 | `runtime/execution.py` | 工具执行环节：解析参数 → 拦截 → 执行 → 回填 | 隔离"工具调用协议" | events / policy.permission / tools |
+| 运行时 | `runtime/execution.py` | 工具执行环节：解析参数 → 拦截 → 执行 → 回填 | 隔离"工具调用协议" | events / tools（**不含 policy**：权限判定在 `runtime/hooks.py` 触发的回调里，见 §12 判据 9） |
 | 运行时 | `runtime/state.py` | `RunState`：轮次计数、一次性标志、计数统计、TODO 与技能实例 | 隔离"运行期可变状态的生命周期" | policy.todo / policy.skills |
 | 运行时 | `runtime/hooks.py` | 事件注册与触发（**文件名与签名都不变**——§2 的删除测试判定改名无收益） | 隔离"扩展点的发现方式" | 无 |
 | 策略 | `policy/permission.py` | 三闸门 + 黑名单 + 审批 | 隔离"安全规则" | 无 |
@@ -63,9 +63,9 @@
 | 策略 | `policy/skills.py` | 技能扫描、目录、全文读取 | 隔离"技能来源与解析" | 无 |
 | 协议 | `ai/client.py` | `/chat/completions`、`Turn`、错误分类 | 隔离"HTTP 与各家措辞" | 无 |
 | 协议 | `ai/config.py` | 环境变量读取 | 隔离"配置来源" | 无 |
-| 能力 | `tools/*` | 8 个工具的实现与 schema | 隔离"文件系统与进程" | 无（`subagent` 例外见 §5.3） |
+| 能力 | `tools/*` | 14 个工具的实现与 schema | 隔离"文件系统与进程" | 无（`subagent` 例外见 §5.3） |
 
-不新增层、不新增能力。分层只是在既有 13 个模块上重排依赖方向。
+不新增层、不新增能力。分层只是在当时的 13 个模块上重排依赖方向（现在模块更多，分层不变；计数以 `pkgutil.walk_packages` 实测为准）。
 
 ## 4. 核心接口与数据结构
 
@@ -135,11 +135,16 @@ class RunState:
 1. `run_subagent` 在子线程里自建 `RunState`（现在也是自建 context；改成显式后代码更直白）。
 2. `ToolImpl` 签名不变，改为在 `execution.execute_batch` 里把 `RunState` 放进工具调用上下文，由 `execution` 负责传参——即工具的 handler 多一个可选参数。
 
-**选定方案 2，但只给需要的三个工具**：`todo_write`、`load_skill`、`subagent` 的签名改为 `(args, *, state: RunState)`；其余 5 个工具仍是 `(args)`。这样"需要运行状态的工具"是一个显式、可枚举的集合（判据 §4：谁拥有状态要能指名），代价是 `ToolImpl` 变成 `Callable[..., Any]` 且 `execute_batch` 要按名称判断是否传 state。
+**选定方案 2，落地时逐步扩到全部工具**：初稿只给 `todo_write`、`load_skill`、`subagent`
+三个工具传 `state`；到阶段 18，"越界检查要工作区根、审批要账本、任务工具要工作区根"把所有工具
+都拉了进来，于是 `STATEFUL_TOOLS` == `TOOLS`（14 个），签名统一 `(args, *, state)`。集合仍然
+显式可枚举（判据 §4：谁拥有状态要能指名），契约测试保证不漏不错。
 
-> 落地时的修正：初稿只列了两个工具，漏了 `subagent`——它也要读 `RunState.auto_approve`（原来是 `RUN_AUTO_APPROVE` 这个 ContextVar）。实际是 **3 / 8**，仍低于"超过一半就该统一传 state"的阈值。该集合落在 `execution.STATEFUL_TOOLS`，由契约测试保证不漏不错。
+> 落地时的修正：初稿只列了两个工具，漏了 `subagent`——它也要读 `RunState.auto_approve`（原来是 `RUN_AUTO_APPROVE` 这个 ContextVar）。当时是 **3 / 8**；阶段 18 之后统一成 14 / 14（见上）。该集合落在 `execution.STATEFUL_TOOLS`，由契约测试保证不漏不错。
 
-**这个代价值不值**：值得，因为它是唯一能在不引入依赖注入框架的前提下消除 contextvars 的办法；不值的信号是"需要的工具超过一半"——那时应该给所有工具统一传 state。
+**这个代价值不值**：值得，因为它是唯一能在不引入依赖注入框架的前提下消除 contextvars 的办法；
+不值的信号是"需要的工具超过一半"——**这个信号在阶段 18 出现了**（14 / 14），于是按当初写下的
+判断统一传 `state`，没有回头改判据。
 
 ### 4.3 `runtime/context.py` —— 压缩编排
 
@@ -481,7 +486,7 @@ D1–D8 里，D3/D5/D6/D7 是**能力差异**（我们没做），D1/D2/D4 是**
 
 **与设计的偏差**（落地时才发现，已回写上文对应小节）：
 
-1. `STATEFUL_TOOLS` 是 **3 个**不是 2 个——补上 `subagent`（它要读 `RunState.auto_approve`）。
+1. `STATEFUL_TOOLS` 是 **3 个**不是 2 个——补上 `subagent`（它要读 `RunState.auto_approve`）。（阶段 18 起扩到全部 14 个，见 §4.2。）
 2. 写入方法是 **5 个**不是 4 个——`append_many` 与 `set_content` 分开。
 3. **删掉了 `permission.RUN_AUTO_APPROVE` / `bind_auto_approve`**：`auto_approve` 由 `execution` 从 `RunState` 放进 PreToolUse 事件 context，跨线程传播结构上自然成立，不再需要运行级 ContextVar 做中转。
 4. 原 `test_snip_gives_up_when_no_safe_cut_exists` 用的是**非法** messages（孤立的 tool 结果），`Transcript` 现在会直接拒绝——改用合法的"头尾保留量之和超过消息数"触发同一条分支。
@@ -1063,8 +1068,9 @@ pending ──claim──→ in_progress ──complete──→ completed
 | 注册进 `TOOLS` / `TOOL_IMPLS` | `src/avid/tools/__init__.py` |
 | 契约与行为测试 | 新增 `tests/test_tasks.py`（+ 契约测试自动覆盖"定义与实现一一对应"） |
 
-任务工具**不进** `execution.STATEFUL_TOOLS`：状态在文件里，不在 `RunState` 里，因此签名保持
-`(args)` 形状，与 `bash` 这类工具同类。
+任务工具**进** `execution.STATEFUL_TOOLS`：任务状态在文件里，但**工作区根**从 `RunState` 取
+（阶段 18 起 `.tasks/` 跟着运行级工作区根走），所以签名与其它工具一致，都是
+`(args, *, state)`。
 
 注意一个自动后果：`SUB_TOOLS` 只剔除 `subagent` 本身，所以六个任务工具会**自动进入子 agent 的
 工具集**。这既是"分工"能落地的前提（子 agent 自己认领与完成），也正是 17.8 第 1 条必须解决
