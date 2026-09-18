@@ -610,9 +610,22 @@ class JsonlStorage:
     def commit(self, writes: Sequence[Write]) -> CommitResult:
         self._assert_open()
         with self._lock:
-            prepared = self._state.prepare_commit(writes, self._now())
-            if prepared.writes:
-                _fsync_write(self.path, encode_transaction(prepared.writes) + "\n", append=True)
+            try:
+                prepared = self._state.prepare_commit(writes, self._now())
+                if prepared.writes:
+                    _fsync_write(
+                        self.path,
+                        encode_transaction(prepared.writes) + "\n",
+                        append=True,
+                    )
+            except (TypeError, ValueError) as exc:
+                # 会话层只承诺抛 SessionError。这里会把两类"这一条写不进去"的失败
+                # 收敛掉：非 JSON 可序列化的值（json.dumps 抛 TypeError）、
+                # 无法用 UTF-8 编码的字符（代理对，UnicodeEncodeError 是 ValueError）。
+                # 它们以前会原样漏到调用方——按 SessionError 捕获的代码接不住。
+                raise SessionStorageError(
+                    f"这一条无法写入会话（{type(exc).__name__}：{exc}）"
+                ) from exc
             stats = self._state.apply(prepared.writes)
         return CommitResult(
             first_seq=prepared.first_seq,
@@ -809,6 +822,22 @@ class JsonlSessionRepo:
         if metadata.id in self._open:
             raise SessionAlreadyOpenError(metadata.id)
         path = self._locate(metadata)
+        # 与 open 同一套护栏：`_locate` 优先用 metadata.path，不校验就等于
+        # "拿别人的 metadata 删别人的文件"。删除比打开更不可逆，这里不能更松。
+        header = self._header_of(path)
+        if header.id != metadata.id:
+            raise SessionStorageError(
+                f"文件的 id 与请求不符：{path} 里是 {header.id}，请求的是 {metadata.id}"
+            )
+        if (
+            self.workspace
+            and header.workspace
+            and header.workspace != self.workspace
+        ):
+            raise SessionStorageError(
+                f"会话 {metadata.id} 属于另一个工作区（{header.workspace}），"
+                f"不能在 {self.workspace} 的仓库里删除"
+            )
         # 删除也是一条写路径：另一个进程正持有它时不能删（否则它下次提交会写进
         # 一个已经被 unlink 的 inode，或把别人刚要打开的文件抽走）。
         lock = SessionFileLock(path)
@@ -874,20 +903,26 @@ class JsonlSessionRepo:
             raise SessionExistsError(session_id)
         self._pending.add(session_id)
 
-    def _read_metadata(self, path: Path) -> JsonlSessionMetadata | None:
+    @staticmethod
+    def _header_of(path: Path) -> JsonlHeader:
+        """只读首行解析 header（不重放）。删除与列表都靠它，各写一份会分叉。"""
         try:
             with path.open("r", encoding="utf-8") as handle:
                 first = handle.readline()
+        except OSError as exc:
+            raise SessionStorageError(f"会话文件读不了：{path}（{exc}）") from exc
+        if not first.endswith("\n"):
+            raise SessionStorageError(f"会话文件缺少完整 header：{path}")
+        return parse_header(first.rstrip("\n"))
+
+    def _read_metadata(self, path: Path) -> JsonlSessionMetadata | None:
+        try:
             modified_at = int(path.stat().st_mtime * 1000)
+            header = self._header_of(path)
         except OSError as exc:
             # 列表不该因为一个坏文件（读不了、刚好被删）整体失败。
             logger.warning("跳过读不了的会话文件 %s：%s", path, exc)
             return None
-        if not first.endswith("\n"):
-            logger.warning("跳过没有完整 header 的会话文件：%s", path)
-            return None
-        try:
-            header = parse_header(first.rstrip("\n"))
         except SessionStorageError as exc:
             logger.warning("跳过 header 非法的会话文件 %s：%s", path, exc)
             return None

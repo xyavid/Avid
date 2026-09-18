@@ -8,16 +8,20 @@ from __future__ import annotations
 
 import itertools
 import json
+import threading
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from avid.session import (
+    BranchScan,
     EntryQuery,
     JsonlSessionMetadata,
     JsonlSessionRepo,
     SessionClosedError,
     SessionExistsError,
+    SessionInvalidMessageError,
     SessionLockedError,
     SessionStorageError,
     UuidV7Generator,
@@ -32,7 +36,12 @@ from avid.session.jsonl import (
     session_file_name,
     summarize_file,
 )
-from avid.session.types import CommittedEntry, CommittedValueSet, NewEntry
+from avid.session.types import (
+    CommittedEntry,
+    CommittedValueSet,
+    EntryWrite,
+    NewEntry,
+)
 
 USER = {"role": "user", "content": "一"}
 ASSISTANT = {"role": "assistant", "content": "二"}
@@ -413,6 +422,235 @@ def test_open_refuses_a_session_from_another_workspace(tmp_path):
         mine2 = JsonlSessionRepo(tmp_path, workspace="w-mine")
         mine2.open(metadata)
     assert "另一个工作区" in str(exc.value)
+
+
+# ---------------- 删除的护栏（P1-15） ----------------
+
+
+def test_delete_refuses_a_metadata_from_another_session(tmp_path):
+    """删除也要过 open 的同一套身份护栏。
+
+    `_locate` 优先用 `metadata.path`：不校验的话，拿 A 的 metadata 就能删掉 B 的
+    文件——删除比打开更不可逆，这里不能比 open 更松。
+    """
+    repo = make_repo(tmp_path)
+    victim = repo.create(id="victim")
+    victim.close()
+    repo.create(id="attacker").close()
+
+    victim_meta = next(item for item in repo.list() if item.id == "victim")
+    forged = replace(victim_meta, id="attacker")  # 指向 victim 的文件，但自称 attacker
+
+    with pytest.raises(SessionStorageError) as info:
+        repo.delete(forged)
+    assert "id 与请求不符" in str(info.value)
+    assert victim_meta.path.exists(), "护栏拦下时文件必须原样在"
+
+    # 正常删除仍然可用。
+    repo.delete(victim_meta)
+    assert not victim_meta.path.exists()
+    repo.close()
+
+
+def test_delete_refuses_a_session_from_another_workspace(tmp_path):
+    mine = JsonlSessionRepo(tmp_path, workspace="w-mine")
+    mine.create(id="demo").close()  # 归属 w-mine
+    metadata = mine.list()[0]
+    mine.close()
+
+    other = JsonlSessionRepo(tmp_path, workspace="w-other")
+    with pytest.raises(SessionStorageError) as info:
+        other.delete(metadata)
+    assert "另一个工作区" in str(info.value)
+    other.close()
+
+
+# ---------------- 读路径的隔离与并发（P1-16 / P1-17） ----------------
+
+
+def test_readers_get_copies_not_the_internal_state(tmp_path):
+    """读出来的对象不能是内部状态本身：改写它不该改变会话。
+
+    `Entry` 是 frozen dataclass，但 frozen 只挡属性赋值——`entry.message["x"] = …`
+    与嵌套的 tool_calls 都改得动。不变量 I1（只增不改）以前只对文件成立。
+    """
+    repo = make_repo(tmp_path)
+    session = repo.create(id="demo")
+    branch = session.create_branch("main", None)
+    message = {
+        "role": "user",
+        "content": "原文",
+        "tool_calls": [{"id": "c1", "function": {"name": "bash", "arguments": "{}"}}],
+    }
+    entry_id = branch.append_message(message)
+    session.close()
+    repo.close()
+
+    reader = make_repo(tmp_path)
+    opened = reader.open(reader.list()[0])
+    entry = opened.get_entry(entry_id)
+    assert entry is not None and entry.message is not None
+    entry.message["content"] = "被改过了"
+    entry.message["tool_calls"][0]["function"]["arguments"] = "被改过了"
+
+    fresh = opened.get_entry(entry_id)
+    assert fresh is not None and fresh.message is not None
+    assert fresh.message["content"] == "原文"
+    assert fresh.message["tool_calls"][0]["function"]["arguments"] == "{}"
+    opened.close()
+    reader.close()
+
+
+def test_writers_cannot_mutate_the_state_after_committing(tmp_path):
+    """写入方提交后改写自己那份 dict，也不该影响会话状态（I1 是双向的）。"""
+    repo = make_repo(tmp_path)
+    session = repo.create(id="demo")
+    branch = session.create_branch("main", None)
+    message = {"role": "user", "content": "提交时的内容"}
+    entry_id = branch.append_message(message)
+
+    message["content"] = "提交之后改的"
+
+    stored = session.get_entry(entry_id)
+    assert stored is not None and stored.message is not None
+    assert stored.message["content"] == "提交时的内容"
+    session.close()
+    repo.close()
+
+
+class _SpyLock:
+    """记录被进入次数的锁替身（RLock 的上下文协议就这两个方法）。"""
+
+    def __init__(self) -> None:
+        self.entered = 0
+
+    def __enter__(self) -> "_SpyLock":
+        self.entered += 1
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+
+def test_every_read_path_takes_the_state_lock(tmp_path):
+    """读路径必须与写互斥（机制断言，不靠竞态复现）。
+
+    dict 在迭代中被插入会抛 ``RuntimeError: dictionary changed size during
+    iteration``（例如 `values_in` 遍历值表时另一个线程提交了一条分支头值），
+    表现为 HTTP 500。这个窗口很窄——用"并发跑一会儿看有没有异常"复现不可靠，
+    所以这里直接断言每条读路径都进入了 `SessionState` 的锁；上面那条并发用例
+    留作冒烟。
+    """
+    repo = make_repo(tmp_path)
+    session = repo.create(id="demo")
+    branch = session.create_branch("main", None)
+    entry_id = branch.append_message(USER)
+
+    state = session._storage._state  # type: ignore[attr-defined]
+    spy = _SpyLock()
+    state._lock = spy
+
+    calls = {
+        "get_stats": lambda: session.get_stats(),
+        "get_entry": lambda: session.get_entry(entry_id),
+        "scan_values": lambda: session.scan_values("avid.branch.tip"),
+        "scan_branch": lambda: session.branch("main").find_entries(
+            BranchScan(order="oldestFirst")
+        ),
+        "scan_entries": lambda: session.find_entries(EntryQuery(limit=5)),
+    }
+    for label, call in calls.items():
+        spy.entered = 0
+        call()
+        assert spy.entered >= 1, f"{label} 没有进入读锁"
+    session.close()
+    repo.close()
+
+
+def test_concurrent_reads_during_commits_do_not_raise(tmp_path):
+    """并发读写的冒烟：读路径在提交进行中反复跑，不允许冒出任何异常。
+
+    真正的机制由上面那条断言锁的用例守着（这个窗口很窄，光靠并发不一定复现）。
+    """
+    repo = make_repo(tmp_path)
+    session = repo.create(id="demo")
+    branch = session.create_branch("main", None)
+    for index in range(40):
+        branch.append_message({"role": "user", "content": f"第 {index} 条"})
+
+    failures: list[str] = []
+    stop = threading.Event()
+
+    def reader() -> None:
+        while not stop.is_set():
+            try:
+                session.get_stats()
+                session.branch("main").find_entries(BranchScan(order="oldestFirst"))
+                session.find_entries(EntryQuery(limit=10))
+                session.get_entry("demo-e1")
+            except Exception as exc:  # 任何异常都算失败
+                failures.append(f"{type(exc).__name__}: {exc}")
+                return
+
+    threads = [threading.Thread(target=reader) for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    try:
+        for index in range(80):
+            branch.append_message({"role": "assistant", "content": f"回复 {index}"})
+    finally:
+        stop.set()
+        for thread in threads:
+            thread.join(timeout=5)
+
+    assert failures == []
+    assert session.get_stats().message_count == 40 + 80
+    session.close()
+    repo.close()
+
+
+def test_storage_wraps_unserialisable_and_unencodable_writes(tmp_path):
+    """存储层只承诺抛 SessionError：非 JSON 值（TypeError）与代理对字符
+    （UnicodeEncodeError，是 ValueError 的子类）都要收敛，不能漏出契约。
+
+    消息级校验（session.py 的 validate_message）会先拦下非 JSON 值，所以这里直接
+    打存储层——它才是"写文件"这一步的所有者，也是代理对唯一会炸的地方。
+    """
+    path = tmp_path / "writes.jsonl"
+    write_lines(path, encode_header(JsonlHeader("writes", 1, 100)))
+    storage = JsonlStorage.open(path)
+    try:
+        with pytest.raises(SessionStorageError):
+            storage.commit(
+                [EntryWrite(NewEntry(id="a", parent_id=None, message={"role": "user", "content": "坏的\ud800"}))]
+            )
+        with pytest.raises(SessionStorageError):
+            storage.commit(
+                [EntryWrite(NewEntry(id="a", parent_id=None, message={"role": "user", "extra": {1, 2}}))]
+            )
+        assert storage.get_stats().message_count == 0, "失败的两条都不该落进去"
+        storage.commit([EntryWrite(NewEntry(id="a", parent_id=None, message=USER))])
+        assert storage.get_stats().message_count == 1
+    finally:
+        storage.close()
+
+    # 文件仍然可读（失败没有留下半行）。
+    repo = JsonlSessionRepo(tmp_path)
+    reopened = repo.open(repo.list()[0])
+    assert reopened.get_stats().message_count == 1
+    reopened.close()
+    repo.close()
+
+
+def test_repo_commit_of_a_non_json_value_is_still_a_session_error(tmp_path):
+    """走会话层时非 JSON 值被更早的校验拦下，但错误类型同样是 SessionError。"""
+    repo = make_repo(tmp_path)
+    session = repo.create(id="demo")
+    branch = session.create_branch("main", None)
+    with pytest.raises(SessionInvalidMessageError):
+        branch.append_message({"role": "user", "content": "正常", "extra": {1, 2}})
+    session.close()
+    repo.close()
 
 
 # ---------------- 列表页摘要：不重放也能给出名字/条数/链尾残缺 ----------------

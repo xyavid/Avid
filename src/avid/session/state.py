@@ -11,7 +11,10 @@
 
 from __future__ import annotations
 
+import copy
+import threading
 from collections.abc import Sequence
+from dataclasses import replace
 
 from .errors import SessionInvariantError
 from .types import (
@@ -34,8 +37,28 @@ from .types import (
 from .values import ValueAddress
 
 
+def _copy_entry(entry: Entry) -> Entry:
+    """读路径交给调用方的副本：message 深拷贝，内部状态不再能被就地改写。
+
+    ``Entry`` 是 frozen dataclass，但 frozen 只挡住属性赋值，挡不住
+    ``entry.message["content"] = ...``。不变量 I1（只增不改）以前只对文件成立，
+    内存里拿到的对象与内部状态是同一份——这层拷贝把它补齐。
+    """
+    return replace(entry, message=copy.deepcopy(entry.message))
+
+
+def _copy_value(stored: StoredValue) -> StoredValue:
+    return replace(stored, value=copy.deepcopy(stored.value))
+
+
 class SessionState:
-    """条目的树 + 值的表 + 统计，全部物化在内存里。"""
+    """条目的树 + 值的表 + 统计，全部物化在内存里。
+
+    读写互斥：``apply`` 会就地改这些容器，而读可能来自另一个线程（运行线程落库的
+    同时 HTTP 线程在读同一份状态）。以前只有存储层的 ``commit`` 加锁、读路径不加，
+    于是并发读写会抛 ``RuntimeError: dictionary changed size during iteration``。
+    锁放在这里而不是两个后端各一份：状态的所有权在它，且两个后端的行为必须一致。
+    """
 
     def __init__(self, next_seq: int = 1) -> None:
         self._entries: dict[str, Entry] = {}
@@ -43,11 +66,19 @@ class SessionState:
         self._values: dict[tuple[str, str], StoredValue] = {}
         self._message_count = 0
         self._next_seq = next_seq
+        # 可重入：读方法之间会互相调用（例如 stats 读计数、scan 读 entries）。
+        self._lock = threading.RLock()
 
     # ---------- 提交 ----------
 
     def prepare_commit(self, writes: Sequence[Write], timestamp: int) -> PreparedCommit:
         """分配连续 seq 与同一个 timestamp，并校验；不改动任何状态。"""
+        with self._lock:
+            return self._prepare_commit(writes, timestamp)
+
+    def _prepare_commit(
+        self, writes: Sequence[Write], timestamp: int
+    ) -> PreparedCommit:
         committed: list[CommittedWrite] = []
         for offset, write in enumerate(writes):
             seq = self._next_seq + offset
@@ -69,6 +100,10 @@ class SessionState:
 
     def validate(self, writes: Sequence[CommittedWrite]) -> None:
         """落盘前 / 重放时的同一套校验：seq 单调、id 不重复、parent 必须存在。"""
+        with self._lock:
+            self._validate(writes)
+
+    def _validate(self, writes: Sequence[CommittedWrite]) -> None:
         previous_seq = self._next_seq - 1
         seen_ids: set[str] = set()
         for write in writes:
@@ -94,6 +129,10 @@ class SessionState:
 
     def apply(self, writes: Sequence[CommittedWrite]) -> SessionStats:
         """把已经校验过的写入落地，返回落地后的统计。"""
+        with self._lock:
+            return self._apply(writes)
+
+    def _apply(self, writes: Sequence[CommittedWrite]) -> SessionStats:
         for write in writes:
             if isinstance(write, CommittedEntry):
                 entry = Entry(
@@ -104,6 +143,9 @@ class SessionState:
                     type=write.entry.type,
                     message=write.entry.message,
                 )
+                # 拷贝一份存：写入方在提交后改写自己那份 dict 不该影响会话状态
+                # （I1 只增不改应当是双向的）。
+                entry = replace(entry, message=copy.deepcopy(entry.message))
                 self._entries[entry.id] = entry
                 self._by_seq.append(entry)
                 if entry.type == MESSAGE_ENTRY:
@@ -124,28 +166,34 @@ class SessionState:
         """header 里的高水位：只有重放后仍更大时才采用（快照重写的兼容位）。"""
         if not isinstance(next_seq, int) or next_seq < 1:
             raise SessionInvariantError(f"非法的 seq 高水位：{next_seq!r}")
-        self._next_seq = max(self._next_seq, next_seq)
+        with self._lock:
+            self._next_seq = max(self._next_seq, next_seq)
 
     # ---------- 读 ----------
 
     @property
     def next_seq(self) -> int:
-        return self._next_seq
+        with self._lock:
+            return self._next_seq
 
     @property
     def stats(self) -> SessionStats:
-        return SessionStats(message_count=self._message_count)
+        with self._lock:
+            return SessionStats(message_count=self._message_count)
 
     def get_entries(self, ids: Sequence[str]) -> dict[str, Entry]:
-        found: dict[str, Entry] = {}
-        for entry_id in ids:
-            entry = self._entries.get(entry_id)
-            if entry is not None:
-                found[entry_id] = entry
-        return found
+        with self._lock:
+            found: dict[str, Entry] = {}
+            for entry_id in ids:
+                entry = self._entries.get(entry_id)
+                if entry is not None:
+                    found[entry_id] = _copy_entry(entry)
+            return found
 
     def get_value(self, address: ValueAddress) -> StoredValue | None:
-        return self._values.get((address.namespace, address.key))
+        with self._lock:
+            stored = self._values.get((address.namespace, address.key))
+            return None if stored is None else _copy_value(stored)
 
     def values_in(self, namespace: str) -> list[StoredValue]:
         """某个 namespace 下的全部值，按 seq 升序。
@@ -153,12 +201,21 @@ class SessionState:
         只做命名空间级枚举，不做 prefix 扫描：分支列表是它的第一个使用者——分支头
         就是 ``BRANCH_TIP_NS`` 下的一组值，除此之外没有别的办法回答「有哪些分支」。
         """
-        found = [item for item in self._values.values() if item.namespace == namespace]
-        found.sort(key=lambda item: item.seq)
-        return found
+        with self._lock:
+            found = [
+                _copy_value(item)
+                for item in self._values.values()
+                if item.namespace == namespace
+            ]
+            found.sort(key=lambda item: item.seq)
+            return found
 
     def scan_branch(self, query: BranchScan) -> list[Entry]:
         """从 ``start`` 沿 parent_id 往回走，得到这条链。"""
+        with self._lock:
+            return self._scan_branch(query)
+
+    def _scan_branch(self, query: BranchScan) -> list[Entry]:
         if query.start is None:
             raise SessionInvariantError("scan_branch 需要一个起点条目 id")
         start = self._entries.get(query.start)
@@ -193,10 +250,15 @@ class SessionState:
                 )
             )
         ]
-        return filtered if query.limit is None else filtered[: max(0, query.limit)]
+        page = filtered if query.limit is None else filtered[: max(0, query.limit)]
+        return [_copy_entry(item) for item in page]
 
     def scan_entries(self, query: EntryQuery) -> list[Entry]:
         """按 seq 全局扫描。默认从新到旧。"""
+        with self._lock:
+            return self._scan_entries(query)
+
+    def _scan_entries(self, query: EntryQuery) -> list[Entry]:
         limit = float("inf") if query.limit is None else max(0, query.limit)
         descending = query.order == "desc"
         found: list[Entry] = []
@@ -213,4 +275,4 @@ class SessionState:
             found.append(entry)
             if len(found) >= limit:
                 break
-        return found
+        return [_copy_entry(item) for item in found]
