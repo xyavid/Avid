@@ -100,11 +100,13 @@ API 只给 handle），所以只有跑在本机的后端能回答"用户选了�
 
 ## 3. 判定顺序与决策表
 
-单一判定入口 `policy.permission.gate(name, arguments, *, mode, workspace_root, ledger, workspace_state, answerer)`，
-按固定顺序返回 `Decision{allowed, kind, reason, message, remember_key, warning}`：
+单一判定入口 `policy.permission.gate(name, arguments, *, mode=strict, ask=None, ledger=None, danger=None, outside=None)`，
+按固定顺序返回 `Decision{allowed, kind, reason, message, key}`
+（`kind ∈ {hard, danger, outside, user}`；`danger` / `outside` 是**调用方算好的事实**，
+路径数学只有一份、在 `tools/workspace.py`，策略层不复制）：
 
 1. **硬拒绝** `DENY_PATTERNS`：任何模式、任何回答都不放行（不变量 I-P1）；
-2. **危险命令** `DANGER_PATTERNS`：**与模式无关**，一律问，且带警告（不变量 I-P2）；
+2. **危险命令** `DANGER_PATTERNS`：**与模式无关**，一律问，理由里写明类别（不变量 I-P2）；
 3. **越界**：目标落在工作区之外 → 按模式（§4）；
 4. **常规规则** `APPROVAL_RULES`：按模式；
 5. 其余直接放行。
@@ -112,9 +114,9 @@ API 只给 handle），所以只有跑在本机的后端能回答"用户选了�
 | 动作类别 | `strict` | `workspace` | `system` | 依据 |
 |---|---|---|---|---|
 | 硬拒绝（`DENY_PATTERNS`） | ⛔ | ⛔ | ⛔ | 不可恢复的系统级破坏；`--yes` 也不越过 |
-| 危险命令（`DANGER_PATTERNS`） | ? 警告 | ? 警告 | ? 警告 | 与模式无关 |
+| 危险命令（`DANGER_PATTERNS`） | ? 写类别 | ? 写类别 | ? 写类别 | 与模式无关 |
 | 越界：文件工具目标在区外 | ? 记路径 | ? 记路径 | + | 三态都可就地同意；见下方偏离声明 |
-| 越界：bash 命中区外路径 | ? 记命令 | ? 记命令 | + | 启发式，见 §4 声明 |
+| 越界：bash 命中区外路径 | ? 记路径 | ? 记路径 | + | 启发式扫出的绝对路径，见 §4 声明 |
 | 常规规则：`bash` / `write_file` / `edit_file` | ? | + | + | `workspace` 只放行**区内**；区外已由上一行走越界行 |
 | 常规规则：`subagent`（成本规则，非安全） | ? | + | + | 只在 `strict` 问 |
 | `read_file` / `glob`（区内） | + | + | + | 与现状一致：区内读取从不审批 |
@@ -129,12 +131,12 @@ API 只给 handle），所以只有跑在本机的后端能回答"用户选了�
 又不许区外，模式阶梯就会出现"更严的模式反而失去一种能力"的非单调段；而工具层的回绝
 保留为**未获授权时的失败关闭兜底**（见 §6 I-P4），所以回绝文本本身仍然存在。
 
-**同意一次即生效（`ApprovalLedger`）**：同意后按 `remember_key` 记账，同一次运行内不再重复询问。
+**同意一次即生效（`ApprovalLedger`）**：同意后按 `Decision.key` 记账，同一次运行内不再重复询问。
 
 | 情形 | 键 | 含义 |
 |---|---|---|
-| 越界文件目标 | `("outside", 绝对路径)` | 同意 `/etc/hosts` 不等于同意 `/etc/shadow` |
-| 危险命令 / 越界 bash | `("danger" | "outside", 规范化命令原文)` | 同一条命令同意一次；换个命令重新问 |
+| 越界（文件工具与 bash） | `("outside", 绝对路径)` | 同意 `/etc/hosts` 不等于同意 `/etc/shadow`；bash 记的是启发式扫出来的那个绝对路径 |
+| 危险命令 | `("danger", 规范化命令原文)` | 同一条命令同意一次；换个命令重新问。非 bash 的危险目标按 `path` 记账，两者都没有时按整份参数 |
 
 - 账本**只在内存里、只活一次运行**（`RunState` 持有，带锁——子 agent 在别的线程并行跑），不落盘。
   理由：持久化授权是安全决策，与"运行级同意"不是一回事，本轮不做；出现"每次运行都要重新点一遍、
@@ -152,16 +154,21 @@ API 只给 handle），所以只有跑在本机的后端能回答"用户选了�
 | 类别 | 覆盖 |
 |---|---|
 | 提权 | `sudo` `su` `doas` `pkexec` |
-| 递归 / 强制删除 | `rm` 带 `-r`/`-R`/`-f` 的任意组合 |
-| 权限与属主 | `chmod` `chown` `chgrp`（含 `-R`） |
+| 递归 / 强制删除 | `rm` 的短选项组合（`-r`/`-R`/`-f`/`-rf`…）**与长选项**（`--recursive` / `--force` / `--dir`） |
+| 权限与属主 | `chmod` `chown` `chgrp`（含 `-R` / `--recursive`） |
 | 磁盘与文件系统 | `dd` `fdisk` `parted` `mount` `umount` `losetup` `swapon/swapoff` `truncate` |
 | 系统服务与进程 | `systemctl` `service` `kill` `pkill` `killall` `systemd-run` |
 | 计划任务 | `crontab` `at` |
 | 系统级包管理 | `apt` `apt-get` `dpkg` `dnf` `yum` `pacman` `snap` `brew` `zypper` `apk` |
 | 网络取回即执行 | `curl`/`wget` 管道进 `sh`/`bash`/`zsh`/`python`；`<(...)` 进程替换喂解释器 |
-| 破坏性 git | `push --force` / `push -f`、`reset --hard`、`clean -f`/`-fd`/`-fdx` |
+| 破坏性 git | `push --force` / `push -f`、`reset --hard`、`clean -f`/`-fd`/`-fdx`/`--force` |
+| 批量删除 | `find … -delete` |
 | 远程与容器 | `ssh` `scp` `rsync` 到远端、`docker` `podman` `kubectl` `helm` |
-| 敏感路径 | 读写 `~/.ssh/`、`~/.aws/`、`~/.gnupg/`、`/etc/shadow`、任何 `.pem` 路径 |
+| 敏感路径 | 路径分量里出现 `~/.ssh/`、`~/.aws/`、`~/.gnupg/`、`~/.docker/`（任意用户的等价写法都算），`/etc/shadow`、`/etc/gshadow`、`/etc/sudoers`、`/root`，以及任何 `.pem` 路径 |
+
+长选项必须与短选项同罪：只匹配 `-[a-zA-Z]*[rRf]` 时 `rm --recursive build/` 会整个漏过
+本层，在 `workspace` / `system` 模式下**不问就放行**。敏感路径同理按"展开 `~`/`$HOME` 后的
+路径分量"判定，而不是匹配字面量——`/home/u/.ssh/config` 与 `~/.ssh/config` 是同一个目标。
 
 边界声明（写进模块 docstring）：**这是一个护栏，不是沙箱**。变量展开、`bash script.sh`、
 解释器内构造的路径都能绕过它。因此它只用来"把危险动作变成一次确认"，不用来声称安全。
@@ -188,29 +195,24 @@ API 只给 handle），所以只有跑在本机的后端能回答"用户选了�
 
 ### 5.1 CLI（stderr，不污染 stdout 的最终答复）
 
-危险命令：
+危险命令、越界、常规规则**共用同一条提示**（`policy.permission.ask_user`），
+差别只在 `<原因>` 那一行：
 
 ```
-⚠ 危险命令需要确认：<原因>
-  命令 <命令原文>
-  影响 <范围说明>
-  同意执行这一次？[y/N]
+⚠ 需要确认：<原因>
+  工具 <工具名> <参数 JSON>
+  允许执行？[y/N]
 ```
 
-越界（文件工具）：
+`<原因>` 的三种形态（`gate` 组装，审批回调的签名因此保持三参数不变）：
 
-```
-⚠ 越界操作需要确认：目标在工作区之外
-  工作区 <root>
-  目标   <绝对路径>
-  工具   <工具名>
-  同意后本次运行内不再询问同一目标。[y/N]
-```
+| 情形 | `<原因>` |
+|---|---|
+| 危险命令 | `危险命令（提权）` —— 括号里是 DANGER_PATTERNS 的类别名 |
+| 越界 | `越界操作：目标 /etc/hosts 在工作区之外` |
+| 常规规则（strict） | `执行 shell 命令`（`APPROVAL_RULES` 的说明文本） |
 
-越界（bash）把第二段换成 `命令 <命令原文>`，末行换成
-`同意后本次运行内不再询问同一条命令。[y/N]`。
-
-硬拒绝保持现有文案不变：
+硬拒绝不需要回答者，保持独立文案：
 
 ```
 ⛔ 已拒绝：<原因>
@@ -221,8 +223,8 @@ API 只给 handle），所以只有跑在本机的后端能回答"用户选了�
 | `kind` | 文案 |
 |---|---|
 | `hard` | 现有文案：`Permission denied. 原因：硬拒绝（<原因>）。这条命令被永久禁止，不要重试、也不要改写绕过，请改用别的方式完成任务。` |
-| `danger` | `Permission denied. 原因：危险命令未获批准（<原因>）。不要重复提交同一条命令；请改用非破坏性做法，或说明你需要它做什么。` |
-| `outside` | `Permission denied. 原因：目标在工作区之外且未获批准（<目标>）。不要重复尝试同一路径；请在工作区内完成，或说明为什么需要它。` |
+| `danger` | `Permission denied. 原因：危险命令未获批准（<类别>）。不要重复提交同一条命令；请改用非破坏性做法，或说明你需要它做什么。` |
+| `outside` | `Permission denied. 原因：目标在工作区之外且未获批准（<绝对路径>）。不要重复尝试同一路径；请在工作区内完成，或说明为什么需要它。` |
 | `user` | 现有文案：`Permission denied. 原因：本次未获用户批准。不要重复提交同一条调用；请说明你需要它做什么，或改用其它工具。` |
 
 四档分开的理由沿用既有裁决（拒绝文案可操作化）：模型对"永远不许"与"这次不行"的反应不同，
@@ -237,7 +239,8 @@ API 只给 handle），所以只有跑在本机的后端能回答"用户选了�
 警告与目标写进 `reason` 文本（`危险命令（提权）` / `越界操作：目标 X 在工作区之外`），
 于是 `AskUser` 的三参数签名不变，Web 的审批表与 CLI 的 stdin 回答者都不必改。
 
-**没有**为它们加结构化的 `warning` / `target` / `remember_key` 字段。触发条件：审批卡片需要
+**没有**为它们加结构化的 `warning` / `target` 字段（账本键 `Decision.key` 只用于去重，
+不随事件外发）。触发条件：审批卡片需要
 按风险分色或按目标分组时再加——那时才需要动 `AnswerApprovalIn` 与 `ApprovalTable.request`，
 现在加只是让三处（hook context / 审批表 / DTO）同步维护一个没人读的字段。
 
@@ -248,7 +251,7 @@ API 只给 handle），所以只有跑在本机的后端能回答"用户选了�
 | I-P1 | 硬拒绝清单里的命令在任何模式、任何回答下都不执行 | `policy.permission.gate` 的第 1 步 | 唯一入口是 `gate`；`hook` 之外的调用方只有 `auto_approve`（内部也走 `gate`） |
 | I-P2 | 危险命令在任何模式下都至少问一次 | `gate` 的第 2 步 | 新增工具若自带执行路径（不经 `execution`）会绕过 → 契约测试枚举工具注册表 |
 | I-P3 | `strict` 除"区外文件访问由回绝改为询问"这一条外，行为与阶段 17 一致 | `gate` 的第 3/4 步 + `strict` 对常规规则不用账本 | 现有 `test_permission.py` 与 `test_agent.py` 的硬拒绝断言**不改动**即通过；仅 `test_hooks.py` 的两条 spy 与 `test_tools_files.py` 的区外断言需要改写 |
-| I-P4 | 文件工具越界**失败关闭**：没有账本记录就不放行 | 账本只由 `gate` 写、工具只读 | 工具若自行放行 → `tools/paths.py` 的 `outside_ok` 缺省为假 |
+| I-P4 | 文件工具越界**失败关闭**：没有账本记录就不放行 | 账本只由 `gate` 写、工具只读 | 工具若自行放行 → `tools/workspace.py` 的 `outside_ok` 缺省为假 |
 | I-P5 | 运行级权限开关不漏传给子 agent | `tools/subagent.py` 逐字段前传 + 一条"父 strict 则子 strict"的用例 | 漏传 → 最严一档被静默绕过；现有测试只覆盖 `auto_approve`/`ask` |
 | I-P6 | 会话的归属不可变且可查 | 会话 header（只写一次） | 无其它写入路径 |
 | I-P7 | 注册表只由用户的显式动作改变 | `WorkspaceRegistry` 的三个写方法，调用者只有 `avid workspace` 与 `POST /api/workspaces` | 启动/列举/解析/建会话都不写；`tests/test_cli_session.py` 与 `test_workspace_api.py` 各有一条"跑完文件仍不存在"的断言 |
@@ -283,7 +286,7 @@ API 只给 handle），所以只有跑在本机的后端能回答"用户选了�
 |---|---|---|
 | 「同意一次」只需活一次运行 | 本轮不做持久授权 | 每次运行都要重复点同一路径/命令，明显碍事 |
 | `bash` 越界靠启发式足够 | 只用来触发确认，不声称拦截 | 出现"以为被拦实际没拦"的真实事故 → 换白名单或真沙箱 |
-| 危险清单覆盖够用 | 10 类，均可测 | 评测/真实使用中抓到一个造成不可逆损失却未被问的命令 |
+| 危险清单覆盖够用 | 14 类（15 条正则），均可测 | 评测/真实使用中抓到一个造成不可逆损失却未被问的命令 |
 | 工作区默认权限存注册表 | 唯一写入口在 CLI | 需要按会话或按分支给不同模式时 |
 | 内存后端也能表达归属 | 字段进 `SessionMetadata` | 内存后端要跑跨工作区一致性用例时，再把 root 提上协议 |
 | 会话 id 全局唯一，可以跨库逐个找 | 每次按会话操作要扫各工作区的 `repo.list()`（只读 header，代价与工作区数×会话数成正比） | 工作区或会话数量上去后，定位明显变慢 → 把工作区 id 放进会话 id 或加一层索引 |
