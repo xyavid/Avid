@@ -99,6 +99,42 @@ describe('subscribeRun', () => {
     await stream.return(undefined)
   })
 
+  it('delta 是订阅而非默认：不订阅时 URL 上没有 deltas，订阅时带 deltas=1', async () => {
+    const urls: string[] = []
+    const frame = JSON.stringify({
+      run_id: 'run-1',
+      session_id: 'session-1',
+      seq: 1,
+      ts: 1,
+      type: 'run_finished',
+      data: {},
+    })
+    const fetchImpl = (async (input: unknown) => {
+      urls.push(String(input))
+      return responseFrom([`data: ${frame}\n\n`])
+    }) as unknown as typeof fetch
+
+    const drain = async (deltas: boolean) => {
+      const controller = new AbortController()
+      const stream = subscribeRun('run-1', {
+        signal: controller.signal,
+        fetchImpl,
+        sleepImpl: noSleep,
+        deltas,
+      })
+      for await (const _ of stream) {
+        // 只为把请求发出去：URL 才是这条用例的断言对象。
+      }
+      controller.abort()
+    }
+
+    await drain(false)
+    await drain(true)
+
+    expect(urls[0], '默认不订阅 delta').not.toContain('deltas')
+    expect(urls[1], '显式订阅才带上 deltas=1').toContain('deltas=1')
+  })
+
   it('反复失败时按 1s→30s 退避重连，尝试次数有上界，最后 degraded', async () => {
     const failing = asFetch(async () => {
       throw new Error('boom')
