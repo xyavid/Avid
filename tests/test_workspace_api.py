@@ -236,14 +236,23 @@ def test_startup_writes_nothing_to_the_registry(tmp_path):
 def test_explicit_registration_is_the_only_writer(tmp_path):
     home = tmp_path.parent / f"explicit-{tmp_path.name}"
     home.mkdir()
+    other = tmp_path.parent / f"explicit-other-{tmp_path.name}"
+    other.mkdir()
     registry_file = tmp_path / "registry.json"
     services = Services(workspace_root=home, registry=WorkspaceRegistry(registry_file))
     try:
         assert not registry_file.exists()
 
-        services.workspaces.register(str(home), name="显式登记")
+        workspace, created = services.workspaces.register(str(other), name="显式登记")
 
+        assert created is True
         assert registry_file.exists()
-        assert services.registry.get(str(home)).name == "显式登记"
+        assert services.registry.get(str(other)).name == "显式登记"
+
+        # 绑定值的那个虽然没登记，也已经"在列表里"：再登记它算重复，不写盘、不重复添加。
+        existing, created_again = services.workspaces.register(str(home))
+        assert created_again is False
+        assert existing.id == services.workspaces.default.id
+        assert services.registry.find(str(home)) is None
     finally:
         services.close()

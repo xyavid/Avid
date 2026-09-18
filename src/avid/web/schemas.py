@@ -58,6 +58,9 @@ class Capabilities(BaseModel):
     skills: list[SkillOut]
     model: str | None = None
     workspace: str
+    # 这台机器上会用到哪个文件夹选择器后端（None = 没有可用的）。
+    # **必须声明**：pydantic 的响应模型会静默丢掉未声明的键，于是"后端其实有"会显示成没有。
+    workspace_picker: str | None = None
 
 
 class StreamInfo(BaseModel):
@@ -102,6 +105,12 @@ class WorkspaceOut(WorkspaceRef):
 
 class WorkspaceListOut(BaseModel):
     workspaces: list[WorkspaceOut]
+
+
+class PickFolderOut(BaseModel):
+    """系统文件夹选择器的结果：``path`` 为 ``None`` 表示用户取消（不是错误）。"""
+
+    path: str | None = None
 
 
 class CreateWorkspaceIn(BaseModel):
@@ -366,6 +375,7 @@ __all__ = [
     "SessionDetail",
     "SessionListOut",
     "CreateWorkspaceIn",
+    "PickFolderOut",
     "SessionSummary",
     "WorkspaceListOut",
     "WorkspaceOut",

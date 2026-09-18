@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -86,5 +86,75 @@ test('选工作区建会话、选权限模式提交，两个值都进请求体',
     await expect(page.getByRole('button', { name: '允许一次' })).toHaveCount(0)
   } finally {
     rmSync(extraRoot, { recursive: true, force: true })
+  }
+})
+
+/** 服务端候选列表（新增工作区用例要反复读它）。 */
+async function workspacesOf(
+  request: import('@playwright/test').APIRequestContext,
+): Promise<{ id: string; root: string; name: string | null }[]> {
+  const response = await request.get(`${BASE}/api/workspaces`)
+  return ((await response.json()) as { workspaces: { id: string; root: string; name: string | null }[] })
+    .workspaces
+}
+
+/**
+ * 新增工作区：点按钮 → 选文件夹 → 登记 → 切过去。
+ *
+ * 真对话框没法在无人值守的测试里点，所以服务端用 `AVID_PICKER_CMD` 把选择器换成
+ * "读一个文件里的路径"：写路径 = 用户选了它，写空 = 用户点了取消。这条用例覆盖需求里
+ * 的四条验收：取消不变更、不存在/重复给提示且不重复添加、成功后列表与持久化都可见。
+ */
+test('新增工作区：取消不变更，选择后登记并切过去，重复时提示且不重复添加', async ({
+  page,
+  request,
+}) => {
+  const pickFile = process.env.AVID_E2E_PICK_FILE
+  test.skip(!pickFile, '需要 AVID_E2E_PICK_FILE（服务端也用它接管选择器）')
+
+  const folder = mkdtempSync(join(tmpdir(), 'avid-e2e-pick-'))
+  await page.goto(`${BASE}/sessions`)
+  const addButton = page.getByRole('button', { name: '新增工作区…' })
+  await expect(addButton).toBeVisible({ timeout: 10_000 })
+
+  try {
+    // ---- 1. 取消：不做任何变更（也没有发出登记请求）----
+    writeFileSync(pickFile!, '')
+    let addCalls = 0
+    const countAdds = (req: import('@playwright/test').Request) => {
+      if (req.method() === 'POST' && req.url().endsWith('/api/workspaces')) addCalls += 1
+    }
+    page.on('request', countAdds)
+    const before = await workspacesOf(request)
+    await addButton.click()
+    await expect(page.getByText(/已添加工作区/)).toHaveCount(0)
+    expect((await workspacesOf(request)).length).toBe(before.length)
+    expect(addCalls).toBe(0)
+    page.off('request', countAdds)
+
+    // ---- 2. 选择：请求体带 path，成功后切到它 ----
+    writeFileSync(pickFile!, folder)
+    const [addRequest] = await Promise.all([
+      page.waitForRequest(
+        (req) => req.method() === 'POST' && req.url().endsWith('/api/workspaces'),
+      ),
+      addButton.click(),
+    ])
+    expect((addRequest.postDataJSON() as { path: string }).path).toBe(folder)
+    await expect(page.getByText(/已添加工作区/)).toBeVisible({ timeout: 10_000 })
+
+    const added = (await workspacesOf(request)).find((item) => item.root === folder)
+    expect(added, '新增的工作区必须出现在服务端列表里').toBeTruthy()
+    await expect(page.getByLabel(WORKSPACE_LABEL)).toHaveValue(added!.id)
+
+    // ---- 3. 重复：明确提示、不重复添加、仍切到已有的那个 ----
+    writeFileSync(pickFile!, folder)
+    await addButton.click()
+    await expect(page.getByText(/已经在工作区列表里/)).toBeVisible({ timeout: 10_000 })
+    const again = (await workspacesOf(request)).filter((item) => item.root === folder)
+    expect(again).toHaveLength(1)
+    await expect(page.getByLabel(WORKSPACE_LABEL)).toHaveValue(again[0].id)
+  } finally {
+    rmSync(folder, { recursive: true, force: true })
   }
 })

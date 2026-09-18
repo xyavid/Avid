@@ -40,6 +40,10 @@ cd web && AVID_E2E=1 AVID_BASE_URL=http://127.0.0.1:8877 pnpm test:e2e   # 终�
 * `AVID_E2E_STREAM=1`：走**生产路径**（不注入 chat），delta 会真的经 SSE 到浏览器。
   `streaming.spec.ts` 需要它——脚本模型在非流式路径下不产生 delta，那条会失败（其余 35 项两种模式都过）。
 * `AVID_PORT` / `AVID_BASE_URL`：本机 8765 常被别的进程占着，换端口即可，两边要一致。
+* `AVID_E2E_PICK_FILE`：新增工作区的用例没法点真对话框（会挂住等人），所以服务端用它把
+  选择器换成 `cat <该文件>`：**写路径 = 用户选了那个文件夹，写空 = 用户点了取消**。
+  两个终端都要设它（服务端读它接管选择器，用例读它写路径）：
+  `AVID_E2E_PICK_FILE=/tmp/avid-e2e-pick.txt`。不设时那条用例整体跳过。
 
 只跑某个文件 / 带 UI 调试：
 

@@ -13,16 +13,25 @@ export interface WorkspaceSelectorProps {
   failed?: boolean
   onRetry?: () => void
   disabled?: boolean
+  /** 点「新增工作区…」：调用方负责弹选择器、登记、切过来（见 SessionList）。 */
+  onAdd?: () => void
+  /** 选择器或登记请求进行中。 */
+  adding?: boolean
+  /** 是否声明了 workspace_picker 能力；老内核没有这个端点，按钮不出现。 */
+  canAdd?: boolean
 }
 
 /**
- * 新建会话前的工作区选择器：多工作区模式下建会话必须说清归属，这是那个选择的落点。
+ * 新建会话前的工作区选择器：建会话必须说清归属，这是那个选择的落点。
  *
  * 放在 `features/sessions/` 内部而不是独立 feature：它只服务这一个动作，独立出去会
  * 变成「sessions import 另一个 feature」，layers 门禁当场红（`web/README.md` 规则 2）。
  *
- * 列表为空时给**可执行**的提示：这里不提供登记入口（登记是注册表的写入口，走
- * `avid workspace add <路径>`），但必须让人知道下一步敲什么，而不是点了新建才报错。
+ * **新增工作区**的入口就放在这里——选工作区与加工作区是同一个动作的两半。按钮只负责
+ * 说"用户想加"，弹选择器 / 登记 / 切换都由调用方（持有查询的那个组件）做，所以这个
+ * 组件仍然"有形状无状态"。
+ *
+ * 列表为空时也给这个入口：只回一句"去终端敲命令"会让人以为界面不支持加。
  */
 export function WorkspaceSelector({
   workspaces,
@@ -32,8 +41,18 @@ export function WorkspaceSelector({
   failed = false,
   onRetry,
   disabled = false,
+  onAdd,
+  adding = false,
+  canAdd = false,
 }: WorkspaceSelectorProps) {
   const { t } = useTranslation()
+
+  const addButton =
+    canAdd && onAdd ? (
+      <Button size="sm" loading={adding} disabled={disabled} onClick={onAdd}>
+        {t('sessions.workspace.add')}
+      </Button>
+    ) : null
 
   if (loading) {
     return <p className="text-xs text-ink/70">{t('sessions.workspace.loading')}</p>
@@ -53,23 +72,31 @@ export function WorkspaceSelector({
   }
 
   if (workspaces.length === 0) {
-    return <p className="empty-note">{t('sessions.workspace.none')}</p>
+    return (
+      <div className="empty-note">
+        <p>{t('sessions.workspace.none')}</p>
+        {addButton ? <div className="mt-2">{addButton}</div> : null}
+      </div>
+    )
   }
 
   return (
     <Field label={t('sessions.workspace.label')} hint={t('sessions.workspace.hint')}>
-      <Select
-        aria-label={t('sessions.workspace.label')}
-        value={value ?? ''}
-        disabled={disabled}
-        onChange={(event) => onChange(event.target.value)}
-      >
-        {workspaces.map((workspace) => (
-          <option key={workspace.id} value={workspace.id}>
-            {workspace.name ?? workspace.root}
-          </option>
-        ))}
-      </Select>
+      <div className="flex items-end gap-2">
+        <Select
+          aria-label={t('sessions.workspace.label')}
+          value={value ?? ''}
+          disabled={disabled}
+          onChange={(event) => onChange(event.target.value)}
+        >
+          {workspaces.map((workspace) => (
+            <option key={workspace.id} value={workspace.id}>
+              {workspace.name ?? workspace.root}
+            </option>
+          ))}
+        </Select>
+        {addButton}
+      </div>
     </Field>
   )
 }

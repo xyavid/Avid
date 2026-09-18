@@ -203,8 +203,10 @@ export const DICTIONARY: Record<Locale, Entry> = {
     'sessions.workspace.label': '工作区',
     'sessions.workspace.hint': '新建的会话归到这个工作区，权限边界与文件位置都由它决定',
     'sessions.workspace.loading': '正在读取工作区…',
+    'sessions.workspace.add': '新增工作区…',
+    'sessions.workspace.added': '已添加工作区：{name}，并切换到它',
     'sessions.workspace.none':
-      '还没有登记任何工作区。先在终端里用 `avid workspace add <路径>` 登记一个，或用 `avid web --workspace <路径>` 起单工作区模式。',
+      '还没有工作区。点上面的「新增工作区…」挑一个本地文件夹，或在终端里用 `avid workspace add <路径>` 登记一个。',
     'sessions.workspace.failed': '工作区列表没取回来',
     'sessions.workspace.belongs': '工作区：{name}',
 
@@ -243,6 +245,14 @@ export const DICTIONARY: Record<Locale, Entry> = {
     'errors.network_error': '无法连接内核',
     'errors.timeout': '请求超时',
     'errors.not_found': '未知的 API 路径',
+    'errors.workspace_required': '新建会话必须指定工作区',
+    'errors.workspace_not_found': '找不到这个工作区',
+    'errors.workspace_invalid': '工作区参数不合法（目录不存在或不是目录）',
+    'errors.workspace_exists': '这个文件夹已经在工作区列表里',
+    'errors.picker_unavailable':
+      '这台机器上没有可用的系统文件夹选择器；可以在终端里用 `avid workspace add <路径>`',
+    'errors.picker_busy': '已经有一个文件夹选择器开着，先去那边选完或取消',
+    'errors.picker_failed': '文件夹选择器启动失败',
     'errors.unknown': '未知错误：{code}',
     'errors.http_error': '请求被拒绝',
     'errors.config_error': '模型配置缺失或不合法（见错误详情里的修复命令）',

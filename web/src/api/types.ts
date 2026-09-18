@@ -27,6 +27,11 @@ export interface Skill {
  */
 export type PermissionMode = 'strict' | 'workspace' | 'system'
 
+/** 系统文件夹选择器的结果：`path` 为 null = 用户取消（不是错误）。 */
+export interface PickFolderResult {
+  path: string | null
+}
+
 /** 会话归属的线格式（`SessionSummary.workspace`）：`id` 来自会话 header。 */
 export interface WorkspaceRef {
   id: string | null

@@ -338,8 +338,12 @@ def _run_workspace(argv: list[str]) -> int:
     registry = WorkspaceRegistry()
     try:
         if args.action == "add":
+            before = registry.find(args.path)
             ws = registry.add(args.path, name=args.name, permission=args.permission)
-            print(f"{ws.id}\t{ws.root}\t{ws.name}\t{ws.default_permission}")
+            if before is not None:
+                print(f"已登记过，未重复添加：{ws.id}\t{ws.root}\t{ws.name}")
+            else:
+                print(f"{ws.id}\t{ws.root}\t{ws.name}\t{ws.default_permission}")
             return 0
 
         if args.action == "list":

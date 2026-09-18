@@ -23,6 +23,7 @@ import type {
   CancelResult,
   EntryPage,
   Meta,
+  PickFolderResult,
   Run,
   RunCreated,
   SessionDetail,
@@ -69,6 +70,33 @@ export function useSkills() {
  * 已知工作区候选（阶段 18）。排序由服务端给：单工作区模式下默认那个排在最前，
  * 其余按最近使用。
  */
+/**
+ * 弹宿主机文件夹选择器。超时给足：对话框开着等人操作，15 秒会把一次正常的选择掐断。
+ * 浏览器拿不到目录绝对路径（webkitdirectory 只给相对路径），所以这一步必须走后端。
+ */
+export const PICKER_TIMEOUT_MS = 300_000
+
+export function usePickFolder() {
+  return useMutation({
+    mutationFn: () =>
+      request<PickFolderResult>('/workspaces/pick', {
+        method: 'POST',
+        timeoutMs: PICKER_TIMEOUT_MS,
+      }),
+  })
+}
+
+export function useAddWorkspace() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (input: { path: string; name?: string | null }) =>
+      request<WorkspaceSummary>('/workspaces', { method: 'POST', body: input }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.workspaces })
+    },
+  })
+}
+
 export function useWorkspaces() {
   return useQuery({
     queryKey: queryKeys.workspaces,

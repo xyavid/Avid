@@ -316,3 +316,16 @@ def test_cli_never_writes_the_registry(sandbox, model, capsys, tmp_path):
 
     assert cli.main(["workspace", "add", str(sandbox)]) == 0
     assert registry_file.exists()
+
+
+def test_workspace_add_reports_a_duplicate_without_adding_twice(sandbox, capsys, tmp_path):
+    other = tmp_path.parent / f"dup-{tmp_path.name}"
+    other.mkdir()
+
+    assert cli.main(["workspace", "add", str(other)]) == 0
+    capsys.readouterr()
+    assert cli.main(["workspace", "add", str(other)]) == 0
+    assert "已登记过" in capsys.readouterr().out
+
+    assert cli.main(["workspace", "list"]) == 0
+    assert capsys.readouterr().out.count(str(other.resolve())) == 1

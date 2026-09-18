@@ -121,3 +121,31 @@ __all__ = [
     "TaskCorrupt",
     "TaskNotFound",
 ]
+
+
+class WorkspaceExists(ServiceError):
+    """要登记的工作区已经在列表里（进程绑定的或已登记的）。"""
+
+    code = "workspace_exists"
+    status = 409
+
+
+class PickerBusy(ServiceError):
+    """已经有一个文件夹选择器开着。"""
+
+    code = "picker_busy"
+    status = 409
+
+
+class PickerUnavailable(ServiceError):
+    """这台机器上没有可用的系统文件夹选择器。"""
+
+    code = "picker_unavailable"
+    status = 503
+
+
+class PickerFailed(ServiceError):
+    """选择器后端起得来但失败了。"""
+
+    code = "picker_failed"
+    status = 500

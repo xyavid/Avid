@@ -21,12 +21,21 @@
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 from typing import Any
 
 from ..session import JsonlSessionRepo, SessionMetadata
 from ..workspaces import Workspace, WorkspaceError, WorkspaceRegistry, derive_id
-from .errors import ServiceError, SessionNotFound
+from .errors import (
+    PickerBusy,
+    PickerFailed as PickerFailedError,
+    PickerUnavailable as PickerUnavailableError,
+    ServiceError,
+    SessionNotFound,
+    WorkspaceExists,
+)
+from .picker import PickerError, PickerFailed, PickerUnavailable, pick_directory
 
 logger = logging.getLogger("avid.svc.workspaces")
 
@@ -68,6 +77,8 @@ class WorkspaceService:
             Path(default_sessions_root) if default_sessions_root is not None else None
         )
         self._repos: dict[str, JsonlSessionRepo] = {}
+        # 一次只允许一个对话框：第二个窗口会盖住第一个，用户会以为界面卡死。
+        self._pick_lock = threading.Lock()
 
     # ---------------- 查询 ----------------
 
@@ -109,15 +120,78 @@ class WorkspaceService:
         except (OSError, RuntimeError):
             return text
 
+    def find_known(self, selection: str) -> Workspace | None:
+        """按 id 或路径找**已知**工作区：进程绑定的那个也算（它就在候选列表里）。"""
+        text = (selection or "").strip()
+        if not text:
+            return None
+        resolved = self._as_root(text)
+        for workspace in self.workspaces():
+            if workspace.id == text or workspace.root == resolved:
+                return workspace
+        return None
+
     def register(
         self, path: str, *, name: str | None = None, permission: str | None = None
-    ) -> Workspace:
+    ) -> tuple[Workspace, bool]:
+        """登记一个工作区，返回 ``(记录, 是否新建)``。
+
+        数据层 ``registry.add`` 是幂等的（同一个目录永远同一个 id）；"是否重复"这件事
+        在这里判断并交给传输层表达成 409——重复登记不该悄悄成功，也不该真的加第二遍。
+        已登记的与**进程绑定但未登记**的都算重复：它已经出现在候选列表里了。
+        """
+        existing = self.find_known(path)
+        if existing is not None:
+            # 已经在列表里（进程绑定的或已登记的）：不重复添加，也不悄悄改名字/权限。
+            return existing, False
         try:
-            return self.registry.add(path, name=name, permission=permission)
+            created = self.registry.add(path, name=name, permission=permission)
         except WorkspaceError as exc:
             raise WorkspaceInvalid(str(exc)) from exc
         except ValueError as exc:  # 未知权限模式
             raise WorkspaceInvalid(str(exc)) from exc
+        return created, existing is None
+
+    def require_new(self, path: str) -> Workspace:
+        """``register`` 的严格版：已存在就 409，且带上已存在的那个（界面据此切过去）。"""
+        workspace, created = self.register(path)
+        if not created:
+            raise WorkspaceExists(
+                f"这个文件夹已经在工作区列表里：{workspace.name}（{workspace.root}）",
+                detail={
+                    "id": workspace.id,
+                    "name": workspace.name,
+                    "root": workspace.root,
+                },
+            )
+        return workspace
+
+    # ---------------- 系统文件夹选择器 ----------------
+
+    def pick(self) -> str | None:
+        """弹一次系统文件夹选择器，返回绝对路径；用户取消返回 ``None``。
+
+        只应在回环地址上暴露：它等于"让服务进程在宿主机桌面上弹窗"。
+        """
+        if not self._pick_lock.acquire(blocking=False):
+            raise PickerBusy("已经有一个文件夹选择器开着了；先去那边选完或取消")
+        try:
+            chosen = pick_directory()
+        except PickerUnavailable as exc:
+            raise PickerUnavailableError(str(exc)) from exc
+        except PickerFailed as exc:
+            raise PickerFailedError(str(exc)) from exc
+        except PickerError as exc:  # 兜底：子类漏了就按失败处理
+            raise PickerFailedError(str(exc)) from exc
+        finally:
+            self._pick_lock.release()
+
+        if chosen is None:
+            return None
+        path = Path(chosen).expanduser()
+        if not path.is_dir():
+            raise WorkspaceInvalid(f"选中的路径不存在或不是目录：{chosen}")
+        return str(path.resolve())
 
     def describe(self, workspace: Workspace) -> dict[str, Any]:
         record = workspace.to_dict()

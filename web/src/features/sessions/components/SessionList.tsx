@@ -5,8 +5,11 @@ import { useTranslation } from '../../../lib/i18n'
 import { useErrorText } from '../../../lib/errors'
 import { ApiError } from '../../../api/client'
 import {
+  useAddWorkspace,
   useCreateSession,
   useDeleteSession,
+  useMeta,
+  usePickFolder,
   useRenameSession,
   useSessionList,
   useWorkspaces,
@@ -29,10 +32,15 @@ export function SessionList({ activeId, onSelect }: SessionListProps) {
   const create = useCreateSession()
   const rename = useRenameSession()
   const remove = useDeleteSession()
+  const meta = useMeta()
+  const pick = usePickFolder()
+  const addWorkspace = useAddWorkspace()
   const [editing, setEditing] = useState<string | null>(null)
   const [name, setName] = useState('')
   const [pendingDelete, setPendingDelete] = useState<string | null>(null)
   const [alert, setAlert] = useState<string | null>(null)
+  // 成功/提示类消息（错误走 alert）：用一句人话说明"刚刚发生了什么"。
+  const [notice, setNotice] = useState<string | null>(null)
   // 用户选过的那个（null = 还没选，按服务端排序回落）。**不进界面域**：它是这次
   // 新建动作的选择，不是用户偏好——服务端状态不在本地留副本（uiStore 开头那条）。
   const [preferredWorkspace, setPreferredWorkspace] = useState<string | null>(null)
@@ -44,6 +52,53 @@ export function SessionList({ activeId, onSelect }: SessionListProps) {
     setAlert(
       errorText(error instanceof ApiError ? error.code : undefined, (error as Error)?.message),
     )
+
+  // 老内核没有这个端点：能力表里没声明就不显示按钮，而不是点出一个 404。
+  const canAddWorkspace = meta.data?.features.workspace_picker === 1
+
+  /**
+   * 新增工作区：弹**宿主机**的文件选择器 → 登记 → 切过去。
+   *
+   * 三条路径都要有明确结果，且都不该悄悄发生：
+   *   · 取消（`path === null`）→ 什么都不做，也不报错（取消不是故障）；
+   *   · 已在列表里（409 `workspace_exists`）→ 切到那个已有的，提示已经在了，**不重复添加**；
+   *   · 成功 → 切到新的，提示已添加。路径不存在/没有可用后端等错误照常走 `failure`。
+   */
+  const handleAddWorkspace = () => {
+    setAlert(null)
+    setNotice(null)
+    pick.mutate(undefined, {
+      onError: failure,
+      onSuccess: (result) => {
+        if (!result.path) return // 取消：不做任何变更
+        addWorkspace.mutate(
+          { path: result.path },
+          {
+            onSuccess: (workspace) => {
+              setPreferredWorkspace(workspace.id)
+              setNotice(
+                t('sessions.workspace.added', {
+                  name: workspace.name ?? workspace.root,
+                }),
+              )
+            },
+            onError: (error) => {
+              const existingId =
+                error instanceof ApiError && error.code === 'workspace_exists'
+                  ? error.detail.id
+                  : undefined
+              if (typeof existingId === 'string') {
+                setPreferredWorkspace(existingId)
+                setNotice(error.message)
+                return
+              }
+              failure(error)
+            },
+          },
+        )
+      },
+    })
+  }
 
   return (
     <section className="flex h-full flex-col gap-3 p-3" aria-label={t('sessions.title')}>
@@ -82,7 +137,13 @@ export function SessionList({ activeId, onSelect }: SessionListProps) {
         failed={workspaces.isError}
         onRetry={() => void workspaces.refetch()}
         disabled={create.isPending}
+        onAdd={handleAddWorkspace}
+        adding={pick.isPending || addWorkspace.isPending}
+        canAdd={canAddWorkspace}
       />
+
+      {notice ? <p className="empty-note">{notice}</p> : null}
+      {alert ? <p className="empty-note text-danger">{alert}</p> : null}
 
       {list.isLoading ? <p className="text-sm text-ink/70">{t('common.loading')}</p> : null}
       {list.isError ? (

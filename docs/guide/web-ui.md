@@ -46,6 +46,7 @@ uv run avid web --port 8765      # 静态资源与 API 同源
 |---|---|---|
 | 导航列（`/sessions` 左侧） | `GET /api/sessions`、`POST /api/sessions`、`PATCH /api/sessions/{id}`、`DELETE /api/sessions/{id}` | 查询流（TanStack Query）；列表项带归属工作区 |
 | 工作区选择器（新建会话前） | `GET /api/workspaces`、`POST /api/workspaces` | 查询流；选中的 id 随 `POST /api/sessions` 发出（**必填**，缺了是 400 `workspace_required`） |
+| 「新增工作区…」（选择器旁） | `POST /api/workspaces/pick`（弹宿主机文件夹选择器）→ `POST /api/workspaces`（登记） | 命令流；成功后刷新候选并**切到新工作区**。取消 → 什么都不做；已在列表里 → 409 `workspace_exists` + 切到已有的那个，不重复添加 |
 | 权限模式选择器（输入条旁） | 不新增接口 | 随 `POST /api/sessions/{id}/runs` 的 `permission` 发出；缺省取会话所属工作区的 `default_permission` |
 | 会话时间线（`/sessions/{id}`） | `GET /api/sessions/{id}/entries`（分页，带 `branch`）、`GET /api/runs/{id}/events`（SSE） | 历史来自条目（权威），实时来自事件 |
 | 提交一次运行（输入条） | `POST /api/sessions/{id}/runs`（`branch` 决定接哪条链尾） | 命令流 → 201 `{run_id}` |
@@ -93,6 +94,18 @@ durable `assistant_message` 带完整内容并把它替换掉。**delta 不落�
   `b2`、`b3`…（跳过已占用的）。
 
 ## 3.2 工作区与权限模式（阶段 18）
+
+**新增工作区**（选择器旁的按钮）：点击后由**服务端**在宿主机上弹出系统文件夹选择器——
+浏览器拿不到目录的绝对路径（`webkitdirectory` 只给相对路径、File System Access API 只给
+handle），所以这一步只能由跑在本机的后端做。后端按 `AVID_PICKER_CMD` → tkinter →
+zenity/kdialog → Windows（WSL 互操作）→ osascript 依次探测，`GET /api/meta` 的
+`capabilities.workspace_picker` 会报告实际用的是哪一个（`null` = 这台机器没有可用的，
+此时按钮的报错里会给出 `avid workspace add <路径>` 这条替代做法）。
+
+三种结果都有明确反馈：**取消什么都不做**（取消不是故障，不弹错误）；**已在列表里**
+（含进程绑定的那个）→ 409 `workspace_exists`，提示"已经在了"并切到它，**不重复添加**；
+**路径不存在** → 400 `workspace_invalid`。成功后新工作区立刻出现在候选列表里、
+注册表里也写下来了（`~/.avid/workspaces.json`），并成为当前选中的那个。
 
 **工作区**是一个本地目录，同时是权限边界、会话归属与干活的地点。界面上它出现在两处：
 新建会话前必须选（列表 = 进程绑定的工作地点 + 已登记的，`is_default` 或最近使用的那一个

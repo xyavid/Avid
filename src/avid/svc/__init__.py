@@ -24,6 +24,7 @@ from ..workspaces import Workspace, WorkspaceRegistry
 from .approvals import APPROVAL_TIMEOUT_SECONDS
 from .runs import REPLAY_BUFFER_SIZE, RunRegistry
 from .sessions import SessionService
+from .picker import available_backend
 from .tasks import TaskService
 from .workspaces import WorkspaceService, bound_workspace, single_workspace
 
@@ -41,6 +42,7 @@ FEATURES: dict[str, int] = {
     "branches": 1,  # F4：分支列表 / 分叉 / 在指定分支上运行
     "workspaces": 1,  # 阶段 18：工作区注册表 + 按工作区建会话
     "permission_modes": 1,  # 阶段 18：POST /runs 接受 permission（strict/workspace/system）
+    "workspace_picker": 1,  # 新增工作区：POST /workspaces/pick 弹宿主机文件夹选择器
 }
 
 # 事件流相关常量对客户端可见：它据此设超时与对账阈值（I13）。
@@ -135,6 +137,9 @@ class Services:
                     if self.workspaces.default is not None
                     else str(workspace.WORKSPACE_ROOT)
                 ),
+                # 这台机器上会用到哪个选择器后端（null = 没有可用的）。诊断用：
+                # 点了"新增工作区"没弹窗时，先看这里。
+                "workspace_picker": available_backend(),
             },
             "stream": {
                 "heartbeat_seconds": STREAM_HEARTBEAT_SECONDS,

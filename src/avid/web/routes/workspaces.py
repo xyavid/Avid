@@ -8,7 +8,12 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Request, status
 
-from ..schemas import CreateWorkspaceIn, WorkspaceListOut, WorkspaceOut
+from ..schemas import (
+    CreateWorkspaceIn,
+    PickFolderOut,
+    WorkspaceListOut,
+    WorkspaceOut,
+)
 from . import current_services
 
 router = APIRouter()
@@ -23,7 +28,21 @@ def list_workspaces(request: Request) -> dict:
     "/workspaces", response_model=WorkspaceOut, status_code=status.HTTP_201_CREATED
 )
 def create_workspace(request: Request, body: CreateWorkspaceIn) -> dict:
-    workspace = current_services(request).workspaces.register(
-        body.path, name=body.name, permission=body.permission
-    )
+    """登记一个工作区。已在列表里（含进程绑定的那个）→ 409 ``workspace_exists``，
+    ``detail`` 带上已存在的 id/名字，界面据此直接切过去而不是报错卡住。"""
+    workspace = current_services(request).workspaces.require_new(body.path)
+    if body.name is not None or body.permission is not None:
+        workspace = current_services(request).workspaces.registry.add(
+            workspace.root, name=body.name, permission=body.permission
+        )
     return current_services(request).workspaces.describe(workspace)
+
+
+@router.post("/workspaces/pick", response_model=PickFolderOut)
+def pick_folder(request: Request) -> dict:
+    """弹一次**宿主机**的文件夹选择器（浏览器拿不到目录绝对路径，只能后端来）。
+
+    用户取消返回 ``{"path": null}``；已有对话框开着 409；没有可用后端 503
+    （消息里给出 `avid workspace add <路径>` 这条替代做法）。
+    """
+    return {"path": current_services(request).workspaces.pick()}
