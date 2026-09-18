@@ -155,10 +155,13 @@ def test_a11_recorder_remains_the_only_session_writer():
 
 
 def test_a12_frontend_has_no_third_party_urls_outside_api():
+    # `__tests__/` 例外：URL 夹具（例如 sanitizeUrl 的用例）必须拿真实字面量当输入，
+    # 而它们不产生请求。规则拦的是运行时代码里的第三方端点。
     found = [
         item
         for item in hits(frontend_sources(), r"https?://")
         if not item.split(":")[0].startswith("web/src/api/")
+        and "/__tests__/" not in item.split(":")[0]
     ]
     assert found == [], f"前端在 api/ 之外直连了第三方：{found}"
 

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -34,6 +35,47 @@ from ..policy.permission import (
 )
 
 logger = logging.getLogger("avid.runtime.hooks")
+
+# 日志摘要里要打码的键名/写法。INFO 是默认日志级别，而工具参数里经常带凭据：
+# `bash` 的 `curl -H "Authorization: Bearer sk-…"`、`write_file` 写 .env 的内容……
+# 日志会被收集、转发、贴进 issue，所以"原样打印整份参数"不能接受。
+_SECRET_KEYS = ("token", "api_key", "apikey", "authorization", "password", "secret", "key")
+# 两种写法都要盖住：`--token=xyz` / `API_KEY: xyz`，以及
+# `Authorization: Bearer xyz`（值前面还有一个 scheme 词）。
+_SECRET_IN_TEXT = re.compile(
+    r"(?i)((?:authorization|token|api[_-]?key|password|secret)\s*[=:]\s*)"
+    r"(?:bearer\s+)?\S+"
+)
+_SECRET_BEARER = re.compile(r"(?i)(bearer\s+)\S+")
+_BRIEF_LIMIT = 300
+
+
+def brief(arguments: Any, *, limit: int = _BRIEF_LIMIT) -> str:
+    """日志用的参数摘要：敏感键与内联凭据打码，并截断长度。
+
+    策略是"宁可多打一点码"：日志只用来定位问题，不需要完整的命令原文。
+    """
+
+    def redact(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: (
+                    "***"
+                    if any(mark in str(key).lower() for mark in _SECRET_KEYS)
+                    else redact(item)
+                )
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [redact(item) for item in value]
+        if isinstance(value, str):
+            return _SECRET_IN_TEXT.sub(
+                r"\1***", _SECRET_BEARER.sub(r"\1***", value)
+            )
+        return value
+
+    text = json.dumps(redact(arguments), ensure_ascii=False, default=str)
+    return text if len(text) <= limit else text[:limit] + "…（已截断）"
 
 # 事件名白名单。register_hook 对表外的事件名直接报错——事件名拼错会让权限
 # 校验静默消失，这类错误必须炸出来。
@@ -192,8 +234,7 @@ def log_hook(context: dict[str, Any]) -> str | None:
     """PreToolUse + PostToolUse：审计一次调用的开始与结束。永不拦截。"""
     tool = context.get("tool")
     if context.get("event") == "PreToolUse":
-        arguments = json.dumps(context.get("arguments"), ensure_ascii=False, default=str)
-        logger.info("[hook] 调用 %s %s", tool, arguments)
+        logger.info("[hook] 调用 %s %s", tool, brief(context.get("arguments")))
     else:
         content = context.get("content") or ""
         suffix = "（已被截断）" if context.get("truncated") else ""

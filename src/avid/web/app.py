@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import uuid
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -48,6 +49,23 @@ STATIC_DIR = Path(__file__).parent / "static"
 # `AVID_ALLOWED_HOSTS`（逗号分隔）是给非回环部署的显式逃生口，见 `cli._run_web`。
 LOOPBACK_HOSTS: frozenset[str] = frozenset({"127.0.0.1", "localhost", "::1"})
 ALLOWED_HOSTS_ENV = "AVID_ALLOWED_HOSTS"
+
+# 安全响应头。CSP 与产物形状对齐：首屏只有同源脚本/样式/字体（dist/index.html 里
+# 没有内联 script），`style-src` 需要 `unsafe-inline` 是因为 Radix 在运行时注入
+# 滚动锁等样式；`img-src` 放 data: 是 `favicon` 用的。
+SECURITY_HEADERS: dict[str, str] = {
+    "Content-Security-Policy": (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "font-src 'self'; "
+        "connect-src 'self'; "
+        "object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    ),
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+}
 
 
 def _hostname_of(value: str) -> str:
@@ -97,7 +115,10 @@ class TrustBoundaryMiddleware(BaseHTTPMiddleware):
                 status_code=status.HTTP_403_FORBIDDEN,
                 content=_envelope("origin_rejected", f"Origin 不在允许列表内：{origin}"),
             )
-        return await call_next(request)
+        response = await call_next(request)
+        for name, value in SECURITY_HEADERS.items():
+            response.headers.setdefault(name, value)
+        return response
 
 # 未知 /api 路径的兜底 JSON 404。绝不回落 SPA（B10）。
 UNKNOWN_API = ErrorOut(
@@ -171,10 +192,17 @@ def create_app(
 
     @app.exception_handler(Exception)
     async def _internal_error(_: Request, exc: Exception) -> JSONResponse:
-        logger.exception("未处理的服务端错误：%s", exc)
+        # 只回一个关联 id：以前把 `f"{type(exc).__name__}: {exc}"` 回给客户端，
+        # 等于把内核内部细节（可能含绝对路径）贴到任意本地 HTTP 客户端/界面上。
+        error_id = uuid.uuid4().hex[:12]
+        logger.exception("未处理的服务端错误（error_id=%s）：%s", error_id, exc)
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content=_envelope("internal", f"{type(exc).__name__}: {exc}"),
+            content=_envelope(
+                "internal",
+                "内核内部错误（详情见服务端日志）",
+                {"error_id": error_id},
+            ),
         )
 
     # ---------------- 路由 ----------------
@@ -223,6 +251,7 @@ def create_app(
 
 __all__ = [
     "ALLOWED_HOSTS_ENV",
+    "SECURITY_HEADERS",
     "LOOPBACK_HOSTS",
     "STATIC_DIR",
     "TrustBoundaryMiddleware",

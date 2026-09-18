@@ -181,6 +181,23 @@ def test_hard_deny_and_user_refusal_give_different_guidance(clean):
     assert hard["denied_content"] != user["denied_content"]
 
 
+def test_brief_redacts_credentials_and_truncates():
+    """工具参数进日志前必须脱敏：INFO 是默认级别，而命令里常带 token。"""
+    from avid.runtime.hooks import brief
+
+    line = brief({"command": 'curl -H "Authorization: Bearer sk-live-abc123" https://x'})
+    assert "sk-live-abc123" not in line
+    assert "***" in line
+
+    nested = brief({"content": "API_KEY=topsecret", "path": "a.txt"})
+    assert "topsecret" not in nested
+
+    assert brief({"api_key": "plain-secret"}) == '{"api_key": "***"}'
+
+    long_line = brief({"command": "x" * 1000})
+    assert len(long_line) < 400 and long_line.endswith("（已截断）")
+
+
 def test_permission_hook_routes_auto_approve_to_the_answerer(clean):
     """``--yes`` 只换回答者：注入的 ask 不被调用，硬拒绝仍被拦住。"""
     asked = []

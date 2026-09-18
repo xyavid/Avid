@@ -80,6 +80,9 @@ const SCHEME = /^[a-z][a-z0-9+.-]*:/i
 export function sanitizeUrl(url: string): string | null {
   const value = url.trim()
   if (!value) return null
+  // 协议相对地址（`//host/x`，以及 `\\host\x` 这种浏览器会当斜杠处理的写法）
+  // 会直接打到外部主机：模型输出里的 `![](//attacker/x)` 渲染即出网。先掐掉。
+  if (/^[\\/]{2}/.test(value)) return null
   if (SCHEME.test(value)) return /^https?:\/\//i.test(value) ? value : null
   return value
 }

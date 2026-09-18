@@ -20,7 +20,7 @@ from typing import Any
 
 from ..tools import ToolImpl, workspace
 from . import events
-from .hooks import BLOCK, trigger_hooks
+from .hooks import BLOCK, brief, trigger_hooks
 from .state import RunState
 
 logger = logging.getLogger("avid.runtime.execution")
@@ -174,7 +174,7 @@ def execute_batch(
         function = call.get("function") or {}
         name = str(function.get("name", ""))
         raw_arguments = function.get("arguments") or "{}"
-        logger.info("  → %s %s", name, raw_arguments)
+        logger.info("  → %s %s", name, brief(raw_arguments))
 
         content = execute_one(
             name,

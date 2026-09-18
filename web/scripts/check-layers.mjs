@@ -8,7 +8,8 @@
  *   2. 特性之间不互相 import：`src/features/a/**` 不得 import `src/features/b/**`（a≠b），
  *      相对路径（`../b/`、`../../features/b`）与别名（`@/features/b`）都算。
  *   3. `runStoreActions` 只允许被 `src/state` / `src/events` / `src/routes` import。
- *   4. `src/**` 不得出现 `https?://`（字符串与注释都算；只有 `src/api/**` 放接口注释）。
+ *   4. `src/**` 不得出现 `https?://`（字符串与注释都算；只有 `src/api/**` 放接口注释、
+ *      `__tests__/` 放 URL 夹具——规则拦的是运行时代码里的第三方端点）。
  *   5. L1 只接受 props：`src/ui/**` 不得 import `events/` / `state/` / `features/` /
  *      `routes/` / `api/` / `layouts/`（`frontend-architecture.md` §3.4 的分层声明）。
  *   6. 暂缺：不在 `src/ui/**` 之外 import `radix` 之外的组件库（无此约束）。
@@ -135,6 +136,7 @@ function lineAt(text, index) {
 }
 
 const isApi = (rel) => rel.startsWith('src/api/')
+const isTest = (rel) => rel.split('/').includes('__tests__')
 const isAllowedRunStoreImporter = (rel) =>
   rel.startsWith('src/state/') || rel.startsWith('src/events/') || rel.startsWith('src/routes/')
 
@@ -160,7 +162,9 @@ for (const file of files) {
   }
 
   // ---- 规则 4：src/** 不得出现 http(s)://（字符串与注释都算，用原文） ----
-  if (!isApi(rel)) {
+  // 测试夹具例外：`sanitizeUrl` 这类用例必须拿真实的 URL 字面量当输入，而它们
+  // 不会产生任何请求（规则 1 仍然管着测试里的 fetch）。
+  if (!isApi(rel) && !isTest(rel)) {
     const urls = /https?:\/\/[^\s'"`)]*/g
     const seenLines = new Set()
     let match

@@ -63,6 +63,52 @@ def finish_run(client: TestClient, chat, tools=None, prompt: str = "问题") -> 
     return session["id"], run_id
 
 
+# ---------------- 错误面不外泄细节（P2-10） ----------------
+
+
+def test_internal_errors_only_expose_a_correlation_id(bundle):
+    """500 只回错误码 + 关联 id：以前回 `f"{type(exc).__name__}: {exc}"`，
+    等于把内核内部细节（可能含绝对路径）贴到界面上。"""
+    from fastapi.testclient import TestClient
+
+    from avid.web import create_app
+
+    _, services = bundle()
+
+    def boom():
+        raise RuntimeError("内部细节：/home/someone/secret/path.py 打不开")
+
+    # 让一个端点稳定抛异常：直接换掉 meta 的实现
+    services.meta = boom  # type: ignore[method-assign]
+
+    # bundle 的 client 是"测试模式"（会重抛异常）；这一条要的是**真实部署下客户端
+    # 看到什么**，所以自建一个不重抛的。
+    client = TestClient(
+        create_app(services=services, static_dir="/tmp/unbuilt"),
+        base_url="http://127.0.0.1:8765",
+        raise_server_exceptions=False,
+    )
+    response = client.get("/api/meta")
+
+    assert response.status_code == 500
+    payload = response.json()["error"]
+    assert payload["code"] == "internal"
+    assert "secret" not in response.text and "RuntimeError" not in response.text
+    assert payload["detail"]["error_id"]
+
+
+def test_security_headers_are_set_on_every_response(bundle):
+    """CSP / Referrer-Policy / nosniff：与产物形状对齐（无内联脚本）。"""
+    client, _ = bundle()
+
+    for path in ("/api/meta", "/api/nope"):
+        headers = client.get(path).headers
+        assert headers["content-security-policy"].startswith("default-src 'self'")
+        assert "script-src 'self'" in headers["content-security-policy"]
+        assert headers["referrer-policy"] == "no-referrer"
+        assert headers["x-content-type-options"] == "nosniff"
+
+
 # ---------------- 只读端点的磁盘 IO（P2-5） ----------------
 
 
