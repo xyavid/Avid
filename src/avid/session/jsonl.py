@@ -75,6 +75,8 @@ class JsonlHeader:
     created_at: int
     parent_session_id: str | None = None
     next_seq: int | None = None
+    # 归属工作区（阶段 18）。老会话没有这个键：读回为 None，由文件位置派生。
+    workspace: str | None = None
 
 
 def encode_header(header: JsonlHeader) -> str:
@@ -89,6 +91,8 @@ def encode_header(header: JsonlHeader) -> str:
         record["parentSessionId"] = header.parent_session_id
     if header.next_seq is not None:
         record["nextSeq"] = header.next_seq
+    if header.workspace is not None:
+        record["workspaceId"] = header.workspace
     return json.dumps(record, ensure_ascii=False)
 
 
@@ -120,7 +124,12 @@ def parse_header(line: str) -> JsonlHeader:
     next_seq = record.get("nextSeq")
     if next_seq is not None and (not isinstance(next_seq, int) or next_seq < 1):
         raise SessionStorageError("会话 header 的 nextSeq 非法")
-    return JsonlHeader(session_id, storage_version, created_at, parent, next_seq)
+    workspace = record.get("workspaceId")
+    if workspace is not None and (not isinstance(workspace, str) or not workspace):
+        raise SessionStorageError("会话 header 的 workspaceId 非法")
+    return JsonlHeader(
+        session_id, storage_version, created_at, parent, next_seq, workspace
+    )
 
 
 def encode_write(write: CommittedWrite) -> dict[str, object]:
@@ -357,9 +366,17 @@ class JsonlSessionRepo:
     """``SessionRepo`` 的文件实现。列表只读 header，不把会话整个读进来。"""
 
     def __init__(
-        self, root: str | Path, *, now=None, id_generator: IdGenerator | None = None
+        self,
+        root: str | Path,
+        *,
+        now=None,
+        id_generator: IdGenerator | None = None,
+        workspace: str | None = None,
     ) -> None:
         self.root = Path(root)
+        # 本仓库服务哪个工作区。session/ 不推导工作区（它对 avid 内部零依赖），
+        # 由调用方告诉它；老会话文件没有 workspaceId 时据此归属。
+        self.workspace = workspace
         self._now = now or now_ms
         self._id_generator = id_generator or UuidV7Generator(self._now)
         self._open: dict[str, JsonlStorage] = {}
@@ -369,8 +386,13 @@ class JsonlSessionRepo:
     # ---------------- 生命周期 ----------------
 
     def create(
-        self, *, id: str | None = None, parent_session_id: str | None = None
+        self,
+        *,
+        id: str | None = None,
+        parent_session_id: str | None = None,
+        workspace: str | None = None,
     ) -> StorageBackedSession:
+        """``workspace`` 缺省时用仓库自己的归属（由会话库位置派生）。"""
         self._assert_open()
         session_id = validate_session_id(
             self._id_generator.next() if id is None else id
@@ -378,11 +400,13 @@ class JsonlSessionRepo:
         self._reserve(session_id)
         try:
             created_at = self._now()
+            owner = self.workspace if workspace is None else workspace
             header = JsonlHeader(
                 id=session_id,
                 storage_version=STORAGE_VERSION,
                 created_at=created_at,
                 parent_session_id=parent_session_id,
+                workspace=owner,
             )
             path = self.root / session_file_name(created_at, session_id)
             storage = JsonlStorage.create(path, header, now=self._now)
@@ -392,6 +416,7 @@ class JsonlSessionRepo:
                 storage_version=STORAGE_VERSION,
                 parent_session_id=parent_session_id,
                 path=path,
+                workspace=owner,
             )
             return self._publish(metadata, storage)
         finally:
@@ -403,6 +428,17 @@ class JsonlSessionRepo:
             raise SessionAlreadyOpenError(metadata.id)
         path = self._locate(metadata)
         storage = JsonlStorage.open(path, now=self._now)
+        # 跨工作区护栏：_locate 优先用 metadata.path，而 open 只校验 header.id，
+        # 于是把 A 工作区的 metadata 交给指向 B 的仓库会静默打开 A 的文件。
+        if (
+            self.workspace
+            and storage.header.workspace
+            and storage.header.workspace != self.workspace
+        ):
+            raise SessionStorageError(
+                f"会话 {metadata.id} 属于另一个工作区（{storage.header.workspace}），"
+                f"不能在 {self.workspace} 的仓库里打开"
+            )
         if storage.header.id != metadata.id:
             raise SessionStorageError(
                 f"文件的 id 与请求不符：{path} 里是 {storage.header.id}，请求的是 {metadata.id}"
@@ -417,6 +453,8 @@ class JsonlSessionRepo:
             storage_version=storage.header.storage_version,
             parent_session_id=storage.header.parent_session_id,
             path=path,
+            # 老文件没有 workspaceId：按仓库归属补上（位置即归属）。
+            workspace=storage.header.workspace or self.workspace,
         )
         return self._publish(resolved, storage)
 
@@ -514,6 +552,7 @@ class JsonlSessionRepo:
             parent_session_id=header.parent_session_id,
             path=path,
             modified_at=modified_at,
+            workspace=header.workspace or self.workspace,
         )
 
     def _assert_open(self) -> None:

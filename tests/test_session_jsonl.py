@@ -312,3 +312,62 @@ def test_tip_value_survives_a_restart(tmp_path):
     assert reopened.branch("main").get_tip_id() == entry_id
     reopened.close()
     second.close()
+
+
+# ---------------- 工作区归属（阶段 18） ----------------
+
+
+def test_header_records_the_workspace_when_known(tmp_path):
+    repo = JsonlSessionRepo(tmp_path, workspace="w-abc")
+    session = repo.create(id="demo")
+
+    header = json.loads(only_file(tmp_path).read_text(encoding="utf-8").splitlines()[0])
+
+    assert header["workspaceId"] == "w-abc"
+    assert session.metadata.workspace == "w-abc"
+    session.close()
+    repo.close()
+
+
+def test_header_omits_the_workspace_when_unknown(tmp_path):
+    """没有归属时不发射这个键：老文件与新文件的形状因此一致（可选字段惯例）。"""
+    repo = make_repo(tmp_path)
+    session = repo.create(id="demo")
+
+    header = json.loads(only_file(tmp_path).read_text(encoding="utf-8").splitlines()[0])
+
+    assert "workspaceId" not in header
+    assert session.metadata.workspace is None
+    session.close()
+
+
+def test_legacy_session_inherits_the_repo_workspace(tmp_path):
+    """老会话没有这个字段：按仓库归属补上——位置即归属。"""
+    make_repo(tmp_path).create(id="legacy").close()
+
+    repo = JsonlSessionRepo(tmp_path, workspace="w-abc")
+    listed = repo.list()
+
+    assert listed[0].workspace == "w-abc"
+    session = repo.open(listed[0])
+    assert session.metadata.workspace == "w-abc"
+    session.close()
+    repo.close()
+
+
+def test_open_refuses_a_session_from_another_workspace(tmp_path):
+    """护栏：metadata 带着别的工作区时不许静默打开（_locate 会优先用 metadata.path）。"""
+    mine = JsonlSessionRepo(tmp_path, workspace="w-mine")
+    session = mine.create(id="demo", workspace="w-other")
+    session.close()
+    metadata = mine.list()[0]
+    mine.close()
+
+    other = JsonlSessionRepo(tmp_path, workspace="w-other")
+    assert other.open(metadata).metadata.workspace == "w-other"
+    other.close()
+
+    with pytest.raises(SessionStorageError) as exc:
+        mine2 = JsonlSessionRepo(tmp_path, workspace="w-mine")
+        mine2.open(metadata)
+    assert "另一个工作区" in str(exc.value)

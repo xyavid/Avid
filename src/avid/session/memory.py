@@ -100,7 +100,15 @@ class _Record:
 class MemorySessionRepo:
     """``SessionRepo`` 的内存实现，行为与 ``JsonlSessionRepo`` 逐条对齐。"""
 
-    def __init__(self, *, now=None, id_generator: IdGenerator | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        now=None,
+        id_generator: IdGenerator | None = None,
+        workspace: str | None = None,
+    ) -> None:
+        # 与文件后端同形：会话归属由调用方告诉仓库，老会话按仓库归属补。
+        self.workspace = workspace
         self._now = now or now_ms
         self._id_generator = id_generator or UuidV7Generator(self._now)
         self._sessions: dict[str, _Record] = {}
@@ -110,7 +118,11 @@ class MemorySessionRepo:
     # ---------------- 生命周期 ----------------
 
     def create(
-        self, *, id: str | None = None, parent_session_id: str | None = None
+        self,
+        *,
+        id: str | None = None,
+        parent_session_id: str | None = None,
+        workspace: str | None = None,
     ) -> StorageBackedSession:
         self._assert_open()
         session_id = validate_session_id(
@@ -122,6 +134,7 @@ class MemorySessionRepo:
                 id=session_id,
                 created_at=self._now(),
                 parent_session_id=parent_session_id,
+                workspace=self.workspace if workspace is None else workspace,
             )
             storage = MemoryStorage(now=self._now)
             record = _Record(metadata=metadata, storage=storage)

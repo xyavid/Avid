@@ -422,6 +422,20 @@ def _branch_scan_orders_limits_and_pages(repo) -> None:
     session.close()
 
 
+def _workspace_membership_is_recorded_and_queryable(repo) -> None:
+    """归属是创建时的静态事实：能查、能持久化、老会话按仓库归属补上。"""
+    session = repo.create(id="owned", workspace="w-abc")
+    assert session.metadata.workspace == "w-abc"
+
+    listed = {meta.id: meta for meta in repo.list()}
+    assert listed["owned"].workspace == "w-abc"
+
+    session.close()
+    reopened = repo.open(listed["owned"])
+    assert reopened.metadata.workspace == "w-abc"
+    reopened.close()
+
+
 def all_cases() -> list[Case]:
     return [
         Case("lifecycle", "create 不隐式建分支并拒绝重复 id", _create_has_no_branch),
@@ -442,4 +456,5 @@ def all_cases() -> list[Case]:
         Case("values", "命名空间枚举有序且互不串门", _value_namespace_scan_is_ordered_and_isolated),
         Case("queries", "条目查询的翻页与过滤", _entry_queries_page_and_filter),
         Case("queries", "分支扫描的顺序、上限与翻页", _branch_scan_orders_limits_and_pages),
+        Case("ownership", "工作区归属可查可持久化", _workspace_membership_is_recorded_and_queryable),
     ]

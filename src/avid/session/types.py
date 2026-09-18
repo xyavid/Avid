@@ -175,6 +175,9 @@ class SessionMetadata:
     created_at: int
     storage_version: int = STORAGE_VERSION
     parent_session_id: str | None = None
+    # 归属工作区（阶段 18）：创建时的静态事实，header 只写一次，之后不可变。
+    # 老会话读回为 None，由所在仓库的归属补上（位置即归属）。
+    workspace: str | None = None
 
 
 @dataclass(frozen=True)
@@ -266,7 +269,11 @@ class Session(Protocol):
 
 class SessionRepo(Protocol):
     def create(
-        self, *, id: str | None = None, parent_session_id: str | None = None
+        self,
+        *,
+        id: str | None = None,
+        parent_session_id: str | None = None,
+        workspace: str | None = None,
     ) -> Session: ...
 
     def open(self, metadata: SessionMetadata) -> Session: ...
