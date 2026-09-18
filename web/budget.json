@@ -1,0 +1,10 @@
+{
+  "entry_gzip_bytes": 460800,
+  "chunk_gzip_bytes": 358400,
+  "exempt_gzip_bytes": 204800,
+  "font_bytes": 61440,
+  "texture_bytes": 32768,
+  "frozen_at": null,
+  "note": "起点值：首次实测前用来拦住明显失控的引入；冻结时把 frozen_at 与测量环境写进来（设计文档 P1/C1）",
+  "EXEMPT": []
+}

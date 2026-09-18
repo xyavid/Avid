@@ -1,0 +1,242 @@
+/*
+ * 涂鸦语言：纸面、墨线、贴纸、胶带、笔触、按压。
+ *
+ * 这一层只提供**构件类**（形状 + 高度 + 交互），不含任何业务名词，也不含颜色
+ * 字面量——全部引用 ui/tokens.css。
+ *
+ * 顺序约定：本文件必须在 main.tsx 里**先于** tokens.css 导入，于是 @tailwind
+ * utilities 在产物里排在本文件的构件类之后——`shadow-none` 这类工具类才能覆盖
+ * `.sketch-chip`。两个文件各自被 Tailwind 处理一次，所以这里不能写 @layer。
+ *
+ * 三条禁令由 scripts/check-style.mjs 守着：
+ *   · 组件里不得出现 shadow-[…] / 内联 borderRadius / 内联 fontFamily；
+ *   · 正文、代码、工具输出、输入框容器不得带 rotate；
+ *   · 过渡只写 transform / box-shadow / background-color，不写 transition-all。
+ */
+
+/* ---------------- 纸面 ---------------- */
+
+.paper-canvas {
+  position: fixed;
+  inset: 0;
+  background-color: rgb(var(--avid-paper-rgb));
+  background-image: var(--paper-dot);
+  background-size: var(--paper-size);
+  pointer-events: none;
+  z-index: var(--z-base);
+}
+
+@media (max-width: 960px) {
+  /* 窄屏把点阵与倾斜都减半：拥挤时涂鸦会变成噪音。 */
+  .paper-canvas {
+    background-image: var(--paper-dot-narrow);
+    background-size: var(--paper-size-narrow);
+  }
+}
+
+/* ---------------- 卡片与面板（形状轮换用 .shape-1/2/3） ---------------- */
+
+.sketch-card {
+  @apply border-bold border-ink bg-card;
+  border-radius: var(--sketch-r1);
+  box-shadow: var(--sticker-4);
+}
+
+.sketch-panel {
+  @apply border-bold border-ink bg-card;
+  border-radius: var(--sketch-r2);
+  box-shadow: var(--sticker-8);
+}
+
+.sketch-main {
+  @apply border-bold border-ink bg-card;
+  border-radius: var(--sketch-r3);
+  box-shadow: var(--sticker-12);
+}
+
+.sketch-chip {
+  @apply border-hair border-ink bg-card;
+  border-radius: var(--sketch-r-chip);
+  box-shadow: var(--sticker-2);
+}
+
+.shape-1 {
+  border-radius: var(--sketch-r1);
+}
+
+.shape-2 {
+  border-radius: var(--sketch-r2);
+}
+
+.shape-3 {
+  border-radius: var(--sketch-r3);
+}
+
+.shape-blob {
+  border-radius: var(--sketch-r-blob);
+}
+
+/* ---------------- 按压：位移量 = 阴影偏移，阴影归零 ---------------- */
+
+.press {
+  transition: transform var(--motion-press) ease, box-shadow var(--motion-press) ease,
+    background-color var(--motion-hover) ease;
+}
+
+.press-2 {
+  --press-offset: 2px;
+}
+
+.press-3 {
+  --press-offset: 3px;
+}
+
+.press-4 {
+  --press-offset: 4px;
+}
+
+.press-6 {
+  --press-offset: 6px;
+}
+
+.press:active {
+  transform: translate(var(--press-offset, 2px), var(--press-offset, 2px));
+  box-shadow: none;
+}
+
+.press:disabled,
+.press[aria-disabled='true'] {
+  transform: none;
+}
+
+/* ---------------- 倾斜：外壳倾斜，内容反向抵消 ---------------- */
+
+.tilt-shell {
+  transform: rotate(var(--tilt-1));
+}
+
+.tilt-content {
+  transform: rotate(calc(-1 * var(--tilt-1)));
+}
+
+.tilt-small {
+  transform: rotate(var(--tilt-6));
+}
+
+.tilt-input {
+  transform: rotate(var(--tilt-input));
+}
+
+.tilt-input-content {
+  transform: rotate(calc(-1 * var(--tilt-input)));
+}
+
+/* 窄屏倾斜减半 */
+@media (max-width: 960px) {
+  .tilt-shell {
+    transform: rotate(calc(var(--tilt-1) / 2));
+  }
+
+  .tilt-content {
+    transform: rotate(calc(-1 * var(--tilt-1) / 2));
+  }
+
+  .tilt-input,
+  .tilt-input-content {
+    transform: none;
+  }
+}
+
+/* ---------------- 胶带与便签（会话 / 运行 ID 常驻可见） ---------------- */
+
+.tape {
+  @apply border-hair border-ink px-2 py-0.5 font-mono text-[10px];
+  background-color: rgb(var(--avid-mark-rgb) / 70%);
+  border-radius: var(--sketch-r-chip);
+  transform: rotate(var(--tilt-2));
+}
+
+.tape-empty {
+  @apply border-hair border-dashed border-ink/40 px-2 py-0.5 font-mono text-[10px];
+  background-color: rgb(var(--avid-sand-rgb) / 60%);
+  border-radius: var(--sketch-r-chip);
+}
+
+/* ---------------- 笔触填充（进度、占用率、已完成底纹） ---------------- */
+
+.hatch {
+  background-image: var(--hatch-forward);
+}
+
+.hatch-reverse {
+  background-image: var(--hatch-backward);
+}
+
+.hatch-danger {
+  background-image: var(--hatch-danger);
+}
+
+/* ---------------- 空态与提示 ---------------- */
+
+.empty-note {
+  @apply border-hair border-dashed border-ink/40 bg-card/70 px-4 py-6 text-center text-sm text-ink/70;
+  border-radius: var(--sketch-r2);
+}
+
+/* ---------------- 滚动容器：时间线是唯一滚动容器 ---------------- */
+
+.scroll-area {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.scroll-area::-webkit-scrollbar {
+  width: 10px;
+}
+
+.scroll-area::-webkit-scrollbar-thumb {
+  background-color: rgb(var(--avid-ink-rgb) / 30%);
+  border-radius: var(--sketch-r-chip);
+}
+
+/* ---------------- 状态点（徽标用，纯装饰） ---------------- */
+
+.dot {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+}
+
+.pulse {
+  animation: avid-pulse 1.6s ease-in-out infinite;
+}
+
+
+/* ---------------- 终端/代码：唯一允许深底浅字的地方 ---------------- */
+
+.term {
+  background-color: rgb(var(--term-bg-rgb));
+  color: rgb(var(--term-fg-rgb));
+  @apply font-mono text-xs;
+}
+
+.ink-rule {
+  border-bottom: var(--stroke-hair) solid rgb(var(--avid-ink-rgb));
+}
+
+/* 长命令行不能撑破卡片：横向滚动只出现在工具输出里。 */
+.break-anywhere {
+  overflow-wrap: anywhere;
+}
+
+@keyframes avid-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}

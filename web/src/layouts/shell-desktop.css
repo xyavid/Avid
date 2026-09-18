@@ -1,0 +1,25 @@
+/*
+ * 桌面壳专属样式：默认**不加载**（浏览器里这些规则会让顶部 32px 无法点击，
+ * 参照实现 purrcat 的 `z-[2147483647]` 拖拽条就是这个坑）。
+ * 只有 `html[data-shell="desktop"]` 下才生效。
+ */
+
+html[data-shell='desktop'] body {
+  padding-top: 32px;
+}
+
+html[data-shell='desktop'] .shell-drag-region {
+  -webkit-app-region: drag;
+  app-region: drag;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 32px;
+  z-index: var(--z-shell-chrome);
+}
+
+html[data-shell='desktop'] .shell-no-drag {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}

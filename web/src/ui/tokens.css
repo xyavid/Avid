@@ -1,0 +1,199 @@
+/*
+ * 设计 token：颜色、间距、字阶、形状、高度、动效、层级的**唯一来源**。
+ *
+ * 三条硬规则（由 scripts/check-style.mjs 守着）：
+ *   1. 六种形状与八个阴影档只在这里定义，组件里只能引用 token；
+ *   2. 颜色以 RGB 三元组给出，Tailwind 才能做 alpha 合成（`text-ink/70`）；
+ *   3. 硬阴影与形状偏移都乘 --avid-scale，于是整体缩放时层级感不变。
+ *
+ * 为什么把 @tailwind 指令放在这里：本文件是 CSS 入口（main.tsx 第一个 import），
+ * 顺序必须是 base → token 覆盖 → 涂鸦构件，少一个文件就少一处漂移的可能。
+ */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * 手写体只给拉丁与数字（OFL 许可，Architects Daughter，13 KB woff2，自托管）。
+ * 中文不入手写体：中文手写体要么缺字形、要么大到无法接受，正文可读性优先。
+ * 自托管而不是 Google Fonts：渲染阻塞的跨网请求会挂起首屏（照 purrcat 的教训）。
+ */
+@font-face {
+  font-family: 'Avid Sketch';
+  src: url('../assets/fonts/avid-sketch-latin.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  /* 拉丁 + 数字；中文永远走 --font-sans。 */
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215,
+    U+FEFF, U+FFFD;
+  font-display: swap;
+}
+
+:root {
+  /* ---- 缩放与触控 ---- */
+  --avid-text-scale: 1;
+  --avid-scale: var(--avid-text-scale);
+  --avid-control-height: 2.75rem; /* ≥44px，不写死像素到组件里 */
+
+  /* ---- 色板：画布与墨（值为 RGB 三元组） ---- */
+  --avid-paper-rgb: 253 250 245;
+  --avid-card-rgb: 255 255 255;
+  --avid-sand-rgb: 232 229 223;
+  --avid-input-rgb: 253 248 240;
+  --avid-ink-rgb: 26 26 26;
+  --avid-accent-rgb: 212 122 90;
+
+  /* 墨的层级：只允许 ≥18.66px 或 ≥14px 加粗的文本用 40（WCAG 大字门槛）。
+     小字号（≤12px）只允许 ink 与 ink/70。对比度脚本按 alpha 合成后计算。 */
+  --avid-ink-70: rgb(var(--avid-ink-rgb) / 70%);
+  --avid-ink-50: rgb(var(--avid-ink-rgb) / 50%);
+  --avid-ink-40: rgb(var(--avid-ink-rgb) / 40%);
+
+  /* ---- 状态标注：底（只能做填充/边框/徽标） ---- */
+  --avid-ok-bg-rgb: 163 190 140;
+  --avid-warn-bg-rgb: 208 135 112;
+  --avid-danger-bg-rgb: 191 97 106;
+  --avid-info-bg-rgb: 136 192 208;
+  --avid-mark-rgb: 235 203 139;
+
+  /* ---- 状态标注：文字与图标（比底色深一档，保证对比度） ---- */
+  --avid-ok-rgb: 114 150 84;
+  --avid-warn-rgb: 208 135 112;
+  --avid-danger-rgb: 191 97 106;
+  --avid-info-rgb: 94 129 172;
+
+  /* ---- 终端主题：只给代码块与工具输出，不进 UI 语义色 ---- */
+  --term-bg-rgb: 46 52 64;
+  --term-fg-rgb: 216 222 233;
+  --term-blue-rgb: 136 192 208;
+  --term-red-rgb: 191 97 106;
+  --term-green-rgb: 163 190 140;
+  --term-yellow-rgb: 235 203 139;
+  --term-purple-rgb: 180 142 173;
+
+  /* ---- ① 手绘圆角：三种容器形状轮换用，相邻同级卡片禁止同形 ---- */
+  --sketch-r1: 255px 15px 225px 15px / 15px 225px 15px 255px;
+  --sketch-r2: 15px 255px 15px 225px / 225px 15px 255px 15px;
+  --sketch-r3: 225px 15px 255px 15px / 15px 255px 15px 225px;
+  --sketch-r-chip: 4px 6px 3px 5px / 5px 3px 6px 4px;
+  --sketch-r-blob: 50% 10% 50% 10%;
+
+  /* ---- ② 硬偏移阴影：偏移量就是高度层级 ---- */
+  --sticker-1: calc(1px * var(--avid-scale)) calc(1px * var(--avid-scale)) 0 0
+    rgb(var(--avid-ink-rgb));
+  --sticker-2: calc(2px * var(--avid-scale)) calc(2px * var(--avid-scale)) 0 0
+    rgb(var(--avid-ink-rgb));
+  --sticker-3: calc(3px * var(--avid-scale)) calc(3px * var(--avid-scale)) 0 0
+    rgb(var(--avid-ink-rgb));
+  --sticker-4: calc(4px * var(--avid-scale)) calc(4px * var(--avid-scale)) 0 0
+    rgb(var(--avid-ink-rgb));
+  --sticker-6: calc(6px * var(--avid-scale)) calc(6px * var(--avid-scale)) 0 0
+    rgb(var(--avid-ink-rgb));
+  --sticker-8: calc(8px * var(--avid-scale)) calc(8px * var(--avid-scale)) 0 0
+    rgb(var(--avid-ink-rgb));
+  --sticker-12: calc(12px * var(--avid-scale)) calc(12px * var(--avid-scale)) 0 0
+    rgb(var(--avid-ink-rgb));
+  --sticker-16: calc(16px * var(--avid-scale)) calc(16px * var(--avid-scale)) 0 0
+    rgb(var(--avid-ink-rgb));
+  --sticker-inset-2: inset calc(2px * var(--avid-scale)) calc(2px * var(--avid-scale)) 0 0
+    rgb(var(--avid-ink-rgb));
+  --sticker-inset-4: inset calc(4px * var(--avid-scale)) calc(4px * var(--avid-scale)) 0 0
+    rgb(var(--avid-ink-rgb));
+  --sticker-accent-4: calc(4px * var(--avid-scale)) calc(4px * var(--avid-scale)) 0 0
+    rgb(var(--avid-accent-rgb));
+  --sticker-accent-6: calc(6px * var(--avid-scale)) calc(6px * var(--avid-scale)) 0 0
+    rgb(var(--avid-accent-rgb));
+
+  /* ---- ③ 墨线 ---- */
+  --stroke-hair: 2px;
+  --stroke-bold: 4px;
+
+  /* ---- ④ 纸纹：只用 CSS 渐变，位图纹理禁止进仓 ---- */
+  --paper-dot: radial-gradient(rgb(var(--avid-ink-rgb) / 16%) 1px, transparent 1px);
+  --paper-size: 24px 24px;
+  --paper-dot-narrow: radial-gradient(rgb(var(--avid-ink-rgb) / 12%) 1px, transparent 1px);
+  --paper-size-narrow: 12px 12px;
+
+  /* ---- ⑤ 倾斜：正文/代码/工具输出/输入框一律 0deg ---- */
+  --tilt-1: 1deg;
+  --tilt-2: 2deg;
+  --tilt-6: 6deg;
+  /* 输入框容器允许 ≤0.5deg（它不承载长文本阅读）；正文永远 0deg。 */
+  --tilt-input: 0.5deg;
+
+  /* ---- ⑦ 笔触填充 ---- */
+  --hatch-forward: repeating-linear-gradient(
+    45deg,
+    rgb(var(--avid-ink-rgb) / 22%) 0 2px,
+    transparent 2px 6px
+  );
+  --hatch-backward: repeating-linear-gradient(
+    -45deg,
+    rgb(var(--avid-ink-rgb) / 22%) 0 2px,
+    transparent 2px 6px
+  );
+  --hatch-danger: repeating-linear-gradient(
+    45deg,
+    rgb(var(--avid-danger-bg-rgb) / 45%) 0 3px,
+    transparent 3px 8px
+  );
+
+  /* ---- 层级刻度：禁止任意值 z-[…] ---- */
+  --z-base: 0;
+  --z-sticky: 100;
+  --z-drawer: 150;
+  --z-modal: 200;
+  --z-toast: 250;
+  --z-shell-chrome: 300;
+
+  /* ---- 字体 ---- */
+  --font-sketch: 'Avid Sketch', 'Segoe Print', cursive;
+  --font-sans: system-ui, -apple-system, 'Segoe UI', 'Noto Sans CJK SC',
+    'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas,
+    monospace;
+
+  /* ---- 动效：只用 transform / box-shadow / background-color ---- */
+  --motion-press: 90ms;
+  --motion-hover: 120ms;
+  --motion-panel: 300ms;
+}
+
+@layer base {
+  html {
+    font-size: calc(1rem * var(--avid-text-scale, 1));
+  }
+
+  body {
+    @apply bg-paper text-ink font-sans antialiased;
+    margin: 0;
+    min-height: 100vh;
+  }
+
+  /* 正文永不倾斜：涂鸦只出现在装饰外壳上。 */
+  p,
+  pre,
+  code,
+  textarea,
+  input {
+    font-style: normal;
+  }
+
+  :focus-visible {
+    outline: var(--stroke-hair) solid rgb(var(--avid-accent-rgb));
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      /* 位移、旋转、脉冲归零；颜色变化保留（它是状态信息）。 */
+      transition-duration: 0ms !important;
+      animation-duration: 0ms !important;
+      animation-iteration-count: 1 !important;
+    }
+  }
+}

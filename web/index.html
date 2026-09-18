@@ -1,0 +1,15 @@
+<!doctype html>
+<!-- lang 与 i18n 默认语言一致：否则首屏会闪一次语言切换，读屏器也会先按错的语言发音。 -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- data: 空图标：避免浏览器对 /favicon.ico 的额外请求（也避免位图纹理进仓）。 -->
+    <link rel="icon" href="data:," />
+    <title>Avid</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
