@@ -4,6 +4,8 @@
  * 待办看勾、任务看字段、子代理看分段。所有读法都收敛成「带标记与色调的行」，由同一个
  * 渲染器输出，于是加一种工具只需要加一段纯函数。正文/代码/工具输出一律不倾斜。
  */
+import { memo } from 'react'
+
 import { clsx } from 'clsx'
 import { useMemo, useState } from 'react'
 
@@ -162,7 +164,7 @@ function Body({ run, text, density }: { run: ToolRun; text: string; density: Den
   return <Lines lines={toolLines(run, text)} head={head} truncated={tool === 'bash' && cut} density={density} />
 }
 
-export function ToolCallCard({
+export const ToolCallCard = memo(function ToolCallCard({
   run,
   content,
   density = 'comfy',
@@ -216,4 +218,4 @@ export function ToolCallCard({
       <Body run={run} text={text} density={density} />
     </section>
   )
-}
+})

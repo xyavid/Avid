@@ -32,7 +32,9 @@ export default defineConfig({
     },
   },
   test: {
+    // 默认 node（纯函数用例跑得最快）；需要 DOM 的组件用例在文件头用
+    // `// @vitest-environment jsdom` 单独切换，不必让全部用例都背 jsdom 的启动成本。
     environment: 'node',
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
   },
 })

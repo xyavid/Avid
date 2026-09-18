@@ -1,3 +1,5 @@
+import { useMemo } from 'react'
+
 import { Button, Tooltip } from '../../../ui/primitives'
 
 import { useTranslation } from '../../../lib/i18n'
@@ -35,7 +37,9 @@ export function Timeline({
   resetKey,
 }: TimelineProps) {
   const { t } = useTranslation()
-  const blocks = useGroupedTimeline(entries, tools)
+  // memo：`useGroupedTimeline` 每次调用都要建 Map/Set 并遍历全部条目，而父组件在
+  // 流式期间每帧都重渲染——只有 entries/tools 真的变了才需要重算。
+  const blocks = useMemo(() => useGroupedTimeline(entries, tools), [entries, tools])
   const windowState = useTimelineWindow(blocks.length, resetKey)
 
   const visible = blocks.slice(Math.max(0, blocks.length - windowState.visibleCount))

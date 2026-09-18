@@ -33,6 +33,11 @@ export interface ConversationViewProps {
 
 const BUSY_PHASES = new Set(['submitting', 'streaming', 'awaiting_approval', 'cancelling'])
 
+/** 模块级函数：行内箭头每次渲染都换身份，会让 `EntryRow` 的 memo 失效。 */
+function copyText(text: string): void {
+  void navigator.clipboard?.writeText(text)
+}
+
 /** 主表面：对话卡。头部 + 提示条 + 审批队列 + 时间线 + 处理中卡片 + 输入条。 */
 export function ConversationView(props: ConversationViewProps) {
   const { t } = useTranslation()
@@ -78,7 +83,7 @@ export function ConversationView(props: ConversationViewProps) {
         onInspect={props.onInspect}
         onInspectTool={props.onInspectTool}
         onFork={props.onFork}
-        onCopy={(text) => void navigator.clipboard?.writeText(text)}
+        onCopy={copyText}
         resetKey={props.sessionId ?? 'none'}
       />
 

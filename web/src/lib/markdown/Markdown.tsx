@@ -10,6 +10,7 @@
  */
 
 import { clsx } from 'clsx'
+import { memo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import type { Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -58,7 +59,18 @@ const COMPONENTS: Components = {
   ),
 }
 
-export function Markdown({ text, className }: { text: string; className?: string }) {
+/**
+ * 正文渲染。**必须 memo**：react-markdown 在渲染体内解析（没有内部缓存），而流式
+ * 期间父组件每帧都会重渲染——不 memo 的话，窗口里每条 assistant 消息都在 ≤60fps
+ * 地重新解析 markdown。memo 之后只有正文真的变了的那一条会重解析。
+ */
+export const Markdown = memo(function Markdown({
+  text,
+  className,
+}: {
+  text: string
+  className?: string
+}) {
   return (
     <div className={clsx('break-anywhere text-sm leading-relaxed', className)}>
       <ReactMarkdown
@@ -70,4 +82,4 @@ export function Markdown({ text, className }: { text: string; className?: string
       </ReactMarkdown>
     </div>
   )
-}
+})

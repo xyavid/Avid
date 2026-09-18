@@ -5,6 +5,8 @@
  * 调用方的分组规则可能已经过期，这里兜底。少于 `EVENT_GROUP_MIN_SIZE` 时默认展开——
  * 两条调用还要再点一次才能看见，纯粹是浪费。
  */
+import { memo } from 'react'
+
 import { useState } from 'react'
 
 import { useTranslation } from '../../lib/i18n'
@@ -24,7 +26,7 @@ export interface StepGroupProps {
   density?: Density
 }
 
-export function StepGroup({
+export const StepGroup = memo(function StepGroup({
   title,
   tools,
   contents,
@@ -67,4 +69,4 @@ export function StepGroup({
       ))}
     </section>
   )
-}
+})

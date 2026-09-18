@@ -18,6 +18,8 @@
  * 聚焦时显形——`focus-visible` 直接写在按钮上，这样键盘用户 tab 到哪个按钮哪个就可见
  * （透明放在容器上会把子元素一起吃掉，键盘用户将永远看不见动作）。
  */
+import { memo } from 'react'
+
 import { clsx } from 'clsx'
 
 import { useTranslation } from '../../lib/i18n'
@@ -90,7 +92,7 @@ function Actions({
   )
 }
 
-export function EntryRow({
+export const EntryRow = memo(function EntryRow({
   entry,
   shapeIndex = 0,
   density = 'comfy',
@@ -159,4 +161,4 @@ export function EntryRow({
       {actions}
     </article>
   )
-}
+})
