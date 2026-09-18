@@ -109,6 +109,45 @@ def test_security_headers_are_set_on_every_response(bundle):
         assert headers["x-content-type-options"] == "nosniff"
 
 
+# ---------------- 输入面：长度上限（P2-24） ----------------
+
+
+def test_oversized_inputs_are_rejected_at_the_schema(bundle):
+    """请求体以前没有任何长度上限：一次请求就能写进任意大的字符串。
+
+    上限在 schema 层（422），不进服务层——和"非法权限模式"同一条路子。
+    """
+    from avid.web.schemas import MAX_NAME_CHARS, MAX_PROMPT_CHARS
+
+    client, _ = bundle()
+    workspace = client.get("/api/workspaces").json()["workspaces"][0]
+
+    too_long_name = client.post(
+        "/api/sessions",
+        json={"workspace": workspace["id"], "name": "x" * (MAX_NAME_CHARS + 1)},
+    )
+    assert too_long_name.status_code == 422, too_long_name.text
+
+    created = client.post(
+        "/api/sessions", json={"workspace": workspace["id"], "name": "正常名字"}
+    )
+    assert created.status_code == 201
+    session_id = created.json()["id"]
+
+    too_long_prompt = client.post(
+        f"/api/sessions/{session_id}/runs",
+        json={"prompt": "x" * (MAX_PROMPT_CHARS + 1)},
+    )
+    assert too_long_prompt.status_code == 422, too_long_prompt.status_code
+
+    # 正常长度照常受理（上限只拦"明显不是人打出来的"输入）。
+    ok = client.post(
+        f"/api/sessions/{session_id}/runs",
+        json={"prompt": "正常问题", "auto_approve": True},
+    )
+    assert ok.status_code == 201
+
+
 # ---------------- 只读端点的磁盘 IO（P2-5） ----------------
 
 

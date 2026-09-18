@@ -27,13 +27,13 @@ Access API 只给一个 handle——所以"选文件夹"这件事只能由跑在
 
 from __future__ import annotations
 
-import functools
 import logging
 import os
 import shlex
 import shutil
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from contextlib import suppress
 
@@ -93,14 +93,22 @@ def _override(timeout: float, env: dict[str, str]) -> str | None:
 
 
 def _run(argv: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        argv,
-        capture_output=True,
-        text=True,
-        errors="replace",
-        timeout=timeout,
-        check=False,
-    )
+    try:
+        return subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        # 以前这个异常会穿透所有捕获层（pick_directory 只捕 _BackendUnavailable，
+        # WorkspaceService 只捕 PickerError）→ 冒到 500 兜底处理器，把内部命令行
+        # 回给客户端。超时是"选择器起得来但没结果"，按 PickerFailed 报。
+        raise PickerFailed(f"选择器 {argv[0]} 超时（{timeout:.0f} 秒）") from exc
+    except OSError as exc:
+        raise PickerFailed(f"选择器 {argv[0]} 起不来：{exc}") from exc
 
 
 def _tkinter(timeout: float, env: dict[str, str]) -> str | None:
@@ -235,9 +243,14 @@ def pick_directory(
     )
 
 
-@functools.lru_cache(maxsize=1)
-def available_backend() -> str | None:
-    """第一个能起来的后端名（只探测，不弹窗）。给 `/api/meta` 做诊断用。"""
+# 诊断值的缓存时长：探测本身不贵（import tkinter + which），但 `/api/meta` 会被
+# 界面反复取。以前是 `lru_cache`（**永久**）：装上 zenity 或改 AVID_PICKER_CMD 之后
+# `/api/meta` 仍报旧值，只有重启才更新——诊断值撒谎比慢几毫秒糟得多。
+_BACKEND_TTL_SECONDS = 30.0
+_backend_cache: tuple[float, str | None] | None = None
+
+
+def _probe_backend() -> str | None:
     environment = dict(os.environ)
     for name, _backend in BACKENDS:
         if name == "override":
@@ -264,8 +277,26 @@ def available_backend() -> str | None:
     return None
 
 
+def available_backend() -> str | None:
+    """第一个能起来的后端名（只探测，不弹窗）。给 `/api/meta` 做诊断用。"""
+    global _backend_cache
+    now = time.monotonic()
+    if _backend_cache is not None and now - _backend_cache[0] < _BACKEND_TTL_SECONDS:
+        return _backend_cache[1]
+    found = _probe_backend()
+    _backend_cache = (now, found)
+    return found
+
+
+def clear_backend_cache() -> None:
+    """丢掉诊断缓存（测试与"刚改完环境变量"的场景用）。"""
+    global _backend_cache
+    _backend_cache = None
+
+
 __all__ = [
     "BACKENDS",
+    "clear_backend_cache",
     "ENV_OVERRIDE",
     "PICKER_TIMEOUT_SECONDS",
     "PickerError",

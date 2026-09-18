@@ -15,7 +15,10 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src" / "avid"
 WEB = ROOT / "web"
 
-KERNEL_PACKAGES = ("ai", "runtime", "policy", "session", "tools")
+# svc/ 也在内核侧：它是最容易被"顺手 import 一下 pydantic"的层（离传输层最近），
+# 而 A1 以前只查这五个包——`pyproject.toml` 那句"web/ 是唯一 importer"因此少了
+# 一半的守护（审查里的 P2-22）。
+KERNEL_PACKAGES = ("ai", "runtime", "policy", "session", "tools", "svc")
 
 
 def files_under(*parts: str, suffix: str = ".py") -> list[Path]:
@@ -68,6 +71,12 @@ def test_a2_only_web_knows_http_frameworks():
 def test_a2_uvicorn_is_only_used_for_the_web_subcommand():
     found = hits(files_under(suffix=".py"), r"^\s*(import|from)\s+uvicorn")
     assert {item.split(":")[0] for item in found} == {"src/avid/cli.py"}
+
+
+def test_a1_svc_is_also_checked_for_web_framework_imports():
+    """A1 的包清单必须含 svc（P2-22）：它离传输层最近，最容易顺手 import pydantic。"""
+    assert "svc" in KERNEL_PACKAGES
+    assert hits(files_under("svc"), r"fastapi|pydantic|starlette|uvicorn") == []
 
 
 # ---------------- A3 ----------------

@@ -29,6 +29,15 @@ _FAILED_TOOL_MARK = "执行失败："
 # ---------------- 错误信封 ----------------
 
 
+# 输入长度上限（P2-24）。没有上限时一次请求就能把任意大的字符串写进会话文件与
+# 内存，而"读回"要走全量重放、每条消息还要一次 fsync——代价被放大。上限取得很宽
+# （正常使用远够），只拦住"明显不是人打出来的"输入。
+MAX_PATH_CHARS = 4096
+MAX_NAME_CHARS = 200
+MAX_ID_CHARS = 200
+MAX_PROMPT_CHARS = 1_000_000  # 1 MB：长粘贴够用，又不至于让一次请求吃掉整个进程
+
+
 class ErrorBody(BaseModel):
     code: str
     message: str
@@ -118,8 +127,8 @@ class CreateWorkspaceIn(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    path: str
-    name: str | None = None
+    path: str = Field(max_length=MAX_PATH_CHARS)
+    name: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
     # 枚举而不是自由字符串：非法模式在 schema 层就是 422，不会走到"先落盘再 500"。
     permission: Literal["strict", "workspace", "system"] | None = None
 
@@ -153,13 +162,15 @@ class CreateSessionIn(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    id: str | None = None
-    name: str | None = None
-    workspace: str | None = None
+    id: str | None = Field(default=None, max_length=MAX_ID_CHARS)
+    name: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
+    workspace: str | None = Field(default=None, max_length=MAX_ID_CHARS)
 
 
 class RenameSessionIn(BaseModel):
-    name: str
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(max_length=MAX_NAME_CHARS)
 
 
 class EntryOut(BaseModel):
@@ -197,8 +208,10 @@ class BranchListOut(BaseModel):
 class CreateBranchIn(BaseModel):
     """``at`` 是分叉点条目 id；缺省 = 从零开一条空分支。"""
 
-    name: str | None = None
-    at: str | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
+    at: str | None = Field(default=None, max_length=MAX_ID_CHARS)
 
 
 # ---------------- 运行与审批 ----------------
@@ -209,9 +222,9 @@ class StartRunIn(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    prompt: str
+    prompt: str = Field(max_length=MAX_PROMPT_CHARS)
     auto_approve: bool = False
-    branch: str = "main"
+    branch: str = Field(default="main", max_length=MAX_NAME_CHARS)
     permission: Literal["strict", "workspace", "system"] | None = None
 
 

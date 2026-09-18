@@ -68,21 +68,21 @@ def test_backends_fall_through_in_order(monkeypatch):
 
 
 def test_available_backend_reports_the_override(monkeypatch):
-    picker_module.available_backend.cache_clear()
+    picker_module.clear_backend_cache()
     monkeypatch.setenv("AVID_PICKER_CMD", "printf %s /tmp/x")
     try:
         assert picker_module.available_backend() == "override"
     finally:
-        picker_module.available_backend.cache_clear()
+        picker_module.clear_backend_cache()
 
 
 def test_available_backend_is_none_when_nothing_is_left(monkeypatch):
-    picker_module.available_backend.cache_clear()
+    picker_module.clear_backend_cache()
     monkeypatch.setattr(picker_module, "BACKENDS", ())
     try:
         assert picker_module.available_backend() is None
     finally:
-        picker_module.available_backend.cache_clear()
+        picker_module.clear_backend_cache()
 
 
 # ---------------- HTTP ----------------
@@ -255,3 +255,31 @@ def test_meta_exposes_the_picker_backend(bundle, monkeypatch):
     capabilities = client.get("/api/meta").json()["capabilities"]
 
     assert capabilities["workspace_picker"] == "tkinter"
+
+
+def test_a_timing_out_picker_is_a_picker_failure_not_a_500(monkeypatch):
+    """`AVID_PICKER_CMD` 起得来但不返回时，超时必须收敛成 PickerFailed。
+
+    以前 `subprocess.TimeoutExpired` 会穿透所有捕获层（`pick_directory` 只捕
+    `_BackendUnavailable`，服务层只捕 `PickerError`），冒到 500 兜底处理器——把内部
+    命令行回给客户端（审查里的 P2-21）。
+    """
+    monkeypatch.setenv(picker_module.ENV_OVERRIDE, "sleep 30")
+
+    with pytest.raises(picker_module.PickerFailed):
+        picker_module.pick_directory(timeout=0.5)
+
+
+def test_the_diagnostics_value_is_not_cached_forever(monkeypatch):
+    """`available_backend` 以前是 `lru_cache`（永久）：改了环境变量/装上 zenity 之后
+    界面上的诊断值仍报旧值，只有重启才更新。"""
+    monkeypatch.setenv(picker_module.ENV_OVERRIDE, "")
+    picker_module.clear_backend_cache()
+    probed = picker_module.available_backend()
+    assert probed != "override", "没设覆盖命令时不该报 override"
+
+    monkeypatch.setenv(picker_module.ENV_OVERRIDE, "/bin/true")
+    assert picker_module.available_backend() != "override", "TTL 内返回缓存值（免重复探测）"
+
+    picker_module.clear_backend_cache()
+    assert picker_module.available_backend() == "override", "清掉缓存后立刻看到新值"
