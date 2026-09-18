@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  kernel:
+    name: 内核（ruff + mypy + pytest）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: 同步依赖（含 dev group）
+        run: uv sync --group dev
+      - name: 代码风格与明显错误
+        run: uv run ruff check src tests
+      - name: 类型检查
+        run: uv run mypy
+      - name: 测试（stress 由单独 job 跑）
+        run: uv run pytest -q
+
+  stress:
+    name: 长会话与性能门禁
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --group dev
+      # 显式 -m stress：这类门禁默认不跑（pyproject 的 addopts 排除了它），
+      # 但必须**存在一个会执行它的地方**，否则"门禁存在"与"门禁被执行"又会脱钩。
+      - name: 跑 stress 门禁
+        run: uv run pytest -q -m stress
+
+  web:
+    name: 前端（分层/样式/单测/体积）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - working-directory: web
+        run: pnpm install --frozen-lockfile
+      # verify = check:layers + check:tokens + lint + vitest + gate:size
+      - working-directory: web
+        run: pnpm run verify
+      - name: 类型检查（verify 里没有 tsc）
+        working-directory: web
+        run: pnpm exec tsc -b

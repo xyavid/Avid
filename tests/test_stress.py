@@ -20,9 +20,9 @@ import pytest
 
 from avid.runtime import events
 from avid.session import (
-    JsonlSessionRepo,
-    JsonlSessionMetadata,
     STORAGE_VERSION,
+    JsonlSessionMetadata,
+    JsonlSessionRepo,
 )
 from avid.session.jsonl import (
     JsonlHeader,
