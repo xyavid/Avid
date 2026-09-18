@@ -31,7 +31,16 @@ export function RootLayout() {
 
   return (
     <AppShell
-      nav={<SessionList activeId={activeId} onSelect={onSelect} />}
+      nav={(close) => (
+        <SessionList
+          activeId={activeId}
+          onSelect={(sessionId) => {
+            onSelect(sessionId)
+            // 列表在抽屉里：选完必须收起来，否则看不到刚选中的会话。
+            close()
+          }}
+        />
+      )}
       navItems={navItems}
       currentPath={location.pathname}
       onNavigate={(to) => navigate(to)}

@@ -227,6 +227,48 @@ test('收起导航后：轨道内的按钮不越界、不压到会话卡', async
   expect(expanded, '可以再展开回 320px').toBeGreaterThan(300)
 })
 
+test('中档宽度：会话列表走左侧抽屉，选中会话后抽屉收起', async ({ page, request }) => {
+  // 中档（960–1279）的缺口是「会话列表根本不挂载」：轨道只有图标，列表在收起态
+  // 被 `expanded ? props.nav : null` 挡掉，于是这个宽度下无法切换会话。
+  // 处置是把它做成覆盖式抽屉，而不是就地展开成 320px（那会吃掉 1/3 屏宽）。
+  // 名字带时间戳：会话不会被清理，固定名字会让第二次跑出两个匹配。
+  const stamp = Date.now()
+  const current = await request.post(`${BASE}/api/sessions`, {
+    data: { name: `中档当前会话-${stamp}` },
+  })
+  const currentId = (await current.json()).id as string
+  await runToIdle(request, currentId, '中档抽屉：先垫一条消息')
+  const targetName = `中档抽屉目标-${stamp}`
+  const target = await request.post(`${BASE}/api/sessions`, { data: { name: targetName } })
+  const targetId = (await target.json()).id as string
+
+  await page.setViewportSize({ width: 1100, height: 700 })
+  await page.goto(`${BASE}/sessions/${currentId}`)
+  await expect(page.getByLabel(COMPOSER_LABEL)).toBeVisible()
+
+  const nav = page.locator('nav')
+  // exact 必须给：会话名标题（h1）里也含「会话」二字，子串匹配会把当前会话名一起算进来。
+  const listHeading = page.getByRole('heading', { name: '会话', exact: true })
+  expect(
+    await nav.evaluate((element) => element.getBoundingClientRect().width),
+    '中档是 64px 图标轨',
+  ).toBeLessThanOrEqual(70)
+  await expect(listHeading, '中档默认不挂载会话列表').toHaveCount(0)
+
+  const opener = nav.getByRole('button', { name: '会话列表' })
+  await opener.click()
+  await expect(opener).toHaveAttribute('aria-expanded', 'true')
+  await expect(listHeading).toBeVisible()
+
+  // 可访问名 = 会话名 + id + 时间，所以用锚定前缀只命中本次造的那一条。
+  await page.getByRole('button', { name: new RegExp(`^${targetName}`) }).click()
+
+  // 选中必须既切过去、又把抽屉收起来：75vh 的抽屉留着会盖住刚选中的会话。
+  await expect(page).toHaveURL(new RegExp(`/sessions/${targetId}$`))
+  await expect(listHeading, '选中会话后抽屉自己收起').toHaveCount(0)
+  expectComposerInsideViewport(await measure(page), '中档抽屉选中会话后')
+})
+
 test('会话头部：常驻胶带不压工具按钮，三个按钮语义明确', async ({ page, request }) => {
   const listed = await page.request.get(`${BASE}/api/sessions`)
   const sessions: { id: string; message_count: number }[] = (await listed.json()).sessions
