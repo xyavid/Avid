@@ -139,10 +139,11 @@ class RunState:
         """固定指令 + 环境信息 + 技能目录。
 
         ``instructions`` 为 None 时用策略层的默认指令——于是循环不必知道那段默认文案。
+        工作目录取运行级根：模型看到的路径必须与实际解析用的根一致。
         """
         if instructions is None:
-            return self.skills.build_system_prompt()
-        return self.skills.build_system_prompt(instructions)
+            return self.skills.build_system_prompt(workdir=self.workspace_root)
+        return self.skills.build_system_prompt(instructions, workdir=self.workspace_root)
 
     def snapshot(self) -> dict[str, int]:
         """Stop 事件要看到的运行统计。"""

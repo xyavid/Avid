@@ -8,9 +8,13 @@
 from __future__ import annotations
 
 import subprocess
-from typing import Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from . import workspace
+
+if TYPE_CHECKING:  # 只用于标注：tools 不在运行时依赖 runtime 的实例类型
+    from ..runtime.state import RunState
 
 DEFAULT_TIMEOUT = 30
 MAX_TIMEOUT = 300
@@ -25,16 +29,18 @@ def _timeout(value: Any) -> int:
     return max(1, min(seconds, MAX_TIMEOUT))
 
 
-def bash(args: dict[str, Any]) -> str:
+def bash(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     command = args.get("command")
     if not isinstance(command, str) or not command.strip():
         return "错误：缺少参数 command"
 
+    raw_root = getattr(state, "workspace_root", None)
+    cwd: Path = Path(raw_root) if raw_root else workspace.WORKSPACE_ROOT
     timeout = _timeout(args.get("timeout_seconds"))
     try:
         completed = subprocess.run(
             ["bash", "-lc", command],
-            cwd=workspace.WORKSPACE_ROOT,
+            cwd=cwd,
             capture_output=True,
             text=True,
             errors="replace",

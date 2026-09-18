@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from ..policy import compaction as compact
@@ -80,6 +81,8 @@ def prepare(
     """
     limits = budget or ContextBudget()
     reports: list[CompactReport] = []
+    # 压缩落盘跟着工作区走（阶段 18）：一个进程可以服务多个工作区。
+    workdir = Path(state.workspace_root) if state.workspace_root else None
 
     def run(report: CompactReport | None) -> None:
         if report is None:
@@ -93,6 +96,7 @@ def prepare(
             transcript,
             budget=limits.tool_result_chars,
             keep_recent=limits.tool_result_keep_recent,
+            workdir=workdir,
         )
     )
     run(
@@ -112,6 +116,7 @@ def prepare(
                 limit=limits.context_chars,
                 keep_recent=limits.micro_keep_recent,
                 target_ratio=limits.micro_target_ratio,
+                workdir=workdir,
             )
         )
 
@@ -125,6 +130,7 @@ def prepare(
                 config=config,
                 chat=summarize,
                 limit=limits.context_chars,
+                workdir=workdir,
             )
             if report is not None:
                 state.compacted = True
@@ -151,6 +157,7 @@ def reactive(
         transcript,
         config=config,
         chat=summarize,
+        workdir=Path(state.workspace_root) if state.workspace_root else None,
         keep_recent=limits.reactive_keep_recent,
     )
     announce(report, state)

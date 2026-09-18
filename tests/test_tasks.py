@@ -488,11 +488,16 @@ def test_status_terminology_is_exactly_the_three_names(sandbox):
     assert "status" not in enum["function"]["parameters"]["properties"]
 
 
-def test_task_tools_are_registered_and_stateless(sandbox):
+def test_task_tools_are_registered_and_stateful(sandbox):
+    """任务状态仍只在文件里，但**目录跟着工作区走**，所以工具要接 state。
+
+    阶段 18 改了这一点：一个进程可以服务多个工作区，`.tasks/` 不再是进程 CWD 下
+    的固定位置。工具不把状态放内存，只是从 state 取运行级根。
+    """
     names = {"create_task", "update_task", "can_start", "claim_task", "complete_task", "get_task"}
     assert names <= set(TOOL_IMPLS)
     assert names <= {item["function"]["name"] for item in TOOLS}
-    assert names & set(STATEFUL_TOOLS) == set()  # 状态在文件里，不需要 RunState
+    assert names <= set(STATEFUL_TOOLS)
 
 
 # ---------------- 容错：损坏文件与列表 ----------------

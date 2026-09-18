@@ -97,13 +97,17 @@ class SkillLoader:
             for name in sorted(self.skills)
         )
 
-    def build_system_prompt(self, instructions: str = AGENT_INSTRUCTIONS) -> str:
+    def build_system_prompt(
+        self, instructions: str = AGENT_INSTRUCTIONS, workdir: str | None = None
+    ) -> str:
         # 延迟导入：tools 包要 import tools/skill.py，而它要 import 本模块。
         from ..tools import workspace
 
+        # 运行级工作区根优先（一个进程可以服务多个工作区），否则用进程默认根。
+        root = workdir or workspace.WORKSPACE_ROOT
         return (
             f"{instructions}\n"
-            f"工作目录：{workspace.WORKSPACE_ROOT}\n"
+            f"工作目录：{root}\n"
             "Act, don't explain.\n\n"
             f"## 可用技能\n{self.catalog() or '（当前没有可用技能）'}\n\n"
             "Use load_skill to read the full instructions when a skill applies."

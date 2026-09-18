@@ -78,18 +78,23 @@ class CompactReport:
 # ---------------- 落盘 ----------------
 
 
-def _spill_root() -> Path:
-    # 延迟导入：agent 侧要 import 本模块，顶部导入会成环。
+def _spill_root(root: Path | None = None) -> Path:
+    """落盘目录：运行级工作区根优先，否则回落到进程默认根（调用时读取）。
+
+    延迟导入 tools 是因为 agent 侧要 import 本模块，顶部导入会成环。
+    """
+    if root is not None:
+        return Path(root) / SPILL_DIR
     from ..tools import workspace
 
     return Path(workspace.WORKSPACE_ROOT) / SPILL_DIR
 
 
-def _spill(text: str, kind: str) -> str | None:
+def _spill(text: str, kind: str, root: Path | None = None) -> str | None:
     """写盘并返回工作区相对路径。压缩不是关键路径，落盘失败就跳过、不抛。"""
     global _spill_seq
 
-    root = _spill_root()
+    root = _spill_root(root)
     _spill_seq += 1
     path = root / f"{kind}-{_spill_seq:04d}.txt"
     try:
@@ -109,10 +114,10 @@ def _is_spilled(content: str) -> bool:
     return content.startswith(SPILL_PREFIX)
 
 
-def _save_transcript(messages: list[dict[str, Any]]) -> str:
+def _save_transcript(messages: list[dict[str, Any]], workdir: Path | None = None) -> str:
     global _spill_seq
 
-    root = _spill_root()
+    root = _spill_root(workdir)
     _spill_seq += 1
     path = root / f"transcript-{_spill_seq:04d}.json"
     try:
@@ -161,6 +166,7 @@ def tool_result_budget(
     *,
     budget: int = TOOL_RESULT_CHAR_BUDGET,
     keep_recent: int = TOOL_RESULT_KEEP_RECENT,
+    workdir: Path | None = None,
 ) -> CompactReport | None:
     """工具结果字符总量超预算：把最大的一项落盘。
 
@@ -196,7 +202,7 @@ def tool_result_budget(
     if size == 0:
         return None
 
-    path = _spill(transcript.text_at(index), "tool-result")
+    path = _spill(transcript.text_at(index), "tool-result", workdir)
     if path is None:
         return None
 
@@ -257,6 +263,7 @@ def micro_compact(
     limit: int = CONTEXT_CHAR_LIMIT,
     keep_recent: int = MICRO_COMPACT_KEEP_RECENT,
     target_ratio: float = MICRO_COMPACT_TARGET_RATIO,
+    workdir: Path | None = None,
 ) -> CompactReport | None:
     """上下文超限：把较早的工具结果落盘，保留最近若干条。不调用模型。"""
     before = transcript.estimate_chars()
@@ -276,7 +283,7 @@ def micro_compact(
         if _is_spilled(content):
             continue
 
-        path = _spill(content, "tool-result")
+        path = _spill(content, "tool-result", workdir)
         if path is None:
             break
 
@@ -302,13 +309,14 @@ def compact_history(
     config: Config,
     chat: Any = chat_completion,
     limit: int = CONTEXT_CHAR_LIMIT,
+    workdir: Path | None = None,
 ) -> CompactReport | None:
     """整理之后仍然超限：存完整记录，用一次模型调用换摘要，替换历史。"""
     before = transcript.estimate_chars()
     if before <= limit:
         return None
 
-    path = _save_transcript(transcript.as_messages())
+    path = _save_transcript(transcript.as_messages(), workdir)
     summary = _summarize(transcript.as_messages(), config=config, chat=chat)
     if summary is None:
         logger.warning("compact: 摘要生成失败，保留原历史")
@@ -334,6 +342,7 @@ def reactive_compact(
     config: Config,
     chat: Any = chat_completion,
     keep_recent: int = REACTIVE_KEEP_RECENT,
+    workdir: Path | None = None,
 ) -> CompactReport | None:
     """兜底：模型已经报超限，总结更早历史、保留最近若干条，供重试。"""
     before = transcript.estimate_chars()
@@ -348,7 +357,7 @@ def reactive_compact(
         logger.warning("compact: 没有可总结的更早历史，兜底压缩放弃")
         return None
 
-    path = _save_transcript(messages)
+    path = _save_transcript(messages, workdir)
     summary = _summarize(earlier, config=config, chat=chat)
     if summary is None:
         return None
