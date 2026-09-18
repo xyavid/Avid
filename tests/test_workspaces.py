@@ -15,6 +15,7 @@ from avid.workspaces import (
     WorkspaceRegistryCorrupt,
     derive_id,
     registry_path,
+    sessions_root,
 )
 
 
@@ -165,8 +166,8 @@ def test_registry_file_shape(registry, workspace_dir):
 def test_sessions_root_is_inside_the_workspace(registry, workspace_dir):
     workspace = registry.add(workspace_dir)
 
-    assert registry.sessions_root(workspace) == workspace_dir.resolve() / ".avid/sessions"
-    assert registry.sessions_root(str(workspace_dir)) == (
+    assert sessions_root(workspace) == workspace_dir.resolve() / ".avid/sessions"
+    assert sessions_root(str(workspace_dir)) == (
         workspace_dir.resolve() / ".avid/sessions"
     )
 

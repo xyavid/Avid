@@ -259,10 +259,14 @@ class WorkspaceRegistry:
                 return items[index]
         return None
 
-    # ---------------- 会话库 ----------------
+    # 会话库路径见模块函数 `sessions_root()`（不读实例状态，不做 staticmethod）。
 
-    @staticmethod
-    def sessions_root(workspace: Workspace | str) -> Path:
-        """一个工作区的会话库固定落在它自己的 ``.avid/sessions/`` 下。"""
-        root = workspace.root if isinstance(workspace, Workspace) else str(workspace)
-        return Path(root) / SESSION_DIR
+
+def sessions_root(workspace: Workspace | str) -> Path:
+    """一个工作区的会话库固定落在它自己的 ``.avid/sessions/`` 下。
+
+    模块函数而不是 `WorkspaceRegistry` 的 staticmethod（P3-4）：它不读实例状态，
+    挂在类上只会让人以为"要先有个注册表才能算这个路径"。
+    """
+    root = workspace.root if isinstance(workspace, Workspace) else str(workspace)
+    return Path(root) / SESSION_DIR

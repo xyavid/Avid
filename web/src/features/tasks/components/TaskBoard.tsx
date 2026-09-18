@@ -1,22 +1,12 @@
+import { errorMessage } from '../../../lib/errors'
 import { Button } from '../../../ui/primitives'
 import { useTranslation } from '../../../lib/i18n'
-import { ApiError } from '../../../api/client'
 import { useTaskView } from '../hooks/useTaskView'
 import { TaskCard } from './TaskCard'
 import { TaskFilters } from './TaskFilters'
-import type { LocaleApi } from '../../../lib/i18n'
 import type { Task } from '../../../api/types'
 
 /** 服务端错误码是稳定契约：先查 errors.<code>，缺词条时回落 errors.unknown。 */
-function errorText(t: LocaleApi['t'], error: unknown): string {
-  if (error instanceof ApiError) {
-    const key = `errors.${error.code}`
-    const text = t(key)
-    return text === key ? t('errors.unknown', { code: error.code }) : text
-  }
-  return t('common.networkError')
-}
-
 function TaskList({ tasks }: { tasks: Task[] }) {
   const { t } = useTranslation()
   if (tasks.length === 0) return <p className="empty-note">{t('tasks.empty')}</p>
@@ -36,7 +26,7 @@ function TaskError({ error, onRetry }: { error: unknown; onRetry: () => void }) 
   return (
     <div className="empty-note flex flex-col items-center gap-2">
       <p className="font-sketch text-danger">{t('errors.title')}</p>
-      <p>{errorText(t, error)}</p>
+      <p>{errorMessage(t, error)}</p>
       <Button size="sm" onClick={onRetry}>
         {t('common.retry')}
       </Button>

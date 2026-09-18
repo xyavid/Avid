@@ -525,3 +525,45 @@ def test_every_tool_with_a_path_argument_is_scope_checked():
     }
 
     assert declared == set(PATH_TOOLS)
+
+
+# ---------- 词表一致：三处一份语义（P3-13） ----------
+
+
+def literal_values(annotation):
+    """从一个（可能带 `| None` 的）Literal 注解里取出候选集合。"""
+    from typing import get_args
+
+    values: set[str] = set()
+    for part in get_args(annotation):
+        inner = get_args(part)
+        values |= set(inner) if inner else set()
+    return values
+
+
+def test_permission_mode_vocabulary_is_the_same_in_three_places():
+    """policy 的 `MODES`、web schema 的 Literal、前端 `PermissionMode` 必须相等。
+
+    三处各写一遍 `strict | workspace | system`：加一档模式时漏改一处，症状是
+    "schema 放行、策略层报未知模式"（400）或"前端下拉里没有它"。事件名已经有
+    `test_event_contract.py` 这条先例，词表照同一套办法钉住。
+    """
+    import re
+    from pathlib import Path
+
+    from avid.policy.permission import MODE_STRICT, MODE_SYSTEM, MODE_WORKSPACE, MODES
+    from avid.web.schemas import CreateWorkspaceIn, StartRunIn
+
+    assert set(MODES) == {MODE_STRICT, MODE_WORKSPACE, MODE_SYSTEM}
+
+    for model in (CreateWorkspaceIn, StartRunIn):
+        annotation = model.model_fields["permission"].annotation
+        assert literal_values(annotation) == set(MODES), model.__name__
+
+    types_ts = (Path(__file__).resolve().parents[1] / "web" / "src" / "api" / "types.ts").read_text(
+        encoding="utf-8"
+    )
+    match = re.search(r"export type PermissionMode =([^\n]+)", types_ts)
+    assert match is not None, "types.ts 缺少 PermissionMode"
+    frontend = set(re.findall(r"'([a-z]+)'", match.group(1)))
+    assert frontend == set(MODES), f"前端词表不符：{frontend}"

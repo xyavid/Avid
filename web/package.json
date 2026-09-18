@@ -8,14 +8,15 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test": "vitest run",
-    "lint": "node scripts/check-style.mjs",
+    "copy:dist": "node scripts/copy-dist.mjs",
     "check:layers": "node scripts/check-layers.mjs",
     "check:tokens": "node scripts/check-tokens.mjs",
-    "gate:size": "node scripts/gate-size.mjs",
-    "copy:dist": "node scripts/copy-dist.mjs",
+    "lint": "node scripts/check-style.mjs",
+    "typecheck": "tsc -b --noEmit",
+    "test": "vitest run",
     "test:e2e": "playwright test",
-    "verify": "pnpm run check:layers && pnpm run check:tokens && pnpm run lint && pnpm run test && pnpm run gate:size"
+    "gate:size": "node scripts/gate-size.mjs",
+    "verify": "pnpm run check:layers && pnpm run check:tokens && pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run gate:size"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.2",

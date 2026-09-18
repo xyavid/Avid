@@ -39,11 +39,11 @@ from .svc.workspaces import WorkspaceInvalid, bound_workspace
 from .tools import TOOLS, workspace
 from .web.app import LOOPBACK_HOSTS, trusted_hosts
 from .workspaces import (
-    SESSION_DIR,
     Workspace,
     WorkspaceError,
     WorkspaceNotFound,
     WorkspaceRegistry,
+    sessions_root,
 )
 
 # 工具清单从注册表派生：硬编码过两次，两次都漏（写 8 个时实际已有 14 个）。
@@ -214,7 +214,7 @@ def _run_session(args: argparse.Namespace, config) -> int:
         f"工作区 {target.id}（{target.root}，默认权限 {target.default_permission}）",
         file=sys.stderr,
     )
-    repo = JsonlSessionRepo(target.root + "/" + SESSION_DIR, workspace=target.id)
+    repo = JsonlSessionRepo(sessions_root(target), workspace=target.id)
     session = None
     created = False
     try:
@@ -273,7 +273,7 @@ def _session_admin(args: argparse.Namespace) -> int:
     except WorkspaceNotFound as exc:
         print(f"工作区错误：{exc}", file=sys.stderr)
         return 2
-    repo = JsonlSessionRepo(target.root + "/" + SESSION_DIR, workspace=target.id)
+    repo = JsonlSessionRepo(sessions_root(target), workspace=target.id)
     try:
         if args.delete_session is not None:
             found = _find(repo, args.delete_session)

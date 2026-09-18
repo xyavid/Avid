@@ -1,10 +1,9 @@
+import { errorMessage } from '../../../lib/errors'
 import { Button, Field, Input } from '../../../ui/primitives'
 import { useTranslation } from '../../../lib/i18n'
 import { useMeta } from '../../../api/queries'
-import { ApiError } from '../../../api/client'
 import { useUiStore } from '../../../state/uiStore'
 import { AboutCard, BuildStamp, FeaturesTable, MetaRow, ToolsRow } from './AboutCard'
-import type { LocaleApi } from '../../../lib/i18n'
 import type { Density } from '../../../lib/density'
 import type { TextScale } from '../../../state/uiStore'
 import type { Meta } from '../../../api/types'
@@ -13,15 +12,6 @@ const SCALES: TextScale[] = [90, 100, 110, 125]
 const DENSITIES: Density[] = ['compact', 'comfy']
 
 /** 服务端错误码是稳定契约：先查 errors.<code>，缺词条时回落 errors.unknown。 */
-function errorText(t: LocaleApi['t'], error: unknown): string {
-  if (error instanceof ApiError) {
-    const key = `errors.${error.code}`
-    const text = t(key)
-    return text === key ? t('errors.unknown', { code: error.code }) : text
-  }
-  return t('common.networkError')
-}
-
 interface ChoiceOption<T extends string | number> {
   value: T
   label: string
@@ -144,7 +134,7 @@ function MetaError({ error, onRetry }: { error: unknown; onRetry: () => void }) 
   return (
     <div className="empty-note flex flex-col items-center gap-2">
       <p className="font-sketch text-danger">{t('errors.title')}</p>
-      <p>{errorText(t, error)}</p>
+      <p>{errorMessage(t, error)}</p>
       <Button size="sm" onClick={onRetry}>
         {t('common.retry')}
       </Button>

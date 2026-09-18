@@ -27,7 +27,13 @@ from pathlib import Path
 from typing import Any
 
 from ..session import JsonlSessionRepo, SessionMetadata
-from ..workspaces import Workspace, WorkspaceError, WorkspaceRegistry, derive_id
+from ..workspaces import (
+    Workspace,
+    WorkspaceError,
+    WorkspaceRegistry,
+    derive_id,
+    sessions_root,
+)
 from .errors import (
     PickerBusy,
     ServiceError,
@@ -231,7 +237,7 @@ class WorkspaceService:
             and self.default_sessions_root is not None
         ):
             return self.default_sessions_root
-        return self.registry.sessions_root(workspace)
+        return sessions_root(workspace)
 
     def repo_for(self, workspace: Workspace) -> JsonlSessionRepo:
         repo = self._repos.get(workspace.id)

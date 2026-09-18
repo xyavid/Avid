@@ -6,7 +6,7 @@ import { useTranslation } from '../../../lib/i18n'
 import { EntryRow, StepGroup, ToolCallCard } from '../../../ui/patterns'
 import type { Density } from '../../../lib/density'
 import type { TimelineEntry } from '../../../lib/timeline'
-import { useGroupedTimeline } from '../hooks/useGroupedTimeline'
+import { groupTimeline } from '../lib/groupTimeline'
 import { useTimelineWindow } from '../hooks/useTimelineWindow'
 import type { ToolRun } from '../../../lib/timeline'
 
@@ -37,9 +37,9 @@ export function Timeline({
   resetKey,
 }: TimelineProps) {
   const { t } = useTranslation()
-  // memo：`useGroupedTimeline` 每次调用都要建 Map/Set 并遍历全部条目，而父组件在
+  // memo：`groupTimeline` 每次调用都要建 Map/Set 并遍历全部条目，而父组件在
   // 流式期间每帧都重渲染——只有 entries/tools 真的变了才需要重算。
-  const blocks = useMemo(() => useGroupedTimeline(entries, tools), [entries, tools])
+  const blocks = useMemo(() => groupTimeline(entries, tools), [entries, tools])
   const windowState = useTimelineWindow(blocks.length, resetKey)
 
   const visible = blocks.slice(Math.max(0, blocks.length - windowState.visibleCount))

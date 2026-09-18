@@ -1,20 +1,10 @@
+import { errorMessage } from '../../../lib/errors'
 import { Button } from '../../../ui/primitives'
 import { useTranslation } from '../../../lib/i18n'
 import { useSkills } from '../../../api/queries'
-import { ApiError } from '../../../api/client'
-import type { LocaleApi } from '../../../lib/i18n'
 import type { Skill } from '../../../api/types'
 
 /** 服务端错误码是稳定契约：先查 errors.<code>，缺词条时回落 errors.unknown。 */
-function errorText(t: LocaleApi['t'], error: unknown): string {
-  if (error instanceof ApiError) {
-    const key = `errors.${error.code}`
-    const text = t(key)
-    return text === key ? t('errors.unknown', { code: error.code }) : text
-  }
-  return t('common.networkError')
-}
-
 function SkillItem({ skill }: { skill: Skill }) {
   return (
     <li className="sketch-chip flex flex-col gap-1 p-3">
@@ -29,7 +19,7 @@ function SkillsError({ error, onRetry }: { error: unknown; onRetry: () => void }
   return (
     <div className="empty-note flex flex-col items-center gap-2">
       <p className="font-sketch text-danger">{t('errors.title')}</p>
-      <p>{errorText(t, error)}</p>
+      <p>{errorMessage(t, error)}</p>
       <Button size="sm" onClick={onRetry}>
         {t('common.retry')}
       </Button>

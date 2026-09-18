@@ -169,6 +169,11 @@ zenity/kdialog → Windows（WSL 互操作）→ osascript 依次探测，`GET /
 
 ## 4. 验证
 
+前端的 `pnpm -C web run verify` 覆盖四道门禁 + 类型检查 + 单测 + 体积（`check:layers`
+→ `check:tokens` → `lint` → `typecheck`（`tsc -b --noEmit`）→ `vitest run` →
+`gate:size`）。Playwright 的 `test:e2e` **不在**其中：它要一个活的内核进程与真实模型
+（`AVID_E2E=1`），不适合放进每次提交都跑的门禁，按需单独执行（见下）。
+
 ```bash
 # 内核侧
 uv run pytest -q                                   # 全部（含事件契约 A7 与边界 A1–A12）

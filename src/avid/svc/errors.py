@@ -104,25 +104,6 @@ class SessionReadError(ServiceError):
     status = 500
 
 
-__all__ = [
-    "ApprovalConflict",
-    "ApprovalExpired",
-    "ApprovalNotFound",
-    "BranchExists",
-    "InvalidRequest",
-    "RunBusy",
-    "RunFinished",
-    "RunNotFound",
-    "ServiceError",
-    "SessionBusy",
-    "SessionExists",
-    "SessionNotFound",
-    "SessionReadError",
-    "TaskCorrupt",
-    "TaskNotFound",
-]
-
-
 class WorkspaceExists(ServiceError):
     """要登记的工作区已经在列表里（进程绑定的或已登记的）。"""
 
@@ -160,3 +141,27 @@ class TooManyStreams(ServiceError):
 
     code = "too_many_streams"
     status = 503
+
+
+__all__ = [
+    "ApprovalConflict",
+    "ApprovalExpired",
+    "ApprovalNotFound",
+    "BranchExists",
+    "InvalidRequest",
+    "PickerBusy",
+    "PickerFailed",
+    "PickerUnavailable",
+    "RunBusy",
+    "RunFinished",
+    "RunNotFound",
+    "ServiceError",
+    "SessionBusy",
+    "SessionExists",
+    "SessionNotFound",
+    "SessionReadError",
+    "TaskCorrupt",
+    "TaskNotFound",
+    "TooManyStreams",
+    "WorkspaceExists",
+]

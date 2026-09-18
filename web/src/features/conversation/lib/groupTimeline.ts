@@ -15,7 +15,7 @@ function groupable(run: ToolRun | undefined): boolean {
  * 把「条目 + 工具运行」编织成可渲染的顺序：
  * assistant 条目后面跟它声明的工具调用；连续 ≥2 个正常调用收进一个组。
  */
-export function useGroupedTimeline(
+export function groupTimeline(
   entries: TimelineEntry[],
   tools: ToolRun[],
 ): TimelineBlock[] {
