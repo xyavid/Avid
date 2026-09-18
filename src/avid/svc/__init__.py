@@ -23,6 +23,7 @@ from ..tools import workspace
 from ..workspaces import Workspace, WorkspaceRegistry
 from .approvals import APPROVAL_TIMEOUT_SECONDS
 from .runs import (
+    MAX_EVENT_BUFFER,
     MAX_RETAINED_RUNS,
     REPLAY_BUFFER_SIZE,
     TERMINAL_RETENTION_SECONDS,
@@ -69,6 +70,7 @@ class Services:
         approval_timeout: float = APPROVAL_TIMEOUT_SECONDS,
         retention_seconds: float = TERMINAL_RETENTION_SECONDS,
         max_runs: int = MAX_RETAINED_RUNS,
+        max_events: int = MAX_EVENT_BUFFER,
         registry: WorkspaceRegistry | None = None,
     ) -> None:
         """任何装配都先绑定一个**工作地点**，但**不写盘**（注册表只由用户显式动作写入）。
@@ -105,6 +107,7 @@ class Services:
             approval_timeout=approval_timeout,
             retention_seconds=retention_seconds,
             max_runs=max_runs,
+            max_events=max_events,
         )
         self.sessions = SessionService(self.workspaces, self.runs)
         self.tasks = TaskService(self.workspaces)

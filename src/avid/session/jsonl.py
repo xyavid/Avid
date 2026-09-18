@@ -499,6 +499,9 @@ class SessionFileLock:
     def __init__(self, session_path: Path) -> None:
         self.path = session_path.with_name(session_path.name + ".lock")
         self._fd: int | None = None
+        # 同一存储可能被运行线程与 `repo.close()`（例如服务关停）同时关：没有这把
+        # 小锁时，两个线程都能通过 `_fd is None` 的检查，后到的那个会 `close(None)`。
+        self._mutex = threading.Lock()
 
     def acquire(self, label: str) -> None:
         """拿到锁，或抛 ``SessionLockedError``。"""
@@ -510,18 +513,20 @@ class SessionFileLock:
         if not _try_lock(fd):
             os.close(fd)
             raise SessionLockedError(label)
-        self._fd = fd
+        with self._mutex:
+            self._fd = fd
 
     def release(self) -> None:
-        if self._fd is None:
+        with self._mutex:
+            fd, self._fd = self._fd, None
+        if fd is None:
             return
         try:
-            _unlock(self._fd)
+            _unlock(fd)
         except OSError:  # pragma: no cover
             pass
         finally:
-            os.close(self._fd)
-            self._fd = None
+            os.close(fd)
 
 
 class JsonlStorage:

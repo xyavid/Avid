@@ -8,6 +8,7 @@ F0 的价值不依赖前端：它把「工具是否开始过」「压缩是否�
 from __future__ import annotations
 
 import threading
+import time
 
 import pytest
 
@@ -22,6 +23,7 @@ from support import (
     make_turn,
     new_session,
     tool_call,
+    wait_for,
     wait_terminal,
 )
 
@@ -342,6 +344,102 @@ def test_finished_runs_and_session_locks_are_reclaimed(sandbox):
         services.runs.get(record.run_id)
     assert record.events == [], "缓冲要一起释放"
     assert services.runs._session_locks == {}
+
+
+# ---------------- 缓冲边界：跟随期缺口与事件总数上限 ----------------
+
+
+class BlockingChat:
+    """卡住第一轮模型调用，好让测试在"运行还在进行"时操作缓冲。"""
+
+    def __init__(self) -> None:
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def __call__(self, config, messages, **kwargs):
+        self.entered.set()
+        assert self.release.wait(5), "测试自己没放行"
+        return make_turn("答")
+
+
+def test_live_follower_is_told_when_its_cursor_is_evicted(sandbox):
+    """订阅时检查一次不够：慢消费者还在跟的时候缓冲翻页，同样要显式 resync（I5）。
+
+    以前跟随循环用 ``max(0, index - dropped)`` 把越界下标夹到队首，于是缺口被
+    静默跳过——客户端丢了一段历史却收不到任何提示。
+    """
+    chat = BlockingChat()
+    services = build(sandbox, chat, buffer_size=2)
+    record = services.runs.start(new_session(services), "跑")
+    assert chat.entered.wait(5)
+
+    got: list[str] = []
+    consumed = threading.Event()
+
+    def consume() -> None:
+        # 慢消费者：每次 next() 之间停一下，模拟"跟不上的客户端"。
+        for event in services.runs.subscribe(record.run_id, after=0):
+            if event is not None:
+                got.append(event.type)
+                consumed.set()
+            time.sleep(0.05)
+
+    thread = threading.Thread(target=consume, daemon=True)
+    thread.start()
+    # 先让订阅者把已有事件消费完并进入跟随（此刻还没有任何淘汰）。
+    assert consumed.wait(5), "订阅者没开始消费"
+    assert record.evicted_upto == 0, "这一步不该有缺口，否则测不到跟随期路径"
+
+    # 订阅者正在 sleep，此刻灌入远超 buffer_size 的 durable：它的游标会被淘汰。
+    for index in range(6):
+        services.runs.emit(
+            record,
+            events.TOOL_CALL_STARTED,
+            tool="bash",
+            arguments={},
+            round=1,
+            tool_call_id=f"c{index}",
+        )
+
+    assert wait_for(lambda: events.RESYNC in got, 5), got
+    chat.release.set()
+    assert wait_terminal(record)
+    thread.join(timeout=5)
+
+
+def test_delta_flood_cannot_grow_the_buffer_without_bound(sandbox):
+    """一次长回复的 delta 也要有上限：每条 delta 都是一个 RunEvent。
+
+    上限淘汰最旧的前缀；被连带丢掉的 durable 必须记进 ``evicted_upto``，
+    否则重连的客户端会看到静默缺口。
+    """
+    chat = BlockingChat()
+    services = build(sandbox, chat, buffer_size=16, max_events=64)
+    record = services.runs.start(new_session(services), "跑")
+    assert chat.entered.wait(5)
+
+    for index in range(400):
+        services.runs.emit(
+            record,
+            events.TOOL_CALL_STARTED,
+            tool="bash",
+            arguments={},
+            round=1,
+            tool_call_id=f"c{index}",
+        )
+        services.runs.emit_delta(record, services.runs, "x")
+
+    assert len(record.events) <= 64, len(record.events)
+    assert record.evicted_upto > 0, "被丢掉的 durable 必须记账，否则是静默缺口"
+    assert record.durable_index == [
+        record.dropped + position
+        for position, event in enumerate(record.events)
+        if event.seq is not None
+    ]
+    assert record.absolute_index() == record.dropped + len(record.events)
+
+    chat.release.set()
+    assert wait_terminal(record)
 
 
 def test_cancel_arriving_before_the_state_exists_is_not_lost(sandbox, monkeypatch):

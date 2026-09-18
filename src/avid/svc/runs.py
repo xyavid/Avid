@@ -60,6 +60,11 @@ TERMINAL_RETENTION_SECONDS = 600.0
 # 条数兜底：即便都在保留窗口内，也不让记录数无界。
 MAX_RETAINED_RUNS = 200
 
+# 事件总数上限（durable + transient + delta）。durable 的重放预算是 buffer_size，
+# 这个上限只用来挡住 delta 洪水：一次很长的回复会让缓冲涨到几十 MB（每条 delta
+# 都是一个 RunEvent）。delta 可任意丢，超出就丢最旧的前缀。
+MAX_EVENT_BUFFER = 4096
+
 # 条数兜底时**不允许**动刚结束的记录：订阅者可能还在消费它的缓冲（I5 不允许
 # 静默缺口）。只有结束超过这么久的才在兜底范围内。
 SWEEP_MIN_AGE_SECONDS = 30.0
@@ -146,6 +151,7 @@ class RunRegistry:
         approval_timeout: float = APPROVAL_TIMEOUT_SECONDS,
         retention_seconds: float = TERMINAL_RETENTION_SECONDS,
         max_runs: int = MAX_RETAINED_RUNS,
+        max_events: int = MAX_EVENT_BUFFER,
     ) -> None:
         self.workspaces = workspaces
         self.chat = chat
@@ -156,6 +162,7 @@ class RunRegistry:
         self.approval_timeout = approval_timeout
         self._retention_ms = max(0, int(retention_seconds * 1000))
         self._max_runs = max(1, max_runs)
+        self.max_events = max(1, max_events)
         self._runs: dict[str, RunRecord] = {}
         self._active: dict[str, str] = {}
         self._lock = threading.RLock()
@@ -319,40 +326,55 @@ class RunRegistry:
             record.events.append(event)
             if seq is not None:
                 record.durable_index.append(record.dropped + len(record.events) - 1)
-            self._trim(record, self.buffer_size)
+            self._trim(record, self.buffer_size, self.max_events)
             record.condition.notify_all()
         return event
 
     @staticmethod
-    def _trim(record: RunRecord, size: int | None = None) -> None:
-        """淘汰队首，使剩下的 **durable** 事件不超过上限。调用方必须持有 condition。
+    def _trim(
+        record: RunRecord, size: int | None = None, max_events: int | None = None
+    ) -> None:
+        """淘汰队首：durable 不超过 ``size``，事件总数不超过 ``max_events``。
 
-        只数 durable：设计里的缓冲是「最近 512 条 **durable** 事件」（§5.1），而 delta
-        与 durable 走的是同一条实时队列。若按总条数淘汰，一次长回复的上千条 delta 会把
-        durable 事件挤出缓冲，重连的客户端就会平白收到 ``resync``（I5 的语义被 delta
-        的多少左右，这显然不对）。
+        调用方必须持有 condition。
+
+        只按 durable 算重放预算：设计里的缓冲是「最近 512 条 **durable** 事件」（§5.1），
+        而 delta 与 durable 走同一条实时队列。若按总条数淘汰 durable，一次长回复的上千
+        条 delta 会把 durable 挤出缓冲，重连的客户端就会平白收到 ``resync``（I5 的语义
+        被 delta 的多少左右，这显然不对）。
 
         淘汰必须是**连续前缀**：``absolute_index`` 用 ``dropped + len(events)`` 定位实时
-        队列，非连续删除会让这个下标算错。因此按 ``durable_index`` 找到第 overflow 条
-        durable，把包括它在内的前缀整段丢掉（夹在其中的 delta 一起丢——它们本来就不
-        参与重放）。``durable_index`` 是增量维护的，所以这里不用扫全表。
+        队列，非连续删除会让这个下标算错。``durable_index`` 是增量维护的，所以这里不用
+        扫全表。
         """
         limit = size if size is not None else 0
-        if limit <= 0:
-            return
-        overflow = len(record.durable_index) - limit
-        if overflow <= 0:
-            return
-        last_dropped_abs = record.durable_index[overflow - 1]
-        cut_abs = last_dropped_abs + 1
-        # 被丢掉的最高 durable seq：durable seq 单调，所以就是最后一个被丢的那条。
-        dropped_event = record.events[last_dropped_abs - record.dropped]
-        if dropped_event.seq is not None:
-            record.evicted_upto = max(record.evicted_upto, dropped_event.seq)
-        cut = cut_abs - record.dropped
-        del record.durable_index[:overflow]
-        del record.events[:cut]
-        record.dropped = cut_abs
+        if limit > 0:
+            overflow = len(record.durable_index) - limit
+            if overflow > 0:
+                last_dropped_abs = record.durable_index[overflow - 1]
+                cut_abs = last_dropped_abs + 1
+                # 被丢掉的最高 durable seq：durable seq 单调，所以就是最后一个被丢的。
+                dropped_event = record.events[last_dropped_abs - record.dropped]
+                if dropped_event.seq is not None:
+                    record.evicted_upto = max(record.evicted_upto, dropped_event.seq)
+                cut = cut_abs - record.dropped
+                del record.durable_index[:overflow]
+                del record.events[:cut]
+                record.dropped = cut_abs
+
+        # 事件总数上限：一次长回复的 delta 会把缓冲撑到几十 MB（每条都是一个 RunEvent）。
+        # delta 可任意丢，所以超出就丢最旧的前缀；被连带丢掉的 durable 必须同步
+        # ``evicted_upto``，否则跟随中的订阅者会看到静默缺口（I5）。
+        if max_events and len(record.events) > max_events:
+            cut = len(record.events) - max_events
+            head = record.dropped + cut
+            while record.durable_index and record.durable_index[0] < head:
+                absolute = record.durable_index.pop(0)
+                dropped_event = record.events[absolute - record.dropped]
+                if dropped_event.seq is not None:
+                    record.evicted_upto = max(record.evicted_upto, dropped_event.seq)
+            del record.events[:cut]
+            record.dropped = head
 
     def subscribe(
         self,
@@ -367,16 +389,27 @@ class RunRegistry:
 
         ``after`` 是客户端已知的最大 durable ``seq``；游标落在缓冲之外时先发一条
         durable ``resync``，客户端据此重建视图（I5）。delta 不重放（I15）。
+
+        **跟随期间**缓冲区翻页时同样要发 ``resync``：订阅时检查一次不够——慢消费者
+        还在跟的时候，缓冲可能已经把"还没投递给它"的 durable 事件淘汰掉了，那时的
+        静默缺口与订阅时的缺口一样违反 I5。
         """
         record = self.get(run_id)
         index = 0
+        delivered = after  # 已投递给这个订阅者的最大 durable seq
 
         if self._has_gap(record, after):
             # 缺口已经存在：先显式告知，再从当前队尾开始跟随（不补发残存的旧事件，
             # 否则客户端会在重建视图的同时收到更小的 seq）。
-            yield self.emit(record, events.RESYNC, after=after, reason="buffer_evicted")
+            #
+            # 订阅者自己的游标要推到**这条 resync 的 seq**：缓冲满时每发一条 durable
+            # 都会再淘汰一条，`evicted_upto` 会一直涨；用它的值当游标会让下面的跟随
+            # 循环永远判定"有缺口"，无限发 resync。
+            resync = self.emit(record, events.RESYNC, after=after, reason="buffer_evicted")
+            delivered = max(delivered, resync.seq or delivered)
             with record.condition:
                 index = record.absolute_index()
+            yield resync
         else:
             with record.condition:
                 replayed = list(record.events)
@@ -386,18 +419,48 @@ class RunRegistry:
                     continue
                 if event.seq is not None and event.seq <= after:
                     continue
+                if event.seq is not None:
+                    delivered = max(delivered, event.seq)
                 yield event
 
+        stale = False
         while True:
             if stop is not None and stop():
                 return
             with record.condition:
-                fresh = list(record.events[max(0, index - record.dropped) :])
-                index = record.absolute_index()
-                if not fresh and not record.terminal:
-                    record.condition.wait(timeout=heartbeat)
-                    fresh = list(record.events[max(0, index - record.dropped) :])
+                if self._has_gap(record, delivered):
+                    stale = True
+                    fresh: list[RunEvent] = []
+                elif index < record.dropped:
+                    # 只丢了可丢弃的事件（delta / transient）：不补发，从现在继续。
                     index = record.absolute_index()
+                    fresh = []
+                else:
+                    fresh = list(record.events[index - record.dropped :])
+                    index = record.absolute_index()
+                if not fresh and not record.terminal and not stale:
+                    record.condition.wait(timeout=heartbeat)
+                    if self._has_gap(record, delivered):
+                        stale = True
+                    elif index < record.dropped:
+                        index = record.absolute_index()
+                    else:
+                        fresh = list(record.events[index - record.dropped :])
+                        index = record.absolute_index()
+
+            if stale:
+                # 跟随期间丢了还没投递的 durable：显式告知后从队尾重新跟随。
+                logger.info("订阅 %s 的游标被缓冲淘汰，发 resync", run_id)
+                gap_from = delivered
+                resync = self.emit(
+                    record, events.RESYNC, after=gap_from, reason="buffer_evicted"
+                )
+                delivered = max(delivered, resync.seq or delivered)
+                with record.condition:
+                    index = record.absolute_index()
+                stale = False
+                yield resync
+                continue
             if not fresh:
                 if record.terminal:
                     return
@@ -406,6 +469,10 @@ class RunRegistry:
             for event in fresh:
                 if event.type in events.DELTA_EVENT_TYPES and not deltas:
                     continue
+                if event.seq is not None:
+                    if event.seq <= delivered:
+                        continue  # 重放边界上的重复：幂等，但不重复投递
+                    delivered = event.seq
                 yield event
                 if event.type in events.TERMINAL_EVENT_TYPES:
                     return
@@ -451,7 +518,7 @@ class RunRegistry:
                     ts=events.now_ms(),
                 )
             )
-            RunRegistry._trim(record, registry.buffer_size)
+            RunRegistry._trim(record, registry.buffer_size, registry.max_events)
             record.condition.notify_all()
 
     # ---------------- 运行线程 ----------------
@@ -665,6 +732,8 @@ class RunRegistry:
 
 
 __all__ = [
+    "MAX_EVENT_BUFFER",
+    "MAX_RETAINED_RUNS",
     "REPLAY_BUFFER_SIZE",
     "SESSION_DIR",
     "TERMINAL_HARD_FALLBACK_SECONDS",
