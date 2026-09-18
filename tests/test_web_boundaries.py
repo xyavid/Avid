@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -165,3 +166,97 @@ def test_a12_frontend_has_no_third_party_urls_outside_api():
 def test_frontend_sources_exist():
     """A12 是空集合断言，目录不存在时会假通过——这里把前提钉住。"""
     assert frontend_sources(), "web/src 下没有前端源码"
+
+
+# ---------------- A13：runtime → policy 的边界（设计文档 §12 判据 9） ----------------
+
+
+def policy_imports(path: Path) -> tuple[set[str], set[str]]:
+    """返回 (运行时 import 的 policy 模块, 只在 TYPE_CHECKING 下 import 的)。
+
+    用 AST 而不是 grep：判据 9 特意区分"注解用的惰性 import"与"真依赖"，
+    正则分不出来，而这条边界的价值恰恰在那个区分上。
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    runtime: set[str] = set()
+    typing_only: set[str] = set()
+
+    def walk(body: list[ast.stmt], in_type_checking: bool) -> None:
+        for node in body:
+            if (
+                isinstance(node, ast.If)
+                and isinstance(node.test, ast.Name)
+                and node.test.id == "TYPE_CHECKING"
+            ):
+                walk(node.body, True)
+                walk(node.orelse, in_type_checking)
+                continue
+            if isinstance(node, ast.ImportFrom) and node.level:
+                module = node.module or ""
+                if module == "policy" or module.startswith("policy."):
+                    # `from ..policy import compaction` 也把 policy.compaction 记上：
+                    # 包级 import 同样是跨层使用。
+                    targets = {
+                        f"policy.{alias.name}" for alias in node.names if module == "policy"
+                    } | ({module} if module != "policy" else {"policy"})
+                    (typing_only if in_type_checking else runtime).update(targets)
+            for field in ("body", "orelse", "finalbody"):
+                nested = getattr(node, field, None)
+                if isinstance(nested, list) and nested and not isinstance(node, ast.If):
+                    walk(nested, in_type_checking)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.With, ast.Try)):
+                walk(node.body, in_type_checking)
+                walk(getattr(node, "handlers", []) or [], in_type_checking)
+
+    walk(tree.body, False)
+    return runtime, typing_only
+
+
+# runtime/ 允许 import policy 的文件与各自用到的模块。这不是"豁免名单"，而是把边界
+# 写成会失败的断言：`loop.py` 与 `execution.py` 必须是零运行时依赖（调度与工具协议
+# 不该认识策略），其余三个文件各有明确理由——context 编排压缩、state 持有运行期
+# 实例、hooks 注册默认回调（设计文档 §12 判据 9 的措辞修正①）。
+RUNTIME_POLICY_EDGES: dict[str, set[str]] = {
+    "src/avid/runtime/context.py": {"policy", "policy.compaction"},
+    "src/avid/runtime/state.py": {
+        "policy.permission",
+        "policy.skills",
+        "policy.todo",
+    },
+    "src/avid/runtime/hooks.py": {"policy.permission"},
+}
+POLICY_FREE_RUNTIME = ("src/avid/runtime/loop.py", "src/avid/runtime/execution.py")
+
+
+def test_a13_loop_and_execution_have_zero_runtime_policy_dependency():
+    for name in POLICY_FREE_RUNTIME:
+        runtime, _typing = policy_imports(ROOT / name)
+        assert runtime == set(), f"{name} 出现了对策略层的运行时依赖：{sorted(runtime)}"
+
+
+def test_a13_runtime_policy_edges_are_exactly_the_declared_ones():
+    """边界是双向的：既不许 loop/execution 反向依赖策略层，也不许别的 runtime
+    文件偷偷多出一条没写进设计文档的边（新增一处就必须先改这里与 §12 判据 9）。"""
+    for name in POLICY_FREE_RUNTIME:
+        assert name not in RUNTIME_POLICY_EDGES
+
+    seen: dict[str, set[str]] = {}
+    for path in files_under("runtime"):
+        runtime, _typing = policy_imports(path)
+        if runtime:
+            seen[str(path.relative_to(ROOT))] = runtime
+
+    assert seen == RUNTIME_POLICY_EDGES, (
+        "runtime→policy 的实际边与设计文档 §12 判据 9 不一致："
+        f"{sorted(set(seen) | set(RUNTIME_POLICY_EDGES))}"
+    )
+
+
+def test_a13_type_checking_imports_stay_inert():
+    """注解用的 import 必须是惰性的：`loop.py` 的 AskUser 只在 TYPE_CHECKING 下。
+
+    这条保证"零运行时依赖"不是因为名字没出现，而是因为那段 import 真的没执行。
+    """
+    runtime, typing_only = policy_imports(SRC / "runtime" / "loop.py")
+    assert runtime == set()
+    assert typing_only == {"policy.permission"}
