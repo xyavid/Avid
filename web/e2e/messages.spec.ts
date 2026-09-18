@@ -79,7 +79,9 @@ function assistantChips(page: Page): Locator {
 async function expandAll(page: Page): Promise<void> {
   const earlier = page.getByRole('button', { name: '加载更早' })
   for (let guard = 0; guard < 20 && (await earlier.count()) > 0; guard += 1) {
-    await earlier.first().click()
+    // dispatchEvent 而不是 click()：click() 先滚进视口 → scrollTop 归零 → 触发碰顶
+    // 自动加载 → 高度补偿把按钮推走 → 再滚再加载，按钮最后消失导致点击超时。
+    await earlier.first().dispatchEvent('click')
     await page.waitForTimeout(120)
   }
 }

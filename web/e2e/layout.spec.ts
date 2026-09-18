@@ -227,6 +227,69 @@ test('收起导航后：轨道内的按钮不越界、不压到会话卡', async
   expect(expanded, '可以再展开回 320px').toBeGreaterThan(300)
 })
 
+test('会话头部：常驻胶带不压工具按钮，三个按钮语义明确', async ({ page, request }) => {
+  const listed = await page.request.get(`${BASE}/api/sessions`)
+  const sessions: { id: string; message_count: number }[] = (await listed.json()).sessions
+  const target = sessions.find((item) => item.message_count > 0)
+  await page.setViewportSize({ width: 1440, height: 800 })
+  await page.goto(`${BASE}/sessions/${target?.id}`)
+  await page.waitForTimeout(400)
+
+  // 三种卡片宽度：默认、开检查器后（宽档检查器占 26rem）、关掉导航再开检查器
+  for (const step of ['默认', '开检查器', '再收起导航'] as const) {
+    if (step === '开检查器') {
+      await page.getByRole('button', { name: '检查器' }).click()
+    }
+    if (step === '再收起导航') {
+      await page.locator('nav').getByRole('button', { name: '收起' }).click()
+    }
+    await page.waitForTimeout(250)
+
+    const geometry = await page.evaluate(() => {
+      const box = (element: Element) => {
+        const rect = element.getBoundingClientRect()
+        return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }
+      }
+      const intersects = (a: ReturnType<typeof box>, b: ReturnType<typeof box>) =>
+        !(a.right <= b.left + 1 || b.right <= a.left + 1 || a.bottom <= b.top + 1 || b.bottom <= a.top + 1)
+      const header = document.querySelector('section.sketch-main header') as HTMLElement
+      const tapeClass = 'tape'
+      const tapes = Array.from(header.querySelectorAll('[title]')).filter((element) =>
+        element.className.includes(tapeClass),
+      )
+      const buttons = Array.from(header.querySelectorAll('button'))
+      return {
+        cardWidth: Math.round(
+          (document.querySelector('section.sketch-main') as HTMLElement).getBoundingClientRect()
+            .width,
+        ),
+        tapes: tapes.length,
+        buttons: buttons.length,
+        collisions: tapes
+          .flatMap((tape) =>
+            buttons
+              .filter((button) => intersects(box(tape), box(button)))
+              .map(() => (tape.textContent ?? '').trim().slice(0, 8)),
+          )
+          .filter(Boolean),
+      }
+    })
+
+    expect(geometry.tapes, `${step}：两张常驻胶带都在`).toBe(2)
+    expect(geometry.buttons, `${step}：三个工具按钮都在`).toBe(3)
+    expect(geometry.collisions, `${step}（卡片 ${geometry.cardWidth}px）：胶带不该压到按钮`).toEqual(
+      [],
+    )
+  }
+
+  // 三个按钮的可访问名各自独立，不再互相混淆（此前「检查器」与条目动作同名）
+  for (const name of ['回到最新', '检查器', '待决审批']) {
+    await expect(page.getByRole('button', { name, exact: true }).first()).toBeVisible()
+  }
+  // 没有活动 run 时，运行胶带显示空态文案而不是压住按钮
+  await expect(page.getByText('没有活动运行').first()).toBeVisible()
+})
+
 test('一级切换只有导航列：⌘K 不再打开命令面板', async ({ page, request }) => {
   const listed = await page.request.get(`${BASE}/api/sessions`)
   const sessions: { id: string; message_count: number }[] = (await listed.json()).sessions
@@ -285,12 +348,22 @@ test('发送与加载更早之后输入条依然可见', async ({ page, request 
   await openSession(page, sessionId)
   const composer = page.getByLabel(COMPOSER_LABEL)
 
-  // 加载更早：窗口化只加载一组，点一次后再检查布局
+  // 加载更早：窗口化只加载一组，点一次后再检查布局。
+  // 用 dispatchEvent 而不是 click()：click() 会先把按钮滚进视口 → scrollTop 归零 →
+  // 触发「碰顶自动加载一组」→ 高度补偿又把按钮推走 → 再滚再加载，直到加载完按钮消失。
+  // 那是 Playwright 的滚动与窗口化策略相冲，不是产品缺陷（真人点可见按钮不会滚动）。
   const earlier = page.getByRole('button', { name: '加载更早' })
   if ((await earlier.count()) > 0) {
-    await earlier.first().click()
-    await page.waitForTimeout(200)
+    const heightBefore = await page
+      .getByRole('log')
+      .evaluate((element) => element.scrollHeight)
+    await earlier.first().dispatchEvent('click')
+    await page.waitForTimeout(250)
     expectComposerInsideViewport(await measure(page), '加载更早之后')
+    const heightAfter = await page
+      .getByRole('log')
+      .evaluate((element) => element.scrollHeight)
+    expect(heightAfter, '加载更早应当把更早的一组追加进来').toBeGreaterThanOrEqual(heightBefore)
   }
 
   // 发送：新条目进入时间线后输入条仍在视口内，且消息区继续独立滚动。
