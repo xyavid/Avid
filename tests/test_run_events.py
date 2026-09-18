@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import threading
 
+import pytest
+
 from avid.runtime import events
 from avid.svc import Services
 from avid.svc import runs
+from avid.svc.errors import RunNotFound
 from support import (
     RecordingTools,
     ScriptedChat,
@@ -285,6 +288,60 @@ def test_reading_while_a_run_starts_never_double_opens_the_session(sandbox):
 
 
 # ---------------- 运行记录的取消与统计 ----------------
+
+
+def test_delta_bookkeeping_keeps_the_buffer_consistent(sandbox):
+    """delta 记账必须与"从头重算"完全一致。
+
+    以前每个 delta 都全量扫一遍缓冲来数 durable（O(n²)，实测 8000 分片 1.05 s，
+    而且跑在读模型 SSE 的线程里）。现在增量维护 `durable_index`——这条用例把
+    增量结果与一次全量重算对齐，防止记账写错。
+    """
+    services = build(sandbox, ScriptedChat(make_turn("答")), buffer_size=8)
+    record = services.runs.get(services.runs.start(new_session(services), "跑").run_id)
+
+    for index in range(50):
+        services.runs.emit(record, events.RUN_STATUS, round=index)  # transient
+        services.runs.emit_delta(record, services.runs, f"t{index}")
+        if index % 7 == 0:
+            services.runs.emit(record, events.TOOL_RESULT_MESSAGE, entry_id=str(index))
+
+    # 与全量重算对齐：耐久事件数不超上限、绝对下标自洽、evicted_upto 是被丢掉的最高 seq。
+    durable = [event for event in record.events if event.seq is not None]
+    assert len(durable) <= 8
+    assert record.durable_index == [
+        record.dropped + position
+        for position, event in enumerate(record.events)
+        if event.seq is not None
+    ]
+    assert record.absolute_index() == record.dropped + len(record.events)
+    if record.evicted_upto:
+        assert all(event.seq is None or event.seq > record.evicted_upto for event in record.events)
+
+
+def test_finished_runs_and_session_locks_are_reclaimed(sandbox):
+    """终态记录与句柄锁都要能被回收，而且不许动刚结束的记录。
+
+    没有回收时，长驻的 `avid web` 会一直攒：每条记录带着最长 buffer_size 条
+    durable 事件与期间的全部 delta，每个访问过的会话还留一把锁。
+    """
+    services = build(sandbox, ScriptedChat(make_turn("答")), max_runs=1)
+    record = run_to_end(services)
+
+    # 刚结束的记录还在保留窗口内：条数兜底不许动它（订阅者可能还在消费缓冲）。
+    assert services.runs.get(record.run_id) is record
+    services.runs._sweep()
+    assert services.runs.get(record.run_id) is record, "刚结束的记录不该被兜底淘汰"
+    assert services.runs._session_locks == {}, "运行结束后句柄锁应当已被摘掉"
+
+    # 过了保留窗口：记录连同缓冲一起收掉，回查变成 404（前端按条目重建视图）。
+    services.runs._retention_ms = 0
+    record.finished_at = 0
+    services.runs._sweep()
+    with pytest.raises(RunNotFound):
+        services.runs.get(record.run_id)
+    assert record.events == [], "缓冲要一起释放"
+    assert services.runs._session_locks == {}
 
 
 def test_cancel_arriving_before_the_state_exists_is_not_lost(sandbox, monkeypatch):

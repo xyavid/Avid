@@ -22,7 +22,12 @@ from ..tools import TOOLS
 from ..tools import workspace
 from ..workspaces import Workspace, WorkspaceRegistry
 from .approvals import APPROVAL_TIMEOUT_SECONDS
-from .runs import REPLAY_BUFFER_SIZE, RunRegistry
+from .runs import (
+    MAX_RETAINED_RUNS,
+    REPLAY_BUFFER_SIZE,
+    TERMINAL_RETENTION_SECONDS,
+    RunRegistry,
+)
 from .sessions import SessionService
 from .picker import available_backend
 from .tasks import TaskService
@@ -62,6 +67,8 @@ class Services:
         tool_registry: Any = None,
         buffer_size: int = REPLAY_BUFFER_SIZE,
         approval_timeout: float = APPROVAL_TIMEOUT_SECONDS,
+        retention_seconds: float = TERMINAL_RETENTION_SECONDS,
+        max_runs: int = MAX_RETAINED_RUNS,
         registry: WorkspaceRegistry | None = None,
     ) -> None:
         """任何装配都先绑定一个**工作地点**，但**不写盘**（注册表只由用户显式动作写入）。
@@ -96,6 +103,8 @@ class Services:
             tool_registry=tool_registry,
             buffer_size=buffer_size,
             approval_timeout=approval_timeout,
+            retention_seconds=retention_seconds,
+            max_runs=max_runs,
         )
         self.sessions = SessionService(self.workspaces, self.runs)
         self.tasks = TaskService(self.workspaces)

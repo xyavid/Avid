@@ -53,6 +53,17 @@ logger = logging.getLogger("avid.svc.runs")
 # 每个 run 保留的有界重放缓冲。淘汰即 resync（I5）。
 REPLAY_BUFFER_SIZE = 512
 
+# 终态记录的保留窗口：重连与对账会按 run_id 回查，所以不能一结束就丢；但每条记录
+# 带着最长 buffer_size 条 durable 事件与期间的全部 delta，永久保留就是内存泄漏。
+TERMINAL_RETENTION_SECONDS = 600.0
+
+# 条数兜底：即便都在保留窗口内，也不让记录数无界。
+MAX_RETAINED_RUNS = 200
+
+# 条数兜底时**不允许**动刚结束的记录：订阅者可能还在消费它的缓冲（I5 不允许
+# 静默缺口）。只有结束超过这么久的才在兜底范围内。
+SWEEP_MIN_AGE_SECONDS = 30.0
+
 # 事件流静默兜底：客户端这么久没收到东西后应与注册表对账（I13）。
 TERMINAL_HARD_FALLBACK_SECONDS = 30.0
 
@@ -80,9 +91,13 @@ class RunRecord:
     cancel_reason: str | None = None
     finished_at: int | None = None
 
-    # 事件缓冲：durable 与 transient 都在里面；delta 不落缓冲（I15）。
+    # 事件缓冲：durable 与 transient 都在里面；delta 不参与重放（I15）。
     events: list[RunEvent] = field(default_factory=list)
     dropped: int = 0  # 从队首淘汰的条数；绝对下标 = dropped + 位置
+    # 缓冲里 durable 事件的**绝对下标**，升序。用它把"数 durable 条数"从每次
+    # 全量扫描变成 O(1) 记账——每个 delta 都会调一次 `_trim`，全量扫描会让
+    # 一次长回复退化成 O(n²)（实测 8000 分片 1.05 s，而且跑在读模型 SSE 的线程里）。
+    durable_index: list[int] = field(default_factory=list)
     # 已被淘汰的 durable 事件的最高 seq。用它判断「游标是否落在缓冲之外」，
     # 比看队首更稳：队首可能是一条 transient 事件。
     evicted_upto: int = 0
@@ -129,6 +144,8 @@ class RunRegistry:
         tool_registry: dict[str, Any] | None = None,
         buffer_size: int = REPLAY_BUFFER_SIZE,
         approval_timeout: float = APPROVAL_TIMEOUT_SECONDS,
+        retention_seconds: float = TERMINAL_RETENTION_SECONDS,
+        max_runs: int = MAX_RETAINED_RUNS,
     ) -> None:
         self.workspaces = workspaces
         self.chat = chat
@@ -137,6 +154,8 @@ class RunRegistry:
         self.tool_registry = tool_registry
         self.buffer_size = buffer_size
         self.approval_timeout = approval_timeout
+        self._retention_ms = max(0, int(retention_seconds * 1000))
+        self._max_runs = max(1, max_runs)
         self._runs: dict[str, RunRecord] = {}
         self._active: dict[str, str] = {}
         self._lock = threading.RLock()
@@ -144,6 +163,9 @@ class RunRegistry:
         # 每会话一把"句柄锁"：会话层只允许一个句柄，而读路径与运行路径会同时想开它。
         # 所有 open/close 该会话的地方都先持这把锁（顺序恒为 句柄锁 → self._lock）。
         self._session_locks: dict[str, threading.RLock] = {}
+        # 正在等/持句柄锁的线程数：归零且该会话没有活动 run 时才允许把锁丢掉
+        # （新老两把锁同时存在会让"一个会话一个句柄"的互斥失效）。
+        self._session_lock_users: dict[str, int] = {}
 
     @contextmanager
     def session_lock(self, session_id: str):
@@ -152,14 +174,30 @@ class RunRegistry:
         不变量：**持锁期间才 open/close**。否则"读路径先开、运行线程后开"必然
         撞上 ``SessionAlreadyOpenError``，而那会以两种都很难看的形式冒出来——
         运行刚起就 failed，或读取返回 500「会话已关闭」。
+
+        退出时若无人在等/持有且该会话没有活动 run，就把这把锁从表里摘掉：
+        长期运行的服务访问过的会话数只增不减，锁本身也是泄漏。
         """
         with self._lock:
             lock = self._session_locks.get(session_id)
             if lock is None:
                 lock = threading.RLock()
                 self._session_locks[session_id] = lock
-        with lock:
-            yield
+            self._session_lock_users[session_id] = (
+                self._session_lock_users.get(session_id, 0) + 1
+            )
+        try:
+            with lock:
+                yield
+        finally:
+            with self._lock:
+                remaining = self._session_lock_users.get(session_id, 1) - 1
+                if remaining > 0:
+                    self._session_lock_users[session_id] = remaining
+                else:
+                    self._session_lock_users.pop(session_id, None)
+                    if session_id not in self._active:
+                        self._session_locks.pop(session_id, None)
 
     # ---------------- 生命周期 ----------------
 
@@ -279,6 +317,8 @@ class RunRegistry:
                 ts=events.now_ms(),
             )
             record.events.append(event)
+            if seq is not None:
+                record.durable_index.append(record.dropped + len(record.events) - 1)
             self._trim(record, self.buffer_size)
             record.condition.notify_all()
         return event
@@ -293,25 +333,26 @@ class RunRegistry:
         的多少左右，这显然不对）。
 
         淘汰必须是**连续前缀**：``absolute_index`` 用 ``dropped + len(events)`` 定位实时
-        队列，非连续删除会让这个下标算错。因此先找到第 overflow 条 durable，把包括它
-        在内的前缀整段丢掉（夹在其中的 delta 一起丢——它们本来就不参与重放）。
+        队列，非连续删除会让这个下标算错。因此按 ``durable_index`` 找到第 overflow 条
+        durable，把包括它在内的前缀整段丢掉（夹在其中的 delta 一起丢——它们本来就不
+        参与重放）。``durable_index`` 是增量维护的，所以这里不用扫全表。
         """
-
         limit = size if size is not None else 0
         if limit <= 0:
             return
-        durable_positions = [
-            index for index, event in enumerate(record.events) if event.seq is not None
-        ]
-        overflow = len(durable_positions) - limit
+        overflow = len(record.durable_index) - limit
         if overflow <= 0:
             return
-        cut = durable_positions[overflow - 1] + 1
-        for dropped in record.events[:cut]:
-            if dropped.seq is not None:
-                record.evicted_upto = max(record.evicted_upto, dropped.seq)
+        last_dropped_abs = record.durable_index[overflow - 1]
+        cut_abs = last_dropped_abs + 1
+        # 被丢掉的最高 durable seq：durable seq 单调，所以就是最后一个被丢的那条。
+        dropped_event = record.events[last_dropped_abs - record.dropped]
+        if dropped_event.seq is not None:
+            record.evicted_upto = max(record.evicted_upto, dropped_event.seq)
+        cut = cut_abs - record.dropped
+        del record.durable_index[:overflow]
         del record.events[:cut]
-        record.dropped += cut
+        record.dropped = cut_abs
 
     def subscribe(
         self,
@@ -562,6 +603,54 @@ class RunRegistry:
         record.finished_at = events.now_ms()
         self.emit(record, type, **data)
         logger.info("运行 %s 结束：%s", record.run_id, record.status)
+        self._sweep()
+
+    def _sweep(self) -> None:
+        """回收终态运行记录与不再需要的句柄锁。
+
+        没有它，长驻的 ``avid web`` 会一直攒：每条记录带着最长 ``buffer_size`` 条
+        durable 事件与期间的全部 delta，每个访问过的会话还留一把锁。
+
+        两条规则：过了保留窗口就丢；超出条数上限时按结束时间从早到晚丢，但**不许动
+        刚结束的**——订阅者可能还在消费那条记录的缓冲，丢掉缓冲就是 I5 说的静默缺口。
+        """
+        now = events.now_ms()
+        with self._lock:
+            victims = [
+                run_id
+                for run_id, record in self._runs.items()
+                if record.terminal
+                and record.finished_at is not None
+                and now - record.finished_at > self._retention_ms
+            ]
+            extra = len(self._runs) - len(victims) - self._max_runs
+            if extra > 0:
+                old_enough = [
+                    record
+                    for record in self._runs.values()
+                    if record.terminal
+                    and record.finished_at is not None
+                    and record.run_id not in victims
+                    and now - record.finished_at > int(SWEEP_MIN_AGE_SECONDS * 1000)
+                ]
+                old_enough.sort(key=lambda record: record.finished_at or 0)
+                victims.extend(record.run_id for record in old_enough[:extra])
+
+            for run_id in victims:
+                record = self._runs.pop(run_id, None)
+                if record is not None:
+                    with record.condition:
+                        record.events.clear()
+                        record.durable_index.clear()
+            for session_id in [
+                session_id
+                for session_id in self._session_locks
+                if session_id not in self._session_lock_users
+                and session_id not in self._active
+            ]:
+                del self._session_locks[session_id]
+        if victims:
+            logger.info("回收 %d 条已结束的运行记录", len(victims))
 
     def _fail(self, record: RunRecord, code: str, message: str) -> None:
         record.error = {"code": code, "message": message}
