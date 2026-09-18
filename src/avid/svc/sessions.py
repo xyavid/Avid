@@ -79,22 +79,50 @@ class SessionService:
         self, meta: SessionMetadata, workspace: Workspace | None = None
     ) -> dict[str, Any] | None:
         try:
-            with self._session(meta.id, meta=meta, workspace=workspace) as session:
-                return {
-                    "id": meta.id,
-                    "name": session.get_name(),
-                    "created_at": meta.created_at,
-                    "storage_version": meta.storage_version,
-                    "parent_session_id": meta.parent_session_id,
-                    "workspace": self._workspace_field(workspace, meta),
-                    "message_count": session.get_stats().message_count,
-                    "active_run_id": self.runs.active_run_id(meta.id),
-                    "truncated_tail": self._truncated_tail(session),
-                }
+            name, count, truncated = self._facts(meta, workspace)
+            return {
+                "id": meta.id,
+                "name": name,
+                "created_at": meta.created_at,
+                "storage_version": meta.storage_version,
+                "parent_session_id": meta.parent_session_id,
+                "workspace": self._workspace_field(workspace, meta),
+                "message_count": count,
+                "active_run_id": self.runs.active_run_id(meta.id),
+                "truncated_tail": truncated,
+            }
         except (SessionReadError, SessionError) as exc:
             # 列表是最不该因为一个坏项整体失败的读操作（与 CLI 列举同原则）。
             logger.warning("跳过读不了的会话 %s：%s", meta.id, exc)
             return None
+
+    def _facts(
+        self, meta: SessionMetadata, workspace: Workspace | None
+    ) -> tuple[str | None, int, bool]:
+        """列表页要的三个事实：先用不重放的快速路径，判不出来才退回重放。
+
+        以前每个会话都 ``open()`` 一次（逐行重放 + 建对象 + 抢会话句柄），
+        20 个会话 5.9 MB 实测 54 ms；会话一多，首屏与"每次运行结束重取列表"
+        都变成秒级。尾部窗口判不出链尾时（例如刚在别的分支上追加了很多条目）
+        仍然重放一次拿权威答案——不猜。
+        """
+        if workspace is None:
+            return self._facts_by_replay(meta, workspace)
+        repo = self.workspaces.repo_for(workspace)
+        summary = repo.summarize(meta)
+        if summary.truncated_tail is None:
+            return self._facts_by_replay(meta, workspace)
+        return summary.name, summary.message_count, summary.truncated_tail
+
+    def _facts_by_replay(
+        self, meta: SessionMetadata, workspace: Workspace | None
+    ) -> tuple[str | None, int, bool]:
+        with self._session(meta.id, meta=meta, workspace=workspace) as session:
+            return (
+                session.get_name(),
+                session.get_stats().message_count,
+                self._truncated_tail(session),
+            )
 
     def _workspace_field(
         self, workspace: Workspace | None, meta: SessionMetadata

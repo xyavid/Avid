@@ -30,8 +30,9 @@ from avid.session.jsonl import (
     encode_transaction,
     parse_header,
     session_file_name,
+    summarize_file,
 )
-from avid.session.types import CommittedEntry, NewEntry
+from avid.session.types import CommittedEntry, CommittedValueSet, NewEntry
 
 USER = {"role": "user", "content": "一"}
 ASSISTANT = {"role": "assistant", "content": "二"}
@@ -60,6 +61,18 @@ def write_lines(path: Path, *lines: str) -> None:
 def entry_line(seq: int, entry_id: str, parent: str | None, timestamp: int = 1) -> str:
     return encode_transaction(
         [CommittedEntry(seq, timestamp, NewEntry(id=entry_id, parent_id=parent, message=USER))]
+    )
+
+
+def _message_line(
+    seq: int, entry_id: str, parent: str | None, message: dict
+) -> str:
+    return encode_transaction(
+        [
+            CommittedEntry(
+                seq, 1, NewEntry(id=entry_id, parent_id=parent, message=message)
+            )
+        ]
     )
 
 
@@ -400,6 +413,105 @@ def test_open_refuses_a_session_from_another_workspace(tmp_path):
         mine2 = JsonlSessionRepo(tmp_path, workspace="w-mine")
         mine2.open(metadata)
     assert "另一个工作区" in str(exc.value)
+
+
+# ---------------- 列表页摘要：不重放也能给出名字/条数/链尾残缺 ----------------
+
+TRAILING_NAME = "最后的名字"
+
+
+def test_summarize_matches_replay_even_with_marker_literals_in_content(tmp_path):
+    """快速摘要必须与重放逐字段一致，尤其是正文里含标记字面量时。
+
+    条数靠子串计数（一个条目写恰好一次 `"kind": "entry"`），而消息正文里的
+    同名字面量会被 JSON 转义，因此不该被算进去——这条耦合就在这里钉住。
+    """
+    path = tmp_path / "summary.jsonl"
+    trick = '正文里出现 "kind": "entry" 与 "avid.session.name" 这两个字面量'
+    write_lines(
+        path,
+        encode_header(JsonlHeader("summary", 1, 100)),
+        entry_line(1, "a", None),
+        entry_line(2, "b", "a"),
+        _message_line(
+            3,
+            "c",
+            "a",
+            {
+                "role": "assistant",
+                "content": trick,
+                # 一批没有结果的 tool_calls → 链尾残缺
+                "tool_calls": [
+                    {
+                        "id": "call_x",
+                        "type": "function",
+                        "function": {"name": "bash", "arguments": "{}"},
+                    }
+                ],
+            },
+        ),
+        encode_transaction(
+            [CommittedValueSet(4, "avid.session.name", "", "中间的名字")]
+        ),
+        encode_transaction(
+            [CommittedValueSet(5, "avid.session.name", "", TRAILING_NAME)]
+        ),
+        # 默认分支链尾指向 c；c 是一批没有结果的 tool_calls → 链尾残缺。
+        encode_transaction([CommittedValueSet(6, "avid.branch.tip", "main", "c")]),
+    )
+
+    summary = summarize_file(path)
+
+    assert summary.name == TRAILING_NAME, "取最后一次写入"
+    assert summary.message_count == 3, "正文里的字面量不能被算成条目"
+    assert summary.truncated_tail is True
+
+    # 与重放路径逐字段对齐。
+    repo = JsonlSessionRepo(tmp_path)
+    session = repo.open(repo.list()[0])
+    assert summary.name == session.get_name()
+    assert summary.message_count == session.get_stats().message_count
+    session.close()
+    repo.close()
+
+
+def test_summarize_tail_is_none_when_the_window_cannot_decide(tmp_path):
+    """窗口内看不到链尾时返回 None（交给调用方重放），而不是猜一个 False。"""
+    path = tmp_path / "short-window.jsonl"
+    write_lines(
+        path,
+        encode_header(JsonlHeader("short", 1, 100)),
+        entry_line(1, "a", None),
+        encode_transaction([CommittedValueSet(2, "avid.branch.tip", "main", "a")]),
+    )
+
+    assert summarize_file(path, window=1).truncated_tail is None
+    assert summarize_file(path, window=32).truncated_tail is False
+
+
+def test_repo_summarize_is_cached_until_the_file_changes(tmp_path):
+    repo = make_repo(tmp_path)
+    session = repo.create(id="demo")
+    session.set_name("名字")
+    branch = session.create_branch("main", None)
+    branch.append_message(USER)
+    session.close()
+
+    meta = repo.list()[0]
+    first = repo.summarize(meta)
+    again = repo.summarize(meta)
+
+    assert first is again, "同一份文件第二次应当命中缓存"
+    assert (first.name, first.message_count) == ("名字", 1)
+
+    # 追加一条之后 stamp 变了：必须重新读，不能返回陈旧条数。
+    reopened = repo.open(meta)
+    reopened.branch("main").append_message(ASSISTANT)
+    reopened.close()
+
+    after = repo.summarize(meta)
+    assert after.message_count == 2
+    repo.close()
 
 
 # ---------------- 跨进程互斥与写入完整性（P0） ----------------

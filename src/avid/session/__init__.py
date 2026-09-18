@@ -30,7 +30,13 @@ from .errors import (
     SessionUnknownTargetError,
 )
 from .ids import UuidV7Generator, new_uuidv7, now_ms, validate_session_id
-from .jsonl import JsonlHeader, JsonlSessionRepo, JsonlStorage
+from .jsonl import (
+    FileSummary,
+    JsonlHeader,
+    JsonlSessionRepo,
+    JsonlStorage,
+    summarize_file,
+)
 from .memory import MemorySessionRepo, MemoryStorage
 from .mutation import MutationLine
 from .projection import repair_incomplete_batches, entries_to_messages, messages_for_branch
@@ -142,6 +148,8 @@ __all__ = [
     "JsonlSessionRepo",
     "JsonlStorage",
     "JsonlHeader",
+    "FileSummary",
+    "summarize_file",
     "UuidV7Generator",
     "new_uuidv7",
     "now_ms",

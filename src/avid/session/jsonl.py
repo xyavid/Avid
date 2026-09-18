@@ -57,7 +57,7 @@ from .types import (
     StoredValue,
     Write,
 )
-from .values import ValueAddress
+from .values import BRANCH_TIP_NS, DEFAULT_BRANCH, SESSION_NAME_NS, ValueAddress
 
 logger = logging.getLogger("avid.session.jsonl")
 
@@ -237,6 +237,153 @@ def _split_complete_lines(content: str) -> tuple[list[str], bool]:
     if last_newline == -1:
         return [], True
     return content[:last_newline].split("\n"), True
+
+
+# ---------------- 列表页摘要（不重放） ----------------
+
+# 一个条目写恰好包含一次这个片段。消息正文里的同名字面量会被 JSON 转义成
+# `\"kind\"`，因此不会误计——这条耦合由 `test_summarize_matches_replay` 用
+# "正文里含该字面量"的用例钉住。
+_ENTRY_MARKER = '"kind": "entry"'
+
+# 判断"链尾是否残缺"只需要链尾附近的几条：判据在遇到第一个非 tool 条目时就返回，
+# 所以正常情况下只需要链尾 + 它的几个工具结果。窗口大小直接决定解析代价（窗口里的
+# 每一行都要 JSON 解析，而一条工具结果可能很大），因此取 32——判不出来时返回 None，
+# 由调用方重放拿权威答案，不猜。
+TAIL_WINDOW_LINES = 32
+
+
+@dataclass(frozen=True)
+class FileSummary:
+    """列表页需要、且不必重放整个会话就能得到的三个事实。
+
+    ``truncated_tail`` 为 ``None`` 表示"尾部窗口内判不出来"（例如刚在别的分支上
+    追加了很多条目，默认分支的链尾落在窗口之外），调用方需要退回重放。
+    """
+
+    name: str | None
+    message_count: int
+    truncated_tail: bool | None
+
+
+def _last_value(content: str, namespace: str) -> Any:
+    """该 namespace 的最后一次写入（delete 也算一次，返回 None）。
+
+    用 ``rfind`` 从后往前找候选行，再按行边界切开解析——不 splitlines 整个文件：
+    值写入很少，候选行通常只有一两行，而整个文件可能有几千行。
+    """
+    marker = f'"{namespace}"'
+    index = content.rfind(marker)
+    while index != -1:
+        line_start = content.rfind("\n", 0, index) + 1
+        line_end = content.find("\n", index)
+        if line_end == -1:
+            line_end = len(content)
+        try:
+            writes = parse_transaction(content[line_start:line_end])
+        except SessionStorageError:
+            writes = ()
+            # 残片/坏行：跳过，交给 open 的修复路径
+        for write in reversed(writes):
+            if not isinstance(write, (CommittedValueSet, CommittedValueDelete)):
+                continue
+            if write.namespace != namespace:
+                continue
+            if isinstance(write, CommittedValueSet):
+                return write.value
+            return None
+        index = content.rfind(marker, 0, line_start)
+    return None
+
+
+def _tail_lines(content: str, window: int) -> list[str]:
+    """文件末尾最多 window 行；不 splitlines 整个文件。
+
+    ``rsplit`` 的 maxsplit=window 在"换行数 ≥ window"时会多出一个头部残段，
+    按 len(parts) == window + 1 判断并丢掉它——否则窗口里会混进一大截文件头。
+    """
+    text = content[:-1] if content.endswith("\n") else content
+    parts = text.rsplit("\n", window)
+    return parts[1:] if len(parts) == window + 1 else parts
+
+
+def _tail_state(lines: list[str]) -> tuple[dict[str, Any], bool, Any]:
+    """尾部窗口内：条目表（id → NewEntry）、是否见过默认分支的链尾值、链尾值。"""
+    entries: dict[str, Any] = {}
+    tip_seen = False
+    tip: Any = None
+    for line in reversed(lines):
+        if not line.strip():
+            continue
+        try:
+            writes = parse_transaction(line)
+        except SessionStorageError:
+            continue
+        for write in reversed(writes):
+            if isinstance(write, CommittedEntry):
+                entries.setdefault(write.entry.id, write.entry)
+            elif (
+                isinstance(write, CommittedValueSet)
+                and write.namespace == BRANCH_TIP_NS
+                and write.key == DEFAULT_BRANCH
+                and not tip_seen
+            ):
+                tip_seen = True
+                tip = write.value
+            elif (
+                isinstance(write, CommittedValueDelete)
+                and write.namespace == BRANCH_TIP_NS
+                and write.key == DEFAULT_BRANCH
+                and not tip_seen
+            ):
+                tip_seen = True
+                tip = None
+    return entries, tip_seen, tip
+
+
+def _tail_is_truncated(entries: dict[str, Any], tip_seen: bool, tip: Any) -> bool | None:
+    """默认分支的链尾是否有一批没有结果的 tool_calls。
+
+    与 ``svc.sessions._truncated_tail`` 同一判据（那一条是权威路径，走重放），
+    差别只在这里只看尾部窗口：窗口不够就返回 None。
+    """
+    if not tip_seen:
+        return False  # 默认分支还没有链尾值：没有可残缺的东西
+    if not isinstance(tip, str) or tip not in entries:
+        return None
+    seen: set[str] = set()
+    cursor: str | None = tip
+    while cursor is not None:
+        entry = entries.get(cursor)
+        if entry is None:
+            return None  # 链走到窗口之外
+        message = entry.message or {}
+        if message.get("role") == "tool":
+            seen.add(str(message.get("tool_call_id")))
+            cursor = entry.parent_id
+            continue
+        expected = {str(call.get("id")) for call in (message.get("tool_calls") or [])}
+        return bool(expected - seen)
+    return False
+
+
+def summarize_file(path: Path, *, window: int = TAIL_WINDOW_LINES) -> FileSummary:
+    """读一次文件，给出列表页要的三个事实，**不建 SessionState、不逐行重放**。
+
+    代价从"解析每一行 + 建对象"降到"一次读 + 子串计数 + 解析尾部窗口"：列表页
+    每次都要为每个会话付这笔钱，会话一多它就是首屏的主要成本。
+    """
+    try:
+        content = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise SessionStorageError(f"会话文件读不了：{path}（{exc}）") from exc
+    name = _last_value(content, SESSION_NAME_NS)
+    entries, tip_seen, tip = _tail_state(_tail_lines(content, window))
+    return FileSummary(
+        name=name if isinstance(name, str) else None,
+        message_count=content.count(_ENTRY_MARKER),
+        truncated_tail=_tail_is_truncated(entries, tip_seen, tip),
+    )
 
 
 def _fsync_dir(path: Path) -> None:
@@ -536,7 +683,36 @@ class JsonlSessionRepo:
         self._id_generator = id_generator or UuidV7Generator(self._now)
         self._open: dict[str, JsonlStorage] = {}
         self._pending: set[str] = set()
+        # 列表页摘要：(mtime_ns, size) → FileSummary。列表在一次运行期间会被反复取，
+        # 只有正在写的那一个会话会失效。
+        self._summaries: dict[str, tuple[tuple[int, int], FileSummary]] = {}
         self._closed = False
+
+    def summarize(self, metadata: SessionMetadata) -> FileSummary:
+        """列表页的三个事实（名字 / 条数 / 链尾是否残缺），不打开句柄。
+
+        不重放整个会话，也不与运行线程抢句柄：列表是只读视图，以前却要
+        ``open()`` 一次（逐行重放 + 建对象 + 拿会话锁）。
+        """
+        self._assert_open()
+        path = self._locate(metadata)
+        stamp = self._stamp(path)
+        if stamp is not None:
+            cached = self._summaries.get(metadata.id)
+            if cached is not None and cached[0] == stamp:
+                return cached[1]
+        summary = summarize_file(path)
+        if stamp is not None:
+            self._summaries[metadata.id] = (stamp, summary)
+        return summary
+
+    @staticmethod
+    def _stamp(path: Path) -> tuple[int, int] | None:
+        try:
+            stat = path.stat()
+        except OSError:  # 刚被删/读不了：不缓存，让调用方看到真实错误
+            return None
+        return (stat.st_mtime_ns, stat.st_size)
 
     # ---------------- 生命周期 ----------------
 
@@ -642,12 +818,14 @@ class JsonlSessionRepo:
         finally:
             lock.release()
         logger.info("会话已删除：%s", metadata.id)
+        self._summaries.pop(metadata.id, None)
 
     def close(self) -> None:
         self._closed = True
         for storage in list(self._open.values()):
             storage.close()
         self._open.clear()
+        self._summaries.clear()
 
     # ---------------- 内部 ----------------
 

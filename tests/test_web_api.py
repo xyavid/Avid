@@ -65,6 +65,36 @@ def finish_run(client: TestClient, chat, tools=None, prompt: str = "问题") -> 
 # ---------------- B10 ----------------
 
 
+def test_session_list_does_not_replay_the_sessions(bundle, monkeypatch):
+    """列表页读名字与条数，但**不该**逐个重放整个会话。
+
+    以前每个会话都 open() 一次（逐行重放 + 建对象 + 抢会话句柄）：20 个会话
+    5.9 MB 实测 54 ms，会话一多首屏与"每次运行结束重取列表"都变成秒级。
+    这里用"open 次数必须为 0"把快速路径钉住，同时断言三个字段仍然正确。
+    """
+    from avid.session import jsonl as session_jsonl
+
+    client, services = bundle(chat=ScriptedChat(make_turn("答")))
+    session_id, _ = finish_run(client, None)
+
+    opened: list[str] = []
+    real_open = session_jsonl.JsonlStorage.open
+
+    def counting_open(path, **kwargs):
+        opened.append(str(path))
+        return real_open(path, **kwargs)
+
+    monkeypatch.setattr(session_jsonl.JsonlStorage, "open", staticmethod(counting_open))
+
+    listed = client.get("/api/sessions").json()["sessions"]
+
+    assert opened == [], f"列表页不该打开会话：{opened}"
+    entry = next(item for item in listed if item["id"] == session_id)
+    assert entry["message_count"] >= 2  # 用户消息 + 助手消息
+    assert entry["truncated_tail"] is False
+    assert entry["active_run_id"] is None
+
+
 def test_unknown_api_is_json_404(bundle):
     client, _ = bundle()
     response = client.get("/api/nope")

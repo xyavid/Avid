@@ -10,9 +10,9 @@
 CLI 是**唯一**同时认识 ``runtime`` 与 ``session`` 的地方：循环不认识持久化，
 会话包也不认识运行时（不变量 I7）。
 
-会话落盘在 ``工作区/.avid/sessions/``。``--list-sessions`` 会打开每个会话读名字
-与条数（比 pi 的"只读 header"贵），代价是 O(文件大小)×会话数——等这个代价在
-真实使用里变得可感时，再把名字冗余进 header。
+会话落盘在 ``工作区/.avid/sessions/``。``--list-sessions`` 的名字与条数来自
+``JsonlSessionRepo.summarize``：读一次文件 + 解析尾部窗口，不重放整个会话
+（以前是 O(文件大小)×会话数，见 `session/jsonl.py` 的 `summarize_file`）。
 """
 
 from __future__ import annotations
@@ -436,12 +436,14 @@ def _run_web(argv: list[str]) -> int:
 
 
 def _peek(repo: JsonlSessionRepo, meta: JsonlSessionMetadata) -> tuple[str | None, int]:
-    """打开看一眼名字与条数。读不了就当没有名字——列表不该因为一个坏文件失败。"""
+    """名字与条数：走**不重放**的摘要路径。
+
+    以前这里 `open()` 整个会话只为读这两个数（代价 O(文件大小)×会话数，见文件头
+    的旧注释）；现在只读一次文件、解析尾部窗口，并按 (mtime,size) 缓存。
+    读不了就当没有名字——列表不该因为一个坏文件失败。
+    """
     try:
-        session = repo.open(meta)
+        summary = repo.summarize(meta)
     except SessionError:
         return None, 0
-    try:
-        return session.get_name(), session.get_stats().message_count
-    finally:
-        session.close()
+    return summary.name, summary.message_count
