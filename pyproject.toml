@@ -8,15 +8,24 @@ dependencies = ["httpx>=0.27"]
 [project.scripts]
 avid = "avid.cli:main"
 
+[project.optional-dependencies]
+# Web 传输适配层的依赖。内核使用路径（CLI）不装它：`web/` 是唯一 importer，
+# 由 tests/test_web_boundaries.py 的 grep 门禁守着（设计文档 §4.2/A1/A2）。
+web = ["fastapi>=0.110", "uvicorn>=0.27", "pydantic>=2.6"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
-dev = ["pytest>=8.0"]
+# 测试要打 Web 端点，所以开发环境把可选依赖也装上。
+dev = ["pytest>=8.0", "fastapi>=0.110", "uvicorn>=0.27", "pydantic>=2.6"]
 
 [tool.uv]
 package = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "stress: 性能与长会话类门禁，默认不跑（需显式 -m stress）",
+]

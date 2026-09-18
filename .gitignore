@@ -9,6 +9,17 @@ build/
 dist/
 *.egg-info/
 
+# ---- 前端 ----
+
+# 依赖与产物不入库：`pnpm -C web build && pnpm -C web run copy:dist` 会把 dist/
+# 复制进 src/avid/web/static/（随 wheel 分发）。构建戳也在产物里。
+web/node_modules/
+web/dist/
+web/playwright-report/
+web/test-results/
+/src/avid/web/static/*
+!/src/avid/web/static/.gitkeep
+
 # ---- 文档入库规则：正式文档进 docs/，过程文档留 dev/ ----
 
 # docs/ 白名单：默认全部忽略，只放行下面四类正式文档目录。

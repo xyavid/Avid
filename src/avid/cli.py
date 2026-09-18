@@ -90,6 +90,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # 子命令 `avid web` 在普通解析之前分流：既有的 `avid "问题"` 逐字不变。
+    if argv and argv[0] == "web":
+        return _run_web(argv[1:])
+
     parser = build_parser()
     args = parser.parse_args(argv)
 
@@ -233,6 +238,56 @@ def _find(repo: JsonlSessionRepo, session_id: str) -> JsonlSessionMetadata | Non
         if meta.id == session_id:
             return meta
     return None
+
+
+def build_web_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="avid web",
+        description="起本地 Web 服务：REST + SSE 事件流 + 已构建的静态资源",
+    )
+    parser.add_argument("--host", default="127.0.0.1", help="监听地址（默认回环）")
+    parser.add_argument(
+        "--port", type=int, default=8765, help="监听端口（默认 8765）"
+    )
+    parser.add_argument(
+        "--reload", action="store_true", help="开发模式：代码变更自动重载"
+    )
+    return parser
+
+
+def _run_web(argv: list[str]) -> int:
+    """``avid web``：起 uvicorn。
+
+    Web 依赖是**可选的**（``pyproject.toml`` 的 ``[project.optional-dependencies].web``），
+    所以缺依赖时给出可执行的修复命令，而不是 ImportError 栈。
+    """
+    args = build_web_parser().parse_args(argv)
+    try:
+        import uvicorn
+    except ImportError:
+        print(
+            "缺少 Web 依赖。安装方法：uv sync --extra web\n"
+            "（或 uv run --extra web avid web）",
+            file=sys.stderr,
+        )
+        return 2
+
+    from .web import create_app
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    print(
+        f"Avid Web 正在监听 http://{args.host}:{args.port}\n"
+        "开发期前端：pnpm -C web dev（Vite 代理 /api → 本进程）",
+        file=sys.stderr,
+    )
+    if args.reload:
+        uvicorn.run(
+            "avid.web:create_app", factory=True, host=args.host, port=args.port, reload=True
+        )
+    else:
+        uvicorn.run(create_app(), host=args.host, port=args.port)
+    return 0
 
 
 def _peek(repo: JsonlSessionRepo, meta: JsonlSessionMetadata) -> tuple[str | None, int]:
