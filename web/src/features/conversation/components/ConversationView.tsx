@@ -22,11 +22,13 @@ export interface ConversationViewProps {
   reconnectAttempt: number | null
   onInspect: (entry: TimelineEntry) => void
   onInspectTool: (run: ToolRun) => void
+  onFork?: (entry: TimelineEntry) => void
   onToggleInspector: () => void
   onRefetch: () => void
-  /** 审批队列与输入条由 route 组合进来：feature 之间不得互相 import（§3.4）。 */
+  /** 审批队列、输入条与分支选择器由 route 组合进来：feature 之间不得互相 import（§3.4）。 */
   approvalsSlot?: ReactNode
   composerSlot?: ReactNode
+  branchSlot?: ReactNode
 }
 
 const BUSY_PHASES = new Set(['submitting', 'streaming', 'awaiting_approval', 'cancelling'])
@@ -65,6 +67,8 @@ export function ConversationView(props: ConversationViewProps) {
         onScrollToBottom={() => setJumpToken((token) => token + 1)}
       />
 
+      {props.branchSlot ? <div className="px-3 pt-2">{props.branchSlot}</div> : null}
+
       <StatusBanner
         phase={view.phase}
         error={view.error}
@@ -88,6 +92,7 @@ export function ConversationView(props: ConversationViewProps) {
         loading={props.loading}
         onInspect={props.onInspect}
         onInspectTool={props.onInspectTool}
+        onFork={props.onFork}
         onCopy={(text) => void navigator.clipboard?.writeText(text)}
         resetKey={props.sessionId ?? 'none'}
         jumpToken={jumpToken}

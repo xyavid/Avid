@@ -1,9 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 
-import { useAnswerApproval, useCancelRun, useEntries, useSession, useStartRun } from '../api/queries'
+import {
+  useAnswerApproval,
+  useCancelRun,
+  useCreateBranch,
+  useEntries,
+  useSession,
+  useStartRun,
+} from '../api/queries'
 import type { Entry } from '../api/types'
 import { ApprovalQueue } from '../features/approvals'
+import { BranchSelector } from '../features/branches'
 import { Composer } from '../features/composer'
 import { ConversationView } from '../features/conversation'
 import type { InspectorSelection } from '../features/inspector'
@@ -20,15 +28,20 @@ function flatten(pages: { entries: Entry[] }[] | undefined): Entry[] {
   return pages.flatMap((page) => page.entries)
 }
 
+/** 服务端把 main 作为隐式默认返回（新建会话还没有任何分支值）。 */
+const DEFAULT_BRANCH = 'main'
+
 /** L4：会话工作面。唯一把查询结果与活动域拼在一起的地方。 */
 export function ConversationRoute() {
   const { t } = useTranslation()
   const { sessionId = null } = useParams()
-  const entries = useEntries(sessionId)
+  const [branch, setBranch] = useState(DEFAULT_BRANCH)
+  const entries = useEntries(sessionId, branch)
   const session = useSession(sessionId)
   const startRun = useStartRun()
   const cancelRun = useCancelRun()
   const answer = useAnswerApproval()
+  const createBranch = useCreateBranch()
   const view = useRunView()
 
   const density = useUiStore((state) => state.density)
@@ -45,18 +58,33 @@ export function ConversationRoute() {
   const refetchEntries = entries.refetch
   const refetchSession = session.refetch
 
-  // 切换会话：活动域清空、胶带与选择一起换。
+  // 切换会话：活动域清空、胶带与选择一起换，分支回到默认那条。
   useEffect(() => {
     runStoreActions.reset(sessionId)
     setStartedRunId(null)
     setSelection(null)
+    setBranch(DEFAULT_BRANCH)
   }, [sessionId])
 
-  // 权威视图来自条目：首屏、刷新、resync、断线对账都走这一条。
+  // 换分支 = 换历史：活动域清空，等该分支的条目到达后重建。服务端没有「当前分支」
+  // 这个概念（它只有一组链尾值），所以这只是本地视图状态。
+  const switchBranch = useCallback(
+    (name: string) => {
+      setBranch(name)
+      runStoreActions.reset(sessionId)
+      setStartedRunId(null)
+      setSelection(null)
+    },
+    [sessionId],
+  )
+
+  // 权威视图来自条目：首屏、刷新、resync、断线对账、换分支都走这一条。
   const flat = useMemo(() => flatten(entries.data?.pages), [entries.data])
   useEffect(() => {
-    if (flat.length > 0) runStoreActions.rebuild(flat)
-  }, [flat])
+    // 用 entries.data 而不是 flat.length 判断：空分支也要重建，否则会留着上一条链的视图。
+    if (!entries.data) return
+    runStoreActions.rebuild(flat)
+  }, [entries.data, flat])
 
   // 路由切换后焦点移到主内容（键盘用户不该留在 body 上）。
   useEffect(() => {
@@ -98,6 +126,21 @@ export function ConversationRoute() {
     [setInspectorTab, view.tools],
   )
 
+  // 在某条目处开新分支：成功后直接切过去看那条链。名字由服务端取（b2、b3…）。
+  const forkEntry = useCallback(
+    (entry: TimelineEntry) => {
+      if (!sessionId || !entry.entryId) return
+      createBranch.mutate(
+        { sessionId, at: entry.entryId },
+        {
+          onSuccess: (created) => switchBranch(created.name),
+          onError: (error) => console.error('[branch] 分叉失败', error),
+        },
+      )
+    },
+    [createBranch, sessionId, switchBranch],
+  )
+
   if (!sessionId) {
     return (
       <section className="sketch-main flex flex-1 flex-col items-center justify-center gap-2 p-8">
@@ -114,9 +157,12 @@ export function ConversationRoute() {
         sessionName={session.data?.name ?? null}
         truncatedTail={Boolean(session.data?.truncated_tail)}
         entriesLoading={entries.isLoading}
+        branch={branch}
+        hasActiveRun={Boolean(session.data?.active_run_id)}
+        onSwitchBranch={switchBranch}
         onSend={(prompt) => {
           startRun.mutate(
-            { sessionId, run: { prompt, auto_approve: autoApprove } },
+            { sessionId, run: { prompt, auto_approve: autoApprove, branch } },
             {
               onSuccess: (created) => {
                 runStoreActions.reset(sessionId)
@@ -137,6 +183,7 @@ export function ConversationRoute() {
         }}
         onInspect={inspect}
         onInspectTool={inspectTool}
+        onFork={forkEntry}
         onToggleInspector={() => toggleInspector()}
         inspectorOpen={inspectorOpen}
         inspectorTab={inspectorTab}
@@ -157,6 +204,10 @@ interface BodyProps {
   sessionName: string | null
   truncatedTail: boolean
   entriesLoading: boolean
+  /** 当前查看的分支（本地视图状态，服务端没有「当前分支」）。 */
+  branch: string
+  /** 服务端说这个会话有活动 run：切换与分叉都会失败，先把入口禁掉。 */
+  hasActiveRun: boolean
   density: 'compact' | 'comfy'
   inspectorOpen: boolean
   inspectorTab: 'content' | 'diff' | 'json'
@@ -167,6 +218,8 @@ interface BodyProps {
   answering: boolean
   onInspect: (entry: TimelineEntry) => void
   onInspectTool: (run: ToolRun) => void
+  onFork: (entry: TimelineEntry) => void
+  onSwitchBranch: (name: string) => void
   onToggleInspector: () => void
   setInspectorTab: (tab: 'content' | 'diff' | 'json') => void
   onCloseInspector: () => void
@@ -192,8 +245,17 @@ function ConversationBody(props: BodyProps) {
           reconnectAttempt={reconnectAttempt}
           onInspect={props.onInspect}
           onInspectTool={props.onInspectTool}
+          onFork={props.onFork}
           onToggleInspector={props.onToggleInspector}
           onRefetch={refresh}
+          branchSlot={
+            <BranchSelector
+              sessionId={props.sessionId}
+              current={props.branch}
+              disabled={busy || props.hasActiveRun}
+              onSwitch={props.onSwitchBranch}
+            />
+          }
           approvalsSlot={
             <ApprovalQueue
               approvals={view.approvals}

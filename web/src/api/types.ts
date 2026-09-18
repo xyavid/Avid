@@ -150,7 +150,22 @@ export interface Task {
   dependency_titles: Record<string, string>
 }
 
+export interface Branch {
+  name: string
+  /** 链尾条目 id；空分支为 null。 */
+  tip_entry_id: string | null
+  entry_count: number
+  is_default: boolean
+}
+
+export interface BranchList {
+  session_id: string
+  branches: Branch[]
+}
+
 export interface StartRunInput {
   prompt: string
   auto_approve?: boolean
+  /** 这次运行接在哪条链尾上；缺省 = main。 */
+  branch?: string
 }

@@ -34,6 +34,8 @@ export interface EntryRowProps {
   density?: Density
   onInspect?: (entry: TimelineEntry) => void
   onCopy?: (text: string) => void
+  /** 「从此处分支」：只有落了库的条目（有 `entryId`）才可能成为分叉点。 */
+  onFork?: (entry: TimelineEntry) => void
 }
 
 const NOTICE_KEY = {
@@ -57,9 +59,16 @@ function Role({ label, mark = 'avid' }: { label: string; mark?: 'avid' | 'user' 
   )
 }
 
-function Actions({ entry, onInspect, onCopy }: Pick<EntryRowProps, 'entry' | 'onInspect' | 'onCopy'>) {
+function Actions({
+  entry,
+  onInspect,
+  onCopy,
+  onFork,
+}: Pick<EntryRowProps, 'entry' | 'onInspect' | 'onCopy' | 'onFork'>) {
   const { t } = useTranslation()
-  if (!onCopy && !onInspect) return null
+  if (!onCopy && !onInspect && !onFork) return null
+  // 分叉点是条目树里的一个 id：乐观条目（delta）还没有 id，不能当分叉点。
+  const forkable = Boolean(onFork && entry.entryId)
   return (
     <div className="mt-1 flex gap-1">
       {onCopy ? (
@@ -72,6 +81,11 @@ function Actions({ entry, onInspect, onCopy }: Pick<EntryRowProps, 'entry' | 'on
           {t('chat.message.raw')}
         </Button>
       ) : null}
+      {forkable ? (
+        <Button size="sm" variant="secondary" className={ACTION} onClick={() => onFork?.(entry)}>
+          {t('chat.message.fork')}
+        </Button>
+      ) : null}
     </div>
   )
 }
@@ -82,10 +96,11 @@ export function EntryRow({
   density = 'comfy',
   onInspect,
   onCopy,
+  onFork,
 }: EntryRowProps) {
   const { t } = useTranslation()
   const pad = density === 'compact' ? 'p-2' : 'p-3'
-  const actions = <Actions entry={entry} onInspect={onInspect} onCopy={onCopy} />
+  const actions = <Actions entry={entry} onInspect={onInspect} onCopy={onCopy} onFork={onFork} />
 
   if (entry.kind === 'user') {
     return (

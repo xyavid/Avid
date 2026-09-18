@@ -37,7 +37,7 @@
 | **折叠默认值** | 无折叠。notice 文案用 `truncate` + `max-w-[32rem]` 收敛长度，完整内容留给 inspector（`onInspect`）。 |
 | **形状轮换** | 消息卡的形状由 `shapeIndex` 决定（`ui/sketch/shapes.ts` 的 `shapeFor`），序号按**全部**条目计算而不是当前窗口，所以「加载更早」不会让已渲染的卡片换形；相邻卡片不同形（§8.1 ①，C15）。 |
 | **手绘标记** | 两枚**静态**内联 SVG，按作者分开：`AvidMark`（角形笔画）给模型，`UserMark`（歪头 + 肩弧）给用户。两者共用同一套笔触契约（`stroke-width 4.5` + `vector-effect: non-scaling-stroke`，颜色 `currentColor`，−2deg 倾斜，`aria-hidden`）。**不复用同一枚**：标记的职责是区分作者，两卡共用一个形状等于没标。§8.1 ⑥ 把「手绘轮廓」限定在一级入口，这里是同一枚路径在列表里复用：没有逐元素生成路径、没有滤镜、没有位图，成本与 §8.9 的结论一致；角色名由旁边文字承担，装饰不进无障碍树。 |
-| **a11y** | `aria-live="polite"` **只加在 durable（`!entry.optimistic`）的 assistant 条目上**：乐观 delta 每帧都在变，播报等于噪音。动作行（复制 / 查看原始 JSON）默认 `opacity-0`，`group-hover:opacity-100`；`focus-visible:opacity-100` 写在**按钮自己**身上，键盘 tab 到哪个哪个显形（若把透明放在容器上，子元素会被一起变透明，键盘用户永远看不见动作）。两个动作按钮的 accessible name 来自内部文字（`复制文本` / `查看原始 JSON`）。 |
+| **a11y** | `aria-live="polite"` **只加在 durable（`!entry.optimistic`）的 assistant 条目上**：乐观 delta 每帧都在变，播报等于噪音。动作行（复制 / 查看原始 JSON / 从此处分支）默认 `opacity-0`，`group-hover:opacity-100`；`focus-visible:opacity-100` 写在**按钮自己**身上，键盘 tab 到哪个哪个显形（若把透明放在容器上，子元素会被一起变透明，键盘用户永远看不见动作）。动作按钮的 accessible name 来自内部文字（`复制文本` / `查看原始 JSON` / `从此处分支`）。「从此处分支」只在条目有 `entryId` 时出现：乐观的 delta 条目还不是分叉点。 |
 | **交互反馈** | 动作按钮用 `variant="secondary"`：**方框是本身就有的**（墨线边 + `--sketch-r-chip` 圆角 + 纸卡底 + `--sticker-2` 档硬阴影），与「改名」等次级按钮同族；悬停抬升一档（`--sticker-3`）、按住阴影归零且位移等于当前档偏移（`ui/sketch.css` 里对 `button.sketch-chip.press` 统一处理）。`opacity` 只管「什么时候显形」，不是方框的来源。取值全部来自 `ui/tokens.css`，不要在调用点硬写边框或阴影。 |
 
 ## CompactionNotice

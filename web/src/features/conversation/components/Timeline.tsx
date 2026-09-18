@@ -16,6 +16,8 @@ export interface TimelineProps {
   onInspect: (entry: TimelineEntry) => void
   onInspectTool: (run: ToolRun) => void
   onCopy: (text: string) => void
+  /** 「从此处分支」：交给 route 决定（只有它知道会话 id 与当前分支）。 */
+  onFork?: (entry: TimelineEntry) => void
   /** 初次加载（还没有任何事件到达）时的占位。 */
   loading?: boolean
   resetKey: string
@@ -31,6 +33,7 @@ export function Timeline({
   onInspect,
   onInspectTool,
   onCopy,
+  onFork,
   loading = false,
   resetKey,
   jumpToken = 0,
@@ -83,6 +86,7 @@ export function Timeline({
                 density={density}
                 onInspect={onInspect}
                 onCopy={onCopy}
+                onFork={onFork}
               />
             ) : block.kind === 'group' ? (
               <StepGroup

@@ -18,6 +18,8 @@ import { request } from './client'
 import type {
   Approval,
   ApprovalAnswer,
+  Branch,
+  BranchList,
   CancelResult,
   EntryPage,
   Meta,
@@ -38,6 +40,7 @@ export const queryKeys = {
   sessions: ['sessions'] as const,
   session: (id: string) => ['session', id] as const,
   entries: (id: string, branch: string) => ['entries', id, branch] as const,
+  branches: (id: string) => ['branches', id] as const,
   run: (id: string) => ['run', id] as const,
   approvals: (id: string) => ['approvals', id] as const,
   tasks: ['tasks'] as const,
@@ -89,6 +92,16 @@ export function useEntries(sessionId: string | null, branch = 'main') {
       return request<EntryPage>(`/sessions/${sessionId}/entries?${params.toString()}`)
     },
     getNextPageParam: (last) => (last.has_more ? last.next_cursor : undefined),
+  })
+}
+
+/** 分支列表：切换与分叉都以它为准（服务端把 main 作为隐式默认返回）。 */
+export function useBranches(sessionId: string | null) {
+  return useQuery({
+    queryKey: queryKeys.branches(sessionId ?? ''),
+    queryFn: () => request<BranchList>(`/sessions/${sessionId}/branches`),
+    enabled: Boolean(sessionId),
+    staleTime: 5_000,
   })
 }
 
@@ -161,6 +174,24 @@ export function useDeleteSession() {
     mutationFn: (id: string) => request<void>(`/sessions/${id}`, { method: 'DELETE' }),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: queryKeys.sessions })
+    },
+  })
+}
+
+/** 在某条目处开新分支（fork）。名字缺省时由服务端取 b2 / b3… */
+export function useCreateBranch() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (input: { sessionId: string; name?: string | null; at?: string | null }) =>
+      request<Branch>(`/sessions/${input.sessionId}/branches`, {
+        method: 'POST',
+        body: { name: input.name ?? null, at: input.at ?? null },
+      }),
+    onSuccess: (branch, input) => {
+      void client.invalidateQueries({ queryKey: queryKeys.branches(input.sessionId) })
+      void client.invalidateQueries({
+        queryKey: queryKeys.entries(input.sessionId, branch.name),
+      })
     },
   })
 }
