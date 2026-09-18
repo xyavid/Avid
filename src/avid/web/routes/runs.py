@@ -21,9 +21,16 @@ router = APIRouter()
     status_code=status.HTTP_201_CREATED,
 )
 def start_run(request: Request, session_id: str, body: StartRunIn) -> dict:
-    """``branch`` 决定这次运行接在哪条链尾上（缺省 main）。"""
+    """``branch`` 决定这次运行接在哪条链尾上（缺省 main）。
+
+    ``permission`` 决定这次运行的三态权限；缺省按会话所属工作区的默认权限。
+    """
     record = current_services(request).runs.start(
-        session_id, body.prompt, auto_approve=body.auto_approve, branch=body.branch
+        session_id,
+        body.prompt,
+        auto_approve=body.auto_approve,
+        branch=body.branch,
+        permission=body.permission,
     )
     return {
         "run_id": record.run_id,

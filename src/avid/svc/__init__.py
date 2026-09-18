@@ -20,10 +20,12 @@ from ..runtime.events import EVENT_TYPES, now_ms
 from ..session import JsonlSessionRepo
 from ..tools import TOOLS
 from ..tools import workspace
+from ..workspaces import Workspace, WorkspaceRegistry
 from .approvals import APPROVAL_TIMEOUT_SECONDS
-from .runs import REPLAY_BUFFER_SIZE, SESSION_DIR, RunRegistry
+from .runs import REPLAY_BUFFER_SIZE, RunRegistry
 from .sessions import SessionService
 from .tasks import TaskService
+from .workspaces import WorkspaceService, single_workspace
 
 # 破坏性变更时 +1。客户端只在**不兼容**时失败收敛；加可选事件不改它（§6.3）。
 API_VERSION = 1
@@ -37,6 +39,8 @@ FEATURES: dict[str, int] = {
     "entries": 1,
     "deltas": 1,  # F3：内核按 SSE 流式解析，delta 经事件流投递（需 ?deltas=1 订阅）
     "branches": 1,  # F4：分支列表 / 分叉 / 在指定分支上运行
+    "workspaces": 1,  # 阶段 18：工作区注册表 + 按工作区建会话
+    "permission_modes": 1,  # 阶段 18：POST /runs 接受 permission（strict/workspace/system）
 }
 
 # 事件流相关常量对客户端可见：它据此设超时与对账阈值（I13）。
@@ -51,23 +55,58 @@ class Services:
         self,
         root: str | Path | None = None,
         *,
+        workspace_root: str | Path | None = None,
         chat: Any = None,
         tool_registry: Any = None,
         buffer_size: int = REPLAY_BUFFER_SIZE,
         approval_timeout: float = APPROVAL_TIMEOUT_SECONDS,
+        registry: WorkspaceRegistry | None = None,
     ) -> None:
-        self.root = Path(root) if root is not None else Path(workspace.WORKSPACE_ROOT) / SESSION_DIR
-        self.repo = JsonlSessionRepo(self.root)
+        """``root`` = 单工作区模式下的**会话库路径**（测试与 `avid web --workspace` 用）；
+        两者都不给 = 多工作区模式，工作区由注册表回答，建会话必须指定归属。
+        """
+        self.registry = registry or WorkspaceRegistry()
+        if root is not None:
+            default = single_workspace(root)
+            sessions_root: Path | None = Path(root)
+        elif workspace_root is not None:
+            default = self.registry.add(workspace_root)
+            sessions_root = None  # 用 `<root>/.avid/sessions`
+        else:
+            default = None
+            sessions_root = None
+        self.workspaces = WorkspaceService(
+            self.registry, default=default, default_sessions_root=sessions_root
+        )
+        self.root = (
+            self.workspaces.sessions_root(default) if default is not None else None
+        )
         self.runs = RunRegistry(
-            self.repo,
+            self.workspaces,
             chat=chat,
             tool_registry=tool_registry,
             buffer_size=buffer_size,
             approval_timeout=approval_timeout,
         )
-        self.sessions = SessionService(self.repo, self.runs)
+        self.sessions = SessionService(self.workspaces, self.runs)
         self.tasks = TaskService()
         self.started_at = now_ms()
+
+    # ---------------- 兼容访问器 ----------------
+
+    @property
+    def repo(self) -> JsonlSessionRepo:
+        """默认工作区的会话仓库（单工作区模式下的旧访问点）。
+
+        多工作区模式没有"唯一仓库"这种东西，所以显式报错而不是随便挑一个——
+        "挑错了库"正是阶段 18 要消灭的那类静默错误。
+        """
+        if self.workspaces.default is None:
+            raise RuntimeError(
+                "多工作区模式没有单一会话仓库；"
+                "请用 services.workspaces.repo_for(workspace)"
+            )
+        return self.workspaces.repo_for(self.workspaces.default)
 
     # ---------------- 能力面 ----------------
 
@@ -81,7 +120,13 @@ class Services:
                 "tools": [item["function"]["name"] for item in TOOLS],
                 "skills": self.skills(),
                 "model": self.model_name(),
-                "workspace": str(workspace.WORKSPACE_ROOT),
+                # 本进程的默认工作区根（多工作区模式下为空）；候选列表走
+                # GET /api/workspaces，避免同一概念两种拼写。
+                "workspace": (
+                    self.workspaces.default.root
+                    if self.workspaces.default is not None
+                    else str(workspace.WORKSPACE_ROOT)
+                ),
             },
             "stream": {
                 "heartbeat_seconds": STREAM_HEARTBEAT_SECONDS,
@@ -107,7 +152,7 @@ class Services:
             return None
 
     def close(self) -> None:
-        self.repo.close()
+        self.workspaces.close()
 
 
 __all__ = [

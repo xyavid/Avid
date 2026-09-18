@@ -28,6 +28,7 @@ from ..runtime import events
 from ..runtime.events import RunEvent
 from ..runtime.loop import RoundLimitExceeded, RunCancelled, agent_loop
 from ..runtime.state import RunState
+from ..workspaces import SESSION_DIR
 from ..session import (
     DEFAULT_BRANCH,
     JsonlSessionMetadata,
@@ -39,10 +40,9 @@ from ..session import (
 from ..tools import workspace
 from .approvals import APPROVAL_TIMEOUT_SECONDS, ApprovalTable
 from .errors import RunBusy, RunFinished, RunNotFound, SessionNotFound
+from .workspaces import WorkspaceService
 
 logger = logging.getLogger("avid.svc.runs")
-
-SESSION_DIR = ".avid/sessions"
 
 # 每个 run 保留的有界重放缓冲。淘汰即 resync（I5）。
 REPLAY_BUFFER_SIZE = 512
@@ -117,14 +117,14 @@ class RunRegistry:
 
     def __init__(
         self,
-        repo: JsonlSessionRepo,
+        workspaces: WorkspaceService,
         *,
         chat: Callable[..., Any] | None = None,
         tool_registry: dict[str, Any] | None = None,
         buffer_size: int = REPLAY_BUFFER_SIZE,
         approval_timeout: float = APPROVAL_TIMEOUT_SECONDS,
     ) -> None:
-        self.repo = repo
+        self.workspaces = workspaces
         self.chat = chat
         # 工具注册表可注入：测试要一个不真的执行 shell 的 bash 工具，
         # 生产路径留空 = 用 tools/ 的默认注册表。
@@ -146,14 +146,18 @@ class RunRegistry:
         auto_approve: bool = False,
         chat: Callable[..., Any] | None = None,
         branch: str = DEFAULT_BRANCH,
+        permission: str | None = None,
     ) -> RunRecord:
         """登记并起线程。已占用 → ``RunBusy``；会话不存在 → ``SessionNotFound``。
 
         ``branch`` 决定这次运行追加到哪条链上：历史取该分支的链，新消息接在它的链尾。
+        ``permission`` 是这次运行的权限模式；缺省按**会话所属工作区的默认权限**。
         """
-        metadata = self.find_metadata(session_id)
-        if metadata is None:
+        found = self.workspaces.find_session(session_id)
+        if found is None:
             raise SessionNotFound(f"没有这个会话：{session_id}")
+        workspace, metadata = found
+        mode = permission or workspace.default_permission
 
         with self._lock:
             if session_id in self._active:
@@ -174,7 +178,16 @@ class RunRegistry:
         logger.info("起运行 %s（会话 %s）", run_id, session_id)
         thread = threading.Thread(
             target=self._run,
-            args=(record, metadata, prompt, auto_approve, chat or self.chat, branch),
+            args=(
+                record,
+                workspace,
+                metadata,
+                prompt,
+                auto_approve,
+                chat or self.chat,
+                branch,
+                mode,
+            ),
             name=f"avid-run-{run_id}",
             daemon=True,
         )
@@ -373,23 +386,29 @@ class RunRegistry:
     def _run(
         self,
         record: RunRecord,
+        workspace: Any,
         metadata: JsonlSessionMetadata,
         prompt: str,
         auto_approve: bool,
         chat: Callable[..., Any] | None,
         branch: str = DEFAULT_BRANCH,
+        permission: str | None = None,
     ) -> None:
         session = None
+        # run_started 带上归属与模式：刷新页面后重建界面靠它，而不是靠内存里的 RunRecord。
         self.emit(
             record,
             events.RUN_STARTED,
             session_id=record.session_id,
             prompt=prompt,
             auto_approve=auto_approve,
+            workspace=workspace.id,
+            workspace_root=workspace.root,
+            permission=permission or workspace.default_permission,
         )
         try:
             config = load_config()
-            session = self.repo.open(metadata)
+            session = self.workspaces.repo_for(workspace).open(metadata)
             with self._lock:
                 self._sessions[record.run_id] = session
             recorder = SessionRecorder(session, branch)
@@ -401,6 +420,8 @@ class RunRegistry:
                 auto_approve=auto_approve,
                 ask=record.approvals.request if record.approvals is not None else None,
                 observer=lambda event: self._observe(record, event),
+                permission_mode=permission or workspace.default_permission,
+                workspace_root=workspace.root,
             )
             record.state = state
 
@@ -498,13 +519,9 @@ class RunRegistry:
     # ---------------- 会话定位 ----------------
 
     def find_metadata(self, session_id: str) -> JsonlSessionMetadata | None:
-        for meta in self.repo.list():
-            if meta.id == session_id:
-                return meta
-        return None
-
-    def session_root(self) -> Any:
-        return workspace.WORKSPACE_ROOT
+        """会话元信息（跨工作区找）。会话本身不带工作区信息，所以只能逐个库扫。"""
+        found = self.workspaces.find_session(session_id)
+        return None if found is None else found[1]
 
 
 __all__ = [

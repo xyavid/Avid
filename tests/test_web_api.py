@@ -204,6 +204,20 @@ def test_meta_matches_kernel_and_features_match_endpoints(bundle):
         assert client.get("/api/runs/run_x/events?deltas=1").status_code == 404
     else:
         assert "assistant_delta" in meta["event_types"]  # 类型已定义，只是不投递
+    if FEATURES["workspaces"]:
+        # 工作区是**端点型**特性：路由在就返回列表。
+        listed = client.get("/api/workspaces")
+        assert listed.status_code == 200
+        assert listed.json()["workspaces"]
+    if FEATURES["permission_modes"]:
+        # 权限模式是**参数型**特性，没有新端点可断言；用"非法值被拒"证明它真的生效
+        # （声明了却没人读，就会连非法值都照收）。
+        session = client.post("/api/sessions", json={}).json()
+        rejected = client.post(
+            f"/api/sessions/{session['id']}/runs",
+            json={"prompt": "x", "permission": "yolo"},
+        )
+        assert rejected.status_code == 422
 
 
 def test_health(bundle):

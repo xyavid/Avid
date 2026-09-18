@@ -42,6 +42,7 @@ from .errors import (
     SessionReadError,
 )
 from .runs import RunRegistry
+from .workspaces import Workspace, WorkspaceService
 
 logger = logging.getLogger("avid.svc.sessions")
 
@@ -54,8 +55,8 @@ _TAIL_SCAN_LIMIT = 64
 
 
 class SessionService:
-    def __init__(self, repo: JsonlSessionRepo, runs: RunRegistry) -> None:
-        self.repo = repo
+    def __init__(self, workspaces: WorkspaceService, runs: RunRegistry) -> None:
+        self.workspaces = workspaces
         self.runs = runs
 
     # ---------------- 列表与元信息 ----------------
@@ -67,21 +68,25 @@ class SessionService:
         CLI 早已承认这个代价；Web 首屏同样付它（设计文档 §6.1）。
         """
         found: list[dict[str, Any]] = []
-        for meta in self.repo.list():
-            summary = self._summary(meta)
-            if summary is not None:
-                found.append(summary)
+        for workspace in self.workspaces.workspaces():
+            for meta in self.workspaces.repo_for(workspace).list():
+                summary = self._summary(meta, workspace)
+                if summary is not None:
+                    found.append(summary)
         return found
 
-    def _summary(self, meta: SessionMetadata) -> dict[str, Any] | None:
+    def _summary(
+        self, meta: SessionMetadata, workspace: Workspace | None = None
+    ) -> dict[str, Any] | None:
         try:
-            with self._session(meta.id, meta=meta) as session:
+            with self._session(meta.id, meta=meta, workspace=workspace) as session:
                 return {
                     "id": meta.id,
                     "name": session.get_name(),
                     "created_at": meta.created_at,
                     "storage_version": meta.storage_version,
                     "parent_session_id": meta.parent_session_id,
+                    "workspace": self._workspace_field(workspace, meta),
                     "message_count": session.get_stats().message_count,
                     "active_run_id": self.runs.active_run_id(meta.id),
                     "truncated_tail": self._truncated_tail(session),
@@ -90,6 +95,25 @@ class SessionService:
             # 列表是最不该因为一个坏项整体失败的读操作（与 CLI 列举同原则）。
             logger.warning("跳过读不了的会话 %s：%s", meta.id, exc)
             return None
+
+    def _workspace_field(
+        self, workspace: Workspace | None, meta: SessionMetadata
+    ) -> dict[str, Any]:
+        """归属的线格式：id 来自会话 header（创建时的静态事实），名字来自注册表。
+
+        注册表里查不到（已被摘掉索引、或老会话）也要给得出 id 与根目录——
+        归属在 header 里，不依赖索引存活。
+        """
+        owner = workspace
+        if owner is None:
+            found = self.workspaces.find_session(meta.id)
+            owner = found[0] if found is not None else None
+        workspace_id = meta.workspace or (owner.id if owner is not None else None)
+        return {
+            "id": workspace_id,
+            "root": owner.root if owner is not None else None,
+            "name": owner.name if owner is not None else None,
+        }
 
     def get(self, session_id: str) -> dict[str, Any]:
         with self._session(session_id) as session:
@@ -100,6 +124,7 @@ class SessionService:
                 "created_at": meta.created_at,
                 "storage_version": meta.storage_version,
                 "parent_session_id": meta.parent_session_id,
+                "workspace": self._workspace_field(None, meta),
                 "message_count": session.get_stats().message_count,
                 "active_run_id": self.runs.active_run_id(meta.id),
                 "truncated_tail": self._truncated_tail(session),
@@ -108,9 +133,18 @@ class SessionService:
 
     # ---------------- 写：改名与销毁 ----------------
 
-    def create(self, *, id: str | None = None, name: str | None = None) -> dict[str, Any]:
+    def create(
+        self,
+        *,
+        id: str | None = None,
+        name: str | None = None,
+        workspace: str | None = None,
+    ) -> dict[str, Any]:
+        """新建会话：**必须先有归属**（多工作区模式下缺 workspace 直接 400）。"""
+        owner = self.workspaces.resolve(workspace)
+        repo = self.workspaces.repo_for(owner)
         try:
-            session = self.repo.create(id=id)
+            session = repo.create(id=id, workspace=owner.id)
         except SessionExistsError as exc:
             raise SessionExists(f"会话已存在：{id}") from exc
         except SessionInvalidIdError as exc:
@@ -124,6 +158,7 @@ class SessionService:
                 "created_at": session.metadata.created_at,
                 "storage_version": session.metadata.storage_version,
                 "parent_session_id": session.metadata.parent_session_id,
+                "workspace": self.workspaces.describe(owner),
                 "message_count": 0,
                 "active_run_id": None,
                 "truncated_tail": False,
@@ -140,11 +175,12 @@ class SessionService:
     def delete(self, session_id: str) -> None:
         if self.runs.active_run_id(session_id) is not None:
             raise SessionBusy(f"会话有活动 run，不能销毁：{session_id}")
-        metadata = self.runs.find_metadata(session_id)
-        if metadata is None:
+        found = self.workspaces.find_session(session_id)
+        if found is None:
             raise SessionNotFound(f"没有这个会话：{session_id}")
+        workspace, metadata = found
         try:
-            self.repo.delete(metadata)
+            self.workspaces.repo_for(workspace).delete(metadata)
         except SessionError as exc:
             raise SessionReadError(f"销毁会话失败：{exc}") from exc
 
@@ -282,19 +318,31 @@ class SessionService:
 
     @contextmanager
     def _session(
-        self, session_id: str, *, meta: SessionMetadata | None = None
+        self,
+        session_id: str,
+        *,
+        meta: SessionMetadata | None = None,
+        workspace: Workspace | None = None,
     ) -> Iterator[Any]:
-        """活动 run 正持有的句柄优先；否则自己 open/close。"""
+        """活动 run 正持有的句柄优先；否则自己 open/close。
+
+        ``meta``/``workspace`` 由调用方传进来时不再反查归属：列表已经为每个工作区
+        遍历过一遍，再查一次会让列举变成 O(工作区数 × 会话数) 的平方级扫描。
+        """
         active = self.runs.active_session(session_id)
         if active is not None:
             yield active
             return
 
-        metadata = meta or self.runs.find_metadata(session_id)
-        if metadata is None:
-            raise SessionNotFound(f"没有这个会话：{session_id}")
+        owner = workspace
+        metadata = meta
+        if owner is None or metadata is None:
+            found = self.workspaces.find_session(session_id)
+            if found is None:
+                raise SessionNotFound(f"没有这个会话：{session_id}")
+            owner, metadata = found
         try:
-            session = self.repo.open(metadata)
+            session = self.workspaces.repo_for(owner).open(metadata)
         except SessionError as exc:
             raise SessionReadError(f"打不开会话 {session_id}：{exc}") from exc
         try:

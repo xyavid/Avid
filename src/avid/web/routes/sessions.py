@@ -31,7 +31,9 @@ def list_sessions(request: Request) -> dict:
 
 @router.post("/sessions", response_model=SessionDetail, status_code=status.HTTP_201_CREATED)
 def create_session(request: Request, body: CreateSessionIn) -> dict:
-    return current_services(request).sessions.create(id=body.id, name=body.name)
+    return current_services(request).sessions.create(
+        id=body.id, name=body.name, workspace=body.workspace
+    )
 
 
 @router.get("/sessions/{session_id}", response_model=SessionDetail)

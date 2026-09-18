@@ -387,6 +387,12 @@ def build_web_parser() -> argparse.ArgumentParser:
         "--port", type=int, default=8765, help="监听端口（默认 8765）"
     )
     parser.add_argument(
+        "--workspace",
+        metavar="PATH|ID",
+        help="把这个进程绑到一个工作区（单工作区模式）：建会话可以省略 workspace。"
+        "缺省是多工作区模式，候选来自 `avid workspace list`，建会话必须指定归属。",
+    )
+    parser.add_argument(
         "--reload", action="store_true", help="开发模式：代码变更自动重载"
     )
     return parser
@@ -419,11 +425,19 @@ def _run_web(argv: list[str]) -> int:
         file=sys.stderr,
     )
     if args.reload:
+        if args.workspace:
+            print(
+                "注意：--reload 走模块工厂，--workspace 在重载模式下不生效；"
+                "要绑定工作区请去掉 --reload。",
+                file=sys.stderr,
+            )
         uvicorn.run(
             "avid.web:create_app", factory=True, host=args.host, port=args.port, reload=True
         )
     else:
-        uvicorn.run(create_app(), host=args.host, port=args.port)
+        uvicorn.run(
+            create_app(workspace_root=args.workspace), host=args.host, port=args.port
+        )
     return 0
 
 

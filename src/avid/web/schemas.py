@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..runtime import events
 from ..runtime.events import RunEvent
@@ -84,12 +84,43 @@ class HealthOut(BaseModel):
 # ---------------- 会话与条目 ----------------
 
 
+class WorkspaceRef(BaseModel):
+    """会话归属的线格式。``id`` 来自会话 header（创建时的静态事实）。"""
+
+    id: str | None = None
+    root: str | None = None
+    name: str | None = None
+
+
+class WorkspaceOut(WorkspaceRef):
+    id: str
+    created_at: int = 0
+    last_used_at: int = 0
+    default_permission: str = "strict"
+    is_default: bool = False
+
+
+class WorkspaceListOut(BaseModel):
+    workspaces: list[WorkspaceOut]
+
+
+class CreateWorkspaceIn(BaseModel):
+    """登记一个工作区；``permission`` 是它的默认权限模式。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    name: str | None = None
+    permission: str | None = None
+
+
 class SessionSummary(BaseModel):
     id: str
     name: str | None = None
     created_at: int
     storage_version: int
     parent_session_id: str | None = None
+    workspace: WorkspaceRef | None = None
     message_count: int
     active_run_id: str | None = None
     truncated_tail: bool = False
@@ -104,8 +135,17 @@ class SessionListOut(BaseModel):
 
 
 class CreateSessionIn(BaseModel):
+    """``workspace`` 在多工作区模式下必填（服务端 400 `workspace_required`）。
+
+    ``extra="forbid"`` 是刻意的：pydantic 默认**静默丢弃**未知字段，于是"前端加了
+    字段、服务端漏加"会变成一个不报错却按默认值跑的模式错配。这里让它变 422。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
     id: str | None = None
     name: str | None = None
+    workspace: str | None = None
 
 
 class RenameSessionIn(BaseModel):
@@ -155,9 +195,14 @@ class CreateBranchIn(BaseModel):
 
 
 class StartRunIn(BaseModel):
+    """``permission`` 缺省按会话所属工作区的默认权限（再缺省才是 strict）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
     prompt: str
     auto_approve: bool = False
     branch: str = "main"
+    permission: Literal["strict", "workspace", "system"] | None = None
 
 
 class RunCreatedOut(BaseModel):
@@ -320,7 +365,11 @@ __all__ = [
     "RunOut",
     "SessionDetail",
     "SessionListOut",
+    "CreateWorkspaceIn",
     "SessionSummary",
+    "WorkspaceListOut",
+    "WorkspaceOut",
+    "WorkspaceRef",
     "SkillListOut",
     "SkillOut",
     "StartRunIn",

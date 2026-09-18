@@ -25,7 +25,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from ..svc import API_VERSION, Services
 from ..svc.errors import ServiceError
 from . import routes  # noqa: F401 - 只为让 routes 包可见
-from .routes import approvals, events, meta, runs, sessions, tasks
+from .routes import approvals, events, meta, runs, sessions, tasks, workspaces
 from .schemas import ErrorOut
 
 logger = logging.getLogger("avid.web.app")
@@ -60,13 +60,16 @@ def create_app(
     *,
     services: Services | None = None,
     static_dir: str | Path | None = None,
+    workspace_root: str | Path | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title="Avid",
         version=f"api-v{API_VERSION}",
         description="自建 agent 运行时（harness）的 Web API 与事件流",
     )
-    app.state.services = services or Services()
+    # ``workspace_root`` 只在自装配时有用：指定它就是单工作区模式，
+    # 不给则是多工作区模式（建会话必须指定归属）。
+    app.state.services = services or Services(workspace_root=workspace_root)
     app.state.static_dir = Path(static_dir) if static_dir is not None else STATIC_DIR
     app.state.build = load_build_info(app.state.static_dir)
 
@@ -103,7 +106,7 @@ def create_app(
 
     # ---------------- 路由 ----------------
 
-    for module in (meta, sessions, runs, approvals, events, tasks):
+    for module in (meta, sessions, runs, approvals, events, tasks, workspaces):
         app.include_router(module.router, prefix="/api")
 
     @app.api_route(
