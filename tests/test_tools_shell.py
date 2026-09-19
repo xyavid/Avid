@@ -49,6 +49,28 @@ def test_bash_truncates_output(sandbox, monkeypatch):
     assert "输出已截断" in result
 
 
+def test_bash_truncation_keeps_the_tail_and_the_exit_code(sandbox, monkeypatch):
+    """截断保尾，且退出码不被切掉。
+
+    长输出的开头信息量最低，最近的几行（报错、汇总）才是结论；`[exit N]` 若跟着正文
+    一起被切，模型会分不清"命令失败了"和"输出被截断了"。
+    """
+    monkeypatch.setattr(shell, "MAX_OUTPUT_CHARS", 200)
+
+    result = bash(
+        {
+            "command": (
+                "printf 'EARLY-MARK'; printf 'HEAD-%.0s' {1..200}; printf 'TAIL-MARK'; exit 7"
+            )
+        }
+    )
+
+    assert "TAIL-MARK" in result
+    assert "[exit 7]" in result
+    assert "输出已截断" in result
+    assert "EARLY-MARK" not in result
+
+
 def test_bash_requires_command(sandbox):
     assert "command" in bash({"command": "   "})
 

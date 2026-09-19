@@ -146,6 +146,10 @@ def execute_one(
         "tool_call_id": tool_call_id,
         "content": content,
         "truncated": False,
+        # PostToolUse 的截断回调要落盘到**这次运行**的工作区，并用运行标识命名文件
+        # （否则两次运行会互相覆盖）。与 PreToolUse 的 workspace_root 同源。
+        "workspace_root": state.workspace_root or str(workspace.WORKSPACE_ROOT),
+        "run_tag": state.run_tag,
     }
     if state.hooks.trigger("PostToolUse", after) == BLOCK:
         # PostToolUse 的 BLOCK 语义：工具**已经跑过**了，拦的是"结果进上下文"

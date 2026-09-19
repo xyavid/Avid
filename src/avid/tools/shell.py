@@ -15,8 +15,9 @@
 
 * **超时**：`threading.Timer` 到点 `killpg` 整个进程组——只 `kill()` 直接子进程时，
   `bash -c 'npm run …'` 起的一串子孙会活下来继续占端口/文件。
-* **输出**：边读边限长。以前 `capture_output=True` 会把全部输出读进内存再截断到
-  20000 字符，`yes` 这类命令直接把进程撑爆。
+* **输出**：边读边限长，超限后保留**尾部**（最近的行才是要看的：报错、汇总、进度）；
+  退出码与截断提示永远留在结果里、不参与正文截断，否则超长输出会把 `[exit N]` 一起
+  切掉，模型分不清"命令失败了"和"输出被截断了"。
 * **刷屏**：超过上限后还继续丢弃一小段余量；再多说明命令在刷屏，直接终止
   （否则读循环会一直跑下去，直到超时）。
 """
@@ -27,6 +28,7 @@ import os
 import signal
 import subprocess
 import threading
+from collections import deque
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
@@ -55,20 +57,31 @@ def _timeout(value: Any) -> int:
 
 
 class _Bounded:
-    """有上限的字符收集器：到上限后只计数、不再存。"""
+    """有上限的字符收集器：超过上限后丢掉**最早**的部分，保留最近的。
+
+    保留尾部而不是头部：命令输出里最新的行才是结论（报错、汇总、进度），长输出的
+    开头往往最没有信息量。内存上限与改法之前一样是一个常量（不随输出增长）。
+    """
 
     def __init__(self, limit: int) -> None:
         self.limit = limit
-        self.parts: list[str] = []
+        self.parts: deque[str] = deque()
         self.size = 0
         self.total = 0
 
     def feed(self, piece: str) -> None:
         self.total += len(piece)
-        if self.size < self.limit:
-            room = self.limit - self.size
-            self.parts.append(piece[:room])
-            self.size += min(room, len(piece))
+        if self.limit <= 0:  # pragma: no cover - 上限来自常量，正常不会是 0
+            return
+        self.parts.append(piece)
+        self.size += len(piece)
+        # 先整块丢：剩下的部分仍覆盖整个上限时，队首那块可以整体扔掉。
+        while len(self.parts) > 1 and self.size - len(self.parts[0]) >= self.limit:
+            self.size -= len(self.parts.popleft())
+        # 再切块：队首只多出一部分时，从它开头切掉多出来的字。
+        if self.size > self.limit:
+            self.parts[0] = self.parts[0][self.size - self.limit :]
+            self.size = self.limit
 
     @property
     def text(self) -> str:
@@ -173,21 +186,30 @@ def bash(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     if timed_out.is_set():
         return f"错误：命令超时，超过 {timeout} 秒未结束，已终止"
 
-    parts = []
-    if out.text:
-        parts.append(out.text.rstrip("\n"))
-    if err.text:
-        parts.append("[stderr]\n" + err.text.rstrip("\n"))
-    parts.append(f"[exit {returncode}]")
-
-    output = "\n".join(parts)
+    marker = f"[exit {returncode}]"
+    seen = out.total + err.total
     flooded = out.flooded or err.flooded
-    if len(output) > MAX_OUTPUT_CHARS:
-        output = output[:MAX_OUTPUT_CHARS]
-    if flooded or out.truncated or err.truncated:
-        seen = out.total + err.total
-        if flooded:
-            output += f"\n…（输出过多已终止命令，已收到 {seen} 字符）"
-        else:
-            output += f"\n…（输出已截断，原文 {seen} 字符）"
-    return output
+
+    body_parts = []
+    if out.text:
+        body_parts.append(out.text.rstrip("\n"))
+    if err.text:
+        body_parts.append("[stderr]\n" + err.text.rstrip("\n"))
+    body = "\n".join(body_parts)
+
+    # 退出码与截断提示不参与正文截断：它们是这次调用的结论。超长输出若把 `[exit N]`
+    # 一起切掉，模型就分不清"命令失败了"和"输出被截断了"。
+    dropped = len(body) > MAX_OUTPUT_CHARS - len(marker)
+    if flooded:
+        notice = f"…（输出过多已终止命令，已收到 {seen} 字符）"
+    elif dropped or out.truncated or err.truncated:
+        notice = f"…（输出已截断，原文 {seen} 字符）"
+    else:
+        notice = ""
+
+    # 正文保尾：`_Bounded` 已按尾部收集，这里再按"扣掉结论部分后的额度"切一次。
+    separators = 2 if notice else 1
+    budget = max(0, MAX_OUTPUT_CHARS - len(marker) - len(notice) - separators)
+    if len(body) > budget:
+        body = body[-budget:] if budget else ""
+    return "\n".join(part for part in (body, marker, notice) if part)

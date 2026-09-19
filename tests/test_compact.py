@@ -165,13 +165,13 @@ def test_concurrent_spills_produce_distinct_files(spill_root):
     """并行 subagent 会同时压缩：序号必须原子地取，不能两个线程拿到同一个名字。"""
     import threading
 
-    from avid.policy.compaction import _spill
+    from avid.policy.compaction import spill
 
     paths: list[str] = []
     lock = threading.Lock()
 
     def worker(index: int) -> None:
-        path = _spill(f"payload-{index}", "tool-result", spill_root, "shared1")
+        path = spill(f"payload-{index}", "tool-result", spill_root, "shared1")
         assert path is not None
         with lock:
             paths.append(path)

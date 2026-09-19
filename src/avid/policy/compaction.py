@@ -110,8 +110,12 @@ def _spill_root(root: Path | None = None) -> Path:
     return Path(workspace.WORKSPACE_ROOT) / SPILL_DIR
 
 
-def _spill(text: str, kind: str, root: Path | None = None, tag: str = "") -> str | None:
-    """写盘并返回工作区相对路径。压缩不是关键路径，落盘失败就跳过、不抛。"""
+def spill(text: str, kind: str, root: Path | None = None, tag: str = "") -> str | None:
+    """写盘并返回工作区相对路径。落盘不是关键路径，失败就跳过、不抛。
+
+    公开给工具层的输出截断复用（``runtime.hooks.large_output_hook``）：同一个落盘目录、
+    同一套文件名与同一句「用 read_file 读回」的文案，模型不需要学两套恢复办法。
+    """
     root = _spill_root(root)
     path = _next_spill_path(root, kind, ".txt", tag)
     try:
@@ -123,7 +127,7 @@ def _spill(text: str, kind: str, root: Path | None = None, tag: str = "") -> str
     return f"{SPILL_DIR}/{path.name}"
 
 
-def _notice(path: str, size: int, kind: str) -> str:
+def spill_notice(path: str, size: int, kind: str) -> str:
     return f"{SPILL_PREFIX} 原{kind}共 {size} 字符，已存至 {path}；需要时用 read_file 读回。"
 
 
@@ -223,11 +227,11 @@ def tool_result_budget(
     if size == 0:
         return None
 
-    path = _spill(transcript.text_at(index), "tool-result", workdir, tag)
+    path = spill(transcript.text_at(index), "tool-result", workdir, tag)
     if path is None:
         return None
 
-    transcript.set_content(index, _notice(path, size, "工具结果"))
+    transcript.set_content(index, spill_notice(path, size, "工具结果"))
     return CompactReport(
         "tool_result_budget",
         f"落盘最大的一项工具结果（保留最近 {keep_recent} 条）",
@@ -305,11 +309,11 @@ def micro_compact(
         if _is_spilled(content):
             continue
 
-        path = _spill(content, "tool-result", workdir, tag)
+        path = spill(content, "tool-result", workdir, tag)
         if path is None:
             break
 
-        transcript.set_content(index, _notice(path, len(content), "工具结果"))
+        transcript.set_content(index, spill_notice(path, len(content), "工具结果"))
         spilled += 1
 
     if not spilled:

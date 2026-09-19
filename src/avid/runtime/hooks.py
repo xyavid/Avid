@@ -33,6 +33,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
+from ..policy.compaction import spill
 from ..policy.permission import (
     DEFAULT_MODE,
     always_allow,
@@ -93,7 +94,8 @@ ALLOW = "allow"
 BLOCK = "block"
 
 # 工具输出进入上下文前的预算上限。比工具自身的截断更严：工具层管
-# "单次输出别太大"，这一层管"塞进上下文的别太多"。
+# "单次输出别太大"，这一层管"塞进上下文的别太多"。超出时首尾各留一段，
+# 全文落盘（见 large_output_hook），所以"被截掉的部分"仍读得回来。
 MAX_TOOL_OUTPUT_CHARS = 8000
 
 
@@ -283,18 +285,48 @@ def log_hook(context: dict[str, Any]) -> str | None:
 
 
 def large_output_hook(context: dict[str, Any]) -> str | None:
-    """PostToolUse：按上下文预算截断工具输出。"""
+    """PostToolUse：按上下文预算截断工具输出，并把全文落盘留一条恢复路径。
+
+    只留头部会让尾部**永久丢失**——而最近的输出往往正是要看的（报错行、汇总、退出码）。
+    所以超限时改成首尾各留一段，完整文本交给 ``policy.compaction.spill`` 写进工作区
+    （与压缩落盘同一个目录、同一套文件名、同一句「用 read_file 读回」）：模型看的是
+    节选，需要细节时能自己读回全文，不必重跑一次工具。
+
+    落盘失败（没有工作区、磁盘错）不改变结论：退回只留头部并按上限截断，绝不因为
+    落盘失败而丢掉整段结果或让这次调用失败。
+
+    ``workspace_root`` / ``run_tag`` 由 ``execution.execute_one`` 放进 PostToolUse 的
+    context（与 PreToolUse 同源）：落盘的目录必须是这次运行的工作区，文件名带运行标识，
+    两次运行才不会互相覆盖。
+    """
     content = context.get("content")
     if not isinstance(content, str) or len(content) <= MAX_TOOL_OUTPUT_CHARS:
         return None
 
     original = len(content)
-    notice = (
-        f"\n…（hook 按上下文预算截断，原文 {original} 字符，上限 {MAX_TOOL_OUTPUT_CHARS}）"
+    path = spill(
+        content,
+        "tool-output",
+        context.get("workspace_root"),
+        str(context.get("run_tag") or ""),
     )
-    # 连提示一起算进预算，否则"上限 8000"实际会超出提示的长度。
-    keep = max(0, MAX_TOOL_OUTPUT_CHARS - len(notice))
-    context["content"] = content[:keep] + notice
+    if path is not None:
+        notice = (
+            f"\n…（hook 按上下文预算截断，原文 {original} 字符，已存至 {path}；"
+            "需要时用 read_file 读回。以下为首尾节选）\n"
+        )
+    else:
+        notice = f"\n…（hook 按上下文预算截断，原文 {original} 字符，上限 {MAX_TOOL_OUTPUT_CHARS}）"
+
+    # 连提示一起算进预算（提示本身超预算就只留提示），否则"上限 8000"会静默超出。
+    if len(notice) >= MAX_TOOL_OUTPUT_CHARS:
+        context["content"] = notice[:MAX_TOOL_OUTPUT_CHARS]
+        context["truncated"] = True
+        return None
+
+    keep = MAX_TOOL_OUTPUT_CHARS - len(notice)
+    head = keep // 2
+    context["content"] = content[:head] + notice + content[original - (keep - head) :]
     context["truncated"] = True
     return None
 

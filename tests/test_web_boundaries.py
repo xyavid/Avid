@@ -229,7 +229,7 @@ def policy_imports(path: Path) -> tuple[set[str], set[str]]:
 # runtime/ 允许 import policy 的文件与各自用到的模块。这不是"豁免名单"，而是把边界
 # 写成会失败的断言：`loop.py` 与 `execution.py` 必须是零运行时依赖（调度与工具协议
 # 不该认识策略），其余三个文件各有明确理由——context 编排压缩、state 持有运行期
-# 实例、hooks 注册默认回调（设计文档 §12 判据 9 的措辞修正①）。
+# 实例、hooks 注册默认回调（权限裁决 + 截断落盘，设计文档 §12 判据 9 的措辞修正）。
 RUNTIME_POLICY_EDGES: dict[str, set[str]] = {
     "src/avid/runtime/context.py": {"policy", "policy.compaction"},
     "src/avid/runtime/state.py": {
@@ -237,7 +237,7 @@ RUNTIME_POLICY_EDGES: dict[str, set[str]] = {
         "policy.skills",
         "policy.todo",
     },
-    "src/avid/runtime/hooks.py": {"policy.permission"},
+    "src/avid/runtime/hooks.py": {"policy.permission", "policy.compaction"},
 }
 POLICY_FREE_RUNTIME = ("src/avid/runtime/loop.py", "src/avid/runtime/execution.py")
 

@@ -232,14 +232,51 @@ def test_log_hook_never_blocks(clean):
     assert hooks.log_hook({"event": "PostToolUse", "tool": "bash", "content": "x"}) is None
 
 
-def test_large_output_hook_truncates(clean, monkeypatch):
-    monkeypatch.setattr(hooks, "MAX_TOOL_OUTPUT_CHARS", 100)
-    context = {"content": "x" * 1000, "truncated": False}
+def test_large_output_hook_spills_the_full_text(clean, monkeypatch, sandbox):
+    """超限时全文落盘：模型看到首尾节选，需要细节时能自己读回来。"""
+    monkeypatch.setattr(hooks, "MAX_TOOL_OUTPUT_CHARS", 400)
+    payload = "头" * 300 + "尾" * 300
+    context = {
+        "content": payload,
+        "truncated": False,
+        "workspace_root": str(sandbox),
+        "run_tag": "t1",
+    }
 
     assert hooks.large_output_hook(context) is None
+
+    content = context["content"]
+    assert context["truncated"] is True
+    assert len(content) <= 400
+    assert "原文 600 字符" in content
+    assert content.startswith("头")
+    assert content.endswith("尾")
+
+    from avid.policy.compaction import SPILL_DIR
+
+    files = list((sandbox / SPILL_DIR).glob("tool-output-*.txt"))
+    assert len(files) == 1
+    assert files[0].read_text(encoding="utf-8") == payload
+    assert files[0].name in content  # 提示里给出了可读回的路径
+
+
+def test_large_output_hook_falls_back_when_spill_fails(clean, monkeypatch, sandbox):
+    """落盘失败（路径不可用）不能丢掉结果，也不能让这次调用失败：退回只留头部。"""
+    monkeypatch.setattr(hooks, "MAX_TOOL_OUTPUT_CHARS", 100)
+    blocked = sandbox / "not-a-dir"
+    blocked.write_text("x", encoding="utf-8")
+    context = {
+        "content": "x" * 1000,
+        "truncated": False,
+        "workspace_root": str(blocked),
+    }
+
+    assert hooks.large_output_hook(context) is None
+
     assert context["truncated"] is True
     assert context["content"].startswith("x")
     assert "原文 1000 字符" in context["content"]
+    assert "已存至" not in context["content"]  # 没落盘成功就不给假的恢复路径
     # 连截断提示一起算进预算，不超上限。
     assert len(context["content"]) <= 100
 
