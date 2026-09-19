@@ -161,6 +161,8 @@ def execute_one(
         # （否则两次运行会互相覆盖）。与 PreToolUse 的 workspace_root 同源。
         "workspace_root": state.workspace_root or str(workspace.WORKSPACE_ROOT),
         "run_tag": state.run_tag,
+        # 重复调用计数归运行所有：回调原地读写这个 dict，下一轮就能看出"同名同参又来了"。
+        "repeat_calls": state.repeat_calls,
     }
     if state.hooks.trigger("PostToolUse", after) == BLOCK:
         # PostToolUse 的 BLOCK 语义：工具**已经跑过**了，拦的是"结果进上下文"

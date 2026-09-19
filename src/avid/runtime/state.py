@@ -76,6 +76,11 @@ class RunState:
     compactions: int = 0
     tokens: int = 0
 
+    # 同名同参工具的重复次数（键是 `名字:规范化参数`），由 `repeat_call_hook` 读写。
+    # 挂在运行状态上而不是回调闭包里：一次运行一份，新的用户输入换一份新的 RunState，
+    # 计数因此自然清零；回调本身仍是可共享的纯函数。
+    repeat_calls: dict[str, int] = field(default_factory=dict)
+
     # 本次运行的短标识：压缩落盘的文件名里带上它，否则两次运行（哪怕进程重启后）
     # 会写同一个 `tool-result-0001.txt`，把上一次的上下文记录静默覆盖掉。
     run_tag: str = field(default_factory=lambda: uuid.uuid4().hex[:8])

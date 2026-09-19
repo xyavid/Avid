@@ -115,7 +115,11 @@ def test_register_hook_works_as_a_decorator(clean):
 def test_default_hooks_are_registered_on_import():
     assert DEFAULT_HOOKS.registered("UserPromptSubmit") == [hooks.context_inject_hook]
     assert DEFAULT_HOOKS.registered("PreToolUse") == [hooks.permission_hook, hooks.log_hook]
-    assert DEFAULT_HOOKS.registered("PostToolUse") == [hooks.large_output_hook, hooks.log_hook]
+    assert DEFAULT_HOOKS.registered("PostToolUse") == [
+        hooks.repeat_call_hook,
+        hooks.large_output_hook,
+        hooks.log_hook,
+    ]
     assert DEFAULT_HOOKS.registered("Stop") == [hooks.summary_hook]
 
 
@@ -288,6 +292,93 @@ def test_large_output_hook_leaves_small_output_alone(clean):
 
     assert context["content"] == "short"
     assert context["truncated"] is False
+
+
+def test_repeat_call_hook_reminds_on_the_third_and_fifth_time(clean):
+    """同名同参重复到第 3、5 次时追加一句提醒；其余次数原样返回。"""
+    counts: dict[str, int] = {}
+    for times in range(1, 6):
+        context = {
+            "tool": "bash",
+            "arguments": {"command": "pytest -q"},
+            "content": "输出",
+            "repeat_calls": counts,
+        }
+
+        assert hooks.repeat_call_hook(context) is None
+
+        if times in (3, 5):
+            assert "[重复调用提醒]" in context["content"]
+            assert f"重复 {times} 次" in context["content"]
+            assert context["content"].startswith("输出"), "提醒是追加，不是替换"
+        else:
+            assert context["content"] == "输出"
+
+
+def test_repeat_call_hook_treats_different_arguments_as_different_calls(clean):
+    counts: dict[str, int] = {}
+
+    def call(arguments):
+        context = {
+            "tool": "bash",
+            "arguments": arguments,
+            "content": "输出",
+            "repeat_calls": counts,
+        }
+        hooks.repeat_call_hook(context)
+        return context["content"]
+
+    call({"command": "a"})
+    call({"command": "b"})
+    call({"command": "a"})
+    reminded = call({"command": "a"})
+
+    assert "[重复调用提醒]" in reminded
+    assert sorted(counts.values()) == [1, 3]
+
+
+def test_repeat_call_hook_ignores_key_order(clean):
+    """参数按规范化 JSON 比较：键序不同是同一个调用。"""
+    counts: dict[str, int] = {}
+    for arguments in ({"a": 1, "b": 2}, {"b": 2, "a": 1}, {"a": 1, "b": 2}):
+        context = {
+            "tool": "bash",
+            "arguments": arguments,
+            "content": "输出",
+            "repeat_calls": counts,
+        }
+        hooks.repeat_call_hook(context)
+
+    assert list(counts.values()) == [3]
+
+
+def test_repeat_call_hook_is_inert_without_the_run_state(clean):
+    """没接上 RunState（直调、别的调用方）时不报错、不误判。"""
+    context = {"tool": "bash", "arguments": {"command": "a"}, "content": "输出"}
+
+    assert hooks.repeat_call_hook(context) is None
+    assert context["content"] == "输出"
+
+
+def test_repeat_call_hook_counts_through_execute_one():
+    """接线：`execution` 必须把 `RunState.repeat_calls` 放进 PostToolUse 的 context。"""
+    from avid.runtime.execution import execute_one
+    from avid.runtime.state import RunState
+
+    registry_obj = HookRegistry()
+    registry_obj.register("PostToolUse", hooks.repeat_call_hook)
+    state = RunState.for_run(hooks=registry_obj, auto_approve=True)
+    registry = {"bash": lambda arguments, *, state=None: "输出"}
+
+    contents = [
+        execute_one("bash", '{"command": "same"}', registry, state=state, round_index=0)
+        for _ in range(3)
+    ]
+
+    assert "[重复调用提醒]" not in contents[0]
+    assert "[重复调用提醒]" not in contents[1]
+    assert "重复 3 次" in contents[2]
+    assert state.repeat_calls, "计数必须落在 RunState 上"
 
 
 def test_summary_hook_writes_a_summary(clean):

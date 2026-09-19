@@ -331,6 +331,40 @@ def large_output_hook(context: dict[str, Any]) -> str | None:
     return None
 
 
+def repeat_call_hook(context: dict[str, Any]) -> str | None:
+    """PostToolUse：同名同参的调用重复到第 3、5 次时给一句提醒，不阻断。
+
+    计数挂在 ``RunState.repeat_calls``（每运行一份；新的用户输入换一份新的 RunState，
+    计数自然清零），回调本身因此是可共享的纯函数。参数按规范化 JSON（键序无关）比较，
+    与 DSH 的 ``repeat-tool-reminder``、opencode 的 doom-loop 是同一个口径。
+
+    **只提醒、不阻断，也不走权限**：重复调用有时是合理的（轮询、等外部状态），把它变成
+    审批或直接拦截会挡住正常用法；先让模型自己看一眼上一次的结果。提醒追加在结果末尾
+    而不是替换内容——上一次的完整输出仍然可见。
+    """
+    tool = str(context.get("tool") or "")
+    arguments = context.get("arguments")
+    counts = context.get("repeat_calls")
+    content = context.get("content")
+    if not tool or arguments is None or not isinstance(counts, dict):
+        return None
+
+    key = (
+        f"{tool}:"
+        f"{json.dumps(arguments, ensure_ascii=False, sort_keys=True, default=str)}"
+    )
+    counts[key] = counts.get(key, 0) + 1
+    times = counts[key]
+    if times not in REPEAT_REMIND_AT or not isinstance(content, str):
+        return None
+
+    context["content"] = content + (
+        f"\n\n[重复调用提醒] 同一次调用（{tool} + 相同参数）已经重复 {times} 次。"
+        "先看上一次的结果再决定：换一种做法，或者如果已经做完就收尾。"
+    )
+    return None
+
+
 def summary_hook(context: dict[str, Any]) -> str | None:
     """Stop：把本次运行的轮数与工具使用情况汇总进日志。
 
@@ -346,11 +380,16 @@ def summary_hook(context: dict[str, Any]) -> str | None:
     return None
 
 
+# 提醒阈值：只取 3、5 两档——它治的是"反复重试同一次失败调用"，前两档足够打断。
+REPEAT_REMIND_AT: tuple[int, ...] = (3, 5)
+
 # 注册顺序有意义：permission_hook 先跑，log_hook 才能看到 denied_reason；
+# repeat_call_hook 先于 large_output_hook，提醒才算进上下文预算；
 # large_output_hook 先跑，log_hook 才能报出"已被截断"。
 DEFAULT_HOOKS.register("UserPromptSubmit", context_inject_hook)
 DEFAULT_HOOKS.register("PreToolUse", permission_hook)
 DEFAULT_HOOKS.register("PreToolUse", log_hook)
+DEFAULT_HOOKS.register("PostToolUse", repeat_call_hook)
 DEFAULT_HOOKS.register("PostToolUse", large_output_hook)
 DEFAULT_HOOKS.register("PostToolUse", log_hook)
 DEFAULT_HOOKS.register("Stop", summary_hook)
