@@ -64,8 +64,13 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# 默认不跑 stress：它按定义是长会话/性能门禁，CI 里单独一个 job 显式跑。
-addopts = "-m 'not stress' --strict-markers"
+# benchmarks/ 不在 src/avid 包里（它是本地评测仪器，不随 wheel 分发），
+# 但 tests/ 要 import 它，所以仓库根进 pythonpath。
+pythonpath = ["."]
+# 默认不跑 stress 与 eval：前者是复杂度门禁，后者要真模型、有成本与抖动。
+addopts = "-m 'not stress and not eval and not eval_smoke' --strict-markers"
 markers = [
     "stress: 性能与长会话类门禁，默认不跑（需显式 -m stress）",
+    "eval: AvidBench 全量评测（真模型，有成本；需 uv run --env-file .env）",
+    "eval_smoke: AvidBench 冒烟子集（3 条 case，先确认仪器通了）",
 ]
