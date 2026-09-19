@@ -43,12 +43,19 @@
 | 能力 | `tools/*` | 14 个工具的 schema 与实现 | 无（写文件系统与进程） | policy.todo、ai（`subagent`） |
 | 顶层 | `workspaces.py` | 用户级工作区注册表（**索引，非权威**） | `~/.avid/workspaces.json` | 无 |
 | 前端 | `web/`（仓库根，源码在 `web/src/`） | 全部浏览器代码 | 界面域状态（localStorage） | `web/src/api/`（唯一网络出口） |
+| 评测仪器 | `benchmarks/`（仓库根，**不进 wheel**） | AvidBench：case 加载、工作区物化、变体装配、判定器、报表与轨迹落盘 | 只读 case / fixture 与 `runs/` 结果（本地，不入库） | `avid` 的**任意层**——它是叶子消费者，只经既有注入点驱动内核（A14）；产品代码反向不许依赖它 |
 
 边界依据（每条来自设计文档，不在此重推）：`web/`↔`svc/` 隔离**传输形态**；`svc/`↔内核隔离
 **多一个调用方**（内核不知道有几个调用方）；前端↔内核隔离**语言与部署单元**，契约是唯一耦合面；
 `session/` 零内部依赖，隔离**持久化格式**（路径与时钟构造期注入）；`workspaces.py` 只做索引，
 隔离**跨工作区的目录知识**——放进 `session/` 会让会话存储承担它不该有的知识
 （`frontend-architecture.md:104-106`、`session/__init__.py:19-20`、`runtime-architecture.md:1221`）。
+`benchmarks/` 是**叶子消费者**：它必须能 import 内核的任意一层（否则量不到真实行为），反过来
+产品代码一行都不许 import 它——这条由 A14 钉住，因此「无环」不靠自觉。
+
+它里面**故意**有第二份循环（`benchmarks/avidbench/bare.py`）：那是 `bare` 基准线，用来回答
+「Avid 的机制比朴素循环强在哪」。A3 的调用点计数只覆盖 `src/`，所以它落在边界外；新加的
+A14 则保证这份循环永远只是**消费者**，不会被产品路径引用。
 
 ## 2. 一次运行的数据流
 
@@ -134,7 +141,7 @@ Web:  POST /api/sessions/{id}/runs                │
 |---|---|---|
 | A1 | 内核六包（`ai`/`runtime`/`policy`/`session`/`tools`/`svc`）不出现 `fastapi`/`pydantic`/`starlette`/`uvicorn` | `test_web_boundaries.py:58-59, 76-79` |
 | A2 | `fastapi` 只允许出现在 `web/`；`uvicorn` 只允许出现在 `cli.py` | `:62-73` |
-| A3 | 循环只表达调度：只有 2 个 hook 触发点、无手写 `while`、`agent_loop` 的调用点固定为 4 个文件（定义、CLI、svc、subagent）；svc/web 不按轮次自推调度 | `:85-111` |
+| A3 | 循环只表达调度：只有 2 个 hook 触发点、无手写 `while`、`agent_loop` 的调用点固定为 4 个文件（定义、CLI、svc、subagent）；svc/web 不按轮次自推调度 | `:85-111`（计数只覆盖 `src/`；包外第 5 个调用点见 §1 的叶子消费者说明） |
 | A4 | `svc/` 不 import `web/` | `:117-118` |
 | A5 | `RoundLimitExceeded` / `LLMError` 只在 `svc/runs.py` 被捕获并映射 | `:121-126` |
 | A6 | 事件名字面量只允许出现在 `runtime/events.py`（其余用常量） | `:132-141` |
@@ -142,6 +149,7 @@ Web:  POST /api/sessions/{id}/runs                │
 | A11 | `web/`、`svc/` 里不出现 `append_message` / `.commit(`——recorder 是唯一写入者 | `:157-162` |
 | A12 | 前端在 `src/api/` 之外不直连第三方 URL（`__tests__/` 夹具豁免） | `:168-177` |
 | A13 | `runtime/` → `policy/` 的边**双向**钉住（见下表） | `:245-276` |
+| A14 | **产品代码不许 import `benchmarks`**；仪器留在 `src/` 之外，`runs/` 不入库 | `:311-328` |
 | 事件契约 | 内核 `EVENT_TYPES` 与前端联合类型成员集合相等；三档声明一致；心跳/兜底常量三处同一个对象 | `tests/test_event_contract.py` |
 | 线格式契约 | 22 对 pydantic DTO ↔ 前端 TS interface 的字段名双向相等；真实载荷覆盖每个声明字段 | `tests/test_wire_contract.py` |
 | 会话门面 | `session.__all__` 恰好是那份清单；内部件不进 `__all__` 但可子模块导入 | `tests/test_session_facade.py` |

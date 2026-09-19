@@ -4,7 +4,7 @@
 不回答「好不好、缺什么」——那两问在 `CURRENT_STATE.md`（§3 能 / §4 不能 / §5 最可靠 / §6 最差）。
 
 **更新时机**：能力增删、工具参数或语义变更、端点增删、门禁变化时。改这里时同步检查
-`CURRENT_STATE.md` §3 的十四个要点是否还成立。
+`CURRENT_STATE.md` §3 的十六个要点是否还成立。
 
 **证据分级**：仓库内 = `path:line` 或命令，可复核；本地记录 = `dev/` 下的过程文档（不入库），
 只作线索，不作依据；未验证 = 显式标注。
@@ -30,7 +30,7 @@
 | 本地 Web 界面 | 已落地 | `avid web --port 8765` | `src/avid/web/`、`web/src/` |
 | CLI | 已落地 | `avid`、`avid web`、`avid workspace` | `src/avid/cli.py` |
 | 可观测（trace / 事件流 / 运行时状态） | 已落地 | stderr trace、`GET /api/runs/{id}/events`、`GET /api/runs/{id}` | `src/avid/runtime/events.py` |
-| 评测与效果基线 | **不存在** | — | 见 `BENCHMARK.md` §2 |
+| 评测与基准（AvidBench v0.1） | 已落地（第一层） | `python -m benchmarks.run`、`pytest -m eval` / `-m eval_smoke` | `benchmarks/README.md`、`benchmarks/avidbench/`、`BENCHMARK.md` §9 |
 | 长期记忆、沙箱、多 provider、多用户鉴权 | **不存在** | — | 见 `CURRENT_STATE.md` §4 |
 
 ---
@@ -346,7 +346,30 @@ durable、事件总数上限 4096、终态记录保留 600s 或最多 200 个 ru
 
 ---
 
-## 13. 分发、门禁与 CI
+## 13. 评测与基准（AvidBench v0.1）
+
+仪器在 `benchmarks/`，**不进 wheel**——它是本地评测用的，不随包分发。
+
+- **任务集**：`benchmarks/cases/v0/*.toml` 12 条只读 case，分 6 类（basic 4 / long_horizon 3 /
+  recovery 2 / subagent 1 / task 1 / session 1）；fixture 在 `benchmarks/fixtures/`（69 个文件），
+  真跑时复制进临时目录、跑完即删，`fixtures/` 永不被写。
+- **变体**：`bare`（自写朴素循环 + `read_file`/`glob`/`bash`）/ `core`（真 `agent_loop`，工具集与
+  bare 完全相同）/ `full`（全工具与全机制）。三者共用同一份系统提示词，规格写进每次运行的
+  `result.json.variant_spec`，所以历史数字以后仍然可解释。
+- **判定器**：`command` / `file_contains` / `file_equals` / `json_path_equals` / `answer_contains`
+  五种确定性原语；`resolved = 全部通过`（AND，无加权、无部分分）；**没有 LLM judge**。
+- **入口**：`uv run --env-file .env python -m benchmarks.run [--smoke|--list|--cases|--variants]`；
+  pytest 薄壳 `pytest -m eval` / `-m eval_smoke`（默认不跑、不进 CI，真模型有成本与抖动）。
+- **落盘**：`benchmarks/runs/<UTC 时间>-<commit>/<case>/<arm>/{result.json,trajectory.jsonl,answer.txt}`
+  加 `summary.txt` 与 `results.json`；`runs/` 在 `.gitignore` 里。
+- **首个基线**：`BENCHMARK.md` §9（12 × 3 = 36 次真模型运行：11 条非会话 case 上三个变体全部
+  11/11，`full` 的 token 约为 `bare` 的 2.7 倍；跨会话 case `resume` 1 轮成功、`fresh` 5 轮失败）。
+- **它测的是内核循环**：runner 直连 `agent_loop`，不经 `svc.RunRegistry`，所以数字不代表 Web
+  服务层的运行语义。
+
+---
+
+## 14. 分发、门禁与 CI
 
 - **依赖**：内核只需 `httpx`；`web/` 是唯一 importer of FastAPI/uvicorn/pydantic，在
   `[project.optional-dependencies].web`（`pyproject.toml:11-14`），由 A1/A2 门禁守住。
@@ -359,8 +382,8 @@ durable、事件总数上限 4096、终态记录保留 600s 或最多 200 个 ru
 
 ---
 
-## 14. 明确没有的能力
+## 15. 明确没有的能力
 
-评测集与效果基线、长期记忆、沙箱执行、多 provider、多用户与鉴权、中断后恢复运行、
-SQLite 后端、token/成本台账、跨进程的「一个会话一个活动 run」互斥、前端虚拟列表与
-subagent 子事件转发——逐条证据与分类见 `CURRENT_STATE.md` §4，数字现状见 `BENCHMARK.md`。
+长期记忆、沙箱执行、多 provider、多用户与鉴权、中断后恢复运行、SQLite 后端、
+token/成本台账、跨进程的「一个会话一个活动 run」互斥、前端虚拟列表与 subagent 子事件转发
+——逐条证据与分类见 `CURRENT_STATE.md` §4，数字现状见 `BENCHMARK.md`。

@@ -2,14 +2,17 @@
 
 本文件记录**性能与效果的基准**：有什么数字、缺什么数字、首个基线该怎么建。
 
-**当前结论（一句话）**：**基准尚不存在。** 仓库里有一个「防复杂度退化」的门禁和一组体积上限，
-但没有任何任务成功率、没有前后对比机制、体积预算也未冻结。
+**当前结论（一句话）**：**第一层仪器已经建成并跑出首个基线（§9），但一次「改一个变量、跑两次、
+比差值」的实测对照还没有跑过。** 首个基线同时给出一个反直觉的结果：这 11 条只读任务对当前模型
+太容易，三个变体全部 11/11，**成功率没有区分度**；有区分度的是成本（`full` 的 token 约为 `bare`
+的 2.7 倍）与那条跨会话 case（`resume` 1 轮成功 / `fresh` 5 轮失败）。
 
 **更新时机**：基准首次建立、阈值冻结、或跑出一轮新基线时。每次记录必须写清测量环境与命令。
 
-**写作方式说明**：本文件写作时**没有运行任何测试或测量**（`pytest` / `pnpm` / `gate-size` 都没跑），
-因此正文里每个数字都标了出处，并区分「仓库内可复核」与「本地记录不可复核」。这不是偷懒——
-「当前收集数无法从任何文件确定」本身就是本文件第一条结论的证据（§4）。
+**写作方式说明**：初稿（commit `8ed1801`）没有运行任何测量，所以逐条标了出处并区分「仓库内
+可复核 / 本地记录不可复核」；**本版跑了一轮全量评测**（36 次真模型运行，commit `1ece312`），
+命令、机器与结果在 §9，§3.3 与 §4 的规模数字也在本轮重测过。两轮写作方式的差别本身就是这份
+文件存在的理由：可以复核的数字必须是命令跑出来的，不是回忆出来的。
 
 ---
 
@@ -17,24 +20,24 @@
 
 | 问题 | 答案 |
 |---|---|
-| 有任务成功率 / 通过率吗？ | 没有 |
-| 有性能基线（当前值 + 可重复的测量命令）吗？ | 没有 |
-| 有「改动前后对比」机制吗？ | 没有 |
+| 有任务成功率 / 通过率吗？ | **有**：AvidBench v0.1，12 条 case × 3 个变体，首个基线见 §9 |
+| 有性能基线（当前值 + 可重复的测量命令）吗？ | **效果类有**（§9 的命令与数字）；**性能类仍然没有**（耗时口径未定、机器未固定） |
+| 有「改动前后对比」机制吗？ | **机制有**：同一任务集 × 不同变体/不同 commit 的结果都落盘在 `benchmarks/runs/`，差值可算；**但还没跑过一次真实的单变量对照**（§7 协议第 7 条仍未兑现） |
 | 有防退化的复杂度门禁吗？ | **有**：3 条 stress 用例（§3.1） |
 | 有体积/资源上限吗？ | **有**，但是「起点值」不是基线：`web/budget.json` 的 `frozen_at` 是 `null`（§3.2） |
-| 有测试规模的数字吗？ | 有静态计数（§3.3）；但它是**测试项数**，不是能力或效果指标 |
+| 有测试规模的数字吗？ | 有静态计数（§3.3）与**本轮实测的收集数**（921 collected / 5 deselected）；但测试项数是**实现规模**，不是能力或效果指标 |
 
-一句话概括现状：**仓库能告诉你「这次改动有没有让某条路径从线性退化成平方级」，不能告诉你
-「这一版是不是比上一版更会干活」。**
+一句话概括现状：**仓库现在能告诉你「这一版是不是比上一版更会干活」该怎么量**——仪器、任务集、
+判定器与落盘都在；它**还不能**告诉你答案，因为第一轮跑出来的成功率没有区分度，而唯一一次对照
+（跨会话）是 case 设计里的内部对照，不是「改了一个变量然后对比」。
 
 ## 2. 「不存在」的清单与证明
 
-| 要找的东西 | 命令 | 实际输出（本文件写作时执行） |
+| 要找的东西 | 命令 | 实际输出（本版复核） |
 |---|---|---|
-| 评测 / 基准目录 | `ls -d eval evals benchmarks bench tests/eval` | 五个全部 `No such file or directory` |
-| 评测 / 基准文件 | `find src tests web/src skills docs -iname '*eval*' -o -iname '*bench*' -o -iname '*baseline*'` | 无输出（`dev/architecture/phase-0-baseline.svg` 是架构图，不是评测基线） |
-| 通过率 / 准确率 / 任务集 | `grep -rniE '通过率\|pass rate\|pass@\|准确率\|accuracy\|任务集' src tests --include='*.py'` | 零命中 |
-| 成本 / token 台账 | `grep -rn 'usage\|total_tokens' src/avid --include='*.py'` | 只有运行内计数；`src/avid/session/types.py:149` 自述「Avid 的 token 用量目前不落盘」；无成本/计价任何代码 |
+| 评测 / 基准目录 | `ls -d eval evals benchmarks bench` | **`benchmarks`** 存在（commit `569992e` 起）；其余四个仍 `No such file or directory` |
+| 通过率 / 准确率 / 任务集 | `grep -rniE '通过率\|pass rate\|pass@\|准确率\|accuracy\|任务集' src/avid --include='*.py'` | 内核零命中；评测集在 `benchmarks/cases/v0/`（12 条）与 `benchmarks/avidbench/`（runner），不在 wheel 里 |
+| 成本 / token 台账 | `grep -rn 'usage\|total_tokens' src/avid --include='*.py'` | 仍只有运行内计数；**但 AvidBench 现在把每次运行的 tokens 落盘**（`benchmarks/runs/*/*/result.json`），首个基线见 §9 |
 | 前端性能测量脚本 | `ls web/scripts/`；`grep -rln 'performance\.now\|console\.time' web/src web/scripts web/e2e` | 只有 5 个门禁/构建脚本（`check-layers` / `check-style` / `check-tokens` / `copy-dist` / `gate-size`），无 `perf:*`；计时 API 零命中 |
 | 前端 a11y / 视觉回归用例 | `grep -rniE 'axe\|accessibility\|toHaveScreenshot\|snapshot' web/e2e` | 零命中——`web/playwright.config.ts` 写了截图约定，但**没有一条截图断言** |
 | 覆盖率 / pre-commit / 任务入口 | `ls Makefile justfile .pre-commit-config.yaml` | 三者都不存在；`pyproject.toml` 也无 coverage 配置 |
@@ -82,17 +85,18 @@ stress job 跑 `pytest -q -m stress`（`.github/workflows/ci.yml:25-37`）。
 
 | 指标 | 值 | 怎么数的 |
 |---|---|---|
-| 内核测试函数 | **627** 个，分布在 **36** 个 `tests/test_*.py` | `grep -h '^def test_' tests/*.py \| wc -l` |
-| `parametrize` | **23** 处，分布在 **11** 个文件 | `grep -c parametrize` 逐个文件求和 |
-| 内核测试代码量 | 11,862 行（`tests/*.py`） | `wc -l tests/*.py` |
-| 前端 vitest | **74** 条，10 个文件（全在 `__tests__/` 下） | `^\s*(it\|test)\(` 计数 |
-| 浏览器 e2e | **37** 条 `test(`，9 个 spec | 逐文件计数（layout 10 / interaction 8 / messages 7 / routes 4 / workspaces 3 / conversation 2 / branches 1 / smoke 1 / streaming 1） |
-| `skip` / `xfail` / `skipif` | **0** | `grep` 零命中——没有靠跳过兜绿的用例 |
+| 内核测试函数 | **664** 个，分布在 **41** 个 `tests/test_*.py`（另有 3 个支撑文件，`tests/` 共 44 个 `.py`） | `grep -h '^def test_' tests/*.py \| wc -l` |
+| 内核测试收集数（**本轮实测**） | **921 collected，5 deselected**（commit `1ece312`，本机 WSL2 / Python 3.12.3） | `uv run pytest -q --collect-only` |
+| `parametrize` | **27** 处 | `grep -c parametrize` 逐个文件求和 |
+| 内核测试代码量 | 12,439 行（`tests/*.py`） | `wc -l tests/*.py` |
+| 评测仪器规模 | 14 个 Python 文件 / 1,581 行，外带 12 条 case 与 69 个 fixture 文件（`benchmarks/`，**不进 wheel**） | `find benchmarks -name '*.py' \| wc -l`、`wc -l` |
+| 前端 vitest | **74** 条，10 个文件（全在 `__tests__/` 下） | `^\s*(it\|test)\(` 计数（静态，本版未重测） |
+| 浏览器 e2e | **37** 条 `test(`，9 个 spec | 逐文件计数（静态，本版未重测） |
+| `skip` / `xfail` / `skipif` | **0** | `grep` 零命中——没有靠跳过兜绿的用例；评测的 `eval` marker 是「默认不跑」，不是 skip |
 
-**口径警告**：627 是**函数数**，pytest 的收集数会被 `parametrize` 展开（例如
-`test_session_conformance` 的 2 个函数 × 2 个后端 × 每个 case 会展开成几十项）。本文件
-**不给当前收集数**——因为从仓库里无法确定它（§4）。测试项数增长在任何情况下都**不能**当作
-能力或性能指标。
+**口径警告**：664 是**函数数**；pytest 的收集数会被 `parametrize` 展开，所以上表把两者分开列，
+并给出**本轮实测的收集数**（921 / 5 deselected）。测试项数增长在任何情况下都**不能**当作能力或
+性能指标——它只说明实现规模。
 
 ### 3.4 门禁与 CI：抓什么、抓不到什么
 
@@ -115,7 +119,7 @@ a11y 与视觉回归（没有用例）、性能回归（只有 stress 的复杂�
 
 | 指标 | 各文件写的值 | 出处（均为本地记录，除注明） | 本文件处置 |
 |---|---|---|---|
-| 内核测试规模 | `822 passed + 3 deselected`；`869`；`863`；`844`；`835`；`832`；`711` | `dev/review/fix-progress.md:103`；`dev/plan/roadmap.md` 各阶段条目 | 三处口径不同（收集项 vs 函数 vs 不同时点）。**首个基线必须重新收集并只认一个口径** |
+| 内核测试规模 | `822 passed + 3 deselected`；`869`；`863`；`844`；`835`；`832`；`711` | `dev/review/fix-progress.md:103`；`dev/plan/roadmap.md` 各阶段条目 | **本轮已重测并只认一个口径**：`921 collected / 5 deselected`（commit `1ece312`，本机）。历史值不再引用；以后只认「pytest 收集数 + 环境」这一种写法 |
 | 内核测试耗时 | `711 tests in 8.99s` | `dev/review/architecture-review.md:7`、`dev/review/tests.md:14` | 仅历史值；本机与 CI 环境不同，不可比 |
 | 浏览器 e2e | `40 项全通过`、`38`、`36`、`35`；静态 **37** | `dev/plan/roadmap.md:192,179,169,150`；静态计数见 §3.3 | 静态与记录不一致（差额未解释）。以**重测**为准 |
 | 首屏 JS gzip | 5 个值（见 §3.2） | `dev/review/*`、`dev/plan/roadmap.md` | 阈值变过一次，不可直接比 |
@@ -164,6 +168,22 @@ a11y 与视觉回归（没有用例）、性能回归（只有 stress 的复杂�
 工具描述差异，但有成本与抖动；回放便宜稳定但测不出模型行为变化。倾向「真模型 + 固定模型版本 +
 少量任务」当基线、回放只做回归——这需要在动工前澄清（`AGENTS.md` §3 第零步）。
 
+**本轮落地对照**（`benchmarks/`，commit `1ece312`；协议是上面那七条，这里是逐条现状）：
+
+| 协议条目 | 现状 |
+|---|---|
+| 任务集 | **做到了，但比协议更宽**：12 条只读 case（basic 4 / long_horizon 3 / recovery 2 / subagent 1 / task 1 / session 1），不是只有 R 类；全部客观可判、除模型外不联网 |
+| 主指标 | **做到了**：`resolved` 是布尔量（全部确定性 grader 通过），无复合分 |
+| 次指标 | **做到了**：轮数 / tokens / 工具调用 / 工具失败 / 拒绝 / 压缩 / 审批 / 墙钟 + 失败分类（能力 / 预算 / 模型 / 权限 / 基础设施 / 取消） |
+| 环境 | **做到了**：`result.json` 与 `summary.txt` 记录 commit、模型名、日期与 limits；机器仍只记在本文件里，未进结果文件 |
+| 冻结 | **没做**：首个基线已落盘（§9），阈值与 `web/budget.json` 的 `frozen_at` 未动 |
+| 执行 | **做到了**：`-m eval` / `-m eval_smoke` 两个 marker，默认不进 `pytest`，不进 CI |
+| 对比 | **机制做到了，实验没做**：同一任务集跑不同变体的结果都落盘、差值可算，但没有跑过一次「改一个变量再跑一次」的对照 |
+
+**两处与协议的偏离，理由写在这里**：① 判定器不用 LLM judge——那只是把不可复现性从被测对象
+转移到裁判身上，所以 v0.1 的 case 全部是确定性判定；② case 文件用 TOML（`tomllib` 是标准库）
+而不是 YAML，省掉一个依赖。
+
 ## 8. 记录规范：以后每个数字都这么写
 
 新增任何数字（性能或效果）时，按这个格式追加，缺字段就写「未记录」：
@@ -176,3 +196,59 @@ a11y 与视觉回归（没有用例）、性能回归（只有 stress 的复杂�
   数字不得用于任何架构或产品结论。
 - 同一指标出现新值时，**改原行并注明变化**，不要在文末追加第二条（否则重演 §4 的口径冲突）。
 - 阈值或预算类数字变动必须同时写「为什么改」。
+
+## 9. 首个基线（AvidBench v0.1）
+
+**这是什么**：AvidBench 的第一轮全量运行——12 条只读 case × 3 个变体（跨会话 case 只跑 `full`
+的两种条件），共 **36 次真模型运行**。它是一次**测量**，不是门禁：通过率不决定任何退出码。
+
+### 9.1 环境与命令
+
+| 项 | 值 |
+|---|---|
+| 命令 | `uv run --env-file .env python -m benchmarks.run --out benchmarks/runs/baseline` |
+| commit | `1ece312`（跑基线时的代码；此后只改过本文档，未改 case / fixture / runner） |
+| 模型 | `deepseek/deepseek-v4.1-flash`（`AVID_MODEL`；base_url `https://api.commandcode.ai/provider/v1`） |
+| 机器 | `LAPTOP-3M7941PJ`，WSL2（`Linux 6.6.87.2-microsoft-standard-WSL2`），32 vCPU，Python 3.12.3 |
+| 日期 | 2026-09-19 09:23:44Z（UTC） |
+| 上限 | 每条 case 的 `max_rounds` 10–16、`timeout_seconds` 240–300（逐条见 `benchmarks/cases/v0/*.toml`） |
+| 权限 | `auto_approve=True`（离线跑；因此「拒绝」恒为 0，**不代表**权限层没工作） |
+| 记录 | `benchmarks/runs/baseline/`（**不入库**，`.gitignore`）：每次运行的 `result.json` / `trajectory.jsonl` / `answer.txt` |
+
+### 9.2 数字
+
+| arm | resolved | tokens 均值 | rounds 均值 | 墙钟均值 | 工具调用均值 | 失败分类 |
+|---|---|---|---|---|---|---|
+| `bare`（自写朴素循环 + 3 工具） | **11/11** | 3,826.7 | 3.3 | 5.3 s | 2.82 | — |
+| `core`（真 `agent_loop`，同工具集） | **11/11** | 4,297.6 | 3.3 | 5.7 s | 2.64 | — |
+| `full`（全工具与全机制） | **11/11** | 10,438.7 | 3.3 | 5.4 s | 2.45 | — |
+| `full--phase1`（跨会话第一轮，未计分） | 未计分 | 5,954.0 | 2.0 | 3.3 s | — | — |
+| `full--resume`（第二轮带会话历史） | **1/1** | 3,020.0 | 1.0 | 1.6 s | 0 | — |
+| `full--fresh`（第二轮干净上下文） | **0/1** | 16,651.0 | 5.0 | 9.6 s | 4 | 能力 1 |
+
+机制的触发合计（36 次运行）：`compactions` **0**、`todo_reminders` 10、`stop_nudges` 0、
+`denials` 0、`tool_failures` 0、`approvals_requested` 0；36 次运行的 `workspace_pristine` **全为真**
+（没有一次写入受判文件，只读约束成立）。
+
+### 9.3 三条结论
+
+1. **任务集偏易，成功率没有区分度。** 11 条非会话 case 上三个变体全部通过，而且**机制确实触发过**
+   （TODO 提醒 10 次），结果仍然毫无差别——这不是「机制没用」，而是**这套任务测不出机制有没有用**
+   （天花板效应）。要提高区分度只能加难度（更多失败点、更长上下文、更深依赖），不是继续加机制。
+2. **成本差异是真实的，且方向与直觉相反。** `full` 的 token 是 `bare` 的 **2.7 倍**
+   （10,438.7 / 3,826.7），但轮数（3.3）与墙钟（5.4 s vs 5.3 s）几乎相同，工具调用甚至略少
+   （2.45 vs 2.82）。差额主要来自**每次请求都带上 14 个工具的定义**，不是「多跑了几轮」。
+   以后比 token 效率必须把「schema 开销」与「额外推理」分开算——这是首轮基线给出的一条口径。
+3. **唯一有区分度的对照是跨会话那一条。** `resume` 用 1 轮 / 3,020 token 直接答对；`fresh` 花
+   5 轮 / 16,651 token 去工作区里翻找那个**根本不在工作区里**的约定（`find` → `cat POLICY.txt`
+   → `ls -la` + `git log` → 再跑一次脚本），最后答 `code=8842`、缺前缀而失败。它量到的是
+   **会话投影**的价值：把结论从「5 轮搜索」降到「1 轮复述」。
+
+### 9.4 这次测量不能证明什么
+
+- **不能证明 Task / Subagent 有没有增益**：各只有 1 条 case，且三个变体都通过。
+- **不能证明压缩有没有用**：36 次运行里 `compactions = 0`，压缩管线**一次都没触发**——这套任务
+  根本没有覆盖它的适用场景。
+- **不代表生产路径**：runner 直连 `agent_loop`，不经 `svc.RunRegistry`。
+- **不能与将来的数字直接比**，除非模型版本、机器与 limits 相同；改 case / fixture / runner 后
+  必须重跑才能新增一行（§8 的记录规范）。
