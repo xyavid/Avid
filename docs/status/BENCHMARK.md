@@ -215,6 +215,13 @@ a11y 与视觉回归（没有用例）、性能回归（只有 stress 的复杂�
 | 权限 | `auto_approve=True`（离线跑；因此「拒绝」恒为 0，**不代表**权限层没工作） |
 | 记录 | `benchmarks/runs/baseline/`（**不入库**，`.gitignore`）：每次运行的 `result.json` / `trajectory.jsonl` / `answer.txt` |
 
+两条入口都在同一环境复验过：CLI（上表，36 次运行，产出 §9.2 的数字）与 pytest 薄壳
+（`uv run --env-file .env pytest -q -m eval_smoke -s` → 3 条 × 3 变体全部 `resolved`，
+44 s）。首次跑 pytest 路径时踩到一个坑并已修掉：`tests/conftest.py` 的 autouse `model_env`
+把 `AVID_API_KEY` 顶成 `test-key`，9 次运行全部 401 且失败态是 `llm_error`——它原本不在
+「仪器错误」的断言里，于是**全红但绿**。修法两处：夹具对 `eval` 标记让开；断言把
+`llm_error` 并入仪器错误。缺陷运行留在 `benchmarks/runs/20260919T092752Z-*/`（本地）作为记录。
+
 ### 9.2 数字
 
 | arm | resolved | tokens 均值 | rounds 均值 | 墙钟均值 | 工具调用均值 | 失败分类 |

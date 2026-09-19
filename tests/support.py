@@ -10,6 +10,8 @@ import time
 from collections.abc import Callable, Iterable
 from typing import Any
 
+import pytest
+
 from avid.ai.client import Turn, Usage
 
 
@@ -101,6 +103,43 @@ def wait_for(predicate: Callable[[], bool], timeout: float = 5.0) -> bool:
             return True
         time.sleep(0.01)
     return False
+
+
+#: 运行没走完的状态里，属于**仪器或配置**问题的那几个（不是「模型能力不够」）。
+#: 真模型评测必须把 `llm_error` 也算进这类：否则一次 401 会让 36 次运行全红，
+#: 而测试仍然绿——「全红但绿」比直接失败更危险。
+INFRA_STATUSES = ("error", "llm_error")
+
+
+def real_config_or_skip():
+    """真模型评测用的模型配置。
+
+    `tests/conftest.py` 的 `model_env` 是 autouse 的，会给**每个**测试塞
+    `test-key` / `test-model`。那对 eval 是致命的：运行会全部 401（实测踩到过一次），
+    所以这里显式挡一道——缺配置跳过，拿到夹具的假配置直接失败。
+    """
+    from avid.ai.config import ConfigError, load_config
+
+    try:
+        config = load_config()
+    except ConfigError as exc:
+        pytest.skip(f"没有模型配置，跳过真模型评测：{exc}")
+    if config.api_key == "test-key" or config.model == "test-model":
+        pytest.fail(
+            "真模型评测拿到的是测试夹具的假配置（test-key / test-model）："
+            "conftest 的 model_env 对 eval / eval_smoke 标记应当让开"
+        )
+    return config
+
+
+def assert_no_infrastructure_failures(run_set: Any) -> str:
+    """断言没有仪器/配置级失败，返回报表文本供打印。"""
+    summary = run_set.summary()
+    broken = [item for item in run_set.results if item.status in INFRA_STATUSES]
+    assert not broken, summary + "\n仪器或配置出错：\n" + "\n".join(
+        f"{item.case_id}/{item.arm}: {item.status} {item.error}" for item in broken
+    )
+    return summary
 
 
 def wait_status(record: Any, status: str, timeout: float = 5.0) -> bool:

@@ -9,8 +9,15 @@ from avid.workspaces import AVID_HOME_ENV
 
 
 @pytest.fixture(autouse=True)
-def model_env(monkeypatch):
-    """每个测试都有"看起来可用"的模型配置：svc 会在运行线程里 load_config()。"""
+def model_env(request, monkeypatch):
+    """每个测试都有"看起来可用"的模型配置：svc 会在运行线程里 load_config()。
+
+    **例外**：`eval` / `eval_smoke` 标记的真模型评测要用真实环境（`--env-file .env`）。
+    被这份夹具顶成 `test-key` 的话运行会全部 401，而 `llm_error` 不在「仪器错误」的
+    断言里——测出来就是「全红但绿」（实测踩到过一次，见 `support.INFRA_STATUSES`）。
+    """
+    if request.node.get_closest_marker("eval") or request.node.get_closest_marker("eval_smoke"):
+        return
     monkeypatch.setenv("AVID_API_KEY", "test-key")
     monkeypatch.setenv("AVID_MODEL", "test-model")
     monkeypatch.delenv("AVID_BASE_URL", raising=False)

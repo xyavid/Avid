@@ -24,6 +24,11 @@ uv run --env-file .env pytest -q -m eval -s         # 全量
 默认 `pytest` **不跑**评测（`eval` / `eval_smoke` 都不在 addopts 里）。真模型调用有成本
 与抖动，它是提交前手动跑的一次实验，不是门禁。评测数字不决定退出码——通过率是测量结果。
 
+**pytest 路径有一个必须知道的坑**：`tests/conftest.py` 的 `model_env` 是 autouse 的，会给
+每个测试塞 `AVID_API_KEY=test-key`。它现在对 `eval` / `eval_smoke` 标记让开，并且
+`support.real_config_or_skip()` 会在拿到那对假配置时**直接失败**——否则一次 401 会让全部
+运行变成 `llm_error` 而测试仍然绿（实测踩到过一次）。
+
 ## 三个变体
 
 | 变体   | 循环             | 工具集                              | 压缩/提醒/nudge/hook |
