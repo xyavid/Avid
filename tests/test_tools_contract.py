@@ -86,6 +86,7 @@ def test_expected_tools_are_registered():
         "subagent",
         "todo_write",
         "update_task",
+        "web_search",
         "write_file",
     ]
 
