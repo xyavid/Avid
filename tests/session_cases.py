@@ -38,6 +38,7 @@ from avid.session import (
     set_value,
     value,
 )
+
 # 条目类型不在门面里（见 avid/session/__init__.py 的取舍）：内部判别字段按子模块导入。
 from avid.session.types import MESSAGE_ENTRY, NOTICE_ENTRY
 

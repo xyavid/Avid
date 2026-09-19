@@ -36,6 +36,7 @@ from .errors import (
 from .ids import UuidV7Generator, validate_session_id
 from .mutation import MutationLine
 from .types import (
+    MESSAGE_ENTRY,
     BranchScan,
     CommitResult,
     Entry,
@@ -43,7 +44,6 @@ from .types import (
     EntryType,
     EntryWrite,
     IdGenerator,
-    MESSAGE_ENTRY,
     NewEntry,
     SessionMetadata,
     SessionStats,
