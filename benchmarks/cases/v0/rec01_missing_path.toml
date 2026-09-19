@@ -1,0 +1,18 @@
+id = "rec01_missing_path"
+category = "recovery"
+fixture = "rec01_missing_path"
+notes = "恢复：题面里的路径在工作区根上不存在，真文件在 data/ 子目录。第一次读取必然失败，看它是否换策略。"
+
+prompt = """
+工作目录里应该有一份 data.csv（两列：id, amount，第一行是表头）。请把 amount 列的数据行求和。
+
+回答格式：sum=<数字>
+"""
+
+[limits]
+max_rounds = 12
+timeout_seconds = 240
+
+[[graders]]
+kind = "answer_contains"
+text = ["sum=887"]

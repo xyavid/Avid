@@ -1,0 +1,24 @@
+id = "b03_todo_count"
+category = "basic"
+fixture = "b03_todo_count"
+notes = "基础：多文件遍历 + 计数。注意题目要求按出现次数计，不是按行数计。"
+
+prompt = """
+工作目录 docs/ 下的每个文档里都可能出现标记 `TODO`。请统计这些文档里 `TODO` 一共出现了多少次，
+按出现次数计，不是按行数计。
+
+回答格式：TODO 总数=<数字>
+"""
+
+[limits]
+max_rounds = 10
+timeout_seconds = 240
+
+[[graders]]
+kind = "answer_contains"
+text = ["TODO 总数=6"]
+
+[[graders]]
+name = "fixture-不变量"
+kind = "command"
+run = "test \"$(grep -rho TODO docs | wc -l)\" -eq 6"

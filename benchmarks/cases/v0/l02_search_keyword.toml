@@ -1,0 +1,19 @@
+id = "l02_search_keyword"
+category = "long_horizon"
+fixture = "l02_search_keyword"
+notes = "长程：30 个文件里按内容检索唯一命中。逐文件读也能做对，但轮数与 token 会明显更高。"
+
+prompt = """
+shard_01 到 shard_06 六个目录里各有一些记录文件，每条记录有 tag 与 amount 两个字段。
+只有一个文件的 tag 是 ZEPHYR。请找出那个文件，报告它的 amount。
+
+回答格式：amount=<数字>
+"""
+
+[limits]
+max_rounds = 16
+timeout_seconds = 300
+
+[[graders]]
+kind = "answer_contains"
+text = ["amount=7351"]

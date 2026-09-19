@@ -1,0 +1,3 @@
+tag=shard04-2
+amount=4414
+note=记录 4-2

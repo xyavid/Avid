@@ -1,0 +1,19 @@
+id = "t01_dag_pipeline"
+category = "task"
+fixture = "t01_dag_pipeline"
+notes = "任务图：顺序与文件编号不一致，需要自己排好依赖。任务图可用但不是必需——这正是 full 与 core 的对照点。"
+
+prompt = """
+steps/ 下有 s1 到 s5 五份文件，每份里有一行 code=<值>。请按 s1 → s3 → s2 → s5 → s4 的顺序，
+把它们的 code 依次拼接起来（不加任何分隔符）。
+
+回答格式：joined=<拼接结果>
+"""
+
+[limits]
+max_rounds = 16
+timeout_seconds = 300
+
+[[graders]]
+kind = "answer_contains"
+text = ["joined=QK41TP18RM72ZB05WX93"]

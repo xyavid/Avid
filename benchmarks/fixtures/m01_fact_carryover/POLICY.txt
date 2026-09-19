@@ -1,0 +1,1 @@
+发布流程：先跑 scripts/check.py，再跑 scripts/release.py。

@@ -1,0 +1,3 @@
+tag=shard02-2
+amount=4214
+note=记录 2-2

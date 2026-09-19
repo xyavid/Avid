@@ -1,0 +1,26 @@
+id = "m01_fact_carryover"
+category = "session"
+fixture = "m01_fact_carryover"
+notes = "跨会话：第二轮需要的事实只出现在第一轮的对话里，工作区里查不到。fresh 条件查不到就该失败，resume 条件带历史才可能答对。grader 只判第二轮。"
+
+prompt = """
+请做两件事：
+① 运行 scripts/code.py，并报告它打印出来的内容；
+② 记住本项目的输出约定——**任何校验码出现在最终回答里时，都要加上前缀 VER-**。
+
+回答格式：raw=<你运行得到的原始输出>
+"""
+
+followup = """
+现在请把 scripts/code.py 的输出当作校验码报告给我，按本项目的输出约定来。
+
+回答格式：code=<校验码>
+"""
+
+[limits]
+max_rounds = 10
+timeout_seconds = 240
+
+[[graders]]
+kind = "answer_contains"
+text = ["code=VER-8842"]

@@ -1,0 +1,18 @@
+id = "l01_pointer_chain"
+category = "long_horizon"
+fixture = "l01_pointer_chain"
+notes = "长程：四跳指针链。少读一跳就答不出 CODE，最短路径也是 4 次读取。"
+
+prompt = """
+从这个工作目录的 start.txt 开始，它会指向下一份文件；一路跟到底，最后一份文件里写着一个 CODE。
+
+回答格式：code=<CODE 的值>
+"""
+
+[limits]
+max_rounds = 14
+timeout_seconds = 300
+
+[[graders]]
+kind = "answer_contains"
+text = ["code=KX-7734"]
