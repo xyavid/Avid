@@ -1,3 +1,4 @@
+import inspect
 import json
 
 import pytest
@@ -12,8 +13,62 @@ VALID_TYPES = {"string", "integer", "number", "boolean", "array", "object"}
 PARAMETERS = {item["function"]["name"]: item["function"]["parameters"] for item in TOOLS}
 
 
+def _integer_specs(spec):
+    """递归找出所有 integer 参数节点（含数组 items 与嵌套对象 properties）。"""
+    if not isinstance(spec, dict):
+        return
+    if spec.get("type") == "integer":
+        yield spec
+    for sub in (spec.get("properties") or {}).values():
+        yield from _integer_specs(sub)
+    if isinstance(spec.get("items"), dict):
+        yield from _integer_specs(spec["items"])
+
+
 def test_definitions_and_implementations_match():
     assert sorted(NAMES) == sorted(TOOL_IMPLS)
+
+
+def test_stateful_tools_are_exactly_the_handlers_that_take_state():
+    """`STATEFUL_TOOLS` 是可枚举的事实：需要运行状态的工具必须真的接受 `state=`。
+
+    `execution.py` 的 docstring 一直声称这条由契约测试守着，但此前只有一条针对 6 个
+    任务工具的子集断言。漏进这张表（或反过来多写一个名字）会让执行时抛 TypeError，
+    再被兜底成「工具执行失败」——错误信息指向工具，根因却在注册表。
+    """
+    from avid.runtime.execution import STATEFUL_TOOLS
+
+    takes_state = {
+        name
+        for name, impl in TOOL_IMPLS.items()
+        if "state" in inspect.signature(impl).parameters
+    }
+
+    assert set(STATEFUL_TOOLS) == takes_state
+
+
+def test_approval_rules_only_name_registered_tools():
+    """审批规则表不许出现已删除或拼错的工具名（静默失效的规则等于没有规则）。"""
+    from avid.policy.permission import APPROVAL_RULES
+
+    assert set(APPROVAL_RULES) <= set(NAMES)
+
+
+@pytest.mark.parametrize("item", TOOLS, ids=NAMES)
+def test_integer_parameters_declare_a_lower_bound(item):
+    """整数参数必须有下界：无界 integer 让模型可以传 0 或负数，只能靠实现各自兜底。"""
+    for spec in _integer_specs(item["function"]["parameters"]):
+        assert isinstance(spec.get("minimum"), int), spec
+
+
+def test_timeout_parameter_matches_the_enforced_cap():
+    """`timeout_seconds` 的上界以前只写在描述里，实现里另有一份 clamp（300 秒）。"""
+    from avid.tools import shell
+
+    spec = PARAMETERS["bash"]["properties"]["timeout_seconds"]
+
+    assert spec["minimum"] == 1
+    assert spec["maximum"] == shell.MAX_TIMEOUT
 
 
 def test_expected_tools_are_registered():

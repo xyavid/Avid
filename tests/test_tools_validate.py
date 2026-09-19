@@ -78,6 +78,24 @@ def test_extra_keys_are_tolerated():
     assert validate_arguments(params_of("read_file"), {"path": "a.txt", "extra": 1}) is None
 
 
+def test_bounds_are_enforced():
+    """数值边界现在写进 schema 了（P1-2），校验器必须真的按它拦。"""
+    too_small = validate_arguments(params_of("read_file"), {"path": "a.txt", "offset": 0})
+    assert too_small is not None
+    assert "不能小于 1" in too_small
+
+    too_big = validate_arguments(
+        params_of("bash"), {"command": "ls", "timeout_seconds": 9999}
+    )
+    assert too_big is not None
+    assert "不能大于 300" in too_big
+
+    assert (
+        validate_arguments(params_of("bash"), {"command": "ls", "timeout_seconds": 300})
+        is None
+    )
+
+
 def test_execute_one_rejects_bad_arguments_before_running_the_tool():
     calls: list[dict[str, Any]] = []
 

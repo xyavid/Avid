@@ -50,6 +50,10 @@ BASH = tool(
         "timeout_seconds": {
             "type": "integer",
             "description": "超时秒数，默认 30，上限 300；超时后进程被终止。",
+            "minimum": 1,
+            # 与 shell.MAX_TIMEOUT 一致（test_tools_contract 有一条断言钉住两者相等）：
+            # 实现里的 clamp 现在是第二道防线，schema 才是给模型的第一道。
+            "maximum": 300,
         },
     },
     ("command",),
@@ -67,10 +71,12 @@ READ_FILE = tool(
         "offset": {
             "type": "integer",
             "description": "起始行号，从 1 开始，默认 1。",
+            "minimum": 1,
         },
         "limit": {
             "type": "integer",
             "description": "本次最多读取的行数，默认 2000。",
+            "minimum": 1,
         },
     },
     ("path",),
