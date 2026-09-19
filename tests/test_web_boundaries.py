@@ -1,4 +1,4 @@
-"""A1 – A6 / A10 – A12：架构边界用 grep 与断言守住（不依赖运行）。
+"""A1 – A6 / A10 – A12 / A14：架构边界用 grep 与断言守住（不依赖运行）。
 
 这些规则的价值在于它们**会失败**：一次「顺手 import 一下」会被立刻拦住。
 边界是正则的边界——它只匹配字面量，拼接出来的 URL 与间接 import 不在覆盖内
@@ -306,3 +306,23 @@ def test_web_imports_name_submodules_not_the_package():
                         f"from {'.' * node.level} import {alias.name}"
                     )
     assert offenders == [], f"web 内部按子模块名 import：{offenders}"
+
+
+# ---------------- A14：benchmarks/ 是叶子消费者 ----------------
+#
+# AvidBench 在 `benchmarks/`（包外，不进 wheel）。它要靠注入点驱动内核，所以**允许**
+# import `avid` 的任何一层；反过来绝不允许：产品代码 import 评测仪器，或者评测仪器被
+# 写进 `src/avid` 的依赖图。这条边界以前不存在（那时没有 benchmarks/），现在有东西
+# 可以违反它了，所以要有一条会失败的断言。
+
+
+def test_a14_product_code_never_imports_benchmarks():
+    product = list(SRC.rglob("*.py"))
+    assert hits(product, r"^\s*(from|import)\s+benchmarks\b") == []
+
+
+def test_a14_benchmarks_stays_out_of_the_wheel():
+    """仪器不随包分发：它必须在 `src/` 之外，且 `benchmarks/runs/` 不进版本库。"""
+    assert (ROOT / "benchmarks").is_dir()
+    assert not (SRC / "benchmarks").exists()
+    assert hits([ROOT / ".gitignore"], r"^benchmarks/runs/$") != []
