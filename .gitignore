@@ -25,7 +25,7 @@ web/test-results/
 
 # ---- 文档入库规则：正式文档进 docs/，过程文档留 dev/ ----
 
-# docs/ 白名单：默认全部忽略，只放行下面四类正式文档目录。
+# docs/ 白名单：默认全部忽略，只放行下面五类正式文档目录。
 # 新文件落在 docs/ 根目录或未知子目录时自动被忽略，不会误提交。
 /docs/*
 !/docs/README.md
@@ -33,6 +33,9 @@ web/test-results/
 !/docs/api/
 !/docs/deploy/
 !/docs/design/
+# status/：项目现状五问集（现状 / 能力 / 基准 / 架构 / 路线），
+# 文件名沿用大写 SCREAMING_SNAKE 以便与 design/ 下的规格文档区分。
+!/docs/status/
 
 # dev/ 过程文档：开发计划、需求草稿、进度跟踪、笔记、会议记录、阶段出图。
 # 只保留在本地，不参与版本管理。
