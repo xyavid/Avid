@@ -15,9 +15,12 @@
  * 但形状不同——标记的职责就是区分作者。
  *
  * `aria-live` 只加在 durable（非乐观）的 assistant 条目上：乐观 delta 每帧都在变，读屏器
- * 会把它念成一串噪音，而 durable 消息才是完整的一句话。动作行默认透明，鼠标悬停或键盘
- * 聚焦时显形——`focus-visible` 直接写在按钮上，这样键盘用户 tab 到哪个按钮哪个就可见
- * （透明放在容器上会把子元素一起吃掉，键盘用户将永远看不见动作）。
+ * 会把它念成一串噪音，而 durable 消息才是完整的一句话。
+ *
+ * 动作行**常驻可见**（复制文本 / 从此处分支）：以前是 `opacity-0` + 悬停显形，代价是
+ * 「有这功能」本身要先被猜到；方框与高度档本来就一直在，显隐只是额外的一层谜。
+ * 条目级的「查看原始 JSON」按钮已删除——检查器改由工具卡的「查看」打开（那条路径仍在，
+ * 工具输出才是真正需要看全文/diff 的东西）。
  */
 import { memo } from 'react'
 
@@ -35,15 +38,12 @@ export interface EntryRowProps {
   /** 同级卡片的轮换序号：按**全部**条目计算，所以加载更早不会改变已有卡片的形状。 */
   shapeIndex?: number
   density?: Density
-  onInspect?: (entry: TimelineEntry) => void
   onCopy?: (text: string) => void
   /** 「从此处分支」：只有落了库的条目（有 `entryId`）才可能成为分叉点。 */
   onFork?: (entry: TimelineEntry) => void
 }
 
 const NOTICE_KEY = { compaction: 'chat.notice.compaction' } as const
-
-const ACTION = 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100'
 
 /**
  * 角色标记：两种角色各一枚专属手绘小标记（`avid` 是角形笔画，`user` 是歪头 + 肩弧）。
@@ -60,28 +60,22 @@ function Role({ label, mark = 'avid' }: { label: string; mark?: 'avid' | 'user' 
 
 function Actions({
   entry,
-  onInspect,
   onCopy,
   onFork,
-}: Pick<EntryRowProps, 'entry' | 'onInspect' | 'onCopy' | 'onFork'>) {
+}: Pick<EntryRowProps, 'entry' | 'onCopy' | 'onFork'>) {
   const { t } = useTranslation()
-  if (!onCopy && !onInspect && !onFork) return null
+  if (!onCopy && !onFork) return null
   // 分叉点是条目树里的一个 id：乐观条目（delta）还没有 id，不能当分叉点。
   const forkable = Boolean(onFork && entry.entryId)
   return (
     <div className="mt-1 flex gap-1">
       {onCopy ? (
-        <Button size="sm" variant="secondary" className={ACTION} onClick={() => onCopy(entry.text)}>
+        <Button size="sm" variant="secondary" onClick={() => onCopy(entry.text)}>
           {t('chat.message.copy')}
         </Button>
       ) : null}
-      {onInspect ? (
-        <Button size="sm" variant="secondary" className={ACTION} onClick={() => onInspect(entry)}>
-          {t('chat.message.raw')}
-        </Button>
-      ) : null}
       {forkable ? (
-        <Button size="sm" variant="secondary" className={ACTION} onClick={() => onFork?.(entry)}>
+        <Button size="sm" variant="secondary" onClick={() => onFork?.(entry)}>
           {t('chat.message.fork')}
         </Button>
       ) : null}
@@ -93,18 +87,17 @@ export const EntryRow = memo(function EntryRow({
   entry,
   shapeIndex = 0,
   density = 'comfy',
-  onInspect,
   onCopy,
   onFork,
 }: EntryRowProps) {
   const { t } = useTranslation()
   const pad = density === 'compact' ? 'p-2' : 'p-3'
-  const actions = <Actions entry={entry} onInspect={onInspect} onCopy={onCopy} onFork={onFork} />
+  const actions = <Actions entry={entry} onCopy={onCopy} onFork={onFork} />
 
   if (entry.kind === 'user') {
     return (
       <article
-        className={clsx('group sketch-card ml-auto w-fit max-w-[80%]', shapeFor(shapeIndex), pad)}
+        className={clsx('sketch-card ml-auto w-fit max-w-[80%]', shapeFor(shapeIndex), pad)}
       >
         <Role label={t('chat.message.role.user')} mark="user" />
         <p className="whitespace-pre-wrap break-anywhere text-sm">{entry.text}</p>
@@ -115,7 +108,7 @@ export const EntryRow = memo(function EntryRow({
   if (entry.kind === 'notice') {
     const label = entry.notice ? t(NOTICE_KEY[entry.notice]) : ''
     return (
-      <article className="group sketch-chip flex w-fit max-w-[32rem] items-center gap-2 px-3 py-1">
+      <article className="sketch-chip flex w-fit max-w-[32rem] items-center gap-2 px-3 py-1">
         <span className="shrink-0 font-sketch text-xs">{label}</span>
         <span className="min-w-0 truncate text-xs text-ink/70">{entry.text}</span>
         {actions}
@@ -124,7 +117,7 @@ export const EntryRow = memo(function EntryRow({
   }
   if (entry.kind === 'tool') {
     return (
-      <article className="group flex flex-col gap-1">
+      <article className="flex flex-col gap-1">
         <Badge tone="neutral">{t('chat.message.role.tool')}</Badge>
         <pre className="term scroll-area max-h-64 overflow-x-auto whitespace-pre-wrap rounded-sketch-2 p-2 shadow-sticker-2">
           {entry.text}
@@ -139,7 +132,7 @@ export const EntryRow = memo(function EntryRow({
     <article
       aria-live={entry.optimistic ? undefined : 'polite'}
       className={clsx(
-        'group sketch-card mr-auto flex w-fit max-w-[88%] flex-col gap-1',
+        'sketch-card mr-auto flex w-fit max-w-[88%] flex-col gap-1',
         shapeFor(shapeIndex),
         pad,
       )}

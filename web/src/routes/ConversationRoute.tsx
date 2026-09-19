@@ -122,21 +122,6 @@ export function ConversationRoute() {
     [setInspectorTab, view.entries],
   )
 
-  const inspect = useCallback(
-    (entry: TimelineEntry) => {
-      const tool = entry.toolCallId
-        ? view.tools.find((item) => item.toolCallId === entry.toolCallId)
-        : undefined
-      setSelection({
-        title: tool ? `${tool.tool} · ${entry.kind}` : entry.kind,
-        text: entry.text,
-        arguments: tool?.arguments,
-      })
-      setInspectorTab('content')
-    },
-    [setInspectorTab, view.tools],
-  )
-
   // 在某条目处开新分支：成功后直接切过去看那条链。名字由服务端取（b2、b3…）。
   const forkEntry = useCallback(
     (entry: TimelineEntry) => {
@@ -200,7 +185,6 @@ export function ConversationRoute() {
           if (!runId) return
           answer.mutate({ runId, approvalId, decision })
         }}
-        onInspect={inspect}
         onInspectTool={inspectTool}
         onFork={forkEntry}
         inspectorOpen={inspectorOpen}
@@ -238,7 +222,6 @@ interface BodyProps {
   onStop: () => void
   onAnswer: (approvalId: string, decision: 'allow' | 'deny') => void
   answering: boolean
-  onInspect: (entry: TimelineEntry) => void
   onInspectTool: (run: ToolRun) => void
   onFork: (entry: TimelineEntry) => void
   onSwitchBranch: (name: string) => void
@@ -265,7 +248,6 @@ function ConversationBody(props: BodyProps) {
           loading={props.entriesLoading}
           degraded={degraded}
           reconnectAttempt={reconnectAttempt}
-          onInspect={props.onInspect}
           onInspectTool={props.onInspectTool}
           onFork={props.onFork}
           onRefetch={refresh}

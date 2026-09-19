@@ -21,7 +21,6 @@ export interface ConversationViewProps {
   loading: boolean
   degraded: boolean
   reconnectAttempt: number | null
-  onInspect: (entry: TimelineEntry) => void
   onInspectTool: (run: ToolRun) => void
   onFork?: (entry: TimelineEntry) => void
   onRefetch: () => void
@@ -80,7 +79,6 @@ export function ConversationView(props: ConversationViewProps) {
         tools={view.tools}
         density={props.density}
         loading={props.loading}
-        onInspect={props.onInspect}
         onInspectTool={props.onInspectTool}
         onFork={props.onFork}
         onCopy={copyText}

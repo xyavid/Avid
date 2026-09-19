@@ -51,7 +51,6 @@ function props(overrides: Partial<EntryRowProps> = {}): EntryRowProps {
     entry: ENTRY,
     shapeIndex: 1,
     density: 'comfy',
-    onInspect: () => undefined,
     onCopy: () => undefined,
     onFork: () => undefined,
     ...overrides,

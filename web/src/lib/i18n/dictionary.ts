@@ -101,7 +101,6 @@ export const DICTIONARY: Record<Locale, Entry> = {
     'chat.runLabel': '运行',
     'chat.noRun': '没有活动运行',
     'chat.message.copy': '复制文本',
-    'chat.message.raw': '查看原始 JSON',
     'chat.message.fork': '从此处分支',
     'chat.message.role.user': '用户',
     'chat.message.role.assistant': 'Avid',

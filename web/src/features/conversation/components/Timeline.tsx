@@ -14,7 +14,6 @@ export interface TimelineProps {
   entries: TimelineEntry[]
   tools: ToolRun[]
   density: Density
-  onInspect: (entry: TimelineEntry) => void
   onInspectTool: (run: ToolRun) => void
   onCopy: (text: string) => void
   /** 「从此处分支」：交给 route 决定（只有它知道会话 id 与当前分支）。 */
@@ -29,7 +28,6 @@ export function Timeline({
   entries,
   tools,
   density,
-  onInspect,
   onInspectTool,
   onCopy,
   onFork,
@@ -80,7 +78,6 @@ export function Timeline({
                 entry={block.entry}
                 shapeIndex={block.shapeIndex}
                 density={density}
-                onInspect={onInspect}
                 onCopy={onCopy}
                 onFork={onFork}
               />
