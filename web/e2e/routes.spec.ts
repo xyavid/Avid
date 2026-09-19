@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import type { APIRequestContext, Page } from '@playwright/test'
 
 /**
  * 路由最小实验：四条工作面各自渲染出自己的内容，未知路径回落会话页，
@@ -46,15 +47,47 @@ test('会话落点页给的是指路文案，不是「还没有会话」', async
   await expect(landing.getByText('还没有会话')).toHaveCount(0)
 })
 
-test('检查器的三个视图就地切换，不进 URL 历史', async ({ page }) => {
-  const listed = await page.request.get(`${BASE}/api/sessions`)
-  const sessions: { id: string; message_count: number }[] = (await listed.json()).sessions
-  const target = sessions.find((item) => item.message_count > 0)
-  test.skip(!target, '需要一个有条目的会话')
+/**
+ * 找一个**短且有工具调用**的会话：检查器现在由工具卡的「查看」打开。
+ *
+ * 「短」是必要条件：时间线默认只渲染尾部一组，长会话里那张 CALL 卡不在 DOM 里
+ * （以前任取一个有条目的会话就行——那靠的是每个条目都有的按钮）。
+ */
+async function sessionWithToolCall(request: APIRequestContext): Promise<string | null> {
+  const listed = await request.get(`${BASE}/api/sessions`)
+  const sessions = (await listed.json()).sessions as { id: string }[]
+  for (const session of sessions.slice(0, 20)) {
+    const page = await request.get(
+      `${BASE}/api/sessions/${session.id}/entries?order=asc&limit=50`,
+    )
+    const entries = (await page.json()).entries as { message?: { role?: string } }[]
+    if (entries.length > 8) continue
+    if (entries.some((entry) => entry.message?.role === 'tool')) return session.id
+  }
+  return null
+}
 
-  await page.goto(`${BASE}/sessions/${target?.id}`)
+/**
+ * 打开检查器：它现在由**工具卡**的「查看」打开（条目级的「查看原始 JSON」已删）。
+ * 工具卡默认折叠，所以先点开那张 `CALL` 卡再点它的「查看」。
+ */
+async function openInspector(page: Page): Promise<void> {
+  await page
+    .getByRole('button')
+    .filter({ hasText: 'CALL' })
+    .first()
+    .click()
+  const card = page.locator('section.sketch-card').filter({ hasText: 'CALL' }).first()
+  await card.getByRole('button', { name: '查看' }).click()
+}
+
+test('检查器的三个视图就地切换，不进 URL 历史', async ({ page, request }) => {
+  const target = await sessionWithToolCall(request)
+  test.skip(!target, '需要一个含工具调用的会话')
+
+  await page.goto(`${BASE}/sessions/${target}`)
   const url = page.url()
-  await page.getByRole('button', { name: '查看' }).first().click()
+  await openInspector(page)
   await page.getByRole('tab', { name: 'diff' }).click()
   await page.getByRole('tab', { name: '原始 JSON' }).click()
   expect(page.url()).toBe(url)

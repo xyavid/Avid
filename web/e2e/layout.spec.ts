@@ -313,8 +313,11 @@ test('会话头部：常驻胶带不压标题，且没有重复与无作用的�
   // 三种卡片宽度：默认、开检查器后（宽档检查器占 26rem）、再收起导航
   for (const step of ['默认', '开检查器', '再收起导航'] as const) {
     if (step === '开检查器') {
-      // 检查器由条目的「查看」打开——头部那个开关已删（与「查看」完全重复）。
-      await page.getByRole('button', { name: '查看' }).first().click()
+      // 检查器由**工具卡**的「查看」打开（条目级的「查看原始 JSON」已删，
+      // 头部那个开关也早删了）。工具卡默认折叠，先点开那张 CALL 卡。
+      await page.getByRole('button').filter({ hasText: 'CALL' }).first().click()
+      const card = page.locator('section.sketch-card').filter({ hasText: 'CALL' }).first()
+      await card.getByRole('button', { name: '查看' }).click()
     }
     if (step === '再收起导航') {
       await page.locator('nav').getByRole('button', { name: '收起' }).click()

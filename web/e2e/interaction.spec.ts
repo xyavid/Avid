@@ -4,6 +4,7 @@ import type { Locator, Page } from '@playwright/test'
 /**
  * 交互反馈回归：**所有按键本身就有方框**（与「改名」同族），悬停再抬升一档。
  * 包括会话列表里的会话标题——它和下面的「改名 / 删除」是同一排控件，没框时不像一族。
+ * 时间线的动作行**常驻可见**（不再悬停显形），所以直接断言静止时的 opacity 为 1。
  *
  * 需要 AVID_E2E=1 且内核已起（脚本模型即可）。
  * 断言一律等样式稳定后再读：阴影与位移是 90–120ms 的过渡，读中间帧会读到插值
@@ -159,19 +160,24 @@ test('禁用：方框还在，但不抬升、不位移', async ({ page }) => {
   expect(disabled.opacity, '禁用时半透明').toBe('0.5')
 })
 
-test('时间线动作：静止（未悬停）时就已带方框，悬停只负责显形', async ({ page }) => {
+test('时间线动作：常驻可见，悬停只抬升一档', async ({ page }) => {
   await openSession(page)
   const action = page.getByRole('log').getByRole('button', { name: '复制文本' }).first()
 
-  // 关键：**没有做任何悬停**，方框已经在
+  // 关键：**没有做任何悬停**，动作就该看得见——以前是 opacity-0 + 悬停才显形，
+  // 代价是「有这功能」本身要先被猜到。
   const rest = await styleOf(action)
-  expect(rest.opacity, '静止时按时间线约定隐藏').toBe('0')
+  expect(rest.opacity, '静止时就该可见').toBe('1')
   expect(rest.borderColor, '静止时方框已在（墨线）').toBe(INK)
   expect(rest.boxShadow, '静止时高度档已在（--sticker-2）').toContain(STICKER_2)
 
   await action.hover()
-  await expectStyle(action, (style) => style.opacity === '1', '悬停让动作显形')
+  await expectStyle(action, (style) => style.opacity === '1', '悬停时仍然可见')
   await expectStyle(action, (style) => style.boxShadow.includes(STICKER_3), '悬停抬升一档')
+
+  // 条目级「查看原始 JSON」已删：检查器改由工具卡的「查看」打开
+  // （conversation.spec.ts 那条检查器用例顺带证明它没被一起拆掉）。
+  await expect(page.getByRole('button', { name: '查看原始 JSON' })).toHaveCount(0)
 })
 
 test('会话标题也有框，与「改名 / 删除」同族', async ({ page }) => {
