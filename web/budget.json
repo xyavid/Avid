@@ -4,7 +4,7 @@
   "exempt_gzip_bytes": 204800,
   "font_bytes": 61440,
   "texture_bytes": 32768,
-  "frozen_at": null,
-  "note": "起点值：首次实测前用来拦住明显失控的引入；冻结时把 frozen_at 与测量环境写进来（设计文档 P1/C1）",
+  "frozen_at": "2026-09-19T10:04Z · commit de3035c · WSL2 / node v24.15.0 · `pnpm -C web build && pnpm -C web run gate:size` → 首屏 JS gzip 184,160 B / 460,800 B（raw 579,261 B，4 块）",
+  "note": "上限是 2026-09-19 首次实测时的起点值，同轮冻结：实测 184,160 B 与历史上本地记录的 184,311 B 相差 0.08%。改上限必须同时改本字段并写「为什么改」；测量命令与逐块明细见 docs/status/BENCHMARK.md §3.2。",
   "EXEMPT": []
 }

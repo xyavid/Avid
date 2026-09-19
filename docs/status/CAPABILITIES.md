@@ -346,26 +346,33 @@ durable、事件总数上限 4096、终态记录保留 600s 或最多 200 个 ru
 
 ---
 
-## 13. 评测与基准（AvidBench v0.1）
+## 13. 评测与基准（AvidBench）
 
 仪器在 `benchmarks/`，**不进 wheel**——它是本地评测用的，不随包分发。
 
-- **任务集**：`benchmarks/cases/v0/*.toml` 12 条只读 case，分 6 类（basic 4 / long_horizon 3 /
-  recovery 2 / subagent 1 / task 1 / session 1）；fixture 在 `benchmarks/fixtures/`（69 个文件），
-  真跑时复制进临时目录、跑完即删，`fixtures/` 永不被写。
+- **任务集**：两套 suite 共 21 条只读 case。`cases/v0/`（12 条：基础 4 / 长程 3 / 恢复 2 /
+  子 agent 1 / 任务 1 / 会话 1）与 `cases/v1/`（9 条难度 case，`tier` 3–5，分长上下文 /
+  依赖规划 / 委派校验三组）。fixture 在 `benchmarks/fixtures/`（225 个文件），真跑时复制进
+  临时目录、跑完即删，`fixtures/` 永不被写。
+- **版本规则**：一个目录 = 一个冻结版本；有基线落盘后不再改，要改就新建 `cases/v2`。
+  `--suite v0|v1|all` 是唯一选择器；**跨 suite 的差值不可比**。
 - **变体**：`bare`（自写朴素循环 + `read_file`/`glob`/`bash`）/ `core`（真 `agent_loop`，工具集与
   bare 完全相同）/ `full`（全工具与全机制）。三者共用同一份系统提示词，规格写进每次运行的
-  `result.json.variant_spec`，所以历史数字以后仍然可解释。
+  `result.json.variant_spec`。
 - **判定器**：`command` / `file_contains` / `file_equals` / `json_path_equals` / `answer_contains`
   五种确定性原语；`resolved = 全部通过`（AND，无加权、无部分分）；**没有 LLM judge**。
-- **入口**：`uv run --env-file .env python -m benchmarks.run [--smoke|--list|--cases|--variants]`；
-  pytest 薄壳 `pytest -m eval` / `-m eval_smoke`（默认不跑、不进 CI，真模型有成本与抖动）。
+  fixture 不变量类判定器在干净 fixture 上必须先通过。
+- **单变量对照**：`--context-chars N` 经 `agent_loop(budget=...)` 注入压缩阈值（内核唯一开口，
+  默认 `None` 行为不变）；注入值写进 `result.json.overrides`，`bare` 不记（它没有压缩）。
+- **入口**：`python -m benchmarks.run [--suite|--cases|--variants|--context-chars|--smoke|--list]`；
+  pytest 薄壳 `pytest -m eval` / `-m eval_smoke`（默认不跑、不进 CI）。
 - **落盘**：`benchmarks/runs/<UTC 时间>-<commit>/<case>/<arm>/{result.json,trajectory.jsonl,answer.txt}`
   加 `summary.txt` 与 `results.json`；`runs/` 在 `.gitignore` 里。
-- **首个基线**：`BENCHMARK.md` §9（12 × 3 = 36 次真模型运行：11 条非会话 case 上三个变体全部
-  11/11，`full` 的 token 约为 `bare` 的 2.7 倍；跨会话 case `resume` 1 轮成功、`fresh` 5 轮失败）。
+- **基线**：v0 见 `BENCHMARK.md` §9，v1 与三档阈值对照见 §10——两个 suite 上三臂都全过
+  （只读任务被 `bash` 折叠掉），对照量到的是抖动（core ±3.7% / full ±8.5%），不是机制。
 - **它测的是内核循环**：runner 直连 `agent_loop`，不经 `svc.RunRegistry`，所以数字不代表 Web
   服务层的运行语义。
+- **边界门禁**：A14——产品代码不许 import `benchmarks`；仪器留在 `src/` 之外、`runs/` 不入库。
 
 ---
 
