@@ -24,6 +24,7 @@ from .schemas import (
     SUBAGENT,
     TODO_WRITE,
     UPDATE_TASK,
+    WEB_SEARCH,
     WRITE_FILE,
 )
 from .shell import bash
@@ -37,6 +38,7 @@ from .tasks import (
     get_task_tool,
     update_task_tool,
 )
+from .web_search import web_search
 
 # 参数放宽为 ...：多数工具是 (args)，需要运行状态的少数几个是 (args, *, state)。
 # 后者由 execution.STATEFUL_TOOLS 显式列出，契约测试校验它不漏不错。
@@ -57,6 +59,7 @@ TOOLS: list[dict[str, Any]] = [
     GET_TASK,
     SUBAGENT,
     LOAD_SKILL,
+    WEB_SEARCH,
 ]
 
 TOOL_IMPLS: dict[str, ToolImpl] = {
@@ -74,6 +77,7 @@ TOOL_IMPLS: dict[str, ToolImpl] = {
     "get_task": get_task_tool,
     "subagent": subagent,
     "load_skill": load_skill,
+    "web_search": web_search,
 }
 
 # 子 agent 的工具集：去掉 subagent 本身，结构上不可能递归派生。
