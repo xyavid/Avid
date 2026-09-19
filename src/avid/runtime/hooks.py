@@ -171,6 +171,9 @@ def context_inject_hook(context: dict[str, Any]) -> str | None:
 
     工作区根优先取运行级上下文（``state.workspace_root``，阶段 18 起每个会话可以属于
     不同工作区），没有时回落到进程默认根。
+
+    ``injected`` 里的内容由循环并进**系统提示词**，不改写用户消息——它是运行级上下文，
+    每轮重建、不落库；写进 user content 会让界面把内核的话当成用户说的话显示。
     """
     from ..tools import TOOLS, workspace
 

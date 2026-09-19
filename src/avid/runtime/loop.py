@@ -64,11 +64,15 @@ def _calls_todo_write(tool_calls: list[dict[str, Any]]) -> bool:
     )
 
 
-def _submit_input(transcript: Transcript, state: RunState) -> int | None:
+def _submit_input(transcript: Transcript, state: RunState) -> tuple[int, list[str]] | None:
     """UserPromptSubmit：可注入上下文，也可拦截整个输入。
 
-    返回值是**本次运行的触发消息**下标；None 表示这次不跑（没有用户消息，或被拦截）。
-    下标要返回出去，是因为注入会改写那条消息——会话落库要的是改写后的版本。
+    返回**触发消息下标**与本次注入的上下文条目；None 表示这次不跑（没有用户消息，
+    或被拦截）。
+
+    注入**不改写用户消息**——它由调用方并进系统提示词。以前把注入拼在 user content
+    前面，于是「用户说的话」里混进了内核写的环境信息：界面无从分辨（它确实就是一条
+    普通的 user 消息），落库也跟着存了注入后的版本。
     """
     index = transcript.last_user_index()
     if index is None:
@@ -78,7 +82,7 @@ def _submit_input(transcript: Transcript, state: RunState) -> int | None:
         "prompt": transcript.text_at(index),
         "messages": transcript.as_messages(),
         "injected": [],
-        # 运行级工作区根：注入给模型的"[环境] 工作区根目录"要与实际解析一致。
+        # 运行级工作区根：注入给模型的环境信息要与实际解析一致。
         "workspace_root": state.workspace_root,
         "permission_mode": state.permission_mode,
     }
@@ -86,14 +90,7 @@ def _submit_input(transcript: Transcript, state: RunState) -> int | None:
         logger.warning("UserPromptSubmit 被拦截，未调用模型")
         return None
 
-    if submit["injected"]:
-        transcript.set_content(
-            index,
-            "\n".join(str(item) for item in submit["injected"])
-            + "\n\n"
-            + submit["prompt"],
-        )
-    return index
+    return index, [str(item) for item in (submit.get("injected") or [])]
 
 
 def agent_loop(
@@ -171,7 +168,12 @@ def agent_loop(
     trigger = _submit_input(transcript, state)
     if trigger is None:
         return ""
-    emit(transcript.as_messages()[trigger])
+    index, injected = trigger
+    if injected:
+        # 注入的上下文进**系统提示词**（每轮重建，不落库），不改写用户消息：
+        # 用户消息就是用户写的那句话，落库、事件与界面都保持它原样。
+        system_prompt = f"{system_prompt}\n\n" + "\n".join(injected)
+    emit(transcript.as_messages()[index])
 
     for round_index in range(1, max_rounds + 1):
         state.round = round_index

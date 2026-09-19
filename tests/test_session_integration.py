@@ -1,7 +1,8 @@
 """循环 × 会话：``on_message`` 观察点把每条结算消息落成条目。
 
 这是"会话真的接在运行时上"的端到端证据：一条消息一次提交，续接时读回来，
-注入过的触发消息按注入后的版本落库，写入失败则整轮中止。
+触发消息按**用户写的那句话**落库（注入的上下文进系统提示词，不写进用户消息），
+写入失败则整轮中止。
 """
 
 from __future__ import annotations
@@ -124,7 +125,12 @@ def test_second_run_continues_from_the_session(hook_registry, session):
     ]
 
 
-def test_trigger_message_is_recorded_after_injection(hook_registry, session):
+def test_trigger_message_is_recorded_verbatim(hook_registry, session):
+    """落库的是**用户写的那句话**：注入的上下文进系统提示词，不改写用户消息。
+
+    以前注入被拼在 user content 前面，于是界面把内核写的环境信息当成用户输入显示，
+    每次运行的临时环境信息还会在历史里越积越多。
+    """
 
     def inject(context):
         context.setdefault("injected", []).append("[环境] 测试注入")
@@ -132,13 +138,15 @@ def test_trigger_message_is_recorded_after_injection(hook_registry, session):
     hook_registry.register("UserPromptSubmit", inject)
     recorder = SessionRecorder(session)
     messages = [{"role": "user", "content": "原始问题"}]
+    chat = FakeChat(make_turn("答"))
 
-    agent_loop(messages, config=CONFIG, chat=FakeChat(make_turn("答")), on_message=recorder.on_message)
+    agent_loop(messages, config=CONFIG, chat=chat, on_message=recorder.on_message)
 
     stored = messages_for_branch(session)
-    assert stored[0]["content"].startswith("[环境] 测试注入")
-    assert stored[0]["content"].endswith("原始问题")
+    assert [message["content"] for message in stored] == ["原始问题", "答"]
     assert stored == messages
+    # 注入没有丢：它在这次运行的系统提示词里（每轮重建，因此不落库）
+    assert "[环境] 测试注入" in chat.requests[0]["system"]
 
 
 def test_stop_nudge_is_persisted(hook_registry, session):

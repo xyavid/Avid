@@ -342,6 +342,11 @@ def test_large_output_hook_truncates_real_tool_output(hook_registry, monkeypatch
 
 
 def test_user_prompt_submit_injects_context(hook_registry):
+    """注入的上下文进**系统提示词**，用户消息保持原文。
+
+    以前注入被拼在 user content 前面，于是「用户说的话」里混进了内核写的环境信息：
+    界面无从分辨（它就是一条普通 user 消息），落库也存了注入后的版本。
+    """
     hook_registry.register(
         "UserPromptSubmit", lambda ctx: ctx["injected"].append("[环境] 测试注入")
     )
@@ -350,8 +355,9 @@ def test_user_prompt_submit_injects_context(hook_registry):
 
     agent_loop(messages, config=CONFIG, chat=chat)
 
-    assert messages[0]["content"] == "[环境] 测试注入\n\n原始问题"
-    assert chat.requests[0]["messages"][0]["content"] == "[环境] 测试注入\n\n原始问题"
+    assert messages[0]["content"] == "原始问题"
+    assert chat.requests[0]["messages"][0]["content"] == "原始问题"
+    assert "[环境] 测试注入" in chat.requests[0]["system"]
 
 
 def test_user_prompt_submit_receives_the_prompt(hook_registry):
