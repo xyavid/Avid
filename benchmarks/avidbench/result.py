@@ -156,15 +156,18 @@ class RunSet:
         for arm in self.arms():
             group = [item for item in self.results if item.arm == arm]
             scored = [item for item in group if item.status != "unscored"]
-            passed = sum(1 for item in scored if item.resolved)
-            tokens = _mean([int(item.metrics.get("tokens") or 0) for item in scored])
-            rounds = _mean([int(item.metrics.get("rounds") or 0) for item in scored])
-            wall = _mean([item.wall_time_ms / 1000 for item in scored])
+            # 未计分的臂（跨会话 case 的第一轮）不进 resolved 分母，但它的成本要看得到——
+            # 用 "0/0" 会把这段真实开销显示成 0。
+            basis = scored or group
+            denominator = f"{sum(1 for item in scored if item.resolved)}/{len(scored)}" if scored else "未计分"
+            tokens = _mean([int(item.metrics.get("tokens") or 0) for item in basis])
+            rounds = _mean([int(item.metrics.get("rounds") or 0) for item in basis])
+            wall = _mean([item.wall_time_ms / 1000 for item in basis])
             failures = sum(int(item.metrics.get("tool_failures") or 0) for item in group)
             denials = sum(int(item.metrics.get("denials") or 0) for item in group)
             reasons = _reason_counts(group)
             lines.append(
-                f"{arm:<16}{f'{passed}/{len(scored)}':>10}{tokens:>12}{rounds:>12}"
+                f"{arm:<16}{denominator:>10}{tokens:>12}{rounds:>12}"
                 f"{wall:>11}{failures:>10}{denials:>6}{reasons:>12}"
             )
         lines.append("")

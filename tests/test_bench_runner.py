@@ -209,7 +209,8 @@ def test_run_all_skips_session_case_for_bare_and_core(tmp_path: Path):
     summary = run_set.summary()
     assert "AvidBench v0.1" in summary
     assert (tmp_path / "summary.txt").is_file() and (tmp_path / "results.json").is_file()
-    assert "unscored" not in summary  # 未计分的运行不进 resolved 分母
+    # 未计分的臂（跨会话第一轮）不进 resolved 分母，但也不能显示成 0/0
+    assert "未计分" in summary and "0/0" not in summary
 
 
 def test_classify_covers_the_five_categories():
