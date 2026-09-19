@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from avid.ai.client import Config
 from avid.runtime.hooks import HookRegistry
@@ -29,6 +29,9 @@ from avid.runtime.state import RunState
 from avid.tools import TOOL_IMPLS, TOOLS
 
 from .bare import bare_loop
+
+if TYPE_CHECKING:
+    from avid.runtime.context import ContextBudget
 
 #: 三个臂共用的系统提示词。不含任何工具名——工具清单由循环按变体注入，
 #: 否则 bare 会被要求去调用它没有的工具。
@@ -149,8 +152,13 @@ def run_agent(
     state: RunState,
     max_rounds: int,
     on_message: Callable[[dict[str, Any]], Any] | None = None,
+    budget: ContextBudget | None = None,
 ) -> str:
-    """按变体调用对应的循环。返回最终 assistant 文本。"""
+    """按变体调用对应的循环。返回最终 assistant 文本。
+
+    ``budget`` 只对 `avid` 循环有效：`bare` 没有任何压缩机制，给它注入阈值等于无声
+    无效——所以调用方只在被消融的臂上用（`runner` 就是这么做的，且把它写进 overrides）。
+    """
     system = state.system_prompt(SYSTEM_PROMPT)
     if variant.loop == "bare":
         return bare_loop(
@@ -174,4 +182,5 @@ def run_agent(
         state=state,
         max_rounds=max_rounds,
         on_message=on_message,
+        budget=budget,
     )

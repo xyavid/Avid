@@ -111,6 +111,11 @@ def agent_loop(
     # 为什么要能分开：主轮次的输出是**对话内容**，摘要不是。svc 把主轮次接成流式、
     # 摘要接成非流式，delta 流里就不会混进摘要文本（否则它会与真正的回复粘成一条气泡）。
     summarize: Callable[..., Turn] | None = None,
+    # 压缩阈值。None = `ContextBudget()` 的默认值（行为与以前逐字一致）。
+    # 为什么要能注入：压缩的收益与代价（省多少 token / 会不会丢早期事实）只能靠
+    # **同一个任务集跑两组不同阈值**量出来，而"改常量再跑一次"会把代码差异混进差值里。
+    # 这是评测唯一要的内核开口，默认路径一行未变。
+    budget: context.ContextBudget | None = None,
     auto_approve: bool = False,
     # 权限模式（strict / workspace / system）与"同意一次"账本。None 交给 RunState
     # 取默认（循环不认识策略层的默认值）。账本由调用方传入时与子 agent 共用，
@@ -143,6 +148,10 @@ def agent_loop(
 
     ``hooks`` 注入这次运行的 hook 注册表（None = 进程级默认）：以前注册表是模块级
     字典，一次注册会漏到同进程所有运行。
+
+    ``budget`` 注入这次运行的压缩阈值（None = ``ContextBudget()`` 的默认值）：压缩的
+    收益与代价（省多少 token / 会不会丢早期事实）只能靠同一任务集跑两组阈值量出来，
+    而"改常量再跑一次"会把代码差异混进差值里。
 
     ``ask`` 注入审批回调（None = 回落到 stdin）；``state`` 允许调用方传入一份
     已建好的运行状态——取消需要从另一个线程置位，所以取消路径必须能拿到它。
@@ -200,7 +209,7 @@ def agent_loop(
         state.emit(events.RUN_STATUS, round=round_index, tokens=state.tokens, activity="model")
 
         # 上下文管线：①② 每轮跑，③④ 超限时才跑，④ 整个运行最多一次
-        context.prepare(transcript, state, config=config, summarize=summarize)
+        context.prepare(transcript, state, config=config, summarize=summarize, budget=budget)
 
         # 模型调用；报上下文超限时兜底压缩并重试一次（整个运行最多一次）
         try:
@@ -216,7 +225,7 @@ def agent_loop(
                 raise
             state.retried = True
             logger.warning("compact: 模型报上下文超限，兜底压缩后重试一次")
-            context.reactive(transcript, state, config=config, summarize=summarize)
+            context.reactive(transcript, state, config=config, summarize=summarize, budget=budget)
             turn = chat(
                 config,
                 transcript.as_messages(),

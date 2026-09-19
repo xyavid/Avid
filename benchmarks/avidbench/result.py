@@ -85,6 +85,9 @@ class RunResult:
     wall_time_ms: int = 0
     graders: list[dict[str, Any]] = field(default_factory=list)
     variant_spec: dict[str, Any] = field(default_factory=dict)
+    #: 本次运行偏离默认值的注入项（如 `{"context_chars": 30000}`）。空 = 全默认。
+    #: 没有它，两组对照的数字放在一起根本无法解释——所以它跟指标同等重要。
+    overrides: dict[str, Any] = field(default_factory=dict)
     metrics: dict[str, Any] = field(default_factory=dict)
     workspace_files: dict[str, int] = field(default_factory=dict)
     #: 受判文件是否与 fixture 逐字节一致（簿记目录不计）。只读 case 的期望值是 True；
@@ -125,6 +128,7 @@ class RunSet:
     model: str = ""
     cases: list[str] = field(default_factory=list)
     variants: list[str] = field(default_factory=list)
+    overrides: dict[str, Any] = field(default_factory=dict)
 
     # ---------------- 聚合 ----------------
 
@@ -142,11 +146,14 @@ class RunSet:
         return table
 
     def summary(self) -> str:
-        lines = [
+        headline = (
             f"AvidBench v0.1  model={self.model or '未记录'}"
-            f"  commit={self.commit or '未记录'}  started={self.started_at or '未记录'}",
-            "",
-        ]
+            f"  commit={self.commit or '未记录'}  started={self.started_at or '未记录'}"
+        )
+        if self.overrides:
+            injected = " ".join(f"{key}={value}" for key, value in sorted(self.overrides.items()))
+            headline += f"  **注入：{injected}**"
+        lines = [headline, ""]
         header = (
             f"{'arm':<16}{'resolved':>10}{'tokens均值':>12}{'rounds均值':>12}"
             f"{'墙钟均值':>11}{'工具失败':>10}{'拒绝':>6}{'失败分类':>12}"
@@ -202,6 +209,7 @@ class RunSet:
                     "model": self.model,
                     "cases": self.cases,
                     "variants": self.variants,
+                    "overrides": self.overrides,
                     "results": [item.to_dict() for item in self.results],
                 },
                 ensure_ascii=False,

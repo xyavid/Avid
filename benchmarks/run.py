@@ -19,7 +19,7 @@ from pathlib import Path
 
 from avid.ai.config import ConfigError, load_config
 
-from .avidbench import VARIANTS, load_cases
+from .avidbench import VARIANTS, load_suite, suites
 from .avidbench.case import CaseError
 from .avidbench.result import current_commit
 from .avidbench.runner import run_all
@@ -35,19 +35,36 @@ DEFAULT_VARIANTS = ("bare", "core", "full")
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="python -m benchmarks.run",
-        description="AvidBench v0.1：只读任务集 + bare/core/full 三变体",
+        description="AvidBench：只读任务集 + bare/core/full 三变体（可选注入压缩阈值）",
     )
-    parser.add_argument("--cases", help="逗号分隔的 case id；默认全部")
+    parser.add_argument("--cases", help="逗号分隔的 case id；默认该 suite 的全部")
+    parser.add_argument(
+        "--suite",
+        default="all",
+        help=f"case 集版本（一个目录一个版本）；默认 all。可用：all、{'、'.join(suites())}",
+    )
     parser.add_argument(
         "--variants",
         default=",".join(DEFAULT_VARIANTS),
         help=f"逗号分隔的变体名；默认 {','.join(DEFAULT_VARIANTS)}",
     )
     parser.add_argument("--smoke", action="store_true", help=f"只跑 {len(SMOKE_CASES)} 条 smoke case")
+    parser.add_argument(
+        "--context-chars",
+        type=int,
+        default=None,
+        help=(
+            "注入压缩阈值（字符）——单变量对照用；只对 core/full 生效，会写进结果的 "
+            "overrides。不给就是内核默认（40 万）"
+        ),
+    )
     parser.add_argument("--model", help="覆盖 AVID_MODEL（会写进结果文件）")
     parser.add_argument("--out", help="结果目录；默认 benchmarks/runs/<时间>-<commit>")
     parser.add_argument("--list", action="store_true", help="只列出评测集")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.context_chars is not None and args.context_chars < 1000:
+        parser.error("--context-chars 至少 1000（再低就不是压缩而是删库了）")
+    return args
 
 
 def _case_ids(args: argparse.Namespace) -> list[str] | None:
@@ -76,22 +93,25 @@ def default_out_dir() -> Path:
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     try:
-        cases = load_cases(ids=_case_ids(args))
+        cases = load_suite(args.suite, ids=_case_ids(args))
         variants = _variant_names(args)
     except CaseError as exc:
         print(f"评测集错误：{exc}", file=sys.stderr)
         return 2
 
     if args.list:
-        print(f"{'id':<24}{'category':<14}{'fixture':<24}graders  prompt")
+        print(f"{'id':<24}{'category':<14}{'tier':<6}{'fixture':<24}graders  prompt")
         for case in cases:
-            prompt = case.prompt.replace("\n", " ")[:40]
+            prompt = case.prompt.replace("\n", " ")[:36]
             scored = "→ 第二轮" if case.followup else ""
+            tier = "-" if case.tier is None else str(case.tier)
             print(
-                f"{case.id:<24}{case.category:<14}{case.fixture:<24}"
+                f"{case.id:<24}{case.category:<14}{tier:<6}{case.fixture:<24}"
                 f"{len(case.graders):<8}{prompt}{scored}"
             )
-        print(f"\n共 {len(cases)} 条 case，变体：{'、'.join(variants)}")
+        print(
+            f"\n共 {len(cases)} 条 case（suite={args.suite}），变体：{'、'.join(variants)}"
+        )
         return 0
 
     try:
@@ -103,15 +123,29 @@ def main(argv: list[str] | None = None) -> int:
         config = replace(config, model=args.model)
 
     out_dir = Path(args.out) if args.out else default_out_dir()
-    print(f"AvidBench：{len(cases)} 条 case × {len(variants)} 个变体 → {out_dir}", file=sys.stderr)
+    injected = f"，注入 context_chars={args.context_chars}" if args.context_chars else ""
+    print(
+        f"AvidBench：suite={args.suite}，{len(cases)} 条 case × {len(variants)} 个变体"
+        f"{injected} → {out_dir}",
+        file=sys.stderr,
+    )
 
-    run_set = run_all(cases, variants, config=config, out_dir=out_dir)
+    run_set = run_all(
+        cases,
+        variants,
+        config=config,
+        out_dir=out_dir,
+        context_chars=args.context_chars,
+    )
     print(run_set.summary())
     print(f"结果目录：{out_dir}")
 
-    broken = [item for item in run_set.results if item.status == "error"]
+    broken = [item for item in run_set.results if item.status in ("error", "llm_error")]
     if broken:
-        print(f"有 {len(broken)} 次运行是 error 态（仪器问题，不是能力问题）", file=sys.stderr)
+        print(
+            f"有 {len(broken)} 次运行是 error / llm_error 态（仪器或配置问题，不是能力问题）",
+            file=sys.stderr,
+        )
         return 1
     return 0
 

@@ -12,7 +12,17 @@
 * `runner`    —— 把上面这些编排成一次运行。
 """
 
-from .case import CATEGORIES, Case, CaseError, Limits, load_case, load_cases
+from .case import (
+    CATEGORIES,
+    TIERS,
+    Case,
+    CaseError,
+    Limits,
+    load_case,
+    load_cases,
+    load_suite,
+    suites,
+)
 from .graders import GraderError, GraderResult, normalize, run_graders, validate_spec
 from .result import RunResult, RunSet
 from .runner import run_all, run_case
@@ -23,6 +33,7 @@ __all__ = [
     "CATEGORIES",
     "CORE_TOOLS",
     "SYSTEM_PROMPT",
+    "TIERS",
     "VARIANTS",
     "Case",
     "CaseError",
@@ -34,10 +45,12 @@ __all__ = [
     "Variant",
     "load_case",
     "load_cases",
+    "load_suite",
     "materialized",
     "normalize",
     "run_all",
     "run_case",
+    "suites",
     "run_graders",
     "validate_spec",
 ]

@@ -983,3 +983,48 @@ def test_run_state_is_created_per_run(hook_registry, monkeypatch):
 
     assert len(states) == 2
     assert states[0] is not states[1]
+
+
+def test_injected_budget_lowers_the_compaction_threshold(tmp_path, hook_registry):
+    """`budget` 是评测做「单变量对照」的唯一开口；默认 None 时行为不变。
+
+    真读盘、真走压缩管线（不 monkeypatch 压缩函数）：5 份 20k 字符的文件把 transcript
+    推过注入的阈值，压缩应当发生且 before > after；同一份 transcript 在默认阈值
+    （400k）下不该有任何压缩。
+
+    用空 hook 注册表是为了让字符数可算——生产路径上 `large_output_hook` 会先把每个
+    工具结果截到 8000 字符，实机要达到同一个阈值需要更多轮。
+    """
+    from avid.runtime.context import ContextBudget
+
+    for index in range(5):
+        (tmp_path / f"big{index}.txt").write_text("x" * 20_000, encoding="utf-8")
+    turns = [
+        make_turn(
+            tool_calls=[tool_call("read_file", f'{{"path": "big{i}.txt"}}', f"c{i}")]
+        )
+        for i in range(5)
+    ]
+
+    def run(budget):
+        events = []
+        summaries = FakeChat(make_turn("[摘要] 早前的读取"))
+        text = agent_loop(
+            [{"role": "user", "content": "把 5 份文件都读一遍"}],
+            config=CONFIG,
+            chat=FakeChat(*turns, make_turn("读完了")),
+            summarize=summaries,
+            workspace_root=str(tmp_path),
+            budget=budget,
+            on_event=events.append,
+        )
+        return text, [event for event in events if event.type == "context_compacted"]
+
+    text, compacted = run(None)
+    assert text == "读完了"
+    assert compacted == [], "默认阈值下不该压缩（400k 远高于这份 transcript）"
+
+    text, compacted = run(ContextBudget(context_chars=50_000))
+    assert text == "读完了"
+    assert compacted, "注入更低阈值后应当压缩"
+    assert compacted[0].data["before"] > compacted[0].data["after"]

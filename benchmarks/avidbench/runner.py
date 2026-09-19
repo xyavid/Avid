@@ -23,6 +23,7 @@ from typing import Any
 
 from avid.ai.client import LLMError, chat_completion
 from avid.ai.config import Config
+from avid.runtime.context import ContextBudget
 from avid.runtime.loop import RoundLimitExceeded, RunCancelled
 from avid.runtime.state import RunState
 from avid.session import MemorySessionRepo, SessionRecorder, messages_for_branch
@@ -50,8 +51,13 @@ def run_case(
     config: Config,
     chat: Callable[..., Any] | None = None,
     out_dir: str | Path | None = None,
+    context_chars: int | None = None,
 ) -> list[RunResult]:
-    """跑一个 case 的一个变体。跨会话 case 返回多条结果（phase1 + 两种条件）。"""
+    """跑一个 case 的一个变体。跨会话 case 返回多条结果（phase1 + 两种条件）。
+
+    `context_chars` 是**单变量对照**用的注入值：None = 内核默认阈值。它只对 `avid`
+    循环生效，且会写进结果的 `overrides`——否则两组数字放在一起没法解释。
+    """
     variant = spec(variant_name)
     if case.followup is not None:
         if variant.name != "full":
@@ -59,7 +65,9 @@ def run_case(
                 f"跨会话 case {case.id} 只跑 full 变体：bare/core 没有会话层，"
                 "「续接 vs 不续接」在它们身上不可表达"
             )
-        return _run_followup(case, variant, config=config, chat=chat, out_dir=out_dir)
+        return _run_followup(
+            case, variant, config=config, chat=chat, out_dir=out_dir, context_chars=context_chars
+        )
     with materialized(case) as root:
         return [
             _execute(
@@ -73,6 +81,7 @@ def run_case(
                 condition="default",
                 out_dir=out_dir,
                 recorder=None,
+                context_chars=context_chars,
             )
         ]
 
@@ -84,6 +93,7 @@ def _run_followup(
     config: Config,
     chat: Callable[..., Any] | None,
     out_dir: str | Path | None,
+    context_chars: int | None = None,
 ) -> list[RunResult]:
     """跨会话 case：第一轮把事实交给 agent，第二轮比较「续接历史」与「干净上下文」。
 
@@ -110,6 +120,7 @@ def _run_followup(
                     condition="phase1",
                     out_dir=out_dir,
                     recorder=recorder,
+                    context_chars=context_chars,
                 )
             )
             history = messages_for_branch(session, recorder.branch)
@@ -130,6 +141,7 @@ def _run_followup(
                         condition=condition,
                         out_dir=out_dir,
                         recorder=recorder,
+                        context_chars=context_chars,
                     )
                 )
     finally:
@@ -151,6 +163,7 @@ def _execute(
     condition: str,
     out_dir: str | Path | None,
     recorder: SessionRecorder | None,
+    context_chars: int | None = None,
 ) -> RunResult:
     telemetry = Telemetry()
     state = RunState.for_run(
@@ -159,6 +172,14 @@ def _execute(
         workspace_root=str(root),
         hooks=hooks_for(variant),
     )
+    # 注入的阈值只对 avid 循环有作用面：bare 没有压缩，给它一个阈值等于无声无效，
+    # 所以既不传也不记（否则结果里会出现一个不存在的差异来源）。
+    budget = (
+        ContextBudget(context_chars=context_chars)
+        if context_chars is not None and variant.loop == "avid"
+        else None
+    )
+    overrides = {"context_chars": context_chars} if budget is not None else {}
 
     def emit(message: dict[str, Any]) -> None:
         telemetry.on_message(message)
@@ -181,6 +202,7 @@ def _execute(
             state=state,
             max_rounds=case.limits.max_rounds,
             on_message=emit,
+            budget=budget,
         )
     except RunCancelled as exc:
         status = "timeout" if state.cancel_reason == "timeout" else "cancelled"
@@ -226,6 +248,7 @@ def _execute(
         wall_time_ms=wall_time_ms,
         graders=grader_results,
         variant_spec=variant.spec_dict(),
+        overrides=overrides,
         metrics=telemetry.metrics(),
         workspace_files=files,
         workspace_pristine=pristine,
@@ -244,6 +267,7 @@ def run_all(
     config: Config,
     chat_factory: Callable[[Case, str], Callable[..., Any]] | None = None,
     out_dir: str | Path | None = None,
+    context_chars: int | None = None,
 ) -> RunSet:
     """跑完整矩阵并落盘。跨会话 case 只跑 full（在 `run_case` 里判定）。"""
     results: list[RunResult] = []
@@ -252,7 +276,16 @@ def run_all(
             if case.followup is not None and name != "full":
                 continue
             chat = chat_factory(case, name) if chat_factory is not None else None
-            results.extend(run_case(case, name, config=config, chat=chat, out_dir=out_dir))
+            results.extend(
+                run_case(
+                    case,
+                    name,
+                    config=config,
+                    chat=chat,
+                    out_dir=out_dir,
+                    context_chars=context_chars,
+                )
+            )
     run_set = RunSet(
         results=results,
         root=Path(out_dir) if out_dir is not None else None,
@@ -261,6 +294,9 @@ def run_all(
         model=config.model,
         cases=[case.id for case in cases],
         variants=list(variant_names),
+        overrides=(
+            {"context_chars": context_chars} if context_chars is not None else {}
+        ),
     )
     run_set.save()
     return run_set

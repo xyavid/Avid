@@ -1,0 +1,19 @@
+id = "c05_stale_pointer"
+category = "task"
+fixture = "c05_stale_pointer"
+tier = 3
+notes = "依赖组：链中间有一跳是废弃文件，它自己写着替代文件。题面不提这件事——要自己发现并改道。"
+
+prompt = """
+从 chain/p01.txt 开始，按文件里写的 next 指针跟踪到终点，报告终点文件里的 CODE。
+
+回答格式：code=<值>
+"""
+
+[limits]
+max_rounds = 16
+timeout_seconds = 300
+
+[[graders]]
+kind = "answer_contains"
+text = ["code=MD-2260"]

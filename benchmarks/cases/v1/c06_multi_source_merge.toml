@@ -1,0 +1,20 @@
+id = "c06_multi_source_merge"
+category = "task"
+fixture = "c06_multi_source_merge"
+tier = 5
+notes = "依赖组：8 个来源按序覆盖，且 null 表示「未提供」不覆盖。要跟踪每个键当前的值，漏掉规则里的第 3 条就会答成 null 或早先的值。"
+
+prompt = """
+先读工作目录根上的 README.txt（合并规则），再把 sources/ 下的 8 个 JSON 来源按规则合并，
+报告键 c 的最终值。
+
+回答格式：c=<值>
+"""
+
+[limits]
+max_rounds = 20
+timeout_seconds = 300
+
+[[graders]]
+kind = "answer_contains"
+text = ["c=omega"]

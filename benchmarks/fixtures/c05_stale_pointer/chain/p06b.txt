@@ -1,0 +1,2 @@
+replacement for p06
+next: chain/p07.txt

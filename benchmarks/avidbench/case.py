@@ -27,6 +27,10 @@ FIXTURES_ROOT = BENCH_ROOT / "fixtures"
 #: 允许的类别。加类别要同时改这里与 README 的表格——分类是报表的分组维度。
 CATEGORIES = ("basic", "long_horizon", "recovery", "subagent", "task", "session")
 
+#: 难度声明的取值范围（`tier`）。定义见 README：按「需要多少决策 / 多少失败点 /
+#: 依赖多深 / 上下文多长」计，不按文件数或模块数计。
+TIERS = (1, 2, 3, 4, 5)
+
 DEFAULT_MAX_ROUNDS = 12
 DEFAULT_TIMEOUT_SECONDS = 300.0
 
@@ -53,6 +57,9 @@ class Case:
     graders: tuple[dict[str, Any], ...] = ()
     #: 跨会话 case 的第二轮。有它时 grader 只判第二轮（见 `scored_phase`）。
     followup: str | None = None
+    #: 难度声明（1–5，可空）。难度用「需要多少决策 / 多少失败点 / 依赖多深 / 上下文多长」
+    #: 定义，不用「改了多少文件」；它是报表的分组维度，不改变运行方式。
+    tier: int | None = None
     notes: str = ""
 
     @property
@@ -69,6 +76,7 @@ class Case:
             "timeout_seconds": self.limits.timeout_seconds,
             "graders": [dict(spec) for spec in self.graders],
             "followup": self.followup,
+            "tier": self.tier,
         }
 
 
@@ -138,6 +146,14 @@ def load_case(path: str | Path) -> Case:
         if not followup:
             raise CaseError(f"{path}：followup 为空就删掉它")
 
+    tier = raw.get("tier")
+    if tier is not None and (
+        not isinstance(tier, int) or isinstance(tier, bool) or tier not in TIERS
+    ):
+        raise CaseError(
+            f"{path}：tier 必须是 {TIERS[0]}–{TIERS[-1]} 的整数（难度声明），实际是 {tier!r}"
+        )
+
     return Case(
         id=case_id,
         category=category,
@@ -146,12 +162,34 @@ def load_case(path: str | Path) -> Case:
         limits=_limits(raw.get("limits"), path),
         graders=tuple(dict(spec) for spec in specs),
         followup=followup,
+        tier=tier,
         notes=str(raw.get("notes", "")),
     )
 
 
 def case_paths(root: str | Path = CASES_ROOT) -> list[Path]:
     return sorted(Path(root).glob("**/*.toml"))
+
+
+def suites() -> list[str]:
+    """可用的 case 集版本（一个目录一个版本），按名字排序。"""
+    if not CASES_ROOT.is_dir():
+        return []
+    return sorted(path.name for path in CASES_ROOT.iterdir() if path.is_dir())
+
+
+def load_suite(suite: str = "all", ids: list[str] | None = None) -> list[Case]:
+    """按 case 集版本取用例。`all` = 全部版本合起来（全量跑用）。
+
+    版本的意义是**可比性**：一个 suite 目录一旦有基线落盘就不再改；要改就新建下一个
+    版本。跨 suite 的数字不可比——它们的任务集不是同一份。
+    """
+    if suite == "all":
+        return load_cases(CASES_ROOT, ids)
+    root = CASES_ROOT / suite
+    if not root.is_dir():
+        raise CaseError(f"未知 suite {suite!r}；可用：all、{'、'.join(suites())}")
+    return load_cases(root, ids)
 
 
 def load_cases(

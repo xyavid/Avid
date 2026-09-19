@@ -1,0 +1,10 @@
+ts=2026-03-32T01:00 severity=info service=svc32 msg="request ok" ticket=-
+ts=2026-03-32T02:00 severity=info service=svc32 msg="request ok" ticket=-
+ts=2026-03-32T03:00 severity=warn service=svc32 msg="request ok" ticket=-
+ts=2026-03-32T04:00 severity=info service=svc32 msg="request ok" ticket=-
+ts=2026-03-32T05:00 severity=info service=svc32 msg="request ok" ticket=-
+ts=2026-03-32T06:00 severity=info service=svc32 msg="request ok" ticket=-
+ts=2026-03-32T07:00 severity=info service=svc32 msg="request ok" ticket=-
+ts=2026-03-32T08:00 severity=info service=svc32 msg="request ok" ticket=-
+ts=2026-03-32T09:00 severity=info service=svc32 msg="request ok" ticket=-
+ts=2026-03-32T10:00 severity=warn service=svc32 msg="request ok" ticket=-

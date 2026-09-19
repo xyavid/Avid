@@ -1,0 +1,2 @@
+hop=29
+next: links/n0030.txt

@@ -1,0 +1,10 @@
+ts=2026-03-02T01:00 severity=info service=svc02 msg="request ok" ticket=-
+ts=2026-03-02T02:00 severity=info service=svc02 msg="request ok" ticket=-
+ts=2026-03-02T03:00 severity=info service=svc02 msg="request ok" ticket=-
+ts=2026-03-02T04:00 severity=info service=svc02 msg="request ok" ticket=-
+ts=2026-03-02T05:00 severity=warn service=svc02 msg="request ok" ticket=-
+ts=2026-03-02T06:00 severity=info service=svc02 msg="request ok" ticket=-
+ts=2026-03-02T07:00 severity=info service=svc02 msg="request ok" ticket=-
+ts=2026-03-02T08:00 severity=info service=svc02 msg="request ok" ticket=-
+ts=2026-03-02T09:00 severity=info service=svc02 msg="request ok" ticket=-
+ts=2026-03-02T10:00 severity=info service=svc02 msg="request ok" ticket=-

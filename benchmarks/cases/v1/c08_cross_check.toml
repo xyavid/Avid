@@ -1,0 +1,25 @@
+id = "c08_cross_check"
+category = "task"
+fixture = "c08_cross_check"
+tier = 4
+notes = "校验组：两份清单三处不一致，权威文件写在 README 里。只读一份就会漏掉 diff 列表——空着或乱写都判不过。"
+
+prompt = """
+先读工作目录根上的 README.txt，再核对 reports/ 下的两个文件。请报告 main.csv 的 amount 总额，
+以及两个文件对同一个 id 给出不同 amount 的那些 id（按字典序、逗号分隔；没有不一致时写 none）。
+
+回答格式：total=<数字> diff=<id1,id2,...>
+"""
+
+[limits]
+max_rounds = 20
+timeout_seconds = 300
+
+[[graders]]
+kind = "answer_contains"
+text = ["total=6559", "diff=r03,r07,r11"]
+
+[[graders]]
+name = "fixture-不变量"
+kind = "command"
+run = "test \"$(awk -F, 'NR>1{s+=$2} END{print s}' reports/main.csv)\" -eq 6559"

@@ -1,0 +1,25 @@
+id = "c02_rule_then_scan"
+category = "long_horizon"
+fixture = "c02_rule_then_scan"
+tier = 4
+notes = "长上下文组：单位规则写在早期文件里，30 个分片逐份读。规则忘了或漏读就会给出 100 倍大的数（这是可判的失败）。"
+
+prompt = """
+先读工作目录根上的 RULES.txt，再按它的约定处理 data/ 下的 30 个分片：
+每个分片里有若干行 amount=<整数>。请报告这些 amount 的总额，按 RULES.txt 要求的单位与精度。
+
+回答格式：total=<数字>
+"""
+
+[limits]
+max_rounds = 45
+timeout_seconds = 420
+
+[[graders]]
+kind = "answer_contains"
+text = ["total=6747.20"]
+
+[[graders]]
+name = "fixture-不变量"
+kind = "command"
+run = "test \"$(awk -F= '/^amount=/{s+=$2} END{print s}' data/shard_*.txt)\" -eq 674720"

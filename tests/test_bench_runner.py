@@ -226,3 +226,41 @@ def test_classify_covers_the_five_categories():
     assert status("llm_error") == "模型"
     assert status("error") == "基础设施"
     assert status("unscored") == ""
+
+
+def test_injected_context_chars_is_recorded_only_where_it_applies(tmp_path: Path):
+    """注入值必须进 `overrides`，否则两组对照的数字无法解释。
+
+    `bare` 没有压缩机制：给它一个阈值等于无声无效，所以既不传也不记——记了就会凭空
+    多出一个不存在的差异来源。
+    """
+    case = load_cases(ids=["b01_largest_file"])[0]
+    for variant, expected in (
+        ("bare", {}),
+        ("core", {"context_chars": 30_000}),
+        ("full", {"context_chars": 30_000}),
+    ):
+        result = run_case(
+            case,
+            variant,
+            config=CONFIG,
+            chat=ScriptedChat(*b01_turns()),
+            out_dir=tmp_path,
+            context_chars=30_000,
+        )[0]
+        assert result.overrides == expected, variant
+        assert result.status == "resolved", variant
+
+
+def test_summary_shows_the_injected_value(tmp_path: Path):
+    case = load_cases(ids=["b01_largest_file"])[0]
+    run_set = run_all(
+        [case],
+        ("core",),
+        config=CONFIG,
+        chat_factory=lambda case, variant: ScriptedChat(*b01_turns()),
+        out_dir=tmp_path,
+        context_chars=30_000,
+    )
+    assert "注入：context_chars=30000" in run_set.summary()
+    assert run_set.overrides == {"context_chars": 30_000}

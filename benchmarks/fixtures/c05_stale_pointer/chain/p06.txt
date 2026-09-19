@@ -1,0 +1,2 @@
+step=6
+已废弃，替代文件：chain/p06b.txt

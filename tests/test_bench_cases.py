@@ -12,32 +12,56 @@ import pytest
 from benchmarks.avidbench.case import (
     CATEGORIES,
     FIXTURES_ROOT,
+    TIERS,
     CaseError,
     case_paths,
     load_case,
     load_cases,
+    load_suite,
+    suites,
 )
-from benchmarks.avidbench.graders import KINDS
-from benchmarks.avidbench.workspace import BOOKKEEPING, manifest
+from benchmarks.avidbench.graders import KINDS, run_graders
+from benchmarks.avidbench.workspace import BOOKKEEPING, manifest, materialized
 
-EXPECTED_CATEGORY_COUNTS = {
-    "basic": 4,
-    "long_horizon": 3,
-    "recovery": 2,
-    "subagent": 1,
-    "task": 1,
-    "session": 1,
+#: 每个 case 集版本各有多少条、按类别怎么分。**已冻结的版本不许再改**——
+#: 改这里就等于宣布旧基线作废（所以加版本，不是改旧版本）。
+EXPECTED_BY_SUITE = {
+    "v0": {"basic": 4, "long_horizon": 3, "recovery": 2, "subagent": 1, "task": 1, "session": 1},
+    "v1": {"long_horizon": 3, "task": 4, "subagent": 1, "recovery": 1},
 }
 
 
 def test_eval_set_shape():
-    cases = load_cases()
-    assert len(cases) == sum(EXPECTED_CATEGORY_COUNTS.values())
-    counts: dict[str, int] = {}
-    for case in cases:
-        counts[case.category] = counts.get(case.category, 0) + 1
-    assert counts == EXPECTED_CATEGORY_COUNTS
-    assert len({case.id for case in cases}) == len(cases)
+    for suite, expected in EXPECTED_BY_SUITE.items():
+        cases = load_suite(suite)
+        assert len(cases) == sum(expected.values()), suite
+        counts: dict[str, int] = {}
+        for case in cases:
+            counts[case.category] = counts.get(case.category, 0) + 1
+        assert counts == expected, suite
+    every = load_suite("all")
+    assert len(every) == sum(sum(counts.values()) for counts in EXPECTED_BY_SUITE.values())
+    assert len({case.id for case in every}) == len(every), "case id 跨版本也必须唯一"
+
+
+def test_suites_are_discovered_from_directories():
+    assert suites() == sorted(EXPECTED_BY_SUITE)
+    with pytest.raises(CaseError):
+        load_suite("v9")
+
+
+def test_difficulty_is_declared_for_the_new_suite_only():
+    """v1 的每条都要标 tier；v0 已冻结，一个字段都不许动。"""
+    for case in load_suite("v1"):
+        assert case.tier in TIERS, f"{case.id} 没标 tier"
+    assert {case.tier for case in load_suite("v1")} >= {3, 4, 5}, "v1 要有真正的难度分层"
+    for case in load_suite("v0"):
+        assert case.tier is None, f"{case.id} 属于已冻结的 v0，不该被改"
+
+
+def test_suites_are_selectable_by_id_within_one_version():
+    assert [case.id for case in load_suite("v1", ids=["c07_many_modules"])] == ["c07_many_modules"]
+    assert len(load_suite("v1", ids=None)) == sum(EXPECTED_BY_SUITE["v1"].values())
 
 
 def test_every_case_is_decidable():
@@ -111,6 +135,8 @@ BAD_CASES = {
     "空 prompt": f'id = "x01_demo"\ncategory = "basic"\nfixture = "b01_largest_file"\nprompt = "  "\n{_GOOD_GRADER}',
     "limits 有未知键": f'id = "x01_demo"\ncategory = "basic"\nfixture = "b01_largest_file"\nprompt = "p"\n[limits]\nnope = 1\n{_GOOD_GRADER}',
     "grader 不合法": 'id = "x01_demo"\ncategory = "basic"\nfixture = "b01_largest_file"\nprompt = "p"\n[[graders]]\nkind = "nope"\n',
+    "tier 越界": f'id = "x01_demo"\ncategory = "basic"\nfixture = "b01_largest_file"\nprompt = "p"\ntier = 9\n{_GOOD_GRADER}',
+    "tier 不是整数": f'id = "x01_demo"\ncategory = "basic"\nfixture = "b01_largest_file"\nprompt = "p"\ntier = "3"\n{_GOOD_GRADER}',
 }
 
 
@@ -118,6 +144,30 @@ BAD_CASES = {
 def test_load_case_rejects_bad_files(label: str, body: str, tmp_path: Path):
     with pytest.raises(CaseError, match="."):
         load_case(_write_case(tmp_path, body))
+
+
+def test_difficulty_graders_stay_decidable():
+    """难度 case 的判定器也必须全是确定性的——难度不许靠 LLM judge 来判。"""
+    for case in load_suite("v1"):
+        assert {spec["kind"] for spec in case.graders} <= set(KINDS)
+        assert "回答格式" in case.prompt, f"{case.id} 没写回答格式"
+        assert case.limits.max_rounds >= 12, f"{case.id} 的轮数上限对难度 case 太紧"
+
+
+def test_fixture_invariant_graders_pass_on_a_pristine_workspace():
+    """不依赖回答的那些判定器，必须在**没跑过模型**的 fixture 上就通过。
+
+    它们是「fixture 不变量」：一旦有人改了 fixture 而没改真值，这条会先红——不用等到
+    花完真模型的钱才发现判定器自己写错了。
+    """
+    for case in load_cases():
+        specs = [spec for spec in case.graders if spec["kind"] != "answer_contains"]
+        if not specs:
+            continue
+        with materialized(case) as root:
+            results = run_graders(specs, workspace=root, answer="")
+        failed = [(item.kind, item.detail) for item in results if not item.passed]
+        assert not failed, f"{case.id} 的 fixture 不变量在干净工作区上就失败了：{failed}"
 
 
 def test_all_categories_have_at_least_one_case():

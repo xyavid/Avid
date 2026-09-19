@@ -1,0 +1,25 @@
+id = "c07_many_modules"
+category = "subagent"
+fixture = "c07_many_modules"
+tier = 3
+notes = "委派组：12 个互相独立的模块各给一个数，求和。串行读也能做对，但子 agent 在这里第一次有真实作用面——这正是 full 与 core 的对照点。"
+
+prompt = """
+mods/ 下有 12 个模块，每个模块的 README.md 里有一行 value=<整数>。
+请报告这 12 个 value 的总和。
+
+回答格式：sum=<数字>
+"""
+
+[limits]
+max_rounds = 20
+timeout_seconds = 300
+
+[[graders]]
+kind = "answer_contains"
+text = ["sum=2526"]
+
+[[graders]]
+name = "fixture-不变量"
+kind = "command"
+run = "test \"$(awk -F= '/^value=/{s+=$2} END{print s}' mods/*/README.md)\" -eq 2526"
