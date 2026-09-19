@@ -86,7 +86,7 @@ stress job 跑 `pytest -q -m stress`（`.github/workflows/ci.yml:25-37`）。
 | 指标 | 值 | 怎么数的 |
 |---|---|---|
 | 内核测试函数 | **664** 个，分布在 **41** 个 `tests/test_*.py`（另有 3 个支撑文件，`tests/` 共 44 个 `.py`） | `grep -h '^def test_' tests/*.py \| wc -l` |
-| 内核测试收集数（**本轮实测**） | **921 collected，5 deselected**（commit `1ece312`，本机 WSL2 / Python 3.12.3） | `uv run pytest -q --collect-only` |
+| 内核测试收集数（**本轮实测**） | **928 收集**，其中 **923 passed / 5 deselected**（commit `758e3e3`，本机 WSL2 / Python 3.12.3；5 = 3 条 stress + 2 条 eval 薄壳） | `uv run pytest -q` |
 | `parametrize` | **27** 处 | `grep -c parametrize` 逐个文件求和 |
 | 内核测试代码量 | 12,439 行（`tests/*.py`） | `wc -l tests/*.py` |
 | 评测仪器规模 | 14 个 Python 文件 / 1,581 行，外带 12 条 case 与 69 个 fixture 文件（`benchmarks/`，**不进 wheel**） | `find benchmarks -name '*.py' \| wc -l`、`wc -l` |
@@ -95,8 +95,8 @@ stress job 跑 `pytest -q -m stress`（`.github/workflows/ci.yml:25-37`）。
 | `skip` / `xfail` / `skipif` | **0** | `grep` 零命中——没有靠跳过兜绿的用例；评测的 `eval` marker 是「默认不跑」，不是 skip |
 
 **口径警告**：664 是**函数数**；pytest 的收集数会被 `parametrize` 展开，所以上表把两者分开列，
-并给出**本轮实测的收集数**（921 / 5 deselected）。测试项数增长在任何情况下都**不能**当作能力或
-性能指标——它只说明实现规模。
+并给出**本轮实测的收集数**（928 收集 / 923 passed / 5 deselected）。测试项数增长在任何情况下都
+**不能**当作能力或性能指标——它只说明实现规模。
 
 ### 3.4 门禁与 CI：抓什么、抓不到什么
 
@@ -119,7 +119,7 @@ a11y 与视觉回归（没有用例）、性能回归（只有 stress 的复杂�
 
 | 指标 | 各文件写的值 | 出处（均为本地记录，除注明） | 本文件处置 |
 |---|---|---|---|
-| 内核测试规模 | `822 passed + 3 deselected`；`869`；`863`；`844`；`835`；`832`；`711` | `dev/review/fix-progress.md:103`；`dev/plan/roadmap.md` 各阶段条目 | **本轮已重测并只认一个口径**：`921 collected / 5 deselected`（commit `1ece312`，本机）。历史值不再引用；以后只认「pytest 收集数 + 环境」这一种写法 |
+| 内核测试规模 | `822 passed + 3 deselected`；`869`；`863`；`844`；`835`；`832`；`711` | `dev/review/fix-progress.md:103`；`dev/plan/roadmap.md` 各阶段条目 | **本轮已重测并只认一个口径**：928 收集 / 923 passed / 5 deselected（commit `758e3e3`，本机）。历史值不再引用；以后只认「pytest 收集数 + 环境」这一种写法 |
 | 内核测试耗时 | `711 tests in 8.99s` | `dev/review/architecture-review.md:7`、`dev/review/tests.md:14` | 仅历史值；本机与 CI 环境不同，不可比 |
 | 浏览器 e2e | `40 项全通过`、`38`、`36`、`35`；静态 **37** | `dev/plan/roadmap.md:192,179,169,150`；静态计数见 §3.3 | 静态与记录不一致（差额未解释）。以**重测**为准 |
 | 首屏 JS gzip | 5 个值（见 §3.2） | `dev/review/*`、`dev/plan/roadmap.md` | 阈值变过一次，不可直接比 |
