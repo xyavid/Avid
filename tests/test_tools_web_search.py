@@ -111,6 +111,28 @@ def test_a_blank_key_is_treated_as_missing(monkeypatch):
     assert web_search({"query": "x"}, client=_ok()).startswith("错误：")
 
 
+def test_a_non_ascii_key_is_rejected_with_a_fix(monkeypatch):
+    """`.env` 的值后面跟中文注释时整行都会进变量，httpx 装请求头会抛 UnicodeEncodeError。
+
+    那种异常会被 execution 的兜底收敛成「工具执行失败」——错误信息指向工具，根因却在
+    配置。所以在读配置时就失败关闭，并说清注释要独占一行。
+    """
+    called = []
+
+    def handler(request):  # pragma: no cover - 断言它不被调用
+        called.append(request)
+        return httpx.Response(200, json=_payload())
+
+    monkeypatch.setenv(ENV_API_KEY, "tvly-x # 中文注释")
+
+    result = web_search({"query": "x"}, client=_client(handler))
+
+    assert result.startswith("错误：")
+    assert "非 ASCII" in result
+    assert "独占一行" in result
+    assert called == []
+
+
 # ---------- 参数 ----------
 
 

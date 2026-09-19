@@ -57,4 +57,19 @@ def load_search_config(env: Mapping[str, str] | None = None) -> SearchConfig:
         )
 
     base_url = source.get(ENV_BASE_URL, "").strip() or DEFAULT_BASE_URL
+
+    # Key 必须是 ASCII：非 ASCII 会让 httpx 在装请求头时抛 UnicodeEncodeError，那被
+    # execution 的兜底收敛成「工具执行失败」——错误信息指向工具，根因却在配置。
+    # 最常见的来路是 .env 里跟在 Key 后面的中文注释（`TAVILY_API_KEY=tvly-x  # 注释`
+    # 会被整行当成值，注释不是行首所以不算注释）。
+    try:
+        api_key.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise SearchConfigError(
+            f"{ENV_API_KEY} 含非 ASCII 字符，不是有效的 Key：{exc.reason}。\n"
+            "常见原因：值后面跟了中文注释（.env 的注释必须独占一行，不能写在值后面）。\n"
+            "请改成只放 Key 本身，例如：\n"
+            f"  {ENV_API_KEY}=tvly-你的真实Key"
+        ) from exc
+
     return SearchConfig(api_key=api_key, base_url=base_url)
