@@ -64,11 +64,16 @@ def _calls_todo_write(tool_calls: list[dict[str, Any]]) -> bool:
     )
 
 
-def _submit_input(transcript: Transcript, state: RunState) -> tuple[int, list[str]] | None:
+def _submit_input(
+    transcript: Transcript, state: RunState, tool_names: list[str]
+) -> tuple[int, list[str]] | None:
     """UserPromptSubmit：可注入上下文，也可拦截整个输入。
 
     返回**触发消息下标**与本次注入的上下文条目；None 表示这次不跑（没有用户消息，
     或被拦截）。
+
+    ``tool_names`` 是本次运行真正发给模型的工具名：注入的环境信息必须与它一致，
+    否则 subagent 的系统提示会宣称自己能用 ``subagent``（它只带 ``SUB_TOOLS``）。
 
     注入**不改写用户消息**——它由调用方并进系统提示词。以前把注入拼在 user content
     前面，于是「用户说的话」里混进了内核写的环境信息：界面无从分辨（它确实就是一条
@@ -85,6 +90,7 @@ def _submit_input(transcript: Transcript, state: RunState) -> tuple[int, list[st
         # 运行级工作区根：注入给模型的环境信息要与实际解析一致。
         "workspace_root": state.workspace_root,
         "permission_mode": state.permission_mode,
+        "tool_names": list(tool_names),
     }
     if state.hooks.trigger("UserPromptSubmit", submit) == BLOCK:
         logger.warning("UserPromptSubmit 被拦截，未调用模型")
@@ -165,7 +171,7 @@ def agent_loop(
     )
     system_prompt = state.system_prompt(system)
 
-    trigger = _submit_input(transcript, state)
+    trigger = _submit_input(transcript, state, [str(item["function"]["name"]) for item in tools])
     if trigger is None:
         return ""
     index, injected = trigger

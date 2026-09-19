@@ -360,6 +360,30 @@ def test_user_prompt_submit_injects_context(hook_registry):
     assert "[环境] 测试注入" in chat.requests[0]["system"]
 
 
+def test_injected_tool_list_follows_the_runs_tools(hook_registry):
+    """注入的「可用工具」必须是本次运行真正发给模型的那一份。
+
+    subagent 只带 `SUB_TOOLS`（去掉自己）：用全局注册表注入会让它的系统提示宣称能
+    调用 `subagent`，而调用只得到「未知工具」——白烧一轮。
+    """
+    hook_registry.register("UserPromptSubmit", hooks.context_inject_hook)
+    chat = FakeChat(make_turn("好的"))
+    messages = [{"role": "user", "content": "读"}]
+    only_read = [item for item in TOOLS if item["function"]["name"] == "read_file"]
+
+    agent_loop(
+        messages,
+        config=CONFIG,
+        chat=chat,
+        tools=only_read,
+        registry={"read_file": lambda a: "内容"},
+    )
+
+    system = chat.requests[0]["system"]
+    assert "[环境] 可用工具：read_file" in system
+    assert "subagent" not in system
+
+
 def test_user_prompt_submit_receives_the_prompt(hook_registry):
     seen = []
     hook_registry.register("UserPromptSubmit", lambda ctx: seen.append(ctx["prompt"]))

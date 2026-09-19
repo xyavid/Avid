@@ -172,13 +172,21 @@ def context_inject_hook(context: dict[str, Any]) -> str | None:
     工作区根优先取运行级上下文（``state.workspace_root``，阶段 18 起每个会话可以属于
     不同工作区），没有时回落到进程默认根。
 
+    **可用工具取本次运行的那一份**（``context["tool_names"]``，由循环按真正发给模型的
+    ``tools`` 算出），不是全局注册表：subagent 只带 ``SUB_TOOLS``（去掉自己），用全局表
+    注入会让它的系统提示宣称能调用 ``subagent``，而调用只会得到「未知工具」。字段缺失
+    （不跑循环的直调路径）时回落到全局 ``TOOLS``。
+
     ``injected`` 里的内容由循环并进**系统提示词**，不改写用户消息——它是运行级上下文，
     每轮重建、不落库；写进 user content 会让界面把内核的话当成用户说的话显示。
     """
     from ..tools import TOOLS, workspace
 
     root = context.get("workspace_root") or workspace.WORKSPACE_ROOT
-    names = "、".join(item["function"]["name"] for item in TOOLS)
+    names_list = context.get("tool_names")
+    if names_list is None:
+        names_list = [item["function"]["name"] for item in TOOLS]
+    names = "、".join(str(name) for name in names_list)
     context.setdefault("injected", []).append(
         f"[环境] 工作区根目录：{root}\n[环境] 可用工具：{names}"
     )
