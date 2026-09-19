@@ -50,7 +50,11 @@ def make_turn(text="", tool_calls=(), finish_reason="stop"):
     )
 
 
-def tool_call(name="read_file", arguments="{}", call_id="call_1"):
+def tool_call(name="read_file", arguments=None, call_id="call_1"):
+    from support import PLACEHOLDER_ARGS
+
+    if arguments is None:
+        arguments = PLACEHOLDER_ARGS.get(name, "{}")
     return {
         "id": call_id,
         "type": "function",

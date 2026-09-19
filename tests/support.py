@@ -28,7 +28,32 @@ def make_turn(text: str = "", tool_calls: Iterable[dict] = (), finish_reason: st
     )
 
 
-def tool_call(name: str, arguments: str = "{}", call_id: str = "call_1") -> dict:
+# 占位参数必须**能过 schema 校验**：参数校验收口到 `execute_one` 之后（见
+# `tools/validate.py`），"{}" 这类占位会在工具执行前就被拒，测试看到的就不是它想验证
+# 的那条路径了。这张表由 `test_tools_contract.py::test_placeholder_args_stay_schema_valid`
+# 钉住与注册表同步。
+PLACEHOLDER_ARGS: dict[str, str] = {
+    "read_file": '{"path": "a.txt"}',
+    "write_file": '{"path": "a.txt", "content": "x"}',
+    "edit_file": '{"path": "a.txt", "old_string": "a", "new_string": "b"}',
+    "glob": '{"pattern": "*.py"}',
+    "bash": '{"command": "echo hi"}',
+    "todo_write": '{"todos": []}',
+    "create_task": '{"subject": "记一件事"}',
+    "update_task": '{"task_id": "task_00000000", "addBlockedBy": []}',
+    "can_start": '{"task_id": "task_00000000"}',
+    "claim_task": '{"task_id": "task_00000000"}',
+    "complete_task": '{"task_id": "task_00000000"}',
+    "get_task": '{"task_id": "task_00000000"}',
+    "subagent": '{"tasks": [{"description": "子任务", "prompt": "把这件事做完"}]}',
+    "load_skill": '{"name": "demo"}',
+}
+
+
+def tool_call(name: str, arguments: str | None = None, call_id: str = "call_1") -> dict:
+    """构造一次工具调用；不传参数时按工具名取一份 schema 合法的占位参数。"""
+    if arguments is None:
+        arguments = PLACEHOLDER_ARGS.get(name, "{}")
     return {
         "id": call_id,
         "type": "function",

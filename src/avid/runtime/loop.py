@@ -273,7 +273,15 @@ def agent_loop(
 
         state.check_cancelled()  # 检查点 2：每批工具执行前（§7.4）
         outcomes = execute_batch(
-            turn.tool_calls, state=state, registry=registry, round_index=round_index
+            turn.tool_calls,
+            state=state,
+            registry=registry,
+            round_index=round_index,
+            # 参数校验用**发给模型的同一份**定义，不另抄一份 schema。
+            schemas={
+                str(item["function"]["name"]): item["function"]["parameters"]
+                for item in tools
+            },
         )
         for outcome in outcomes:
             message = {

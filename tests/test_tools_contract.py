@@ -1,11 +1,15 @@
+import json
+
 import pytest
 
 from avid.cli import AGENT_TOOL_HELP, build_parser
 from avid.tools import TOOL_IMPLS, TOOLS
 from avid.tools.schemas import tool
+from avid.tools.validate import validate_arguments
 
 NAMES = [item["function"]["name"] for item in TOOLS]
 VALID_TYPES = {"string", "integer", "number", "boolean", "array", "object"}
+PARAMETERS = {item["function"]["name"]: item["function"]["parameters"] for item in TOOLS}
 
 
 def test_definitions_and_implementations_match():
@@ -33,6 +37,20 @@ def test_expected_tools_are_registered():
 
 def test_names_are_unique():
     assert len(NAMES) == len(set(NAMES))
+
+
+def test_placeholder_args_stay_schema_valid():
+    """测试用的占位参数表必须与 schema 同步。
+
+    `support.PLACEHOLDER_ARGS` 被大量 loop / svc / web 用例当前提：某一项一旦不合
+    schema，这些用例就会静默走到"参数错误"分支，测的就不再是它们声称的那条路径。
+    """
+    from support import PLACEHOLDER_ARGS
+
+    for name in NAMES:
+        assert name in PLACEHOLDER_ARGS, f"占位参数表少了 {name}"
+        problem = validate_arguments(PARAMETERS[name], json.loads(PLACEHOLDER_ARGS[name]))
+        assert problem is None, f"{name} 的占位参数不合 schema：{problem}"
 
 
 @pytest.mark.parametrize("item", TOOLS, ids=NAMES)

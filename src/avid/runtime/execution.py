@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..tools import ToolImpl, workspace
+from ..tools.validate import validate_arguments
 from . import events
 from .hooks import BLOCK, brief
 from .state import RunState
@@ -74,11 +75,16 @@ def execute_one(
     state: RunState,
     round_index: int,
     tool_call_id: str = "",
+    parameters: dict[str, Any] | None = None,
 ) -> str:
     """执行一次工具调用，返回要回传给模型的内容。
 
-    前两步失败（参数不是合法 JSON、参数不是对象、工具不存在）都不触发事件——
-    那是协议错误，不是策略问题。
+    前几步失败（参数不是合法 JSON、参数不是对象、工具不存在、参数不合 schema）都不
+    触发事件——那是协议错误，不是策略问题。
+
+    ``parameters`` 是这次调用所用工具的 schema 节点（``tool()`` 产出的 ``parameters``），
+    由循环按它发给模型的那份 ``tools`` 传下来；结构校验因此与模型看到的定义同源。
+    直调路径（单测、复用某个工具）不传就不校验，行为与改动前一致。
     """
     try:
         arguments = json.loads(raw_arguments)
@@ -91,6 +97,11 @@ def execute_one(
     impl = registry.get(name)
     if impl is None:
         return f"未知工具：{name}"
+
+    if parameters is not None:
+        problem = validate_arguments(parameters, arguments)
+        if problem is not None:
+            return problem
 
     state.tool_calls += 1
     started_at = time.monotonic()
@@ -178,8 +189,13 @@ def execute_batch(
     state: RunState,
     registry: dict[str, ToolImpl],
     round_index: int = 0,
+    schemas: dict[str, dict[str, Any]] | None = None,
 ) -> list[ToolOutcome]:
-    """逐个执行，按 assistant 源顺序返回结果。"""
+    """逐个执行，按 assistant 源顺序返回结果。
+
+    ``schemas`` 是本次运行发给模型的工具定义（名字 → ``parameters`` 节点），
+    只用于调用前的参数校验；缺哪个名字就不校哪个。
+    """
     outcomes: list[ToolOutcome] = []
 
     for call in tool_calls:
@@ -195,6 +211,7 @@ def execute_batch(
             state=state,
             round_index=round_index,
             tool_call_id=str(call.get("id", "")),
+            parameters=(schemas or {}).get(name),
         )
 
         logger.info("  ← %s 字符", len(content))

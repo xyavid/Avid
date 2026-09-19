@@ -24,7 +24,11 @@ def make_turn(text="", tool_calls=(), finish_reason="stop"):
     )
 
 
-def tool_call(name, arguments="{}", call_id="call_1"):
+def tool_call(name, arguments=None, call_id="call_1"):
+    from support import PLACEHOLDER_ARGS
+
+    if arguments is None:
+        arguments = PLACEHOLDER_ARGS.get(name, "{}")
     return {
         "id": call_id,
         "type": "function",
@@ -99,8 +103,8 @@ def test_multiple_tool_calls_become_multiple_tool_messages():
         make_turn(
             "",
             [
-                tool_call("read_file", "{}", "call_1"),
-                tool_call("read_file", "{}", "call_2"),
+                tool_call("read_file", '{"path": "a.txt"}', "call_1"),
+                tool_call("read_file", '{"path": "a.txt"}', "call_2"),
             ],
         ),
         make_turn("好了"),
@@ -233,7 +237,7 @@ def test_pre_tool_use_sees_the_round_number(hook_registry):
 
     chat = FakeChat(
         make_turn("", [tool_call("read_file")]),
-        make_turn("", [tool_call("read_file", "{}", "call_2")]),
+        make_turn("", [tool_call("read_file", '{"path": "a.txt"}', "call_2")]),
         make_turn("好了"),
     )
     messages = [{"role": "user", "content": "读"}]
@@ -623,7 +627,7 @@ def test_todo_write_resets_the_silence_counter(hook_registry):
 def test_reminder_is_injected_before_the_next_model_call(hook_registry):
     chat = FakeChat(
         make_turn("", [tool_call("read_file")]),
-        make_turn("", [tool_call("read_file", "{}", "c2")]),
+        make_turn("", [tool_call("read_file", '{"path": "a.txt"}', "c2")]),
         make_turn("好了"),
     )
     messages = [{"role": "user", "content": "x"}]
@@ -648,7 +652,7 @@ def test_reminder_is_injected_before_the_next_model_call(hook_registry):
 
 def test_reminder_fires_once_per_silent_streak(hook_registry):
     chat = FakeChat(
-        *[make_turn("", [tool_call("read_file", "{}", f"c{i}")]) for i in range(6)],
+        *[make_turn("", [tool_call("read_file", '{"path": "a.txt"}', f"c{i}")]) for i in range(6)],
         make_turn("好了"),
     )
     messages = [{"role": "user", "content": "x"}]
@@ -679,7 +683,7 @@ def test_reminder_rearms_after_a_todo_write(hook_registry):
                 )
             ],
         ),
-        make_turn("", [tool_call("read_file", "{}", "c3")]),
+        make_turn("", [tool_call("read_file", '{"path": "a.txt"}', "c3")]),
         make_turn("好了"),
     )
     messages = [{"role": "user", "content": "x"}]
