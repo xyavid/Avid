@@ -88,7 +88,7 @@ class Transcript:
         """区间替换（② snip_compact 用）。start/stop 必须落在安全边界上，否则抛错。"""
 
     def set_content(self, index: int, content: str) -> None:
-        """改单条内容（tool_result 落盘留路径、用户输入注入用）。不改结构，无需校验。"""
+        """改单条内容（压缩管线给 tool_result 落盘留路径用）。不改结构，无需校验。"""
 
     def last_user_index(self) -> int | None: ...
     def tool_indexes(self) -> list[int]: ...
@@ -250,7 +250,7 @@ agent_loop(messages, ...)
 ├─ system_prompt = state.skills.build_system_prompt(system or AGENT_INSTRUCTIONS)
 ├─ emit UserPromptSubmit(transcript.last_user_index())
 │    ├─ block → 返回 ""
-│    └─ injected → transcript.set_content(last_user_index, 注入 + 原文)
+│    └─ injected → 并进 system_prompt 末尾（**不改写用户消息**）
 └─ for round in 1..max_rounds:
      ├─ state.round = round
      ├─ if state.rounds_since_todo == todo_reminder_after:
@@ -276,7 +276,7 @@ agent_loop(messages, ...)
 
 | 阶段 | 读 | 写 | 写的方法 |
 |---|---|---|---|
-| 启动 | `last_user_index` | 注入上下文 | `set_content` |
+| 启动 | `last_user_index` | 注入上下文（并进 system prompt，不落库） | 无 |
 | ① | `tool_indexes` | 落盘留路径 | `set_content` |
 | ② | 长度、边界 | 裁中间 | `splice` |
 | ③ | 字符估算、`tool_indexes` | 落盘留路径 | `set_content` |
@@ -592,7 +592,7 @@ seq 非单调；`SessionMutation.commit` 恰好一次、`end` 后失效；`close
 `agent_loop(on_message=…)`。于是
 
 * `loop.py` 只多一个回调参数，**不 import 会话层**；`_submit_input` 从返回 `bool` 改为返回
-  触发消息下标，因为注入会改写那条消息，会话要存注入后的版本；
+  触发消息下标与注入的上下文条目，注入并进系统提示词（用户消息保持原文，落库的也是原文）；
 * `session/` **不 import** `runtime` / `policy` / `tools` / `ai`（连 `Transcript` 都不 import：
   投影自己修不完整批次，续接时由调用方交给 `Transcript` 再次校验）。
 
@@ -627,7 +627,7 @@ seq 非单调；`SessionMutation.commit` 恰好一次、`end` 后失效；`close
 | 7 | 分支与查询 | 串链、tip 前进、oldestFirst/limit/cursor/type、desc/asc 翻页到末尾返回空 |
 | 8 | 文件格式 | header + 每提交一行（多写为数组）、重启后状态一致、撕裂行忽略并修复、坏行报行号、非单调 seq / 缺 parent / 未知格式版本 / 未知存储版本各有断言、目录扫描查重、`.tmp` 不残留 |
 | 9 | 投影 | 完整链原样、不完整批次与孤儿结果被丢、结果通过 `Transcript.validate()` |
-| 10 | 循环集成 | 每条结算消息按序落库；工具往返落库；第二轮输入含历史；注入后的触发消息落库；Stop nudge 落库；写入失败在调模型前中止 |
+| 10 | 循环集成 | 每条结算消息按序落库；工具往返落库；第二轮输入含历史；触发消息按用户原文落库（注入只进系统提示词）；Stop nudge 落库；写入失败在调模型前中止 |
 | 11 | CLI | 新建/续接/命名/列举/销毁+参数错误退出码（`tests/test_cli_session.py` 11 项） |
 | 12 | 依赖方向 | `grep -rn "session" src/avid/runtime src/avid/policy src/avid/tools` 无 import；`grep -rn "from \.\.\(runtime\|policy\|tools\|ai\)" src/avid/session` 无匹配 |
 | 13 | 公开签名 | `agent_loop` 新增一个带默认值的 `on_message`，其余 11 个参数逐参数不变 |
