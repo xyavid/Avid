@@ -764,7 +764,14 @@ def test_sse_replays_after_last_event_id(bundle):
 def test_classify_tool_status_is_single_point(bundle):
     assert classify_tool_status("ok") == "ok"
     assert classify_tool_status("错误：找不到文件") == "failed"
-    assert classify_tool_status("工具 bash 执行失败：boom") == "failed"
+    assert (
+        classify_tool_status("参数错误：offset 必须是 integer；请按工具 schema 修正后重试。")
+        == "failed"
+    )
+    assert (
+        classify_tool_status("工具执行失败：bash（boom）；不要用同样的参数重复调用。")
+        == "failed"
+    )
     assert classify_tool_status("Permission denied.", denied_kind="user") == "denied"
     assert classify_tool_status("很长" * 10, truncated=True) == "truncated"
 

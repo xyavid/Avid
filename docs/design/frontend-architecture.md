@@ -459,7 +459,8 @@ data: {"run_id":"run_...","seq":null,"text":"…"}      ← 无 id 行，不参�
 ```
 
 - **错误信封**：所有非 2xx 返回 `{"error":{"code":"run_busy","message":"…","detail":{…}}}`，`code` 是稳定字符串，与事件类型共用一份命名规则。
-- **业务失败不是 HTTP 错误**：工具失败按项目既有约定回文本、不抛异常（`execution.py:87-88`、`runtime-architecture.md` §8.2 D2），因此它以 `tool_call_finished` 事件出现，`data.status` ∈ `ok | denied | failed | truncated`。`status` 的来源：`truncated` 与 `denied_kind` 直接来自 hook context（`hooks.py:172`、`hooks.py:120,136`）；`failed` 目前只能由内容前缀（`错误：` / `工具 X 执行失败：`）判定，判定函数单点放在 `web/`（受测），并在 §17 记为待替换项——**重新考虑信号**：出现第二条「错误文本」约定，或第二次需要区分失败种类时，给 `ToolOutcome` 加 `status` 字段。
+- **业务失败不是 HTTP 错误**：工具失败按项目既有约定回文本、不抛异常（`execution.py`、`runtime-architecture.md` §8.2 D2），因此它以 `tool_call_finished` 事件出现，`data.status` ∈ `ok | denied | failed | truncated`。`status` 的来源：`truncated` 与 `denied_kind` 直接来自 hook context；`failed` 只能由内容前缀判定。**前缀自 2026-09-19 起分三类、各有唯一出处**：`错误：`（业务拒绝，各工具自己回）、`参数错误：`（参数不合 schema，`tools/validate.py::bad_arguments`）、`执行失败：`（程序 / 环境错误，`execution.py`）；判定仍是单点（`web/schemas.py` 的 `_FAILED_PREFIXES` + `_FAILED_TOOL_MARK`，受测）。
+  本条原记的**重新考虑信号**（「出现第二条错误文本约定」）已经发生——参数错误就是第二条。**这次仍不换成 `ToolOutcome.status`**，理由：① 事件载荷是 durable 的，加字段意味着历史会话缺字段、要么迁移要么回落，而当前收益只是「判定更稳」；② 三类措辞现在各只有一处出处，漂移面已经很小。**新的重新考虑信号**：出现第二处按失败种类分流的消费者（评测按失败类型统计、循环按可重试性决定收尾），或前缀判定出现一次误判；届时的落地路径是把 `status` 加进 `ToolOutcome` 与 `tool_call_finished`，`classify_tool_status` 优先读它、缺失时回落前缀以兼容旧日志。
 - **HTTP 错误码只承担传输与生命周期语义**：400 参数、404 未知 id、409 状态冲突（会话已有活动 run / 审批已决）、410 审批过期、422 schema、500 内部、503 模型不可达。
 
 ### 6.3 版本与漂移门禁

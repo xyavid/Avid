@@ -21,8 +21,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..runtime import events
 from ..runtime.events import RunEvent
 
-# 项目既有约定：工具失败回文本、不抛异常，文本以「错误：」或「工具 X 执行失败：」开头。
-_FAILED_PREFIX = "错误："
+# 项目既有约定：工具失败回文本、不抛异常。三类前缀分工——`错误：`（业务拒绝）、
+# `参数错误：`（参数不合 schema）、`执行失败：`（程序 / 环境错误）。
+_FAILED_PREFIXES = ("错误：", "参数错误：")
 _FAILED_TOOL_MARK = "执行失败："
 
 
@@ -330,8 +331,7 @@ def classify_tool_status(
     if denied_kind:
         return "denied"
     if isinstance(content, str) and (
-        content.startswith(_FAILED_PREFIX)
-        or _FAILED_TOOL_MARK in content[:64]
+        content.startswith(_FAILED_PREFIXES) or _FAILED_TOOL_MARK in content[:64]
     ):
         return "failed"
     if truncated:

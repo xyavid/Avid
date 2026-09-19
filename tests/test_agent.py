@@ -143,12 +143,43 @@ def test_tool_exception_becomes_a_result_not_a_crash():
     assert "权限不足" in messages[2]["content"]
 
 
+def test_tool_failure_kinds_have_distinguishable_prefixes():
+    """三类失败各说各的下一步：改参数 / 换做法 / 别重复提交。
+
+    权限层的四类拒绝文案早就是这么做的（`policy/permission.py`）；工具层以前只有一句
+    「工具 X 执行失败」，模型分不清该重试还是该换路。`web/schemas.py` 的状态判定就吃
+    这两个前缀，所以它们是**对外契约**，不是措辞偏好。
+    """
+
+    def boom(args, **kwargs):
+        raise ValueError("磁盘满了")
+
+    # 程序 / 环境错误
+    chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
+    messages = [{"role": "user", "content": "读"}]
+    agent_loop(messages, config=CONFIG, chat=chat, registry={"read_file": boom})
+    assert messages[2]["content"].startswith("工具执行失败：read_file（磁盘满了）")
+    assert "不要用同样的参数重复调用" in messages[2]["content"]
+
+    # 业务拒绝：工具自己回的「错误：…」原样透传，不被套上新前缀
+    chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
+    messages = [{"role": "user", "content": "读"}]
+    agent_loop(
+        messages,
+        config=CONFIG,
+        chat=chat,
+        registry={"read_file": lambda args, **kwargs: "错误：文件不存在"},
+    )
+    assert messages[2]["content"] == "错误：文件不存在"
+
+
 def test_invalid_json_arguments_are_reported():
     chat = FakeChat(make_turn("", [tool_call("read_file", "{不是 json")]), make_turn("好的"))
     messages = [{"role": "user", "content": "读"}]
 
     agent_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a: "x"})
 
+    assert messages[2]["content"].startswith("参数错误：")
     assert "不是合法 JSON" in messages[2]["content"]
 
 

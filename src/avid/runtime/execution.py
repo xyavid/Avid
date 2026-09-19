@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..tools import ToolImpl, workspace
-from ..tools.validate import validate_arguments
+from ..tools.validate import bad_arguments, validate_arguments
 from . import events
 from .hooks import BLOCK, brief
 from .state import RunState
@@ -89,10 +89,10 @@ def execute_one(
     try:
         arguments = json.loads(raw_arguments)
     except json.JSONDecodeError as exc:
-        return f"参数不是合法 JSON：{exc}"
+        return bad_arguments(f"参数不是合法 JSON（{exc}）")
 
     if not isinstance(arguments, dict):
-        return "错误：参数必须是 JSON 对象"
+        return bad_arguments("参数必须是 JSON 对象")
 
     impl = registry.get(name)
     if impl is None:
@@ -148,7 +148,10 @@ def execute_one(
         else:
             content = _as_text(impl(arguments))
     except Exception as exc:  # 工具失败回传模型，循环不中断
-        content = f"工具 {name} 执行失败：{exc}"
+        content = (
+            f"工具执行失败：{name}（{exc}）；"
+            "不要用同样的参数重复调用，先检查参数与环境。"
+        )
 
     after: dict[str, Any] = {
         "tool": name,

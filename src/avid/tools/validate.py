@@ -50,8 +50,18 @@ def _type_name(value: Any) -> str:
     return type(value).__name__
 
 
+def bad_arguments(problem: str) -> str:
+    """参数类失败的统一样式。
+
+    模型要能一眼把「参数写错了」与「工具/环境出问题」（``工具执行失败：…``）和
+    「业务拒绝」（``错误：…``）分开——三种失败该做的事完全不同：改参数、换做法、
+    别重复提交。前缀与结尾提示是 ``web/schemas.py`` 判定工具状态的依据，样式只此一处。
+    """
+    return f"参数错误：{problem}；请按工具 schema 修正后重试。"
+
+
 def _bad(path: str, problem: str) -> str:
-    return f"参数错误：{path} {problem}；请按工具 schema 修正后重试。"
+    return bad_arguments(f"{path} {problem}" if path else problem)
 
 
 def _field(path: str, name: str) -> str:
