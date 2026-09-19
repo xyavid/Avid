@@ -16,7 +16,7 @@
 | 能力面 | 状态 | 入口 | 主要证据 |
 |---|---|---|---|
 | 多步 Agent 循环 | 已落地 | `agent_loop`、`avid --agent`、`POST /api/sessions/{id}/runs` | `src/avid/runtime/loop.py:102-295` |
-| 工具调用协议（14 个工具） | 已落地 | 模型自主调用 | `src/avid/tools/__init__.py:45-85` |
+| 工具调用协议（15 个工具） | 已落地 | 模型自主调用 | `src/avid/tools/__init__.py:45-92` |
 | 工具参数校验与失败分类 | 已落地 | 循环内自动 | `src/avid/tools/validate.py`、`src/avid/runtime/execution.py:70-188` |
 | 权限四层三态 + 审批账本 | 已落地 | `--permission`、Web 选择器、`POST /runs {permission}` | `src/avid/policy/permission.py:351-417` |
 | 工作区（干活地点 / 权限边界 / 会话归属） | 已落地 | `--workspace`、`avid workspace`、导航列 ＋、`POST /api/workspaces` | `src/avid/workspaces.py`、`src/avid/svc/picker.py` |
@@ -35,10 +35,10 @@
 
 ---
 
-## 2. 工具层（14 个）
+## 2. 工具层（15 个）
 
-注册表：`TOOLS`（`src/avid/tools/__init__.py:45-60`）与 `TOOL_IMPLS`（`:62-77`）名字一一对应，
-由 `tests/test_tools_contract.py` 钉住。子 agent 用 `SUB_TOOLS` / `SUB_HANDLERS`（`:80-85`）——
+注册表：`TOOLS`（`src/avid/tools/__init__.py:47-63`）与 `TOOL_IMPLS`（`:65-82`）名字一一对应，
+由 `tests/test_tools_contract.py` 钉住。子 agent 用 `SUB_TOOLS` / `SUB_HANDLERS`（`:84-89`）——
 **结构上去掉 `subagent` 自己**，因此不可能递归派发。
 
 | 工具 | 参数（**加粗=必填**） | 边界与语义要点 | 实现 |
@@ -57,11 +57,13 @@
 | `get_task` | **task_id** | 读完整 JSON（含 description 与 blockedBy） | 同上 |
 | `subagent` | **tasks**（`[{description, prompt}]`） | 并行执行互不依赖的子任务；**一次最多 4 个**；单子任务最多 30 轮、300s 超时；子 agent 看不到父对话，prompt 必须自包含 | `src/avid/tools/subagent.py` |
 | `load_skill` | **name** | 读取技能全文；名字必须与系统提示里的技能目录一致 | `src/avid/tools/skill.py` |
+| `web_search` | **query**；max_results | 检索公开网页，返回「标题 / 链接 / 摘要」清单（默认 5 条，上限 20）；**只在模型判断需要联网时调用**；Tavily 凭据来自 `TAVILY_API_KEY`（缺 Key → 回 `错误：` 并给出设置方法，不抛异常）；失败/空结果各给各的下一步；摘要按 800 字符截断 | `src/avid/tools/web_search.py`、`src/avid/tools/search_config.py` |
 
 **执行协议**（`src/avid/runtime/execution.py`）：参数不是合法 JSON / 不是对象 / 工具未知 /
 不符合 schema → **回文本、不抛异常、不触发事件、不计入 `tool_calls`**；实现抛异常 → 回
-`工具执行失败：…`；业务拒绝原样透传。所有 14 个工具都以 `state=` 调用（`STATEFUL_TOOLS`，
-`:38-55`，由契约测试与真实签名比对）。
+`工具执行失败：…`；业务拒绝原样透传。需要运行状态的 14 个工具以 `state=` 调用（`STATEFUL_TOOLS`，
+`:38-55`，由契约测试与真实签名比对）；`web_search` 是**无状态**工具，HTTP client 由调用点
+显式传入（正常运行不传、测试注入 `httpx.MockTransport`）。
 
 ---
 
@@ -243,6 +245,9 @@ key 查而不当作文件路径，未命中返回可用清单（`skills.py:108-1
   **token 用量不落盘**，也没有成本台账（`src/avid/session/types.py:149` 自述该取舍）。
 - **错误**：4xx/5xx 一律 `LLMError` 上抛终止运行；上下文超限是唯一会重试的错误（兜底压缩 +
   重试一次）。
+- **联网检索的凭据是独立的**：`web_search` 用 `TAVILY_API_KEY`（可选，另有 `TAVILY_BASE_URL`），
+  由 `src/avid/tools/search_config.py` 在**调用时**读环境变量。它不进 `Config`、不参与
+  `load_config()` 的必填校验——没配它只让 `web_search` 失败关闭，模型调用、会话、Web 服务不受影响。
 
 ---
 
@@ -333,7 +338,7 @@ durable、事件总数上限 4096、终态记录保留 600s 或最多 200 个 ru
 | 入口 | 用法 | 说明 |
 |---|---|---|
 | 提问 | `avid "问题"` | 单轮问答；stdout 只放回复，stderr 放 trace 与 token 用量 |
-| Agent | `avid --agent "…"` | 走循环，模型可调用 14 个工具；help 里的工具清单从 `TOOLS` 派生 |
+| Agent | `avid --agent "…"` | 走循环，模型可调用 15 个工具；help 里的工具清单从 `TOOLS` 派生 |
 | 审批 | `--yes` | 跳过审批（**硬拒绝仍然生效**）；非交互场景需显式指定 |
 | 权限 | `--permission {strict,workspace,system}` | 缺省按「工作区默认权限」，没设过就是 `strict` |
 | 工作区 | `--workspace PATH\|ID` | 缺省当前目录（会打印解析结果） |

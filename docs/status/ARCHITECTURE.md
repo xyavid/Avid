@@ -40,7 +40,7 @@
 | 策略 | `policy/*` | 阈值、规则与文案（高频变化集中地） | 无（纯函数 + 常量） | ai、tools（延迟） |
 | 协议 | `ai/*` | OpenAI 兼容协议、`Config`、`Transcript` | messages 的内存权威 | 无 |
 | 会话 | `session/` | 条目树 / 值 / 分支 / 变更线 / 两后端 / 投影 | **磁盘上的会话真相**（JSONL） | 无（零 avid 内部依赖） |
-| 能力 | `tools/*` | 14 个工具的 schema 与实现 | 无（写文件系统与进程） | policy.todo、ai（`subagent`） |
+| 能力 | `tools/*` | 15 个工具的 schema 与实现 | 无（写文件系统、进程与外部检索 API） | policy.todo、ai（`subagent`） |
 | 顶层 | `workspaces.py` | 用户级工作区注册表（**索引，非权威**） | `~/.avid/workspaces.json` | 无 |
 | 前端 | `web/`（仓库根，源码在 `web/src/`） | 全部浏览器代码 | 界面域状态（localStorage） | `web/src/api/`（唯一网络出口） |
 | 评测仪器 | `benchmarks/`（仓库根，**不进 wheel**） | AvidBench：case 加载、工作区物化、变体装配、判定器、报表与轨迹落盘 | 只读 case / fixture 与 `runs/` 结果（本地，不入库） | `avid` 的**任意层**——它是叶子消费者，只经既有注入点驱动内核（A14）；产品代码反向不许依赖它 |
