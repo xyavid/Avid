@@ -1,5 +1,5 @@
 import { Badge } from '../../../ui/primitives'
-import { Tape } from '../../../ui/sketch'
+import { GlassTag } from '../../../ui/glass'
 import { useTranslation } from '../../../lib/i18n'
 import type { RunPhase } from '../../../events/reducer'
 
@@ -44,18 +44,18 @@ export function ConversationHeader(props: ConversationHeaderProps) {
       <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           <div className="flex min-w-0 items-center gap-2">
-            <h1 className="truncate font-display text-xl">
+            <h1 className="truncate text-xl font-semibold">
               {props.sessionName ?? t('sessions.unnamed')}
             </h1>
             <Badge tone={phaseTone(props.phase)}>{t(`chat.status.${props.phase}`)}</Badge>
-            <span className="shrink-0 font-mono text-[11px] text-ink/70">
+            <span className="shrink-0 font-mono text-[11px] text-ink-muted">
               {t('chat.round', { round: props.round })} ·{' '}
               {t('chat.tokens', { tokens: props.tokens })}
             </span>
           </div>
 
           {props.workspaceName ? (
-            <p className="truncate font-display text-[11px] text-ink/70">
+            <p className="truncate text-[11px] text-ink-muted">
               {t('chat.workspace', { name: props.workspaceName })}
             </p>
           ) : null}
@@ -63,12 +63,12 @@ export function ConversationHeader(props: ConversationHeaderProps) {
         </div>
 
         <div className="flex shrink-0 flex-col items-end gap-1">
-          <Tape
+          <GlassTag
             label={t('chat.sessionLabel')}
             value={props.sessionId}
             emptyText={t('chat.noRun')}
           />
-          <Tape label={t('chat.runLabel')} value={props.runId} emptyText={t('chat.noRun')} />
+          <GlassTag label={t('chat.runLabel')} value={props.runId} emptyText={t('chat.noRun')} />
         </div>
       </div>
     </header>

@@ -1,19 +1,21 @@
 import { expect, test } from '@playwright/test'
 import type { Locator, Page } from '@playwright/test'
 
+import { lifts, rgba, token } from './helpers'
+
 /**
- * 消息卡片回归：模型回复与用户消息是**同一族对话框**（墨框 + 手绘形状 + `--sticker-4`
- * 硬阴影），差别只在方向与角色标记；模型卡片带一枚手绘小标记（装饰性，不进无障碍树）；
- * 形状按条目序号轮换、相邻卡片不同形；只声明工具调用的空回合不占卡片（工具卡承担）。
+ * 消息卡片回归：模型回复与用户消息是**同一族玻璃卡**（同高光边 + 同圆角 + 同投影），
+ * 差别只在方向与角色标记；两枚角色标记是 lucide 图标（`Bot` / `User`，装饰性、不进
+ * 无障碍树）；新语言里卡片**不再轮换形状**（旧的手绘三形随涂鸦机制删除）；
+ * 只声明工具调用的空回合不占卡片（工具卡承担）。
+ *
+ * 视觉断言从 `:root` 的 token 拼期望值，不钉字面量（阶段 23b 的改造）。
  *
  * 需要 AVID_E2E=1 且内核已起（脚本模型即可）。
  */
 test.skip(!process.env.AVID_E2E, '需要 AVID_E2E=1 且内核已启动')
 
 const BASE = process.env.AVID_BASE_URL ?? 'http://127.0.0.1:8765'
-const INK_BORDER = '4px'
-const STICKER_4 = '4px 4px 0px 0px'
-const CARD_BG = 'rgb(255, 255, 255)'
 
 interface CardStyle {
   borderWidth: string
@@ -86,7 +88,9 @@ async function expandAll(page: Page): Promise<void> {
   }
 }
 
-test('模型回复与用户消息是同一族对话框（同墨框、同硬阴影、方向相反）', async ({ page }) => {
+test('模型回复与用户消息是同一族玻璃卡（同高光边、同圆角、同投影，方向相反）', async ({
+  page,
+}) => {
   await openSession(page)
 
   const user = userCards(page).first()
@@ -97,19 +101,24 @@ test('模型回复与用户消息是同一族对话框（同墨框、同硬阴�
   const userStyle = await styleOf(user)
   const modelStyle = await styleOf(model)
 
+  const edge = rgba(await token(page, '--avid-edge-rgb'), await token(page, '--glass-edge-alpha'))
+  const face = rgba(await token(page, '--avid-glass-rgb'), await token(page, '--glass-alpha'))
   for (const style of [userStyle, modelStyle]) {
-    expect(style.borderWidth, '墨框 4px（--stroke-bold）').toBe(INK_BORDER)
-    expect(style.borderColor, '边框用墨色 token').toBe('rgb(26, 26, 26)')
-    expect(style.backgroundColor, '底色用纸卡 token').toBe(CARD_BG)
-    expect(style.boxShadow, '高度取 --sticker-4 档').toContain(STICKER_4)
+    expect(style.borderWidth, '高光边宽度 = --stroke-hair').toBe(await token(page, '--stroke-hair'))
+    expect(style.borderColor, '高光边用 --avid-edge-rgb').toBe(edge)
+    expect(style.borderRadius, '圆角 = --r-card').toBe(await token(page, '--r-card'))
+    expect(style.backgroundColor, '玻璃面用 --avid-glass-rgb').toBe(face)
+    expect(lifts(style.boxShadow), '高度档已在（投影）').toBeGreaterThan(0)
   }
+  expect(userStyle.borderRadius, '同族：圆角一致').toBe(modelStyle.borderRadius)
+  expect(userStyle.boxShadow, '同族：高度档一致').toBe(modelStyle.boxShadow)
 
   // 方向：用户靠右（ml-auto），模型靠左（mr-auto）
   expect(userStyle.marginLeft, '用户消息靠右').not.toBe('0px')
   expect(modelStyle.marginRight, '模型回复靠左').not.toBe('0px')
 })
 
-test('模型卡片带手绘小标记，且它是装饰性的', async ({ page }) => {
+test('模型卡片带 Bot 图标，且它是装饰性的', async ({ page }) => {
   await openSession(page)
   const model = assistantCards(page).first()
   await expect(model).toBeVisible()
@@ -118,18 +127,18 @@ test('模型卡片带手绘小标记，且它是装饰性的', async ({ page }) 
   await expect(mark).toHaveCount(1)
   expect(await mark.getAttribute('aria-hidden'), '装饰不进无障碍树').toBe('true')
 
-  // 标记用 currentColor（父级 text-ink）→ 换主题跟着走；笔画粗、非缩放描边
-  const stroke = await mark.locator('path').first().evaluate((path) => ({
-    stroke: path.getAttribute('stroke'),
-    width: path.getAttribute('stroke-width'),
-    effect: path.getAttribute('vector-effect'),
+  // 图标用 currentColor（父级给 text-ink）→ 换主题跟着走；细笔画是新的图标语言。
+  const stroke = await mark.evaluate((svg) => ({
+    stroke: svg.getAttribute('stroke'),
+    width: svg.getAttribute('stroke-width'),
+    cls: svg.getAttribute('class') ?? '',
   }))
   expect(stroke.stroke, '颜色来自 currentColor 而不是写死').toBe('currentColor')
-  expect(stroke.width, '粗笔画（涂鸦感）').toBe('4.5')
-  expect(stroke.effect, '描边不随缩放变细').toBe('non-scaling-stroke')
+  expect(stroke.width, '细笔画（图标语言）').toBe('1.75')
+  expect(stroke.cls, '用 lucide 图标集，不自己画一套').toContain('lucide')
 })
 
-test('用户卡片也带手绘标记，且与模型卡片的标记不同形', async ({ page }) => {
+test('用户卡片带 User 图标，与模型卡片的图标不同形', async ({ page }) => {
   await openSession(page)
   const user = userCards(page).first()
   const model = assistantCards(page).first()
@@ -144,18 +153,17 @@ test('用户卡片也带手绘标记，且与模型卡片的标记不同形', as
     locator.locator('path').evaluateAll((paths) => paths.map((path) => path.getAttribute('d')))
   const userPaths = await pathsOf(userMark)
   const modelPaths = await pathsOf(model.locator('svg'))
-  expect(userPaths.length, '用户标记是两条笔画').toBe(2)
-  expect(userPaths, '两枚标记必须不同形，否则等于没标作者').not.toEqual(modelPaths)
+  expect(userPaths, '两枚图标必须不同，否则等于没标作者').not.toEqual(modelPaths)
 
-  // 形状不同，但笔触语言必须一致（同一套涂鸦契约，不是两套风格）
-  const stroke = await userMark.locator('path').first().evaluate((path) => ({
-    stroke: path.getAttribute('stroke'),
-    width: path.getAttribute('stroke-width'),
-    effect: path.getAttribute('vector-effect'),
+  // 不同图标，但笔触语言一致（同一套图标契约：细笔画 + currentColor）
+  const stroke = await userMark.evaluate((svg) => ({
+    stroke: svg.getAttribute('stroke'),
+    width: svg.getAttribute('stroke-width'),
+    cls: svg.getAttribute('class') ?? '',
   }))
   expect(stroke.stroke, '颜色来自 currentColor').toBe('currentColor')
-  expect(stroke.width, '粗笔画（涂鸦感）').toBe('4.5')
-  expect(stroke.effect, '描边不随缩放变细').toBe('non-scaling-stroke')
+  expect(stroke.width, '细笔画（与模型那一枚同一档）').toBe('1.75')
+  expect(stroke.cls, '同一个图标集').toContain('lucide-user')
 
   // 角色名仍由文字承担：图标 aria-hidden，所以读屏器只念一次「用户」
   await expect(user.getByText('用户', { exact: true })).toBeVisible()
@@ -169,23 +177,21 @@ test('角色名与图标同在一行，accessible name 由文字承担', async (
   await expect(model.locator('[aria-hidden="true"] svg, svg[aria-hidden="true"]')).toHaveCount(1)
 })
 
-test('形状按条目轮换：相邻消息卡片不同形', async ({ page }) => {
+test('消息卡片同形：新语言不再轮换形状', async ({ page }) => {
   await openSession(page)
   const cards = page.getByRole('log').locator('article.surface-card')
-  // 消息卡片才是轮换对象：这里包含用户卡与模型卡（同级卡片）
   const count = await cards.count()
-  expect(count, '至少要有两张消息卡片才能测轮换').toBeGreaterThan(1)
+  expect(count, '至少要有两张消息卡片').toBeGreaterThan(1)
 
+  // 旧语言按条目序号在三种手绘圆角之间轮换（相邻不同形）。新语言删掉了这个机制：
+  // 作者靠方向与图标区分，形状是同一档 —— 这条断言守的就是"不再轮换"，
+  // 它会抓住任何"顺手加回一点随机形状"的改动。
   const radii: string[] = []
   for (let index = 0; index < Math.min(count, 6); index += 1) {
     radii.push((await styleOf(cards.nth(index))).borderRadius)
   }
-  for (let index = 1; index < radii.length; index += 1) {
-    expect(radii[index], `第 ${index} 张与上一张形状相同（禁止连续同形）`).not.toBe(
-      radii[index - 1],
-    )
-  }
-  expect(new Set(radii).size, '形状确实在三种之间轮换').toBeGreaterThan(1)
+  expect(radii, '所有消息卡片同形').toEqual(radii.map(() => radii[0]))
+  expect(radii[0], '形状 = --r-card').toBe(await token(page, '--r-card'))
 })
 
 test('只声明工具调用的空回合不再占卡片，工具调用由工具卡承担', async ({ page }) => {

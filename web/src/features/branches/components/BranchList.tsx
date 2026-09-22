@@ -18,7 +18,7 @@ export function BranchList({ branches, current, onSelect }: BranchListProps) {
   const { t } = useTranslation()
 
   if (branches.length === 0) {
-    return <p className="text-xs text-ink/70">{t('branches.empty')}</p>
+    return <p className="text-xs text-ink-muted">{t('branches.empty')}</p>
   }
 
   return (
@@ -32,8 +32,8 @@ export function BranchList({ branches, current, onSelect }: BranchListProps) {
             aria-current={branch.name === current ? 'true' : undefined}
             onClick={() => onSelect(branch.name)}
           >
-            <span className="font-display">{branch.name}</span>
-            <span className="ml-auto text-[10px] text-ink/70">
+            <span className="">{branch.name}</span>
+            <span className="ml-auto text-[10px] text-ink-muted">
               {t('branches.entryCount', { count: branch.entry_count })}
             </span>
           </Button>

@@ -73,8 +73,8 @@ export function WorkspaceFolder({
         >
           <span aria-hidden="true">{expanded ? '▾' : '▸'}</span>
           <span aria-hidden="true">📁</span>
-          <span className="truncate font-display text-sm">{label}</span>
-          <span className="ml-auto shrink-0 font-mono text-[10px] text-ink/70">
+          <span className="truncate text-sm">{label}</span>
+          <span className="ml-auto shrink-0 font-mono text-[10px] text-ink-muted">
             {sessions.length}
           </span>
         </Button>

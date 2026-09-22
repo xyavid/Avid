@@ -49,7 +49,7 @@ describe('groupTimeline：空回合不占卡片，但工具卡留在原位', () 
     expect(blocks.map((block) => block.id)).toEqual(['user', 'tool:call-1', 'answer'])
   })
 
-  it('连续多个空回合不会让相邻可见卡片拿到同一个形状', () => {
+  it('连续多个空回合不打断可见卡片的顺序（空回合自身不占位）', () => {
     const blocks = groupTimeline(
       [
         entry({ id: 'user', kind: 'user', text: '问题' }),
@@ -60,8 +60,8 @@ describe('groupTimeline：空回合不占卡片，但工具卡留在原位', () 
       [],
     )
 
-    // 形状序号只对真正渲染出来的卡片递增：0、1 相邻，shapeFor 一定给出不同形状。
-    expect(blocks.map((block) => (block.kind === 'entry' ? block.shapeIndex : -1))).toEqual([0, 1])
+    // 空回合既不占卡也不插空位：可见卡片就是 ['user', 'answer']，中间不留缝。
+    expect(blocks.map((block) => block.id)).toEqual(['user', 'answer'])
   })
 
   it('有正文的 assistant 回合照旧占一张卡', () => {

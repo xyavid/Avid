@@ -57,7 +57,7 @@ export function PermissionSelector({
       </Select>
       <p
         id={HINT_ID}
-        className="mt-1 text-xs text-ink/70 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+        className="mt-1 text-xs text-ink-muted opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
       >
         {t(`permission.hint.${value}`)}
       </p>

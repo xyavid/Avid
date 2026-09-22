@@ -19,7 +19,8 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "gate:size": "node scripts/gate-size.mjs",
-    "verify": "pnpm run check:layers && pnpm run check:tokens && pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run gate:size"
+    "verify": "pnpm run check:layers && pnpm run check:tokens && pnpm run lint && pnpm run check:contrast && pnpm run typecheck && pnpm run test && pnpm run gate:size",
+    "check:contrast": "node scripts/check-contrast.mjs"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.2",

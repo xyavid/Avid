@@ -76,3 +76,62 @@ export async function newSessionIn(
   expect(settled.status(), `建会话失败：${await settled.text()}`).toBe(201)
   return ((await settled.json()) as { id: string }).id
 }
+
+// ---------------------------------------------------------------- 视觉断言辅助
+
+/**
+ * 读一个 token 的解析值。视觉断言一律走它拼期望值，**不写字面量**——
+ * 阶段 23b 的教训：33 条钉死取值的 expect 会让「换视觉语言」必须改测试，
+ * 于是测试反而不守任何东西了（它守的是"值没变"，而不是"机制还在"）。
+ */
+export async function token(page: Page, name: string): Promise<string> {
+  return page.evaluate(
+    (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim(),
+    name,
+  )
+}
+
+/** `201 123 63` + `70%` → 计算值里的写法 `rgba(201, 123, 63, 0.7)`。 */
+export function rgba(triplet: string, percent: string): string {
+  const [r, g, b] = triplet.split(/\s+/)
+  return `rgba(${r}, ${g}, ${b}, ${Number.parseFloat(percent) / 100})`
+}
+
+/**
+ * 拆开 box-shadow 的顶层逗号。颜色里也有逗号，**不能按逗号直接切**。
+ * 返回顶层每一条；含 `inset` 的是玻璃高光带，其余是投影。
+ */
+export function shadows(boxShadow: string): string[] {
+  if (boxShadow === 'none' || boxShadow === '') return []
+  const parts: string[] = []
+  let depth = 0
+  let current = ''
+  for (const char of boxShadow) {
+    if (char === '(') depth += 1
+    if (char === ')') depth -= 1
+    if (char === ',' && depth === 0) {
+      parts.push(current.trim())
+      current = ''
+    } else {
+      current += char
+    }
+  }
+  if (current.trim()) parts.push(current.trim())
+  return parts
+}
+
+/**
+ * 投影条数：高度由投影承担，高光带不算。
+ *
+ * 判 `inset` 用 includes 而不是 startsWith —— Chromium 把 `inset` 序列化在**每条阴影的
+ * 末尾**（`rgba(...) 0px 1.5px 0px 0px inset`），按开头判会把高光带数成投影。
+ */
+export function lifts(boxShadow: string): number {
+  return shadows(boxShadow).filter((part) => !part.includes('inset')).length
+}
+
+/** 亮度滤镜的系数；没有滤镜时给 1。 */
+export function brightness(filter: string): number {
+  const match = /brightness\(([\d.]+)\)/.exec(filter)
+  return match ? Number(match[1]) : 1
+}

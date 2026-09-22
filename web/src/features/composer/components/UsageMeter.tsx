@@ -24,7 +24,7 @@ const PART_BAR: Record<UsagePart['key'], string> = {
 }
 
 const TONE_TEXT: Record<UsageTone, string> = {
-  neutral: 'text-ink/70',
+  neutral: 'text-ink-muted',
   warn: 'text-warn',
   danger: 'text-danger',
 }
@@ -75,7 +75,7 @@ export function UsageMeter({ sessionId, branch }: UsageMeterProps) {
     return (
       <span
         data-testid="usage-meter"
-        className="whitespace-nowrap font-mono text-[11px] text-ink/50"
+        className="whitespace-nowrap font-mono text-[11px] text-ink-muted"
       >
         {t('usage.meter.empty')}
       </span>
@@ -99,7 +99,7 @@ export function UsageMeter({ sessionId, branch }: UsageMeterProps) {
         className="flex cursor-help items-center gap-2 whitespace-nowrap font-mono text-[11px]"
       >
         {utilization === null ? (
-          <span className="text-ink/60">
+          <span className="text-ink-muted">
             {t('usage.meter.contextTokens', {
               tokens: formatTokens(usage.context.tokens),
             })}
@@ -111,7 +111,7 @@ export function UsageMeter({ sessionId, branch }: UsageMeterProps) {
                 percent: formatPercent(utilization),
               })}
             </span>
-            <span className="block h-1.5 w-16 overflow-hidden rounded-full border-hair border-ink/40 bg-sand">
+            <span className="block h-1.5 w-16 overflow-hidden rounded-full border-hair border-ink/20 bg-sand">
               <span
                 className={clsx('block h-full', TONE_BAR[tone])}
                 style={{ width: `${barPercent(utilization)}%` }}
@@ -119,13 +119,13 @@ export function UsageMeter({ sessionId, branch }: UsageMeterProps) {
             </span>
           </>
         )}
-        <span className="text-ink/40">·</span>
-        <span className="text-ink/60">{cache}</span>
+        <span className="text-ink-muted">·</span>
+        <span className="text-ink-muted">{cache}</span>
         {usage.context.window === null ? (
           <>
-            <span className="text-ink/40">·</span>
+            <span className="text-ink-muted">·</span>
             {/* 没有分母时把原因写在脸上：不然这一行看起来像"功能坏了"。 */}
-            <span className="text-ink/50">{t('usage.meter.windowUnknown')}</span>
+            <span className="text-ink-muted">{t('usage.meter.windowUnknown')}</span>
           </>
         ) : null}
       </span>
@@ -155,7 +155,7 @@ export function UsageDetail({ usage }: { usage: UsageReport }) {
             ? t('usage.detail.noWindow')
             : t('usage.detail.used', { percent: formatPercent(utilization) })}
         </span>
-        <span className="font-mono text-ink/70">
+        <span className="font-mono text-ink-muted">
           {formatTokens(usage.context.tokens)}
           {window === null ? '' : ` / ${formatTokens(window)}`}
         </span>
@@ -163,7 +163,7 @@ export function UsageDetail({ usage }: { usage: UsageReport }) {
 
       {parts.length > 0 ? (
         <>
-          <span className="flex h-1.5 overflow-hidden rounded-full border-hair border-ink/40 bg-sand">
+          <span className="flex h-1.5 overflow-hidden rounded-full border-hair border-ink/20 bg-sand">
             {parts.map((part) => (
               <span
                 key={part.key}
@@ -178,19 +178,19 @@ export function UsageDetail({ usage }: { usage: UsageReport }) {
                 <span
                   className={clsx('block h-2 w-2 shrink-0 rounded-chip', PART_BAR[part.key])}
                 />
-                <span className="flex-1 font-display">{t(PART_LABEL[part.key])}</span>
-                <span className="font-mono text-ink/70">
+                <span className="flex-1 ">{t(PART_LABEL[part.key])}</span>
+                <span className="font-mono text-ink-muted">
                   {`~${formatTokens(part.tokens)}`}
                 </span>
               </li>
             ))}
           </ul>
-          <p className="text-ink/50">{t('usage.detail.estimated')}</p>
+          <p className="text-ink-muted">{t('usage.detail.estimated')}</p>
         </>
       ) : null}
 
       {window === null ? (
-        <p className="text-ink/50">{t('usage.detail.windowUnknown')}</p>
+        <p className="text-ink-muted">{t('usage.detail.windowUnknown')}</p>
       ) : null}
 
       <ul className="flex flex-col gap-1">
@@ -233,8 +233,8 @@ export function UsageDetail({ usage }: { usage: UsageReport }) {
 function DetailRow({ label, value }: { label: string; value: ReactNode }) {
   return (
     <li className="flex items-center justify-between gap-2">
-      <span className="font-display text-ink/70">{label}</span>
-      <span className="font-mono text-ink/70">{value}</span>
+      <span className="text-ink-muted">{label}</span>
+      <span className="font-mono text-ink-muted">{value}</span>
     </li>
   )
 }

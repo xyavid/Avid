@@ -61,13 +61,13 @@ export function Timeline({
 
         {blocks.length === 0 ? (
           <div className="empty-note mx-auto mt-8 max-w-md">
-            <p className="font-display text-base">{t('chat.empty.title')}</p>
+            <p className="text-base">{t('chat.empty.title')}</p>
             <p className="mt-1 text-xs">{t('chat.empty.hint')}</p>
           </div>
         ) : null}
 
         {loading && blocks.length === 0 ? (
-          <p className="text-center text-sm text-ink/70">{t('common.loading')}</p>
+          <p className="text-center text-sm text-ink-muted">{t('common.loading')}</p>
         ) : null}
 
         <div className="flex flex-col gap-3">
@@ -76,7 +76,6 @@ export function Timeline({
               <EntryRow
                 key={block.id}
                 entry={block.entry}
-                shapeIndex={block.shapeIndex}
                 density={density}
                 onCopy={onCopy}
                 onFork={onFork}

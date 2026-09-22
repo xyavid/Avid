@@ -3,7 +3,7 @@ import type { TimelineEntry, ToolRun } from '../../../lib/timeline'
 import { EVENT_GROUP_MIN_SIZE } from '../../../ui/patterns'
 
 export type TimelineBlock =
-  | { kind: 'entry'; id: string; entry: TimelineEntry; shapeIndex: number }
+  | { kind: 'entry'; id: string; entry: TimelineEntry }
   | { kind: 'tool'; id: string; run: ToolRun; content: string }
   | { kind: 'group'; id: string; runs: ToolRun[]; contents: Record<string, string> }
 
@@ -29,8 +29,6 @@ export function groupTimeline(
   const byId = new Map(tools.map((run) => [run.toolCallId, run]))
   const placed = new Set<string>()
   const blocks: TimelineBlock[] = []
-  // 形状轮换按**全部**条目计数（不是可见窗口），所以「加载更早」不会让已渲染的卡片换形。
-  let entryOrdinal = 0
 
   for (const entry of entries) {
     if (entry.kind === 'tool') continue
@@ -39,12 +37,7 @@ export function groupTimeline(
     // 但它必须留在 entries 里——工具卡是挂到「声明它的那个条目」上的，条目一删，工具卡
     // 就会掉到时间线末尾（见文件末尾那条兜底）。
     const silent = entry.kind === 'assistant' && entry.text.trim() === ''
-    if (!silent) {
-      blocks.push({ kind: 'entry', id: entry.id, entry, shapeIndex: entryOrdinal })
-      // 形状计数只对**真正渲染出来的**卡片递增：跳过的条目若也占号，相邻两张可见
-      // 卡片可能拿到同一个形状（连续跳过两个就撞上了）。
-      entryOrdinal += 1
-    }
+    if (!silent) blocks.push({ kind: 'entry', id: entry.id, entry })
     const calls = entry.toolCalls ?? []
     const runs = calls
       .map((call) => byId.get(call.toolCallId))

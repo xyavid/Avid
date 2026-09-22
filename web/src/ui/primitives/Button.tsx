@@ -10,18 +10,18 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   loading?: boolean
 }
 
-// 高度只用 --sticker 档位表达；按压位移 = 本档偏移（.press-2，档位随之缩放）。
+// 三个变体都走 `.surface-chip`（玻璃面 + 高光边 + --lift-1 档投影）；悬停抬一档投影，
+// 按住收掉投影。高度层级由投影承担，所以这里不再需要「按压位移 = 阴影偏移」那套约定。
 //
-// 变体只有三种，**每一个都自带方框**：primary / secondary / danger 都走 `.surface-chip`
-// （墨线边 + --sketch-r-chip 圆角 + --sticker-2 档硬阴影），悬停时由 sketch.css 抬升一档，
-// 按住时阴影归零、位移等于当前档偏移。
+// primary 用**压深过**的强调色配近白字（`--avid-accent-deep-rgb` + `text-card`）：
+// 原来的 `bg-accent text-ink` 在玻璃底上只有 4.19:1，不达 AA（阶段 23b 实测）。
 //
 // 曾经有过一个 `ghost`（无框）变体，只给会话列表的标题用；实测下来标题同样该有框
 // （和它下面的「改名 / 删除」是同一排控件，没框时不像一族），于是变体删掉、调用点改用
 // secondary。删掉而不是留着备用：没有调用点的变体是不可验证的死代码。
 const VARIANTS: Record<ButtonVariant, string> = {
-  primary: 'bg-accent text-ink',
-  secondary: 'bg-card text-ink',
+  primary: 'bg-accent-deep text-card',
+  secondary: 'text-ink',
   danger: 'bg-danger-bg text-ink',
 }
 
@@ -48,7 +48,7 @@ export function Button({
       disabled={disabled || loading}
       aria-busy={loading || undefined}
       className={clsx(
-        'press press-2 inline-flex shrink-0 items-center justify-center gap-2 rounded-chip border-hair border-ink font-display leading-none',
+        'press inline-flex shrink-0 items-center justify-center gap-2 rounded-chip leading-none',
         'disabled:cursor-not-allowed disabled:opacity-50',
         VARIANTS[variant],
         SIZES[size],

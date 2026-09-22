@@ -167,6 +167,24 @@ for (const entry of exempt) {
   if (!entry.hit) console.error(`warn: budget.EXEMPT 里的「${entry.name}」没有匹配到任何块`)
 }
 
+// ---------- 样式表 ----------
+//
+// 这一段是阶段 23b 补的洞：此前门禁只量 JS / 字体 / 纹理，**完全不量 CSS**，而视觉语言
+// 的改动几乎全写在 CSS 里 —— 也就是说，整套「体积不许升」的护栏对 23b 要改的东西正好
+// 是瞎的。CSS 是首屏的阻塞资源，本来就该进预算。
+let cssRaw = 0
+let cssGzip = 0
+const cssFiles = []
+for (const file of distFiles) {
+  if (extname(file).toLowerCase() !== '.css') continue
+  cssFiles.push(relative(DIST, file).split('\\').join('/'))
+  cssRaw += statSync(file).size
+  cssGzip += gzipBytes(file)
+}
+if (cssGzip > budget.css_gzip_bytes) {
+  fail(`样式表合计 gzip ${fmt(cssGzip)} 超过 css_gzip_bytes ${fmt(budget.css_gzip_bytes)}`)
+}
+
 // ---------- 字体 ----------
 
 let fontRaw = 0
@@ -245,6 +263,7 @@ lines.push(
   `豁免块  ${exemptGzip > 0 ? `${exempt.length} 项，合计 raw ${fmt(exemptRaw)}  gzip ${fmt(exemptGzip)}` : '无'}  / 上限 exempt_gzip_bytes ${fmt(budget.exempt_gzip_bytes)}  ${ok(exemptGzip <= budget.exempt_gzip_bytes)}`,
 )
 lines.push(
+  `样式表（.css）  ${cssFiles.length} 个文件  raw ${fmt(cssRaw)}  gzip ${fmt(cssGzip)}  / 上限 css_gzip_bytes ${fmt(budget.css_gzip_bytes)}  ${ok(cssGzip <= budget.css_gzip_bytes)}`,
   `字体（.woff2）  ${fontCount} 个文件  raw ${fmt(fontRaw)}  gzip ${fmt(fontGzip)}  / 上限 font_bytes ${fmt(budget.font_bytes)}  ${ok(fontRaw <= budget.font_bytes)}`,
 )
 lines.push(

@@ -12,9 +12,9 @@ function TaskList({ tasks }: { tasks: Task[] }) {
   if (tasks.length === 0) return <p className="empty-note">{t('tasks.empty')}</p>
   return (
     <ul className="flex flex-col gap-3">
-      {tasks.map((task, index) => (
+      {tasks.map((task) => (
         <li key={task.id}>
-          <TaskCard task={task} index={index} />
+          <TaskCard task={task} />
         </li>
       ))}
     </ul>
@@ -25,7 +25,7 @@ function TaskError({ error, onRetry }: { error: unknown; onRetry: () => void }) 
   const { t } = useTranslation()
   return (
     <div className="empty-note flex flex-col items-center gap-2">
-      <p className="font-display text-danger">{t('errors.title')}</p>
+      <p className="text-danger">{t('errors.title')}</p>
       <p>{errorMessage(t, error)}</p>
       <Button size="sm" onClick={onRetry}>
         {t('common.retry')}
@@ -42,9 +42,9 @@ export function TaskBoard() {
   return (
     <section className="surface-panel flex flex-col gap-3 p-4">
       <header className="flex flex-col gap-1">
-        <h1 className="font-display text-lg">{t('tasks.title')}</h1>
-        <p className="text-xs text-ink/70">{t('tasks.readonly')}</p>
-        <p className="text-xs text-ink/70">{t('tasks.count', { count: tasks.length })}</p>
+        <h1 className="text-lg font-semibold">{t('tasks.title')}</h1>
+        <p className="text-xs text-ink-muted">{t('tasks.readonly')}</p>
+        <p className="text-xs text-ink-muted">{t('tasks.count', { count: tasks.length })}</p>
       </header>
       <TaskFilters counts={counts} />
       {pending ? (

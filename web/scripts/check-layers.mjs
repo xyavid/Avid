@@ -225,7 +225,7 @@ for (const file of files) {
 
   // ---- 规则 6：L1 只接受 props —— `src/ui/**` 不得 import 上层 ----
   //
-  // frontend-architecture.md §3.4 声明 L1（ui/patterns、ui/primitives、ui/sketch）
+  // frontend-architecture.md §3.4 声明 L1（ui/patterns、ui/primitives、ui/glass）
   // "只接受 props；不得读 store、不得发请求"，patterns/README 也声明"反过来没有依赖，
   // 所以这一层可以脱离 store 单测"。只写声明不写检查，这条方向就会被类型 import
   // 悄悄违反（曾经 ui/patterns 就 import 了 events/reducer 与 state/uiStore）。

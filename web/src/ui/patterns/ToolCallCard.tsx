@@ -41,7 +41,7 @@ const TONE_CLASS: Record<AnsiTone, string> = {
 }
 const TONE_ROW: Record<Tone, string> = {
   ok: 'bg-ok-bg/30 text-ok', danger: 'bg-danger-bg/30 text-danger', dim: 'opacity-60',
-  head: 'font-display border-t-hair border-ink pt-1 opacity-80',
+  head: 'border-t-hair border-ink/20 pt-1 opacity-80',
 }
 const SIGN: Record<DiffLineKind, string> = { add: '+', del: '-', ctx: ' ', meta: '' }
 const DIFF_TONE: Record<DiffLineKind, Tone | undefined> = {
@@ -83,24 +83,24 @@ function Lines({ lines, density, summary, truncated, head }: {
   truncated?: boolean; head?: string
 }) {
   const { t } = useTranslation()
-  if (lines.length === 0) return <p className="text-xs text-ink/70">{t('tools.empty')}</p>
+  if (lines.length === 0) return <p className="text-xs text-ink-muted">{t('tools.empty')}</p>
   const rows = lines.map((line, index) => (
     <li key={index} className={clsx('whitespace-pre-wrap break-anywhere', line.tone && TONE_ROW[line.tone])}>
       {line.sign ? <span className="select-none opacity-60">{line.sign}</span> : null}
-      {line.labelKey ? <span className="font-display opacity-70">{t(line.labelKey)} </span> : null}
+      {line.labelKey ? <span className="opacity-70">{t(line.labelKey)} </span> : null}
       {line.ansi ? <AnsiText text={line.text} /> : line.textKey ? t(line.textKey) : line.text}
       {truncated && index === lines.length - 1 ? <span className="text-warn">{`\n── ${t('tools.status.truncated')} ──`}</span> : null}
     </li>
   ))
   return (
-    <div className="rounded-card border-hair border-ink">
+    <div className="rounded-card border-hair border-ink/15">
       {summary ? (
-        <p className="flex gap-2 border-b-hair border-ink px-2 py-1 text-xs">
+        <p className="flex gap-2 border-b-hair border-ink/20 px-2 py-1 text-xs">
           <span className="text-ok">{t('tools.diff.added', { count: summary.added })}</span>
           <span className="text-danger">{t('tools.diff.removed', { count: summary.removed })}</span>
         </p>
       ) : null}
-      {head ? <p className="px-2 pt-2 font-display text-xs">{head}</p> : null}
+      {head ? <p className="px-2 pt-2 text-xs">{head}</p> : null}
       <ol aria-label={summary ? t('tools.inspector.diff') : undefined}
         className={clsx('term scroll-area list-none overflow-x-auto rounded-card p-3 text-xs',
           density === 'compact' ? 'max-h-48' : 'max-h-96')}>
@@ -185,7 +185,7 @@ export const ToolCallCard = memo(function ToolCallCard({
     return (
       <div className="flex w-fit max-w-[250px] items-center gap-2">
         <Button size="sm" variant="secondary" className="max-w-[250px] gap-2 px-4 py-2" aria-expanded={false} onClick={() => setExpanded(true)}>
-          <span className="shrink-0 rounded-face bg-mark/40 px-1 font-display text-xs">{t('tools.call')}</span>
+          <span className="shrink-0 rounded-face bg-mark/40 px-1 text-xs">{t('tools.call')}</span>
           <span className="min-w-0 truncate font-mono text-xs">{run.tool}</span>
         </Button>
         {status}
@@ -193,12 +193,12 @@ export const ToolCallCard = memo(function ToolCallCard({
     )
   }
   return (
-    <section className={clsx('surface-card flex w-full flex-col gap-2 border-bold', density === 'compact' ? 'p-2' : 'p-4')}>
+    <section className={clsx('surface-card flex w-full flex-col gap-2', density === 'compact' ? 'p-2' : 'p-4')}>
       <div className="flex flex-wrap items-center gap-2">
         <span className="rounded-face bg-mark/40 px-2 py-0.5 font-mono text-xs">{t('tools.call')} {run.tool}</span>
         {status}
-        <span className="font-mono text-xs text-ink/70">{t('tools.duration', { ms: run.durationMs })}</span>
-        <span className="font-mono text-xs text-ink/70">{t('tools.chars', { chars: run.contentChars })}</span>
+        <span className="font-mono text-xs text-ink-muted">{t('tools.duration', { ms: run.durationMs })}</span>
+        <span className="font-mono text-xs text-ink-muted">{t('tools.chars', { chars: run.contentChars })}</span>
         {onInspect ? (
           <Button size="sm" variant="secondary" className="ml-auto" onClick={() => onInspect(run)}>
             {t('common.inspect')}

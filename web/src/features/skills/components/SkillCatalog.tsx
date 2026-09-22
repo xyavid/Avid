@@ -8,8 +8,8 @@ import type { Skill } from '../../../api/types'
 function SkillItem({ skill }: { skill: Skill }) {
   return (
     <li className="surface-chip flex flex-col gap-1 p-3">
-      <span className="font-display text-sm">{skill.name}</span>
-      <span className="truncate text-xs text-ink/70">{skill.description}</span>
+      <span className="text-sm">{skill.name}</span>
+      <span className="truncate text-xs text-ink-muted">{skill.description}</span>
     </li>
   )
 }
@@ -18,7 +18,7 @@ function SkillsError({ error, onRetry }: { error: unknown; onRetry: () => void }
   const { t } = useTranslation()
   return (
     <div className="empty-note flex flex-col items-center gap-2">
-      <p className="font-display text-danger">{t('errors.title')}</p>
+      <p className="text-danger">{t('errors.title')}</p>
       <p>{errorMessage(t, error)}</p>
       <Button size="sm" onClick={onRetry}>
         {t('common.retry')}
@@ -36,9 +36,9 @@ export function SkillCatalog() {
   return (
     <section className="surface-panel flex flex-col gap-3 p-4">
       <header className="flex flex-col gap-1">
-        <h1 className="font-display text-lg">{t('skills.title')}</h1>
-        <p className="text-xs text-ink/70">{t('skills.hint')}</p>
-        <p className="text-xs text-ink/70">{t('skills.count', { count: skills.length })}</p>
+        <h1 className="text-lg font-semibold">{t('skills.title')}</h1>
+        <p className="text-xs text-ink-muted">{t('skills.hint')}</p>
+        <p className="text-xs text-ink-muted">{t('skills.count', { count: skills.length })}</p>
       </header>
       {query.isPending ? (
         <p className="empty-note">{t('common.loading')}</p>

@@ -42,7 +42,7 @@ export function Inspector({ open, tab, density, selection, onTabChange, onClose 
       className="surface-panel flex h-[55vh] max-h-[85vh] min-h-[35vh] w-full resize-y flex-col gap-2 overflow-hidden p-3 lg:h-auto lg:max-h-none"
     >
       <header className="flex items-center gap-2">
-        <h3 className="truncate font-display text-sm">{selection?.title ?? t('common.none')}</h3>
+        <h3 className="truncate text-sm font-semibold">{selection?.title ?? t('common.none')}</h3>
         <Button size="sm" variant="secondary" className="ml-auto" onClick={onClose}>
           {t('common.close')}
         </Button>

@@ -27,7 +27,7 @@ export function SessionListHeader({
 
   return (
     <div className="flex items-center justify-between">
-      <h2 className="font-display text-lg">{t('sessions.workspacesTitle')}</h2>
+      <h2 className="text-lg font-semibold">{t('sessions.workspacesTitle')}</h2>
       <Button
         size="icon"
         variant="secondary"

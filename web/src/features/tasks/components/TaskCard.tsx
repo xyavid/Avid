@@ -1,8 +1,6 @@
-import { clsx } from 'clsx'
 import { useState } from 'react'
 
 import { Badge, Button } from '../../../ui/primitives'
-import { shapeFor } from '../../../ui/sketch'
 import { useTranslation } from '../../../lib/i18n'
 import type { BadgeTone } from '../../../ui/primitives'
 import type { Task } from '../../../api/types'
@@ -17,7 +15,7 @@ function DependencyList({ task }: { task: Task }) {
   const { t } = useTranslation()
   if (task.blockedBy.length === 0) return null
   return (
-    <ul className="flex flex-col gap-1 font-mono text-xs text-ink/70">
+    <ul className="flex flex-col gap-1 font-mono text-xs text-ink-muted">
       {task.blockedBy.map((id) => (
         <li key={id} className="break-anywhere">
           {task.dependency_titles[id] ?? t('tasks.dependencyMissing', { id })}
@@ -32,7 +30,7 @@ function TaskDetail({ task }: { task: Task }) {
   return (
     <div className="flex flex-col gap-2 px-3 pb-3">
       <div className="ink-rule" />
-      {task.description ? <p className="text-sm text-ink/70">{task.description}</p> : null}
+      {task.description ? <p className="text-sm text-ink-muted">{task.description}</p> : null}
       <DependencyList task={task} />
       <div className="flex flex-wrap items-center gap-2">
         {task.can_start ? <Badge tone="ok">{t('tasks.canStart')}</Badge> : null}
@@ -44,14 +42,13 @@ function TaskDetail({ task }: { task: Task }) {
 
 export interface TaskCardProps {
   task: Task
-  index: number
 }
 
-export function TaskCard({ task, index }: TaskCardProps) {
+export function TaskCard({ task }: TaskCardProps) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   return (
-    <article className={clsx('surface-card', shapeFor(index))}>
+    <article className="surface-card">
       <Button
         variant="secondary"
         size="sm"
@@ -60,9 +57,9 @@ export function TaskCard({ task, index }: TaskCardProps) {
         onClick={() => setOpen((value) => !value)}
       >
         <span className="flex flex-col items-start gap-1">
-          <span className="font-display text-sm">{task.subject}</span>
+          <span className="text-sm">{task.subject}</span>
           {task.owner ? (
-            <span className="flex items-center gap-1 font-mono text-xs text-ink/70">
+            <span className="flex items-center gap-1 font-mono text-xs text-ink-muted">
               <span>{t('tasks.owner')}</span>
               <span className="text-ink">{task.owner}</span>
             </span>

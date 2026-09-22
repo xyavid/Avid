@@ -24,8 +24,8 @@ export function ProcessingCard({ phaseLabel, round, tokens, activeTool }: Proces
         <Badge tone="info" pulse>
           {t('tools.processing')}
         </Badge>
-        <span className="font-display text-xs">{phaseLabel}</span>
-        <span className="font-mono text-[11px] text-ink/70">
+        <span className="text-xs">{phaseLabel}</span>
+        <span className="font-mono text-[11px] text-ink-muted">
           {t('chat.round', { round })} · {t('chat.tokens', { tokens })}
         </span>
         <Button

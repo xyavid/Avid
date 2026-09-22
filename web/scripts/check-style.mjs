@@ -3,7 +3,7 @@
  * A9 / C11 / C14 / C15 / C18 / C22 的样式与纪律门禁（`pnpm lint`）。
  *
  * 扫描 `src/**\/*.{ts,tsx}` 与 `src/**\/*.css`（规格的最低集是「.css 只扫
- * `src/ui/sketch.css`」；这里把全部 css 都扫上——否则 `src/layouts/*.css` 这类
+ * `src/ui/glass.css`」；这里把全部 css 都扫上——否则 `src/layouts/*.css` 这类
  * 文件里的颜色字面量与 `transition-all` 会漏网），命中任一规则即
  * `process.exitCode = 1`。`tokens.css` 是颜色与形状的唯一来源，规则 1 对它豁免：
  *   1. hex / `rgb(` / `hsl(` 字面量出现在 tokens.css 之外（`rgb(var(--…))` 引用不算）。
@@ -209,13 +209,13 @@ for (const file of files) {
 
   // ---- 规则 4：任意值与内联样式 ----
   each(/\bshadow-\[/g, code, (match) => {
-    report(file, lineAt(code, match.index), '阴影只能用 --sticker-* token，禁止 shadow-[…]')
+    report(file, lineAt(code, match.index), '阴影只能用 --lift-* token，禁止 shadow-[…]')
   })
   each(/\bz-\[/g, code, (match) => {
     report(file, lineAt(code, match.index), '层级只能用 --z-* token，禁止 z-[…]')
   })
   each(/\bborderRadius\s*[:=]/g, code, (match) => {
-    report(file, lineAt(code, match.index), '圆角只能用 --sketch-r* token，禁止内联 borderRadius')
+    report(file, lineAt(code, match.index), '圆角只能用 --r-* token，禁止内联 borderRadius')
   })
   each(/\bfontFamily\s*[:=]/g, code, (match) => {
     report(file, lineAt(code, match.index), '字体只能用 --font-* token，禁止内联 fontFamily')

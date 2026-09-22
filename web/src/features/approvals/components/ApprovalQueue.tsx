@@ -21,11 +21,11 @@ export function ApprovalQueue({ approvals, busy = false, onAnswer }: ApprovalQue
   return (
     <section className="flex flex-col gap-2" aria-label={t('approvals.title')}>
       <header className="flex items-center gap-2">
-        <h3 className="font-display text-sm">{t('approvals.title')}</h3>
+        <h3 className="text-sm font-semibold">{t('approvals.title')}</h3>
         <Badge tone={pending.length ? 'warn' : 'ok'} count={pending.length} pulse={pending.length > 0}>
           {pending.length ? t('approvals.pending', { count: pending.length }) : t('approvals.none')}
         </Badge>
-        <span className="ml-auto text-[11px] text-ink/70">{t('approvals.defaultDeny')}</span>
+        <span className="ml-auto text-[11px] text-ink-muted">{t('approvals.defaultDeny')}</span>
       </header>
 
       {pending.length === 0 && resolved.length === 0 ? (
@@ -43,7 +43,7 @@ export function ApprovalQueue({ approvals, busy = false, onAnswer }: ApprovalQue
 
       {resolved.length > 0 ? (
         <details className="text-xs">
-          <summary className="cursor-pointer font-display">
+          <summary className="cursor-pointer ">
             {t('approvals.answered.allow')} / {t('approvals.answered.deny')}（{resolved.length}）
           </summary>
           <ul className="mt-2 space-y-1">
@@ -55,7 +55,7 @@ export function ApprovalQueue({ approvals, busy = false, onAnswer }: ApprovalQue
                     : t('approvals.answered.deny')}
                 </Badge>
                 <span className="font-mono">{approval.tool}</span>
-                <span className="text-ink/70">{approval.resolvedReason}</span>
+                <span className="text-ink-muted">{approval.resolvedReason}</span>
               </li>
             ))}
           </ul>

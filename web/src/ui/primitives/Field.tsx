@@ -19,11 +19,11 @@ export interface FieldProps {
 export function Field({ label, hint, error, htmlFor, children }: FieldProps) {
   return (
     <div className="flex flex-col gap-1">
-      <label htmlFor={htmlFor} className="font-display text-xs text-ink/70">
+      <label htmlFor={htmlFor} className="text-xs text-ink-muted">
         {label}
       </label>
       {children}
-      {hint ? <p className="text-xs text-ink/70">{hint}</p> : null}
+      {hint ? <p className="text-xs text-ink-muted">{hint}</p> : null}
       {error ? (
         <p role="alert" className="text-xs text-danger">
           {error}
@@ -34,7 +34,7 @@ export function Field({ label, hint, error, htmlFor, children }: FieldProps) {
 }
 
 const CONTROL =
-  'min-h-control w-full rounded-chip border-hair border-ink bg-input px-3 py-2 text-sm text-ink'
+  'min-h-control w-full rounded-chip border-hair border-ink/15 bg-input/70 px-3 py-2 text-sm text-ink'
 
 /**
  * ``forwardRef`` 是为了"打开就能打字"这类焦点管理（导航列的搜索框用它）。
@@ -52,7 +52,7 @@ export function TextArea({ className, ...rest }: TextareaHTMLAttributes<HTMLText
 
 export function Select({ className, children, ...rest }: SelectHTMLAttributes<HTMLSelectElement>) {
   return (
-    <select {...rest} className={clsx(CONTROL, 'font-display', className)}>
+    <select {...rest} className={clsx(CONTROL, '', className)}>
       {children}
     </select>
   )

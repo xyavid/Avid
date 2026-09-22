@@ -14,7 +14,6 @@ import { cleanup, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const markdownCalls = vi.hoisted(() => ({ count: 0 }))
-const shapeCalls = vi.hoisted(() => ({ count: 0 }))
 
 vi.mock('../../../lib/markdown', () => ({
   Markdown: ({ text }: { text: string }) => {
@@ -22,17 +21,6 @@ vi.mock('../../../lib/markdown', () => ({
     return <span data-testid="md">{text}</span>
   },
 }))
-
-vi.mock('../../../ui/sketch', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../../ui/sketch')>()
-  return {
-    ...actual,
-    shapeFor: (index: number) => {
-      shapeCalls.count += 1
-      return actual.shapeFor(index)
-    },
-  }
-})
 
 import { EntryRow } from '../EntryRow'
 import type { EntryRowProps } from '../EntryRow'
@@ -49,7 +37,6 @@ const ENTRY: TimelineEntry = {
 function props(overrides: Partial<EntryRowProps> = {}): EntryRowProps {
   return {
     entry: ENTRY,
-    shapeIndex: 1,
     density: 'comfy',
     onCopy: () => undefined,
     onFork: () => undefined,
@@ -59,17 +46,15 @@ function props(overrides: Partial<EntryRowProps> = {}): EntryRowProps {
 
 beforeEach(() => {
   markdownCalls.count = 0
-  shapeCalls.count = 0
 })
 
 afterEach(cleanup)
 
 describe('EntryRow 的 memo', () => {
-  it('同一份 props 重渲染时组件体不再执行（markdown 与形状计算都不重算）', () => {
+  it('同一份 props 重渲染时组件体不再执行（markdown 不重解析）', () => {
     const stable = props()
     const { rerender } = render(<EntryRow {...stable} />)
     expect(markdownCalls.count).toBe(1)
-    expect(shapeCalls.count).toBe(1)
 
     // 父组件每帧都会重渲染；props 引用不变时必须被 memo 挡住。
     for (let frame = 0; frame < 10; frame += 1) {
@@ -77,7 +62,6 @@ describe('EntryRow 的 memo', () => {
     }
 
     expect(markdownCalls.count).toBe(1)
-    expect(shapeCalls.count).toBe(1)
   })
 
   it('正文变了才重算（流式期间只有当前那条在解析 markdown）', () => {

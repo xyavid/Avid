@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 
 import { App } from './App'
 // 顺序有意义：构件类先，tokens（含 @tailwind utilities）后，工具类才能覆盖构件类。
-import './ui/sketch.css'
+import './ui/glass.css'
 import './ui/tokens.css'
 
 const container = document.getElementById('root')

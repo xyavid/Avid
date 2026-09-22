@@ -103,7 +103,7 @@ export function SessionList({ activeId, onSelect }: SessionListProps) {
       ) : null}
 
       {workspaces.isLoading ? (
-        <p className="text-sm text-ink/70">{t('common.loading')}</p>
+        <p className="text-sm text-ink-muted">{t('common.loading')}</p>
       ) : null}
 
       {workspaces.data && workspaces.data.length === 0 ? (

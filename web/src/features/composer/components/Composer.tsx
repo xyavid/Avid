@@ -59,8 +59,8 @@ export function Composer({
   }
 
   return (
-    <div className="surface-chip tilt-input mx-0 flex flex-col gap-2 bg-input p-3">
-      <div className="tilt-input-content flex flex-col gap-2">
+    <div className="surface-panel mx-0 flex flex-col gap-2 p-3">
+      <div className="flex flex-col gap-2">
         <TextArea
           aria-label={t('chat.placeholder')}
           placeholder={t('chat.placeholder')}
@@ -76,7 +76,7 @@ export function Composer({
           }}
         />
         {restored.current && draft ? (
-          <p className="text-xs text-ink/70">{t('chat.draft.restored')}</p>
+          <p className="text-xs text-ink-muted">{t('chat.draft.restored')}</p>
         ) : null}
         <div className="flex flex-wrap items-end justify-between gap-2">
           <div className="w-52 min-w-0">

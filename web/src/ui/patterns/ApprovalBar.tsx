@@ -39,7 +39,7 @@ function Facts({ approval, open, expired, decided }: {
     <>
       {open ? (
         <div className="flex flex-col gap-1">
-          <p className="text-xs text-ink/70">{t('approvals.reason', { reason: approval.reason })}</p>
+          <p className="text-xs text-ink-muted">{t('approvals.reason', { reason: approval.reason })}</p>
           <pre aria-label={t('approvals.toolArguments')}
             className="term scroll-area max-h-48 overflow-x-auto rounded-face p-2">
             {JSON.stringify(approval.arguments, null, 2)}
@@ -48,7 +48,7 @@ function Facts({ approval, open, expired, decided }: {
       ) : null}
       {expired ? <p role="alert" className="text-xs text-danger">{t('approvals.expired')}</p> : null}
       {decided ? (
-        <p className="text-xs text-ink/70">
+        <p className="text-xs text-ink-muted">
           {approval.decision === 'allow' ? t('approvals.answered.allow') : t('approvals.answered.deny')}
           {approval.resolvedReason ? ` · ${approval.resolvedReason}` : ''}
         </p>
@@ -69,7 +69,7 @@ function AnswerButtons({ locked, onAnswer }: {
       <Button variant="primary" disabled={locked} onClick={() => onAnswer('allow')}>
         {t('approvals.allow')}
       </Button>
-      <span className="text-xs text-ink/70">{t('approvals.defaultDeny')}</span>
+      <span className="text-xs text-ink-muted">{t('approvals.defaultDeny')}</span>
     </div>
   )
 }
@@ -101,7 +101,7 @@ export function ApprovalBar({ approval, busy = false, onAnswer }: ApprovalBarPro
         </Badge>
         <span className="rounded-face bg-mark/40 px-2 py-0.5 font-mono text-xs">{approval.tool}</span>
         {approval.expiresAt > 0 ? (
-          <span className="font-mono text-xs text-ink/70">
+          <span className="font-mono text-xs text-ink-muted">
             {t('approvals.expires', { time: relativeTime(approval.expiresAt - Date.now(), locale) })}
           </span>
         ) : null}

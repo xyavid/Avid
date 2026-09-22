@@ -1,18 +1,16 @@
 /**
- * 时间线条目：用户是右侧便签，模型回复是左侧对话框，工具结果与 notice 是 chip。
+ * 时间线条目：用户是右侧对话框，模型回复是左侧对话框，工具结果与 notice 是 chip。
  *
- * 模型回复与用户消息是**同一族卡片**（`surface-card`：墨框 + 手绘形状 + `--sticker-4`
- * 硬阴影），差别只在方向与角色标记——参照实现 purrcat 的对话框就是这一套
- * （`bg-paper` + `border-4 border-ink` + 大硬阴影 + 小角度倾斜），这里把它的外壳
- * 语言用在消息上，尺寸按消息收敛。形状按 `shapeIndex` 轮换，相邻卡片不同形。
+ * 模型回复与用户消息是**同一族卡片**（`surface-card`：玻璃面 + 高光边 + 柔和投影），
+ * 差别只在方向与角色标记。旧语言里的「形状轮换」（相邻卡片取三种手绘圆角之一）随
+ * 涂鸦机制一起删除：新语言的卡片是同一形状，区分靠方向与角色标记，不靠形变。
  *
  * 没有正文的模型回复**不归这里管**：只声明工具调用、正文为空的那一轮由
  * `conversation/lib/groupTimeline` 直接跳过（它的工具调用本来就有工具卡），所以这个
  * 组件拿到的 assistant 条目一定有正文。注入的提醒（TODO / nudge）同理不进时间线。
  *
- * 角色标记按作者分两枚：模型是 `AvidMark`（角形笔画），用户是 `UserMark`（歪头 +
- * 肩弧）。两者笔触语言一致（`stroke-width 4.5` + `currentColor` + −2deg 倾斜），
- * 但形状不同——标记的职责就是区分作者。
+ * 角色标记用两枚 lucide 图标（`Bot` / `User`），细笔画（1.75）；旧的两位手绘标记随
+ * 涂鸦资产一起删除。标记是装饰，不进无障碍树，角色名由旁边文字承担。
  *
  * `aria-live` 只加在 durable（非乐观）的 assistant 条目上：乐观 delta 每帧都在变，读屏器
  * 会把它念成一串噪音，而 durable 消息才是完整的一句话。
@@ -30,13 +28,12 @@ import { useTranslation } from '../../lib/i18n'
 import { Markdown } from '../../lib/markdown'
 import type { Density } from '../../lib/density'
 import type { TimelineEntry } from '../../lib/timeline'
+import { Bot, User } from 'lucide-react'
+
 import { Badge, Button } from '../../ui/primitives'
-import { AvidMark, UserMark, shapeFor } from '../../ui/sketch'
 
 export interface EntryRowProps {
   entry: TimelineEntry
-  /** 同级卡片的轮换序号：按**全部**条目计算，所以加载更早不会改变已有卡片的形状。 */
-  shapeIndex?: number
   density?: Density
   onCopy?: (text: string) => void
   /** 「从此处分支」：只有落了库的条目（有 `entryId`）才可能成为分叉点。 */
@@ -46,13 +43,14 @@ export interface EntryRowProps {
 const NOTICE_KEY = { compaction: 'chat.notice.compaction' } as const
 
 /**
- * 角色标记：两种角色各一枚专属手绘小标记（`avid` 是角形笔画，`user` 是歪头 + 肩弧）。
- * 不复用同一枚：标记的作用就是标明作者，模型卡与用户卡共用一个形状等于没标。
+ * 角色标记：两枚 lucide 图标（模型 `Bot` / 用户 `User`），`aria-hidden` 由 lucide
+ * 默认带上——标记是装饰，作者由旁边的角色名说明。
  */
 function Role({ label, mark = 'avid' }: { label: string; mark?: 'avid' | 'user' }) {
+  const Icon = mark === 'user' ? User : Bot
   return (
-    <p className="flex items-center gap-1 font-display text-xs text-ink/70">
-      {mark === 'user' ? <UserMark className="text-ink" /> : <AvidMark className="text-ink" />}
+    <p className="flex items-center gap-1 text-xs text-ink-muted">
+      <Icon size={16} strokeWidth={1.75} className="shrink-0 text-ink" aria-hidden="true" />
       {label}
     </p>
   )
@@ -85,7 +83,6 @@ function Actions({
 
 export const EntryRow = memo(function EntryRow({
   entry,
-  shapeIndex = 0,
   density = 'comfy',
   onCopy,
   onFork,
@@ -97,7 +94,7 @@ export const EntryRow = memo(function EntryRow({
   if (entry.kind === 'user') {
     return (
       <article
-        className={clsx('surface-card ml-auto w-fit max-w-[80%]', shapeFor(shapeIndex), pad)}
+        className={clsx('surface-card ml-auto w-fit max-w-[80%]', pad)}
       >
         <Role label={t('chat.message.role.user')} mark="user" />
         <p className="whitespace-pre-wrap break-anywhere text-sm">{entry.text}</p>
@@ -109,8 +106,8 @@ export const EntryRow = memo(function EntryRow({
     const label = entry.notice ? t(NOTICE_KEY[entry.notice]) : ''
     return (
       <article className="surface-chip flex w-fit max-w-[32rem] items-center gap-2 px-3 py-1">
-        <span className="shrink-0 font-display text-xs">{label}</span>
-        <span className="min-w-0 truncate text-xs text-ink/70">{entry.text}</span>
+        <span className="shrink-0 text-xs">{label}</span>
+        <span className="min-w-0 truncate text-xs text-ink-muted">{entry.text}</span>
         {actions}
       </article>
     )
@@ -131,11 +128,7 @@ export const EntryRow = memo(function EntryRow({
   return (
     <article
       aria-live={entry.optimistic ? undefined : 'polite'}
-      className={clsx(
-        'surface-card mr-auto flex w-fit max-w-[88%] flex-col gap-1',
-        shapeFor(shapeIndex),
-        pad,
-      )}
+      className={clsx('surface-card mr-auto flex w-fit max-w-[88%] flex-col gap-1', pad)}
     >
       <Role label={t('chat.message.role.assistant')} />
       <Markdown text={entry.text} />

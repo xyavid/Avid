@@ -39,7 +39,7 @@ export function StatusBanner(props: StatusBannerProps) {
   return (
     <div
       role={failed ? 'alert' : 'status'}
-      className={`mx-3 mt-2 flex flex-wrap items-center gap-2 rounded-chip border-hair border-ink px-3 py-2 text-xs ${
+      className={`mx-3 mt-2 flex flex-wrap items-center gap-2 rounded-chip border-hair border-ink/20 px-3 py-2 text-xs ${
         failed ? 'bg-danger-bg/30' : 'bg-warn-bg/30'
       }`}
     >

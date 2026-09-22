@@ -1,0 +1,185 @@
+/*
+ * 玻璃语言：光斑背景、玻璃面、高光带、投影、交互。
+ *
+ * 这一层只提供**构件类**（面 + 高度 + 交互），不含任何业务名词，也不含颜色
+ * 字面量——全部引用 ui/tokens.css。
+ *
+ * 顺序约定：本文件必须在 main.tsx 里**先于** tokens.css 导入，于是 @tailwind
+ * utilities 在产物里排在本文件的构件类之后——`shadow-none` 这类工具类才能覆盖
+ * `.surface-chip`。两个文件各自被 Tailwind 处理一次，所以这里不能写 @layer。
+ *
+ * 模糊预算（§8.9 改写后的规则，本文件是它的落点）：
+ *   · 允许 backdrop-filter 的只有**面板类**：`.surface-panel` / `.surface-main` /
+ *     `.id-tag`，以及对话框与 toast 外壳 —— 它们同屏最多十几个；
+ *   · `.surface-card`（时间线条目、任务卡）与 `.surface-chip`（按钮、徽标、导航行）
+ *     **只半透明、不模糊**：它们数量随数据增长，列表是最长的一屏，也是最不该为
+ *     观感付性能的地方。玻璃感由它们下面的面板提供，视觉上仍然成立。
+ */
+
+/* ---------------- 光斑背景：纯 CSS，可被运行期插画覆盖 ---------------- */
+
+.app-backdrop {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: var(--z-base);
+  background-color: rgb(var(--avid-paper-rgb));
+  background-image: radial-gradient(
+      42% 34% at 18% 12%,
+      rgb(var(--avid-blob-1-rgb) / 92%) 0%,
+      transparent 70%
+    ),
+    radial-gradient(46% 40% at 88% 30%, rgb(var(--avid-blob-3-rgb) / 85%) 0%, transparent 72%),
+    radial-gradient(40% 36% at 62% 92%, rgb(var(--avid-blob-4-rgb) / 78%) 0%, transparent 74%),
+    radial-gradient(30% 28% at 8% 78%, rgb(var(--avid-blob-2-rgb) / 88%) 0%, transparent 76%);
+}
+
+/* ---------------- 玻璃面：四档 ---------------- */
+
+.surface-card,
+.surface-chip,
+.surface-panel,
+.surface-main {
+  background: var(--glass-face);
+  border: var(--glass-edge);
+  box-shadow: var(--glass-sheen), var(--lift-2);
+}
+
+/* 面板类允许模糊（同屏数量有上限）。 */
+.surface-panel,
+.surface-main {
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  box-shadow: var(--glass-sheen), var(--lift-3);
+}
+
+.surface-card {
+  border-radius: var(--r-card);
+}
+
+.surface-panel,
+.surface-main {
+  border-radius: var(--r-panel);
+}
+
+.surface-chip {
+  border-radius: var(--r-chip);
+  box-shadow: var(--glass-sheen), var(--lift-1);
+}
+
+/*
+ * 侧栏（导航列）：贴屏幕边缘的满高容器，所以没有圆角、没有投影，只要玻璃面与模糊。
+ * 它必须有自己的面——导航列直接压在暖色光斑上虽然仍能读，但那不是对比度验过的底：
+ * 红线是按「玻璃面板」算的（最坏亮度 0.755），裸光斑最深到 0.585。
+ */
+.surface-sidebar {
+  background: var(--glass-face);
+  border-inline-end: var(--glass-edge);
+  box-shadow: var(--glass-sheen);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
+
+/* ---------------- 交互：悬停抬一档投影，按住收掉 ---------------- */
+
+.press {
+  transition: box-shadow var(--motion-press) ease, background-color var(--motion-hover) ease,
+    filter var(--motion-hover) ease;
+}
+
+/*
+ * 悬停与按住的**特异性必须相同**，只靠源码顺序分胜负：上一版给 hover 多挂了一个
+ * `button` 元素选择器（0,3,1），按住那条是（0,3,0）——于是 `:active` 永远被 hover 盖住，
+ * 「按住收掉投影」根本没生效（e2e 抓到的，肉眼看不出来）。
+ */
+.press:hover:not(:disabled, [aria-disabled='true']) {
+  box-shadow: var(--glass-sheen), var(--lift-2);
+  filter: brightness(1.04);
+}
+
+.press:active:not(:disabled, [aria-disabled='true']) {
+  box-shadow: var(--glass-sheen);
+  filter: brightness(0.97);
+}
+
+.press:disabled,
+.press[aria-disabled='true'] {
+  filter: none;
+}
+
+/* ---------------- ID 标签：会话 / 运行的可访问标识（功能不是装饰） ---------------- */
+
+.id-tag {
+  border: var(--glass-edge-soft);
+  border-radius: var(--r-chip);
+  background: rgb(var(--avid-glass-rgb) / 55%);
+  box-shadow: var(--glass-sheen);
+  backdrop-filter: blur(calc(var(--glass-blur) / 2)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) / 2)) saturate(var(--glass-saturate));
+}
+
+.id-tag-empty {
+  border: 1px dashed rgb(var(--avid-ink-rgb) / 35%);
+  border-radius: var(--r-chip);
+  background: rgb(var(--avid-panel-rgb) / 55%);
+}
+
+/* ---------------- 空态与提示 ---------------- */
+
+.empty-note {
+  @apply border border-dashed px-4 py-6 text-center text-sm;
+  border-color: rgb(var(--avid-ink-rgb) / 30%);
+  border-radius: var(--r-card);
+  background: rgb(var(--avid-glass-rgb) / 35%);
+  color: var(--avid-ink-muted);
+}
+
+/* ---------------- 滚动容器：时间线是唯一滚动容器 ---------------- */
+
+.scroll-area {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.scroll-area::-webkit-scrollbar {
+  width: 10px;
+}
+
+.scroll-area::-webkit-scrollbar-thumb {
+  background-color: rgb(var(--avid-ink-rgb) / 25%);
+  border-radius: var(--r-pill);
+}
+
+/* ---------------- 状态点（徽标用，纯装饰） ---------------- */
+
+.pulse {
+  animation: avid-pulse 1.6s ease-in-out infinite;
+}
+
+/* ---------------- 终端/代码：唯一允许深底浅字的地方 ---------------- */
+
+.term {
+  background-color: rgb(var(--term-bg-rgb));
+  color: rgb(var(--term-fg-rgb));
+  @apply font-mono text-xs;
+}
+
+.ink-rule {
+  border-bottom: 1px solid rgb(var(--avid-ink-rgb) / 25%);
+}
+
+/* 长命令行不能撑破卡片：横向滚动只出现在工具输出里。 */
+.break-anywhere {
+  overflow-wrap: anywhere;
+}
+
+@keyframes avid-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}

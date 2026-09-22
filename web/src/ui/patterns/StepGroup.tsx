@@ -44,7 +44,7 @@ export const StepGroup = memo(function StepGroup({
   if (!open) {
     return (
       <Button size="sm" variant="secondary" className="w-fit" aria-expanded={false} onClick={() => setOpen(true)}>
-        {head ? <span className="rounded-face bg-mark/40 px-1 font-display text-xs">{head}</span> : null}
+        {head ? <span className="rounded-face bg-mark/40 px-1 text-xs">{head}</span> : null}
         {label}
       </Button>
     )
@@ -53,7 +53,7 @@ export const StepGroup = memo(function StepGroup({
     <section className="flex flex-col gap-2">
       <div className="flex items-center gap-2">
         {head ? <Badge tone="mark">{head}</Badge> : null}
-        <span className="font-display text-xs">{label}</span>
+        <span className="text-xs">{label}</span>
         <Button size="sm" variant="secondary" className="ml-auto" aria-expanded onClick={() => setOpen(false)}>
           {t('common.collapse')}
         </Button>

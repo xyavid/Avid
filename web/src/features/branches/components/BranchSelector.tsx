@@ -53,7 +53,7 @@ export function BranchSelector({
   return (
     <div className="flex flex-col gap-1">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="font-display text-xs text-ink/70">{t('branches.current')}</span>
+        <span className="text-xs text-ink-muted">{t('branches.current')}</span>
         <Button
           size="sm"
           variant="secondary"
@@ -101,7 +101,7 @@ export function BranchSelector({
       ) : null}
 
       {alert ? (
-        <p role="alert" className="text-xs text-ink/70">
+        <p role="alert" className="text-xs text-ink-muted">
           {alert}
         </p>
       ) : null}

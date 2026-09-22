@@ -20,7 +20,7 @@ export interface MetaRowProps {
 export function MetaRow({ label, children }: MetaRowProps) {
   return (
     <div className="flex flex-col gap-0.5">
-      <span className="text-xs text-ink/70">{label}</span>
+      <span className="text-xs text-ink-muted">{label}</span>
       <span className="break-anywhere text-sm">{children}</span>
     </div>
   )
@@ -30,7 +30,7 @@ export function MetaRow({ label, children }: MetaRowProps) {
 export function BuildStamp({ build }: { build: BuildInfo }) {
   const { t } = useTranslation()
   if (build.source !== 'bundled') {
-    return <span className="text-ink/70">{t('common.settings.buildDev')}</span>
+    return <span className="text-ink-muted">{t('common.settings.buildDev')}</span>
   }
   return (
     <span className="flex flex-wrap items-center gap-2 font-mono text-xs">
@@ -42,7 +42,7 @@ export function BuildStamp({ build }: { build: BuildInfo }) {
 
 export function ToolsRow({ tools }: { tools: string[] }) {
   const { t } = useTranslation()
-  if (tools.length === 0) return <span className="text-ink/70">{t('common.none')}</span>
+  if (tools.length === 0) return <span className="text-ink-muted">{t('common.none')}</span>
   return (
     <span className="flex flex-wrap gap-1">
       {tools.map((tool) => (
@@ -57,7 +57,7 @@ export function ToolsRow({ tools }: { tools: string[] }) {
 export function FeaturesTable({ features }: { features: Record<string, number> }) {
   const { t } = useTranslation()
   const entries = Object.entries(features)
-  if (entries.length === 0) return <span className="text-ink/70">{t('common.none')}</span>
+  if (entries.length === 0) return <span className="text-ink-muted">{t('common.none')}</span>
   return (
     <span className="flex flex-col gap-1 font-mono text-xs">
       {entries.map(([name, value]) => (

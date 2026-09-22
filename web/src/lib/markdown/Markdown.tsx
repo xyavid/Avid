@@ -23,39 +23,39 @@ function Code({ className, children }: { className?: string; children?: ReactNod
     return <code className={clsx('font-mono text-xs', className)}>{children}</code>
   }
   return (
-    <code className="rounded-face border-hair border-ink bg-input px-1 font-mono text-xs">
+    <code className="rounded-face border-hair border-ink/15 bg-input/70 px-1 font-mono text-xs">
       {children}
     </code>
   )
 }
 
 const COMPONENTS: Components = {
-  h1: ({ children }) => <h1 className="ink-rule mb-2 pb-1 font-display text-lg">{children}</h1>,
-  h2: ({ children }) => <h2 className="ink-rule mb-2 pb-1 font-display text-base">{children}</h2>,
-  h3: ({ children }) => <h3 className="ink-rule mb-1 font-display text-sm">{children}</h3>,
+  h1: ({ children }) => <h1 className="ink-rule mb-2 pb-1 text-lg font-semibold">{children}</h1>,
+  h2: ({ children }) => <h2 className="ink-rule mb-2 pb-1 text-base font-semibold">{children}</h2>,
+  h3: ({ children }) => <h3 className="ink-rule mb-1 text-sm font-semibold">{children}</h3>,
   blockquote: ({ children }) => (
-    <blockquote className="my-2 border-l-4 border-accent pl-3 text-ink/70">{children}</blockquote>
+    <blockquote className="my-2 border-l-4 border-accent pl-3 text-ink-muted">{children}</blockquote>
   ),
   pre: ({ children }) => (
-    <pre className="term my-3 overflow-x-auto rounded-card p-3 shadow-lift-4">{children}</pre>
+    <pre className="term my-3 overflow-x-auto rounded-card p-3 shadow-lift-2">{children}</pre>
   ),
   code: Code,
   table: ({ children }) => (
     <div className="my-3 overflow-x-auto">
-      <table className="w-full border-bold border-ink text-sm">{children}</table>
+      <table className="w-full border-hair border-ink/20 text-sm">{children}</table>
     </div>
   ),
   th: ({ children }) => (
-    <th className="border-hair border-ink bg-sand px-2 py-1 text-left font-display">{children}</th>
+    <th className="border-hair border-ink/20 bg-sand px-2 py-1 text-left ">{children}</th>
   ),
-  td: ({ children }) => <td className="border-hair border-ink px-2 py-1">{children}</td>,
+  td: ({ children }) => <td className="border-hair border-ink/20 px-2 py-1">{children}</td>,
   a: ({ href, children }) => (
-    <a href={href} className="ink-rule font-display">
+    <a href={href} className="ink-rule ">
       {children}
     </a>
   ),
   img: ({ src, alt }) => (
-    <img src={src} alt={alt ?? ''} className="max-w-full rounded-face border-hair border-ink" />
+    <img src={src} alt={alt ?? ''} className="max-w-full rounded-face border-hair border-ink/15" />
   ),
 }
 
