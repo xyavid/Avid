@@ -330,7 +330,8 @@ durable、事件总数上限 4096、终态记录保留 600s 或最多 200 个 ru
 状态分三域：REST 权威域（查询缓存）、活动域（事件流 + 纯 reducer）、界面域（localStorage）。
 
 **用量指示器（阶段 22）**：`features/composer/components/UsageMeter` 挂在输入条那一行、
-发送按钮左侧，显示「上下文 72k/200k（36%）· 缓存 78% · 压缩 2 次」，悬浮给明细。
+发送按钮左侧，显示「上下文 72k/200k（36%）· 缓存 78% · 压缩 2 次」，悬浮给明细；
+内核没在 `features` 里声明 `usage` 时它不渲染（旧内核上不留空读数）。
 实时值取活动域的 `RunView.usage`，落盘值取 `useBranches` 返回的分支 `usage`；
 合并规则是 `pickUsage`（活动域优先、查询域兜底），可空字段一律显示 `—`。
 
