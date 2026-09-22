@@ -50,6 +50,27 @@ export function TextArea({ className, ...rest }: TextareaHTMLAttributes<HTMLText
   return <textarea {...rest} className={clsx(CONTROL, 'resize-y leading-relaxed', className)} />
 }
 
+/**
+ * 文件选择。**必须走原语**：`check-style` 禁止 `ui/` 之外出现裸 `<input>`，
+ * 而"选一个本机文件"这件事没法用 Button 表达（浏览器的文件选择器只能由 input 触发）。
+ */
+export const FileInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
+  function FileInput({ className, ...rest }, ref) {
+    return (
+      <input
+        ref={ref}
+        type="file"
+        {...rest}
+        className={clsx(
+          CONTROL,
+          'file:mr-3 file:rounded-chip file:border-0 file:bg-sand file:px-3 file:py-1 file:text-sm file:text-ink',
+          className,
+        )}
+      />
+    )
+  },
+)
+
 export function Select({ className, children, ...rest }: SelectHTMLAttributes<HTMLSelectElement>) {
   return (
     <select {...rest} className={clsx(CONTROL, '', className)}>

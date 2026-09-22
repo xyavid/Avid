@@ -5,7 +5,7 @@
   "css_gzip_bytes": 16384,
   "font_bytes": 0,
   "texture_bytes": 32768,
-  "frozen_at": "2026-09-22T14:50Z · commit 阶段 23b（视觉语言替换）· WSL2 / node v24.15.0 · `pnpm -C web build && pnpm -C web run gate:size` → 首屏 JS gzip 185,927 B / 460,800 B（raw 585,395 B，4 块）· 样式表 gzip 5,470 B / 16,384 B · 字体 0 B / 0 B",
-  "note": "阶段 23b 重冻了三个字段，原因各不相同。① 新增 css_gzip_bytes：此前门禁只量 JS / 字体 / 纹理，**完全不量 CSS**，而视觉语言的改动几乎全在 CSS 里——整套「体积不许升」的护栏对 23b 要改的东西正好是瞎的。上限按实测的 5,470 B 向上取到 16,384 B（留 3 倍余量给后续样式，但不再是无限）。② font_bytes 61,440 → 0：手写体自托管字体（13,156 B）随涂鸦语言一起弃用，字体这一项现在是「不许有」。③ texture_bytes 不动（32,768 B）：参照物的背景是整幅插画，但那不进仓——预算为 0 的位图仍是规则，插画若要做只能走运行期选图。entry_gzip_bytes / chunk_gzip_bytes 未改：实测 185,927 B 比 23b 之前（186,207 B）还低 280 B，换语言没有吃掉余量。测量命令与逐块明细见 docs/status/BENCHMARK.md §3.2。",
+  "frozen_at": "2026-09-22T14:50Z · commit 阶段 23b（视觉语言替换）· WSL2 / node v24.15.0 · `pnpm -C web build && pnpm -C web run gate:size` → 首屏 JS gzip 187,228 B / 460,800 B（raw 588,882 B，4 块）· 样式表 gzip 5,629 B / 16,384 B · 字体 0 B / 0 B",
+  "note": "阶段 23b 重冻了三个字段，原因各不相同。① 新增 css_gzip_bytes：此前门禁只量 JS / 字体 / 纹理，**完全不量 CSS**，而视觉语言的改动几乎全在 CSS 里——整套「体积不许升」的护栏对 23b 要改的东西正好是瞎的。上限按实测的 5,629 B 向上取到 16,384 B（留 3 倍余量给后续样式，但不再是无限）。② font_bytes 61,440 → 0：手写体自托管字体（13,156 B）随涂鸦语言一起弃用，字体这一项现在是「不许有」。③ texture_bytes 不动（32,768 B）：参照物的背景是整幅插画，但那不进仓——预算为 0 的位图仍是规则，插画若要做只能走运行期选图。entry_gzip_bytes / chunk_gzip_bytes 未改：换语言本身让首屏降了 263 B（186,207 → 185,944），之后加「运行期背景插画」入口再涨 1,284 B，净额 187,228 B（比 23b 之前高 1,021 B / +0.55%），仍远在余量内。测量命令与逐块明细见 docs/status/BENCHMARK.md §3.2。",
   "EXEMPT": []
 }

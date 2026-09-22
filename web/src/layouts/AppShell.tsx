@@ -33,6 +33,8 @@ export function AppShell(props: AppShellProps) {
   const { t } = useTranslation()
   const { isWide, isMid } = useViewport()
   const navCollapsed = useUiStore((state) => state.navCollapsed)
+  // 背景插画是界面域的偏好；L1 的 Backdrop 只接受 props（分层声明），所以在这里取。
+  const backdropArt = useUiStore((state) => state.backdropArt)
   const toggleNav = useUiStore((state) => state.toggleNav)
   const [sheetOpen, setSheetOpen] = useState(false)
   const expanded = isWide && !navCollapsed
@@ -64,7 +66,7 @@ export function AppShell(props: AppShellProps) {
     // 下面的 flex-1 / h-full 全部失去参照，于是消息区把整页撑高、输入条被推到
     // 视口之外（页面自己变成滚动容器）。h-dvh 在移动端地址栏伸缩时也用可视高度。
     <div className="relative h-dvh w-full overflow-hidden">
-      <Backdrop />
+      <Backdrop art={backdropArt} />
       <a
         href="#main"
         className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-toast focus:rounded-chip focus:border-hair focus:border-ink/20 focus:bg-card focus:p-2 focus:shadow-lift-2"

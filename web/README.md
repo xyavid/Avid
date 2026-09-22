@@ -18,7 +18,7 @@ pnpm run gate:size      # C1/P9/C17/C18：体积预算 + 显式豁免 + CSS/字�
 pnpm run check:contrast # 按 alpha 合成算 token 表里声明的 17 对，正文 <4.8 即红
 pnpm run verify         # 以上全部（不含 build 与 e2e；gate:size 依赖 dist/，先 pnpm build）
 node scripts/measure-glass.mjs --base http://127.0.0.1:8877   # 手动：玻璃的长任务/帧率对照（不进 verify）
-AVID_E2E=1 pnpm test:e2e    # Playwright 45 项（含 5 条视觉基线；需先 pnpm exec playwright install chromium）
+AVID_E2E=1 pnpm test:e2e    # Playwright 47 项（含 5 条视觉基线；需先 pnpm exec playwright install chromium）
 ```
 
 **Node ≥ 22.22**：jsdom 30 依赖 undici 8，后者调 `node:worker_threads.markAsUncloneable`

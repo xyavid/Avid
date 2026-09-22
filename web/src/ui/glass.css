@@ -34,6 +34,27 @@
     radial-gradient(30% 28% at 8% 78%, rgb(var(--avid-blob-2-rgb) / 88%) 0%, transparent 76%);
 }
 
+/*
+ * 运行期选进来的插画（`--art` 由 Backdrop 内联给）。
+ *
+ * 面纱是**对比度的一部分**，不是审美：玻璃面是 46% 半透明的，背后若是深色照片，面板会
+ * 跟着变暗，而那套对比度是按"暖色浅底"验过的（§8.2）。所以插画上叠一层羊皮纸色 55%
+ * 的平铺渐变，把最坏底色拉回被验过的范围。
+ */
+.app-backdrop-art {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: var(--z-base);
+  background-image: linear-gradient(
+      rgb(var(--avid-paper-rgb) / 55%),
+      rgb(var(--avid-paper-rgb) / 55%)
+    ),
+    var(--art);
+  background-size: cover, cover;
+  background-position: center, center;
+}
+
 /* ---------------- 玻璃面：四档 ---------------- */
 
 .surface-card,

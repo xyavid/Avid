@@ -26,6 +26,17 @@ export interface UiState {
   /** 未发送的草稿：刷新后能恢复（只是 UI 便利，不进会话）。 */
   draft: string
   draftSavedAt: number | null
+  /**
+   * 页面背景的插画（data URL；null = 用纯 CSS 光斑）。
+   *
+   * 为什么存在界面域而不是服务端：它是**用户自己的观感偏好**，丢了不影响正确性——与
+   * `textScale` / `density` 同一类。而且参照物的整幅插画不进仓（`budget.json` 的
+   * `texture_bytes` 仍是 0），所以「哪张图」只能由用户在本机给。
+   *
+   * 这是阶段 23b 唯一一处**越过「承重层零改动」边界**的改动，原因与取舍记录在设计文档
+   * §8.9 的预算条目里：入口本身必须有个地方持久化，而界面域正是为此存在的。
+   */
+  backdropArt: string | null
   setTextScale: (value: TextScale) => void
   setDensity: (value: Density) => void
   toggleInspector: (open?: boolean) => void
@@ -37,6 +48,7 @@ export interface UiState {
   setTaskFilter: (value: UiState['taskFilter']) => void
   setDraft: (value: string) => void
   clearDraft: () => void
+  setBackdropArt: (value: string | null) => void
 }
 
 export const useUiStore = create<UiState>()(
@@ -53,6 +65,7 @@ export const useUiStore = create<UiState>()(
       taskFilter: 'all',
       draft: '',
       draftSavedAt: null,
+      backdropArt: null,
       setTextScale: (value) => set({ textScale: value }),
       setDensity: (value) => set({ density: value }),
       toggleInspector: (open) => set((state) => ({ inspectorOpen: open ?? !state.inspectorOpen })),
@@ -66,6 +79,7 @@ export const useUiStore = create<UiState>()(
       setTaskFilter: (value) => set({ taskFilter: value }),
       setDraft: (value) => set({ draft: value, draftSavedAt: Date.now() }),
       clearDraft: () => set({ draft: '', draftSavedAt: null }),
+      setBackdropArt: (value) => set({ backdropArt: value }),
     }),
     { name: 'avid-ui', version: 1 },
   ),

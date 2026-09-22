@@ -1,8 +1,11 @@
+import { useState } from 'react'
+
 import { errorMessage } from '../../../lib/errors'
-import { Button, Field, Input } from '../../../ui/primitives'
+import { Button, Field, FileInput, Input } from '../../../ui/primitives'
 import { useTranslation } from '../../../lib/i18n'
 import { useMeta } from '../../../api/queries'
 import { useUiStore } from '../../../state/uiStore'
+import { toBackdropDataUrl } from '../lib/image'
 import { AboutCard, BuildStamp, FeaturesTable, MetaRow, ToolsRow } from './AboutCard'
 import type { Density } from '../../../lib/density'
 import type { TextScale } from '../../../state/uiStore'
@@ -54,6 +57,36 @@ function AppearanceSection() {
   const setTextScale = useUiStore((state) => state.setTextScale)
   const density = useUiStore((state) => state.density)
   const setDensity = useUiStore((state) => state.setDensity)
+  const backdropArt = useUiStore((state) => state.backdropArt)
+  const setBackdropArt = useUiStore((state) => state.setBackdropArt)
+  const [artError, setArtError] = useState<string | null>(null)
+  const [artBusy, setArtBusy] = useState(false)
+
+  /**
+   * 选图 → 缩放编码 → 存进界面域。
+   *
+   * 三类失败照各自的下一步报，不混成一句「出错了」（`toBackdropDataUrl` 抛的 code 直接
+   * 映射到词条）。写盘的配额错误单独兜：那时图已经编好了，是"放不下"而不是"图不行"。
+   */
+  const handleArt = async (file: File | undefined) => {
+    if (!file) return
+    setArtError(null)
+    setArtBusy(true)
+    try {
+      const { dataUrl } = await toBackdropDataUrl(file)
+      try {
+        setBackdropArt(dataUrl)
+      } catch {
+        setArtError(t('common.settings.backdrop.failed.quota'))
+      }
+    } catch (error) {
+      const code = error instanceof Error ? error.message : ''
+      const key = `common.settings.backdrop.failed.${code.replace(/-/g, '_')}`
+      setArtError(t(key))
+    } finally {
+      setArtBusy(false)
+    }
+  }
 
   return (
     <section className="flex flex-col gap-3">
@@ -73,6 +106,30 @@ function AppearanceSection() {
         selected={density}
         onSelect={setDensity}
       />
+      <Field
+        label={t('common.settings.backdrop')}
+        htmlFor="settings-backdrop"
+        hint={t('common.settings.backdrop.hint')}
+        error={artError ?? undefined}
+      >
+        <span className="flex flex-wrap items-center gap-2">
+          <FileInput
+            id="settings-backdrop"
+            accept="image/*"
+            aria-busy={artBusy || undefined}
+            onChange={(event) => {
+              void handleArt(event.target.files?.[0])
+              // 清空 input：选同一张图两次也要能再次触发 change。
+              event.target.value = ''
+            }}
+          />
+          {backdropArt ? (
+            <Button size="sm" variant="secondary" onClick={() => setBackdropArt(null)}>
+              {t('common.settings.backdrop.clear')}
+            </Button>
+          ) : null}
+        </span>
+      </Field>
     </section>
   )
 }
