@@ -85,7 +85,7 @@
 | 子 agent | `subagent` 一次最多 4 个子任务，并行执行后汇总；子运行结构上去掉 `subagent` 自己（`SUB_TOOLS`）；子 agent 看不到父对话，prompt 必须自包含 | `src/avid/tools/__init__.py:80-81`、`src/avid/tools/subagent.py`、`src/avid/tools/schemas.py:172-203` |
 | 技能 | 目录下 3 个技能（`agent-builder` / `code-review` / `pdf`）；系统提示里只放 `name + description`，正文由 `load_skill` 按需读取；目录在运行开始时重新扫描 | `skills/`、`src/avid/policy/skills.py:65-111`、`src/avid/runtime/state.py:100-123` |
 | 模型接入 | OpenAI 兼容 `/chat/completions` 直连 httpx（不套 SDK）；非流式 `chat_completion` 与流式 `stream_completion` 返回**同形**的 `Turn`，两条解析路径共用同一个 usage 归一化；连接超时 10s / 读超时 60s | `src/avid/ai/client.py:22-35`、`src/avid/ai/client.py` 的 `stream_completion`、`src/avid/runtime/loop.py:228-237` |
-| Web 与前端 | 22 个 HTTP 端点（会话 / 运行 / 审批 / 事件流 / 任务 / 技能 / 工作区 / 元信息）；18 类事件分三档（16 durable + `run_status` + `assistant_delta`）；时间线 / 任务板 / 技能目录 / 设置四个页面；前端 L0–L4 分层；`pnpm run verify` 串起 6 项检查（分层 / token / 样式 / 类型 / 单测 / 体积） | `src/avid/web/routes/*.py`、`src/avid/runtime/events.py:24-104`、`web/package.json` |
+| Web 与前端 | 22 个 HTTP 端点（会话 / 运行 / 审批 / 事件流 / 任务 / 技能 / 工作区 / 元信息）；18 类事件分三档（16 durable + `run_status` + `assistant_delta`）；时间线 / 任务板 / 技能目录 / 设置四个页面；前端 L0–L4 分层；`pnpm run verify` 串起 7 项检查（分层 / token / 样式 / 对比度 / 类型 / 单测 / 体积） | `src/avid/web/routes/*.py`、`src/avid/runtime/events.py:24-104`、`web/package.json` |
 | CLI | `--agent` / `--yes` / `--permission` / `--workspace` / `--session` / `--new-session` / `--session-name` / `--list-sessions` / `--delete-session`；子命令 `web`、`workspace {add,list,remove,permission}` | `src/avid/cli.py:85-140,317-333` |
 | 用量台账（阶段 22） | `ai/usage.py` 把 OpenAI / DeepSeek 兼容 / Anthropic / Gemini 四种 usage 写法归一成同一形状（缓存读/写可空）；`RunState.usage_report()` 单点算上下文占用（最近一轮真实 `prompt_tokens` / 窗口 / 占用率）、缓存命中率与压缩读数；每轮进 `run_status`、终态进 `run_finished` 与 `GET /api/runs/{id}`，并**按分支落盘**进会话值（刷新 / 切会话 / 重启后可见）；窗口来自 `AVID_CONTEXT_WINDOW` 或内置模型名小表，查不到就不算占用率 | `src/avid/ai/usage.py`、`src/avid/runtime/state.py` 的 `usage_report`、`src/avid/svc/sessions.py:list_branches` |
 | 可观测 | 逐轮 trace 与用量打到 stderr（含缓存读与命中率、有窗口时含占用率）；事件流 + 运行注册表（重放缓冲 512 条、终态记录保留 600s / 最多 200 个 run）；心跳与兜底常量单点定义 | `src/avid/cli.py:usage_suffix`、`src/avid/svc/runs.py:53-65`、`src/avid/runtime/events.py:108-118` |
@@ -108,7 +108,7 @@
 | 两个进程同时操作同一会话的运行 | 做到一半 | 会话**文件**有跨进程锁（`jsonl.py` 的 `<会话>.jsonl.lock`），但「一个会话同时至多一个活动 run」只在进程内成立（`frontend-architecture.md:816` 的 I3 自标「已知缺口」） |
 | 会话的下一段 | 做到一半 | 压缩条目、usage 台账、operation 状态机、SQLite 后端均未做（`runtime-architecture.md:635-643`） |
 | 任务图的下一段 | 做到一半 | 子 agent 的 owner 身份、任务工具进审批、跨进程互斥、`completed` 回退、给人看的**写**路径都没做——Web 任务板是只读的（`runtime-architecture.md:1201-1211`、`docs/guide/web-ui.md:43-67`） |
-| 前端的一部分 | 做到一半 | 虚拟列表、subagent 子事件转发、a11y 与视觉回归用例、性能门禁与基线（C1–C5/C10/C12 无脚本）都没有（`frontend-architecture.md:12-30` 的 D10、§17 的 20 条未验证假设） |
+| 前端的一部分 | 做到一半 | 虚拟列表、subagent 子事件转发、a11y（axe）用例、性能门禁与基线（C1–C5/C10/C12 无脚本）都没有。**视觉回归已在阶段 23b 落地**（`web/e2e/visual.spec.ts` + 入库基线，容差按实测的 `maxDiffPixels: 3`），但 e2e 仍不进 CI（`frontend-architecture.md` 的 D10、§17 的未验证假设） |
 | 大输出以外的 token/成本管理 | 做到一半 | 只有按轮累加的 `tokens` 计数与摘要调用（`src/avid/runtime/state.py:73-77`）；没有按会话/模型/时间的成本台账，也没有预算上限 |
 | 自动重试 | 设计上不做 | 模型 4xx/5xx 一律 `LLMError` 上抛终止；唯一的重试是「上下文超限 → 兜底压缩 → 重试一次」（`runtime-architecture.md:308-324`、`loop.py:214-226`） |
 
@@ -149,7 +149,7 @@
 | 评测集 | **有**：两套 suite 共 21 条只读 case（v0 12 / v1 9 条 tier 3–5） | `benchmarks/cases/`、`tests/test_bench_cases.py` |
 | 通过率 / 效果基线 | **有**：v0 与 v1 各自的基线 | `BENCHMARK.md` §9.2 / §10.2 |
 | 回归对比机制 | **有且真跑过**：同 suite、同 commit、只改 `--context-chars`，三档（§10.3） | `benchmarks/runs/v1-tight*/`（不入库） |
-| 性能预算 | **已冻结** | `web/budget.json` 的 `frozen_at`（首屏 JS gzip 实测 184,160 B / 460,800 B） |
+| 性能预算 | **已冻结** | `web/budget.json` 的 `frozen_at`（阶段 23b 重冻：首屏 JS gzip 实测 185,944 B / 460,800 B；样式表 gzip 5,497 B / 16,384 B；字体 0 B / 0 B） |
 | 效果类门禁 | marker 有（`-m eval` / `-m eval_smoke`），**按设计默认不跑**；另有一条 A14 边界门禁 | `pyproject.toml` 的 `addopts`、`tests/test_web_boundaries.py` |
 | **区分度** | **仍然没有**：v1 的 9 条难度 case 上三臂 9/9；94 次工具调用里 72 次是 `bash` | `BENCHMARK.md` §10.2 |
 | **压缩可评估性** | **不成立**：45 次运行最大 transcript 4,657 字符，而默认阈值 400,000——**差 86 倍**，阈值从未被触达 | `BENCHMARK.md` §10.3 |
@@ -236,7 +236,7 @@ AvidBench 的 `denials` 与 `approvals_requested` 从事件流派生（`benchmar
 （`benchmarks/README.md` 的边界）是对的，但现在它们是唯一还有信息量的方向。
 
 **同版不做**：压缩阈值的再校准（当前任务族不可评估，等可写或大上下文 case 进来再谈）、
-长期记忆、沙箱、多 provider、SQLite 后端、压缩条目、任务图下一段、前端 a11y 与视觉回归。
+长期记忆、沙箱、多 provider、SQLite 后端、压缩条目、任务图下一段、前端 a11y（axe）。
 
 **已定且不再讨论的取舍**：真模型 + 固定模型版本（`AVID_MODEL` 写进 `result.json`）；评测不进
 CI 全量；**不设通过率门禁**（`BENCHMARK.md` §10.4）；case 集版本一旦有基线落盘就不再改。

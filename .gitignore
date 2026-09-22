@@ -24,6 +24,8 @@ web/tsconfig.tsbuildinfo
 *.tsbuildinfo
 web/playwright-report/
 web/test-results/
+# measure-glass.mjs 的落盘记录（手动测量的产物，不入库）
+web/glass-measure.log
 /src/avid/web/static/*
 !/src/avid/web/static/.gitkeep
 

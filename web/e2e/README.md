@@ -63,14 +63,29 @@ AVID_E2E=1 pnpm exec playwright test --update-snapshots
 之后正常运行会拿新截图与基线比对，diff 落在 `test-results/`。基线只在预期变更时更新，
 否则这道门禁就退化成了「每次改动都点一下同意」。
 
+**基线文件入库**（`e2e/visual.spec.ts-snapshots/`，约 320 KB）。**报警已验证**：把 `--r-card`
+从 18px 故意改成 30px → 落点页基线 409 像素不同、测试红；还原即恢复。连跑 9 遍（含 20s
+间隔）稳定。
+
 ### 容差与它的来历（实测，不要再猜）
 
 **容差取 ≤3 像素且单通道差 ≤4**（等价于 `maxDiffPixels: 3`）。来历是阶段 23a 的一次对照：
 把**同一份构建**在 5 个状态上各截两遍（1440×900、`deviceScaleFactor: 1`、
 `reducedMotion: reduce`、每次新开 browser context），其中 1 个状态出现 3 个像素不同、
-单通道最大差 4/255，位置固定为导航列第一个条目按钮的 1px 左边框。也就是说整数像素的硬
-阴影与 1px 墨边仍会留下亚像素光栅化差异，**写 0 会让同一份构建自己报红**。细节见
+单通道最大差 4/255，位置固定为导航列第一个条目按钮的 1px 左边框。**写 0 会让同一份构建
+自己报红**，门禁随即退化成「每次改动都点一下同意」。细节见
 `docs/design/frontend-architecture.md` §8.9。
+
+### 三类"必须先处理掉"的漂移（`visual.spec.ts` 各踩过一次）
+
+1. **按表面截图，不截整页**。整页会把导航列带进来，而它的内容是"这套 e2e 跑到现在攒下的
+   所有会话"——跑第二遍就不一样。`section.surface-main` / `section.surface-panel` 只取决于
+   该用例自己造的数据。
+2. **时钟在 `page.goto` 之前冻结**，且时刻**相对数据**取。审批卡那句"还有 30 秒"是
+   `expiresAt - Date.now()`：导航之后再冻只冻住一个已经算好的值（秒数继续跳，第一版就是
+   这样随机报红，差异只有一个字形）；冻在绝对常数上则差值随真实时钟漂移（第二版差的是
+   "几小时前"的那个小时数）。审批那条因此冻在「还有整 1 小时」的时刻。
+3. **随机 id 要遮罩**（`.id-tag` / `.id-tag-empty`）：会话与运行 id 是随机的，那是数据不是观感。
 
 ### 做「改动前后」对照时的两条硬要求
 
@@ -91,7 +106,8 @@ await page.addStyleTag({ content: '* { transition: none !important; animation: n
 await page.evaluate(() => document.fonts.ready)
 ```
 
-前者冻掉 `--motion-*` 过渡，后者等自托管手写体（`Avid Sketch`，`font-display: swap`）加载完成。
+前者冻掉 `--motion-*` 过渡，后者等字体就绪（阶段 23b 起字体只有系统栈，这一步仍保留：
+它守着"将来若再引入自托管字体，截图不会截到回退字形"）。
 `playwright.config.ts` 里 `trace: 'off'`：截图 diff 足够定位问题，trace 会让产物体积翻很多倍。
 
 ## 配置

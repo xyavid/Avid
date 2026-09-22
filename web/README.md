@@ -14,9 +14,11 @@ pnpm test           # vitest：reducer / coalescer / SSE 解析（纯函数，�
 pnpm run check:layers   # A8：网络出口唯一、feature 不互相 import、store 写入口收敛
 pnpm run check:tokens   # C22：字体声明即加载、z-index 只用 --z-*
 pnpm lint               # A9/C11/C14/C15/C18：token、裸元素、i18n key 完整性、空 catch
-pnpm run gate:size      # C1/P9/C17：体积预算 + 显式豁免 + 字体/纹理字节（读 dist/）
+pnpm run gate:size      # C1/P9/C17/C18：体积预算 + 显式豁免 + CSS/字体/纹理字节（读 dist/）
+pnpm run check:contrast # 按 alpha 合成算 token 表里声明的 17 对，正文 <4.8 即红
 pnpm run verify         # 以上全部（不含 build 与 e2e；gate:size 依赖 dist/，先 pnpm build）
-AVID_E2E=1 pnpm test:e2e    # Playwright 14 项（需先 pnpm exec playwright install chromium）
+node scripts/measure-glass.mjs --base http://127.0.0.1:8877   # 手动：玻璃的长任务/帧率对照（不进 verify）
+AVID_E2E=1 pnpm test:e2e    # Playwright 45 项（含 5 条视觉基线；需先 pnpm exec playwright install chromium）
 ```
 
 **Node ≥ 22.22**：jsdom 30 依赖 undici 8，后者调 `node:worker_threads.markAsUncloneable`
@@ -53,7 +55,7 @@ AVID_E2E=1 pnpm test:e2e    # Playwright 14 项（需先 pnpm exec playwright in
 
 | 层 | 目录 | 约束 |
 |---|---|---|
-| L0 | `ui/tokens.css`、`ui/sketch.css`、`ui/primitives/`、`ui/sketch/` | 不得出现业务名词；六种形状与八个阴影档只在这里定义 |
+| L0 | `ui/tokens.css`、`ui/glass.css`、`ui/primitives/`、`ui/glass/` | 不得出现业务名词；玻璃面/高光边/投影三档/圆角四档只在这里定义 |
 | L1 | `ui/patterns/` | 有形状无状态：只接受 props，不读 store、不发请求 |
 | L2 | `features/*` | 一个业务面一个目录；**feature 之间不得互相 import**（跨 feature 经 store 或 route 组合） |
 | L3 | `layouts/` | 三栏骨架、断点、导航列收起/展开；只依赖界面域 |
@@ -68,31 +70,37 @@ AVID_E2E=1 pnpm test:e2e    # Playwright 14 项（需先 pnpm exec playwright in
    `shadow-[…]`、`z-[…]`、内联 `borderRadius`/`fontFamily`、裸 `<button>/<input>/<select>`
    （`ui/` 之外）、`transition-all`、JSX 内联文案、空 `catch` 全部报错。
 
-## 消息卡片与手绘小标记
+## 视觉语言：暖羊皮纸 + 液态玻璃
 
-时间线里用户消息与模型回复是**同一族对话框**（`ui/patterns/EntryRow.tsx` 用 `sketch-card`：
-4px 墨框 + 手绘形状 + `--sticker-4` 硬阴影；方向相反、角色标记不同，照 purrcat 的对话框
-外壳语言收敛到消息尺寸）。形状由 `ui/sketch/shapes.ts` 的 `shapeFor` 按条目序号轮换，
-序号按全部条目算，加载更早不会让已有卡片换形。模型卡片的角色标记是 `ui/sketch/AvidMark.tsx`
-的一枚静态手绘 SVG（粗笔画 + 非缩放描边 + −2deg，`aria-hidden`）。
+时间线里用户消息与模型回复是**同一族玻璃卡**（`ui/patterns/EntryRow.tsx` 用 `surface-card`：
+半透明玻璃面 + 1px 高光边 + `--lift-2` 柔和投影；方向相反、角色标记不同）。
+**卡片不再轮换形状**：旧语言那三种手绘圆角随涂鸦机制一起删除，`e2e/messages.spec.ts`
+反过来断言「所有消息卡片同形」。角色标记是两枚 lucide 图标（`Bot` / `User`，`strokeWidth
+1.75`，`aria-hidden`）。
+
+值只有一处来源（`ui/tokens.css`），语言名不进组件（`check:style` 守）：**换视觉语言只动
+L0/L1**——阶段 23b 的整个卖点。颜色的可读性由 `check:contrast` 机械守住（按 alpha 合成算），
+不是靠人记得算。玻璃的代价与模糊预算见设计文档 §8.9。
 
 ## 交互反馈（按键一律有方框）
 
 **行动型按键本身就有方框**，与「改名」等次级按钮同族：`variant="secondary"`（时间线的
-复制文本 / 查看原始 JSON、工具卡收起、处理中展开、任务卡展开、审批原因、关闭检查器、
-导航折叠、会话项删除）走 `ui/primitives/Button.tsx` 的同一套 `sketch-chip`——墨线边
-（`--stroke-hair`）、`--sketch-r-chip` 圆角、纸卡底、`--sticker-2` 档硬阴影。
-悬停由 `ui/sketch.css` 统一抬升一档（`--sticker-3`）并把按压位移同步改成新档偏移，
-按住时阴影归零；键盘聚焦有全局 `:focus-visible` 焦点环；禁用保留方框但不抬升、不位移。
+复制文本 / 从此处分支、工具卡收起、处理中展开、任务卡展开、审批原因、关闭检查器、
+导航折叠、会话项删除）走 `ui/primitives/Button.tsx` 的同一套 `surface-chip`——玻璃面 +
+1px 高光边（`--glass-edge`）、`--r-chip` 圆角、`--lift-1` 投影。
+悬停由 `ui/glass.css` 统一抬升一档投影并加一点亮度，按住时投影收掉；键盘聚焦有全局
+`:focus-visible` 焦点环；禁用保留方框但不抬升。**不位移**：新语言的高度由投影承担，
+`transform` 不参与表达层级。
 
 会话列表里的会话标题也是 `secondary`，而且 `w-full`：它和下面的「改名 / 删除」是同一排
 控件，没有理由只有它没框；框与卡片同宽（铺满卡片内容区），长会话名在框内换行而不会撑破卡片。变体只有 primary / secondary / danger 三种，**每个都自带方框**；
 原先那个无框的 `ghost` 变体在最后一个调用点消失后已删除（没有调用点的变体是不可验证的
-死代码）。时间线动作的 `opacity-0 → 100` 只决定「什么时候显形」，方框与高度档在静止时
-就已在 DOM 里。
+死代码）。时间线动作行**常驻可见**：`opacity-0` + 悬停显形已撤销（「有这功能」不该先被
+猜到），方框与高度档在静止时就在 DOM 里。
 
 取值只来自 `ui/tokens.css`，所以换主题与整体缩放不需要动组件。回归用例：
-`e2e/interaction.spec.ts`。
+`e2e/interaction.spec.ts`（断言**读 token 拼期望值**，不写字面量——换语言不必改测试），
+「长什么样」由 `e2e/visual.spec.ts` 的视觉基线守。
 
 ## 状态三域
 

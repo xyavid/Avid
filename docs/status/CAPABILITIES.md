@@ -324,7 +324,7 @@ durable、事件总数上限 4096、终态记录保留 600s 或最多 200 个 ru
 
 | 层 | 目录 | 约束 |
 |---|---|---|
-| L0 | `ui/tokens.css`、`ui/sketch.css`、`ui/primitives/` | 不得出现业务名词；形状与阴影档只在这里定义 |
+| L0 | `ui/tokens.css`、`ui/glass.css`、`ui/primitives/`、`ui/glass/` | 不得出现业务名词；玻璃面 / 高光边 / 投影三档 / 圆角四档只在这里定义 |
 | L1 | `ui/patterns/` | 只接受 props；不读 store、不发请求 |
 | L2 | `features/*`（9 个：approvals、branches、composer、conversation、inspector、sessions、settings、skills、tasks） | 可依赖 L0/L1；**feature 之间不得互相 import** |
 | L3 | `layouts/AppShell` | 不得直接读运行 store |

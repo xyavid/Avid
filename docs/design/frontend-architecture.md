@@ -21,7 +21,7 @@
 | D6 | 状态分三域：**REST 权威域（TanStack Query）+ 活动域（zustand + 纯 reducer）+ 界面域（zustand + localStorage）** | 调研里混用事件与查询缓存的样本付出了手写失效图的代价 | 两套状态机制并存，要在 lint 层禁止越界 |
 | D7 | 前端 `web/` 与 Python 包**分离开发、单进程交付**：产物复制进 `src/avid/web/static/` 随 wheel 分发 | 安装者用 uv，不该需要 Node；Chainlit 式「装包时现跑 pnpm」的失败模式更差 | 产物可能与源码不一致，需要构建戳 + 一致性检查 |
 | D8 | 契约 = **Python 侧事件/条目类型为单点**，OpenAPI 生成 TS 类型，外加一条「两侧清单一致」的机械检查 | 生成器这条路要等「事件数量 × 变更频率」超过人工同步成本才划算 | 早期多一条测试，少一次代码生成 |
-| D9 | 视觉方向 = **涂鸦潦草风，照 purrcat 实现并 token 化**；落地靠 token 单点 + 会失败的样式禁令 + a11y 阻塞门禁 | 语言在 purrcat 里已经成形，但 738 处 hex / 498 处硬阴影 / 228 处内联手写字体全部未 token 化——这是「真实重复」的教科书案例 | 初期写组件的摩擦变大；偏离 token 的临时样式会被拦 |
+| D9 | 视觉方向 = **涂鸦潦草风，照 purrcat 实现并 token 化**（**已被阶段 23b 替换为暖羊皮纸 + 液态玻璃，见 §8**）；落地靠 token 单点 + 会失败的样式禁令 + a11y 阻塞门禁 | 语言在 purrcat 里已经成形，但 738 处 hex / 498 处硬阴影 / 228 处内联手写字体全部未 token 化——这是「真实重复」的教科书案例 | 初期写组件的摩擦变大；偏离 token 的临时样式会被拦 |
 | D10 | v1 **不做**：首页、Web 终端、IDE 面板、桌面壳、多用户/鉴权、中文手写体、i18n 框架、前端侧任务写操作、subagent 子事件转发、虚拟列表 | 每一条都有明确的重新考虑信号（§5.5、§16） | 形态朴素 |
 
 **当前基线（写作时实测）**：内核运行期依赖只有 `httpx>=0.27`（`pyproject.toml:7`）；参照实现 purrcat 的 UI 为 React 18 + Vite 5 + Tailwind 3，视觉语言已成形但未 token 化（738 hex / 498 硬阴影 / 295 墨边 / 228 内联手写字体，§8.0）；`agent_loop` 的对外观察点只有 `on_message`（`src/avid/runtime/loop.py:96,103`）；模型调用非流式（`src/avid/ai/client.py:166-178`）；本机 Node `v24.15.0`、pnpm `10.29.3`、uv `0.12.9`；仓库无 CI（无 `.github/`）。
@@ -179,7 +179,7 @@ Avid/
 │   │   │   ├── sketch/                # 手绘轮廓 SVG blob + 胶带/便签构件（≤6 个入口用）
 │   │   │   ├── primitives/            # Button / Dialog / Field / Tooltip / Toast（含按压位移）
 │   │   │   └── patterns/              # ToolCallCard / ApprovalBar / StepGroup / TodoPanel…
-│   │   ├── assets/fonts/              # 自托管手写体拉丁子集（≤60 KB）；无 Google Fonts 请求
+│   │   ├── assets/                    # 空：手写体已弃用，字体只剩系统栈（零自托管文件）
 │   │   ├── features/
 │   │   │   ├── conversation/  approvals/  tasks/  sessions/  inspector/  composer/
 │   │   ├── layouts/AppShell.tsx       # 三栏 + 响应式 + 键盘图
@@ -207,7 +207,7 @@ Avid/
 | 层 | 内容 | 约束 |
 |---|---|---|
 | L0 `ui/tokens.css` + `ui/sketch.css` + `ui/primitives/` | 涂鸦 token（形状/硬阴影/墨线/纸纹/倾斜）+ 无样式原语包装（Radix/Base UI） | 不得出现业务名词；不得 import `state/`、`features/`；六种形状与八个阴影档只在这里定义 |
-| L1 `ui/patterns/` | 有形状无状态：`ToolCallCard`、`ApprovalBar`、`StepGroup`、`EntryRow` | 只接受 props；不得读 store、不得发请求 |
+| L1 `ui/patterns/` + `ui/glass/` | 有形状无状态：`ToolCallCard`、`ApprovalBar`、`StepGroup`、`EntryRow`；玻璃原语 `Backdrop`、`GlassTag` | 只接受 props；不得读 store、不得发请求 |
 | L2 `features/*` | 一个业务面一个目录，`components/ hooks/ index.ts` | 可依赖 L0/L1；**feature 之间不得互相 import**（跨 feature 经 store 或 route 组合） |
 | L3 `layouts/AppShell` | 三栏骨架、响应式、键盘图 | 可依赖含 `uiStore`；不得直接读 `runStore` |
 | L4 `routes/` | URL ↔ feature 组合，接查询 hooks 与 store | 唯一允许把查询结果与 store 数据拼在一起的地方 |
@@ -538,118 +538,131 @@ class RunObserver(Protocol):
 
 ---
 
-## 8. 界面美观性如何落地：涂鸦潦草风
+## 8. 界面美观性如何落地：暖羊皮纸 + 液态玻璃
 
-**视觉方向由直接指令确定：前端 UI 参考 purrcat 的涂鸦潦草风。** 这一节把 purrcat 已有的视觉语言**量化、token 化、并补上它缺的可访问性与门禁**。所有数值都是我在 `dev/tmp/purrcat-src/ui/` 上实测量的（2026-09-17 快照）。
+**视觉方向由直接指令确定过两次**：v1 参考 purrcat 的涂鸦潦草风（阶段 14 冻结）；阶段 23b
+由需求方给出新的参照物（一张产品截图）并要求**融入液态玻璃**。本节记录第二次替换后的语言、
+它的值来源与实测依据。
+
+> 前一次的语言（涂鸦九机制：手绘圆角 / 硬偏移阴影 / 墨线 / 纸纹 / 倾斜 / 手绘轮廓 /
+> 笔触填充 / 胶带）**已整体删除**。撤掉它的判据是 23b 的 G1：视觉语言的名字原先散在
+> 21 个 L2 文件、5 个 e2e spec 与 33 条钉死取值的断言里，于是「换风格」必须动展示层。
+> 类名中立化先做（零像素变化），让后面的替换只动 L0/L1。
 
 ### 8.0 参照物的量化体检
 
-purrcat 的 UI 是一套已经成形的「纸面 + 墨线 + 贴纸」语言，实测：
+参照物是需求方提供的一张产品截图（2547×1378，DPR≈2）。体检结论：
 
-| 维度 | 实测 | 出处 |
-|---|---|---|
-| 页面/视图 | 8 条路由：会话、任务、编辑器、记忆、市场、进化、IDE、首页 | `src/App.tsx:50-59` |
-| 手绘圆角 | **41 处内联 `borderRadius` 多值 + 3 个导出常量**（`sketchyShape1/2/3`，三种排列），而这 3 个常量被**复制到 9 个文件**各一份 | `src/components/chat/ChatShared.tsx:8-10`；`src/App.tsx:18`；`HomePage.tsx:10-12`、`EditorPage.tsx:11-12`、`Toolbar.tsx:12-14`、`CustomNode.tsx:7-9`、`NodePanel.tsx:5-7`、`AgentLoopEditor.tsx:154-156` 等 |
-| 硬偏移阴影 | **498 处** `shadow-[Npx_Npx_0_0_...]`，N ∈ {1,2,3,4,6,8,10,12,16}；另 42 处 `inset` 内凹 | 全仓统计 |
-| 墨线边框 | **395 处 `border-4 border-ink` + 232 处 `border-2 border-ink`** | 全仓统计 |
-| 纸纹 | 点阵 `radial-gradient(#1a1a1a 1px, transparent 1px) / 24px 24px`，每个页面都用 | `src/index.css:22-27`；`HomePage.tsx:38` |
-| 倾斜 | 298 处 rotate，其中 193 处是静态（`rotate-1` 189 为主，长尾到 `rotate-9`），其余在 hover 态 | 全仓统计 |
-| 手写字体 | **228 处内联 `fontFamily: '"Comic Sans MS", cursive'`** | 全仓统计 |
-| 色值 | **738 处 hex、57 个唯一值**，未 token 化；其中 **4 个值占 52%、6 个值占约 64%**（`#EBCB8B` 114、`#BF616A` 111、`#A3BE8C` 97、`#88C0D0` 63、`#FDF8F0` 46、`#D08770` 36） | 全仓统计 |
-| 阴影颜色 | 498 处硬阴影里 **425 处是同一个 `rgba(26,26,26,1)`**，35 处 `rgba(26,26,26,0.05)`，15 处 terracotta | 全仓统计 |
-| 组件层 | **没有 `ui/` 原语层**；页面把约 95 个键的 `modalProps`、35 个键的 `sidebarProps` 大对象展开传下去，接收端统一 `function X(props: any)`；全仓 `any` 约 137 处 | `ChatPage.tsx:1141-1174`；`ChatModals.tsx:7-27`；`ChatSidebar.tsx:7-18` |
-| 声明了但没装的字体 | `tailwind.config.js` 把 `sans` 声明为 `Inter, ui-sans-serif, system-ui`，但 Inter 从未安装或加载，实际一直是系统字体 | `tailwind.config.js:16-19`；`package.json:12-31` |
-| 模态层级 | 18 个模态框用 z-index **100 / 150 / 200 / 250**，遮罩统一 `fixed inset-0 bg-ink/40 backdrop-blur-sm`，容器统一 `bg-paper border-4 border-ink shadow-[12px_12px_0_0_ink]` + 小角度倾斜 | `ChatModals.tsx` 全篇；`ChatPage.tsx:1184` |
-| 自托管字体 | Playfair Display 400/600/700，走 `@fontsource`，**理由是 Google Fonts 的 `@import` 是渲染阻塞请求、国内网络会挂起导致首屏白屏** | `src/main.tsx:5-11` |
-| 按压交互 | `active:translate-y-[2px] active:translate-x-[2px] active:shadow-none`——位移量恰好等于阴影偏移，阴影消失 | `src/components/chat/ChatSidebar.tsx:23` |
-| 布局 | 整页纸张背景 → 左侧栏 320px + 对话卡（面板打开时压到 420px）→ 头部 40×40 工具按钮 + 计数徽标 | `ChatPage.tsx:1177,1234,1237,1276-1288` |
-| 面板高度 | 原生 `resize-y` + `min-h-[35vh] max-h-[85vh]`，**不引可拖拽分栏库** | `src/components/chat/ChatPanels.tsx:18` |
-| 模态倾斜 | 外壳 `-rotate-1`，内容 `rotate-1` 反向抵消（倾斜框、正内容） | `src/components/ChatPage.tsx:1184-1185` |
-| i18n | 单文件字典（568 行）、10 个命名空间 × 2 语言、`t()` 848 处、localStorage + `documentElement.lang` 同步 | `src/i18n.tsx:510-540` |
+| 维度 | 实测 |
+|---|---|
+| 底 | `#f2e7d0` 羊皮纸（占 **50.7%**）——**暖色浅底**，不是常见的深色玻璃 |
+| 面 | 侧栏 `#ecdfc2`（深一档）/ 顶栏 `#f4e9d1`（浅一档）/ 输入条 `#fef7e8`（最亮） |
+| 边 | `#cdc1aa` 1px；次级 `#e1cdaf` |
+| 墨 | `#3a2a18` **深褐**而非纯黑 → 与底 11.23:1 |
+| 面板质地 | 面板内部通道标准差 ≈ 0：**它是不透明平涂，不是玻璃**——玻璃是要加进去的，不是它已有的 |
+| 背景 | 一幅整幅手绘插画覆盖页面中部大部（无文字区 sd 17–40、深色像素 1–6.5%） |
+| 阴影 | 极弱或没有：它靠 1px 边框与一档色差分层 |
+| 密度 | 小而密（右侧卡片区行距约 20 CSS px） |
 
-结论：**语言已经存在，缺的是 token 化与门禁**——498 处阴影、41 处圆角、228 处字体、738 处 hex 都是同一个值的重复书写。这正是 §2 里「真实重复」的教科书案例，也是 §8.2 那些禁令的由来。
+三条从参照物直接推出的机制结论：
 
-### 8.1 涂鸦语言：token 化后的九个机制
+1. **模糊只能模糊背景里已有的东西**。纯平底色上，玻璃只剩「高光边 + 投影」能被看出来；
+   那点「液态」的错觉需要背景有明暗变化。参照物用一幅插画提供它，我们用**纯 CSS 光斑
+   网格**顶替（插画不进仓，见 §8.9 的预算条目）。
+2. **参照物的质感来自插画与色温，不是来自阴影**。所以高度层级改由**投影的远近与软硬**
+   承担，而不是旧语言那种"硬偏移阴影的位移量 = 层级"。
+3. **密度不跟参照物**：它是信息密度偏高的多面板工具，而 Avid 是读长工具输出与 diff 的
+   界面，保持既有字阶与行距。
 
-全部只用 CSS 与内联 SVG，**不用位图纹理、不用 SVG 滤镜、不旋转正文**（理由见 §8.9）。
+### 8.1 玻璃语言：九个机制
+
+全部只用 CSS（`backdrop-filter` + 渐变 + `box-shadow`），**不用位图纹理、不用 SVG 滤镜、
+不旋转任何东西**。
 
 | 机制 | token | 规则 |
 |---|---|---|
-| ① 手绘圆角 | `--sketch-r1/r2/r3`（purrcat 的三个 255/225/15 排列）+ `--sketch-r-chip`（小控件，`4px 6px 3px 5px/5px 3px 6px 4px`）+ `--sketch-r-blob`（`50% 10% 50% 10%`） | 保留**三种**容器形状：相邻同级卡片依次轮换 1→2→3，禁止连续两张同形（这是 purrcat 之所以写三个常量而非一个的原因） |
-| ② 硬偏移阴影 | `--sticker-1/2/3/4/6/8/12/16`（`Npx Npx 0 0 var(--avid-ink)`）+ `--sticker-inset-2/4` + `--sticker-accent-4/6` | 偏移量就是**高度层级**：1–2 行内控件、3–4 卡片与按钮、6–8 面板、12–16 主容器与模态。hover 抬升 = 档位 +1；`active` = 位移等于本档偏移且阴影归零（purrcat 的按压机制） |
-| ③ 墨线 | `--stroke-hair: 2px` / `--stroke-bold: 4px` | 2px 给控件与徽标，4px 给卡片与面板；两者的使用比例在 purrcat 里是 232 : 395，保持一致的分工 |
-| ④ 纸纹 | 点阵 background-image + `--paper-bg` | 只用 CSS 渐变；点阵间距固定 24px；**任何位图纹理禁止进仓** |
-| ⑤ 倾斜 | `--tilt-1: 1deg` / `--tilt-2: 2deg` / `--tilt-6: 6deg` | 1deg 是默认（purrcat 189 处），6deg 只给 ≤48px 的图标片与胶带；**正文、代码、工具输出、输入框一律 0deg**；倾斜外壳必须反向抵消内容（照 purrcat 的模态做法） |
-| ⑥ 手绘轮廓 | 内联 SVG blob 路径 + `stroke-width: 4.5` + `vector-effect: non-scaling-stroke` + `stroke-linejoin: round` | 只用于一级入口（≤6 个）；每个几百字节，零依赖。这是 purrcat 首页大按钮的做法（`HomePage.tsx:63-65`） |
-| ⑦ 笔触填充 | `repeating-linear-gradient(±45deg, …)` | 进度条、占用率、热力图、「已完成」底纹；正负 45° 区分状态（vocabulary 里的 `.hatch`；本项目的头部占用条已按"它显示的不是实时占用"删掉，这个填充留给进度类表达） |
-| ⑧ 胶带与便签 | `--sketch-r-chip` + 半透明标注色 + `--tilt-2` | 会话 ID / 运行 ID 用右上角斜贴标签（`-top-2 right-12`）；无运行时空贴一条胶带。**这条让「当前是哪个 run/会话」始终可见**，与 §5.4 的 ID 可见性要求同向（`ChatPage.tsx:1240-1243`） |
-| ⑨ 空态与图标 | lucide + `strokeWidth 2.5/3/3.5`；空态图标 `strokeWidth 1.5`、48px | 粗笔画本身就是涂鸦感，**不额外做手绘图标集**（省一整套资产）；空态照 purrcat 的「大图标 + 一行说明」（`ChatPanels.tsx:29`） |
+| ① 玻璃面 | `--glass-face`（`--avid-glass-rgb` @ `--glass-alpha`） | 四档面共用 |
+| ② 高光边 | `--glass-edge`（`--stroke-hair` + `--avid-edge-rgb` @ `--glass-edge-alpha`） | 1px 白边；`--glass-edge-soft` 给身份标签 |
+| ③ 高光带 | `--glass-sheen` | 上边一道亮线 + 下边一道极淡暗线：玻璃的"厚度"全在这两行 |
+| ④ 模糊 | `--glass-blur` + `--glass-saturate` | **只给面板类**（数量上限见 §8.9） |
+| ⑤ 投影三档 | `--lift-1/2/3` | 高度 = 投影的远近与软硬；hover 抬一档、按住收掉（不位移） |
+| ⑥ 光斑背景 | `--avid-blob-1..4-rgb` 四道径向渐变 | 纯 CSS；`ui/glass/Backdrop`，`aria-hidden` |
+| ⑦ 圆角四档 + 胶囊 | `--r-chip/face/card/panel` + `--r-pill` | 10 / 12 / 18 / 24 px；**不再有形状轮换** |
+| ⑧ 身份标签 | `.id-tag` / `.id-tag-empty` | 取代胶带：承担「当前是哪个 run/会话」的可见性（**功能不是装饰**，无倾斜） |
+| ⑨ 图标 | lucide，`strokeWidth 1.75` | 两枚角色标记用 `Bot` / `User`；不自己画一套图标集 |
 
-**层级（z-index）也必须有刻度**，照 purrcat 的 100/150/200/250 扩成六个 token：`--z-base: 0`、`--z-sticky: 100`（粘性头部）、`--z-drawer: 150`（检查器抽屉）、`--z-modal: 200`、`--z-toast: 250`、`--z-shell-chrome: 300`（桌面壳专属，浏览器里不使用）。禁令：禁止任意值 `z-[…]`，尤其禁止 `z-[2147483647]`（purrcat 用它做拖拽条，在浏览器里会盖住整页顶部 32px 的点击）。
+层级刻度（`--z-*`）不变。旧语言的 `--sketch-*` / `--sticker-*` / `--tilt-*` / `--hatch-*` /
+`--paper-*` / `--font-sketch` 全部删除，没有留成"备用"。
 
-### 8.2 色板与语义角色
+### 8.2 色板、对比度红线，以及修掉的 9 处旧缺陷
 
-purrcat 的 57 个 hex 实际分三组，**必须分开治理**：UI 纸面色、状态标注色、终端主题色。
-
-| 角色 | token | 值（来自 purrcat） | 允许用途 |
+| 角色 | token | 值 | 允许用途 |
 |---|---|---|---|
-| 画布纸面 | `--avid-paper` | `#FDFAF5` | 页面底 + 点阵 |
-| 卡片 | `--avid-card` | `#FFFFFF` | 便签/卡片底 |
-| 凹陷/次级 | `--avid-sand` | `#E8E5DF` | 次级按钮、禁用态 |
-| 输入底 | `--avid-input` | `#FDF8F0` | 输入条与表单（与卡片白区分开，purrcat 用 46 处） |
-| 墨 | `--avid-ink` | `#1A1A1A` | 边框、正文、硬阴影 |
-| 墨的层级 | `--avid-ink-70/50/40` | 同色不同 alpha | **见下面的对比度红线** |
-| 强调 | `--avid-accent` | `#D47A5A`（terracotta） | 主行动、品牌、选中边 |
-| 标注·底 | `--avid-ok-bg` `--avid-warn-bg` `--avid-danger-bg` `--avid-info-bg` `--avid-mark` | `#A3BE8C` `#D08770` `#BF616A` `#88C0D0` `#EBCB8B` | **只能做底、边框、徽标填充** |
-| 标注·文字 | `--avid-ok` `--avid-warn` `--avid-danger` `--avid-info` | `#729654` `#D08770` `#BF616A` `#5E81AC` | 文字与图标（`#A3BE8C` 做文字对比度不足，必须用它的深色伴生值） |
-| 终端主题 | `--term-*` | Nord `#2E3440`/`#4C566A`/`#88C0D0`… 与 Catppuccin `#1E1E2E`/`#CDD6F4`/`#F5E0DC`… | 只给代码块与终端，**不进 UI 语义色**（混进来会让「换主题」变成不可能） |
+| 页面底 | `--avid-paper-rgb` | `246 236 216` | 光斑底 |
+| 光斑 | `--avid-blob-1..4-rgb` | `255 247 232` → `230 198 156` | 背景层（最深的一档决定最坏底色） |
+| 玻璃面 | `--avid-glass-rgb` | `255 252 244` | 四档面 |
+| 次级板 | `--avid-panel-rgb` | `236 223 194` | 凹陷 / 次级 |
+| 墨 | `--avid-ink-rgb` | `58 42 24` | 边框、正文、投影 |
+| 次级墨 | `--avid-ink-muted` | ink @ 73% | **唯一**允许的次级文字档 |
+| 强调 | `--avid-accent-rgb` + `-deep` / `-soft` / `-ink` | `201 123 63` / `161 96 45` / `207 137 84` / `138 82 39` | 实心底配浅字 / 浅底配墨字 / 作为文字 |
+| 状态 | `-bg` 与文字两套 | ok / warn / danger / info | `-bg` 只做填充与边框；文字是压暗伙伴 |
 
-**对比度红线（purrcat 的实际缺陷，必须修）**：purrcat 在 10px 文本上用 `text-ink/40`（例如 `ChatPage.tsx:1334` 的统计标签），合成后约 3.4:1——**小字号不达 WCAG AA**。因此：
+**对比度红线由 `check:contrast` 机械守住**：它按 alpha 合成跑 token 表里**声明**的 17 对
+（取值全部从 `ui/tokens.css` 读，不写字面量），门槛 4.5、设计目标 **4.8**——目标是 4.8 而不是
+4.5，因为"刚好通过"是巧合不是设计。最坏底色 = 最深光斑 + 玻璃层（模糊只会把极端值往均值拉，
+所以这样取是保守的）。
 
-- `--avid-ink-40` 只允许用于 ≥18.66px 的文本，或 ≥14px 加粗（WCAG 大字门槛）；
-- 小字号（≤12px）只允许 `--avid-ink` 与 `--avid-ink-70`；
-- 对比度脚本必须**按 alpha 合成后**计算（把 `rgb(26 26 26 / 40%)` 合到它的实际底色上），而不是只比 token 对；
-- 状态色永远「深色文字 + 浅色底」，禁止「浅色文字 + 深色底」的自创组合（purrcat 有 `bg-[#a3be8c] text-ink` 的正确用法，也有 `text-paper` 配浅底的越界处）。
+顺带修掉的是**旧设计里 9 处从未被验过的不达标**。旧文档声称修掉了 purrcat 的对比度缺陷，
+但状态色自己没被算过：
 
-### 8.3 字体：手写体只给拉丁与数字
+| 配对 | 旧实测 | 处置 |
+|---|---|---|
+| 四色状态文字 on 纸面 | 3.25 / 2.73 / 3.93 / 3.87 | 压暗到 4.81–4.86（对最坏玻璃底） |
+| `ink/60` `/50` `/40` | 3.70 / 2.85 / 2.24 | 删掉散档，只留 `ink-muted`（5.34） |
+| `Button` 的 `bg-accent text-ink` | 4.19 | 实心强调底改 `--avid-accent-deep-rgb` + `text-card` |
+| `ToolCallCard` 的 `text-accent` | 2.52 | 改 `--avid-accent-ink-rgb` |
 
-purrcat 的教训与缺陷各一条：
+一条容易搞反的规则：**给深色填装配墨字要提亮，不是压暗**（压暗只会让对比度更低）。
+danger 的浅底因此从 `#bf616a` 提到 `#ce858c`（3.37 → 4.83）。
+状态色永远「深色文字 + 浅色底」，禁止自创「浅色文字 + 深色底」。
 
-- **可抄**：字体自托管，不用 Google Fonts。purrcat 把 `@import` 改成 `@fontsource`，原因写在 `src/main.tsx:5-11`——渲染阻塞请求在国内网络会挂起，首屏白屏。
-- **必须改**：`"Comic Sans MS", cursive` 是 Windows/macOS 的系统字体，**Linux 上没有**（Avid 的开发与运行环境就是 Linux/WSL），落到泛型 `cursive` 后不同平台字形完全不同；而且它不含 CJK，中文文案下必然混排。
+### 8.3 字体：两族，标题靠字重
 
-决策：
+1. `--font-sans`：系统栈承担全部正文、标题与中文。
+2. `--font-mono`：代码、工具输出、ID、路径。
+3. **弃用自托管手写体**（旧方案的 13,156 B 拉丁子集）。理由：手写体只覆盖拉丁与数字，
+   中文永远走系统栈，于是"标题用另一种字体"这件事本身只在西文成立、中英混排必然突兀。
+   新语言里标题由**字号 + 字重**区分（h1–h3 显式 `font-semibold`）。`font_bytes` 预算
+   据此重冻为 **0**（§9）。
+4. 构建期断言不变：产物与源码零 `fonts.googleapis` / `fonts.gstatic` 请求。
+   `check:tokens` 要求每个字体 token 要么有 `@font-face`、要么是系统栈——它在 23b 直接
+   拦下了「`--font-display` 别名到 `--font-sans`」这种空操作写法；处置是**按门禁的意图把
+   那个角色整个删掉**，而不是放宽门禁。
 
-1. `--font-sketch`：自托管一份**开源手写体（拉丁 + 数字子集）**，预算 ≤60 KB woff2，只用于品牌、标题、≤8 字符的标签与数字（工具名、计数、ID）。许可必须是 OFL/Apache 一类的可再分发许可，且许可证文本进仓。
-2. `--font-sans`：系统栈（`system-ui, "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif`）承担全部正文与中文。**中文 v1 不入手写体**。
-3. `--font-mono`：代码、工具输出、ID、路径用等宽栈（purrcat 用 `Cascadia Code/Fira Code/JetBrains Mono/Consolas`，我们加 `ui-monospace` 前缀）。
-4. 构建期断言：产物与源码中**零**对 `fonts.googleapis.com` / `fonts.gstatic.com` 的请求；字体文件从本地路径加载并有 `font-display: swap`。
-5. 中文手写体的可选路径（F4，先测量再决定）：因为 §8.8 已把文案收敛到单文件字典，可以用 `pyftsubset` 把一份开源中文手写体裁到**字典里实际出现的字符集**。诚实估算：300–600 个独立字形，woff2 约 120–300 KB，必须作为 `EXEMPT` 表里一条带原因与上限的豁免。**触发信号**：出现「中文标题也必须是手写体」的明确要求，或拉丁手写体与中文正文混排被判定为突兀。在此之前不做——正文用中文手写体会显著损害可读性，这个代价不该在 v1 付。
-
-### 8.4 布局：纸张画布 + 弹性对话卡 + 便签检查器
+### 8.4 布局：光斑画布 + 弹性对话卡 + 玻璃检查器
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ 点阵纸张画布（absolute inset-0，整页）                                  │
+│ 光斑画布（absolute inset-0，整页，aria-hidden）                        │
 │ ┌────────────┐ ┌──────────────────────────────┐ ┌──────────────────┐ │
-│ │ 导航便签列   │ │ 对话卡（flex-1，侧栏开时 420px）│ │ 检查器卡 420px     │ │
-│ │ 320px       │ │ ┌ 头部：标题 + 状态 + 轮次/token + 常驻 ID 胶带  │ │ 默认收起        │ │
+│ │ 导航列 320px │ │ 对话卡（flex-1，侧栏开时 420px）│ │ 检查器卡 420px     │ │
+│ │              │ │ ┌ 头部：标题 + 状态 + 轮次/token + 常驻 ID 标签  │ │ 默认收起        │ │
 │ │ 会话列表     │ │ ├ 时间线（唯一滚动容器）        │ │ resize-y 调高度   │ │
 │ │ 任务入口     │ │ │  用户便签 / 步骤组 / 工具卡   │ │ 全文 / diff /     │ │
 │ │ 技能目录     │ │ │  审批卡（徽标 + 展开原因）     │ │ 原始 JSON         │ │
-│ │ 设置        │ │ └ 输入条（便签纸 + 胶带）        │ │                  │ │
+│ │ 设置        │ │ └ 输入条（玻璃面 + 占用指示器）   │ │                  │ │
 │ └────────────┘ └──────────────────────────────┘ └──────────────────┘ │
 └──────────────────────────────────────────────────────────────────────┘
         侧栏打开时隐藏导航列（purrcat ChatPage.tsx:1234）
 ```
 
-- **卡片叠放规则**：主容器 `border-4 + sticker-12`；检查器/面板 `border-4 + sticker-8`；时间线条目 `border-4 + sticker-4`；工具按钮 `border-2 + sticker-2`。**高度只用阴影偏移表达**，涂鸦风里没有柔光阴影。
+- **卡片叠放规则**：四档面（`surface-main` / `surface-panel` / `surface-card` / `surface-chip`）+ 投影三档 `--lift-1/2/3`。**高度由投影的远近与软硬表达**（旧语言是硬阴影的位移量）；面本身靠 `--glass-face` 的半透明与 `--glass-edge` 的高光边分层。
 - **弹性而不是固定三栏**：对话卡 `flex-1 min-w-[420px]`，检查器出现时压到 420px 并 `transition-all duration-300`（照 purrcat `ChatPage.tsx:1237`）。窄屏时检查器升格为全屏覆盖层。
 - **检查器高度用原生 `resize-y`**（purrcat `ChatPanels.tsx:18` 的 `h-[55vh] min-h-[35vh] max-h-[85vh] resize-y`）。这比我原稿的「不做可拖拽分栏」更进一步：**不引 `react-resizable-panels`，但保留了人调高度的能力**，且宽度不调（避免与 §8.6 的断点争权）。
 - **时间线是唯一滚动容器**：导航与检查器各自滚动。吸底规则：用户上滚后不抢滚动，回到底部 40px 内才恢复。
-- **ID 可见性**：会话/运行 ID 以斜贴便签常驻卡片右上角；这正是 purrcat 的做法，且对 Avid 有用——多标签页或长会话里「我在看哪个 run」是实际需求。
+- **ID 可见性**：会话/运行 ID 以玻璃标签（`ui/glass/GlassTag`）常驻卡片头部；多标签页或长会话里「我在看哪个 run」是实际需求。**这是功能不是装饰**——它随旧语言换了形式，但没被删掉。
 - **导航有两种，不要都做成路由**：照 purrcat 的分工——**换工作面的走路由**（会话、任务板、技能目录），**同一个工作面里的子面板就地切换**（purrcat 点 MCP/Skill/Cron/Sensor 时不跳路由，只切 `sidebarMode` 并留一个「返回」按钮，`ChatPage.tsx:129` + `ChatSidebar.tsx:33/80/114/139/162`）。对 Avid：`inspector` 的三个视图（工具全文 / diff / 原始 JSON）属于就地切换，不进 URL 历史——否则浏览器后退键会被面板开关塞满。
-- **每条消息带一行动作**（purrcat `ChatPage.tsx:1436-1475` 有 trace / 压缩记忆 / 分支 / 换 loop）：Avid 的条目动作是「复制文本」「查看原始 JSON」「（F4 之后）从这里开分支」。动作行默认 `opacity-0`、悬停或键盘聚焦时出现（purrcat 的 `group-hover/bubble:opacity-100`），但**键盘 Tab 到该条目时必须可见**，否则等于只有鼠标用户能用。
+- **每条消息带一行动作**：Avid 的条目动作是「复制文本」「从此处分支」。动作行**常驻可见**（曾经的 `opacity-0` + 悬停显形已撤销：显隐只是额外一层谜，「有这功能」不该先被猜到）；条目级的「查看原始 JSON」已删，检查器改由工具卡的「查看」打开。
 - **非 main 分支只读**：purrcat 在子分支上把输入区换成只读提示（`ChatPage.tsx:1566-1568`），避免把消息写到错的分支。Avid v1 只在 `main` 上跑运行，这条在 F4 引入分支视图时照做。
 - **入口**：v1 **不做首页**。purrcat 的首页（大号手绘 blob 按钮 + 斜贴设置钮）好看，但对单用户本地工具是一次多余点击；一级切换由顶部工具按钮 + `⌘K` 命令面板承担。**重新考虑信号**：出现 3 个以上互相独立的工作面（例如未来的 fork 视图、评测看板），那时首页才是导航而不是仪式。
 
@@ -666,11 +679,11 @@ purrcat 的教训与缺陷各一条：
 | `TaskPage`/`MemoryPage`/`MarketPage`/`EvolvePage`/`EditorPage` | 只做任务板（只读）；其余不做 | Avid 没有长期记忆、市场、自我进化、DAG 编辑这些对象 |
 | `ConfigModal`（多标签配置） | 做 `features/settings`（读 `/api/meta`；改配置仍走 CLI/环境变量） | 前端不改 `.env` |
 | Electron 壳（preload + 窗口控制 + 32px 拖拽条） | 不做（§5.5） | 真要做时照 purrcat，但**必须补路径白名单**：它的 `fs:readFile/writeFile/readDir/stat` 无白名单。另：`-webkit-app-region` 与那条 32px `z-[2147483647]` 在浏览器里会挡住顶部点击，必须只在 `html[data-shell="desktop"]` 下生效 |
-| `MarkdownComponents`（标题带下划墨线、引用 terracotta 左边框、行内码带框、代码块带硬阴影、表格 2px 墨框） | **做**：`lib/markdown/` 的直接蓝本 | 差异：代码块不加 4px 边框内的倾斜，`pre` 必须 `overflow-x-auto`，长命令行不能被卡片撑破 |
+| `MarkdownComponents`（标题带下划线、引用左边框、行内码带框、代码块带底、表格带框） | **做**：`lib/markdown/` 的直接蓝本 | 差异：代码块是深底等宽块（`.term`），标题用 1px 下划线与字重而非墨线，`pre` 必须 `overflow-x-auto`，长命令行不能被卡片撑破 |
 
-每个 `ui/patterns/*` 组件必须在同目录 README 里声明四件事，缺一不算完成：**状态**（`pending/running/ok/failed/denied/truncated` 各一个 Storybook story）、**密度**（compact 时间线 / comfy 检查器）、**折叠默认值**、**a11y 契约**（accessible name 来源、`aria-expanded`、错误态 `role="alert"`）。
+每个 `ui/patterns/*` 组件必须在同目录 README 里声明四件事，缺一不算完成：**状态**、**密度**（compact 时间线 / comfy 检查器）、**折叠默认值**、**a11y 契约**（accessible name 来源、`aria-expanded`、错误态 `role="alert"`）。**没有 Storybook**（引入它要一整套构建与依赖，与零新依赖的取舍冲突）：视觉基线（§8.9）承担「长什么样」的回归，e2e 断言承担「机制还在」的回归。
 
-**工具卡的两态形状直接照 purrcat**（`chat/ChatShared.tsx:176-230`）：折叠态是 `w-fit max-w-[250px] px-4 py-2 border-2` 的小 chip——工具调用用 `--avid-mark/40` 底显示 `CALL: <name>`，工具结果用 `--avid-ok-bg/30` 底显示 `RESULT:`；展开态 `w-full p-4 border-4` + 等宽内容 + 显式 `COLLAPSE` 按钮。这样时间线在默认状态下只有「谁被调用、返回了没有」两行信息，符合 §8.3 里「打开会话看到的应该是结论而不是噪音」的默认值取向。
+**工具卡的两态形状**：折叠态是 `w-fit` 的小 chip（`surface-card`，工具调用用 `--avid-mark/40` 底显示 `CALL: <name>`）；展开态是 `w-full` 的玻璃卡 + 等宽内容（`.term`）+ 显式「收起」按钮。这样时间线在默认状态下只有「谁被调用、返回了没有」两行信息——打开会话看到的应该是结论而不是噪音。
 
 **「思考中」是独立卡片，且折叠偏好要记住**（同 `ReasoningBubble`，`:248-331`）：进行中显示 `PROCESSING…` chip 并提供暂停；展开时是全宽、`max-h-72 overflow-y-auto`、自动滚底；结束后退化为浅色 chip。折叠偏好写 `localStorage`（purrcat 用 `purrcat-thinking-expanded`），避免用户每次都要重新折叠。对 Avid 而言这一层承载 `transient` 事件里的轮次/工具进度，以及 F3 之后的 delta。
 
@@ -700,21 +713,21 @@ purrcat 的教训与缺陷各一条：
 |---|---|---|
 | 宽 | ≥1280px | 导航 320 + 对话卡自适应 + 检查器 420（可收起） |
 | 中 | 960–1279px | 导航折叠为 64px 图标轨；检查器变右侧抽屉覆盖对话卡 |
-| 窄 | <960px | 单列；导航变顶部 sheet；输入条固定底部；点阵间距与倾斜全部减半（拥挤时涂鸦会变成噪音） |
+| 窄 | <960px | 单列；导航变顶部 sheet；输入条固定底部（光斑背景不随断点变化：它没有高频细节，缩小不产生噪音） |
 
 - **触控目标 ≥44px**：用 `max(var(--avid-control-height), 2.75rem)`，不写死像素。
-- **全局文本缩放**：`html { font-size: calc(1rem * var(--avid-text-scale, 1)) }`，设置面板四档 90/100/110/125%。**注意**：手绘圆角与硬阴影用的是 px，缩放时阴影偏移不变会让层级感变弱——用 `--sticker-*` 的档位跟随 `--avid-text-scale` 的 `calc` 一起缩放。
+- **全局文本缩放**：`html { font-size: calc(1rem * var(--avid-text-scale, 1)) }`，设置面板四档 90/100/110/125%。**注意**：旧语言的硬阴影位移本身就是层级线索，所以必须随缩放一起走；新语言的投影是柔光（远近与软硬），不参与缩放——那条像素级依赖随之消失。
 - **不假设桌面**：桌面壳专属样式（拖拽条、`app-region`）单独放 `layouts/shell-desktop.css`，默认不加载。
 
-### 8.7 可访问性（涂鸦风特有的五个风险）
+### 8.7 可访问性（新语言特有的五个风险）
 
 | 风险 | 具体表现 | 处置 |
 |---|---|---|
-| alpha 文本对比度 | purrcat 在 10px 上使用 `text-ink/40`（≈3.4:1） | 对比度脚本按 alpha 合成计算；小字号只允许 ink/ink-70（§8.2） |
-| 倾斜损害可读性 | 298 处 rotate，长文本一旦倾斜就有锯齿与阅读成本 | **消息正文、代码、工具输出一律 0deg**；输入框容器允许 ≤0.5deg（purrcat 实测 `-rotate-[0.5deg]`，它不承载长文本阅读）；装饰外壳倾斜并反向抵消内容；非图标元素上限 2deg，6deg 只给 ≤48px 的元素 |
+| alpha 文本对比度 | 半透明玻璃把底压暗，散落的 alpha 档在它上面普遍不达标（实测 `ink/40` 只有 2.24:1） | `check:contrast` 按 alpha 合成算 17 对；文字只允许 `ink` 与 `ink-muted` 两档（§8.2） |
+| 倾斜损害可读性 | （旧语言的风险，已随机制消失） | 新语言**不旋转任何元素**：倾斜 token 与全部 `tilt-*` 类已删除；`check:style` 的 rotate 禁令保留——它现在守的是「别再引入倾斜」 |
 | 动效与「物理感」 | `hover:-translate-y-1`、`active:translate-y-2`、`animate-[spin_3s_linear_infinite]`、`animate-pulse` | `prefers-reduced-motion: reduce` 下位移、旋转、脉冲全部归零（保留颜色变化，因为它是状态信息） |
 | 纯装饰元素与读屏器 | 手绘 blob、胶带、点阵对读屏器是噪音 | 装饰层 `aria-hidden="true"`；按钮的 accessible name 来自内部文字（purrcat 的大按钮内部有 `<h2>`，这点是对的） |
-| 大面积模糊与遮罩 | 52 处 `backdrop-blur-sm` 遮罩 | 遮罩默认 `bg-ink/40`；模糊只在 ≥960px 启用，`prefers-reduced-transparency` 下降级（见 §8.9） |
+| 大面积模糊与遮罩 | 模糊是玻璃的核心机制，而它在「面积大 + 背景有细节」时是长任务来源（§8.9 实测：插画底下 1 次 57 ms） | 同屏可模糊元素数 ≤12、**列表内不模糊**；Dialog 遮罩用 `bg-ink/40` 纯色，不叠模糊 |
 
 其余照既有约定：`aria-live="polite"` 只挂「已完成的助手消息」（delta 不进 live region，这是 I5 的推论）；键盘可完成主任务（`Enter` 发送 / `Shift+Enter` 换行 / `Esc` 取消 / 审批对话框 `Enter` 允许、`Esc` 拒绝、**默认焦点在拒绝** / `⌘K` 命令面板）；SPA 路由切换后焦点移到主标题；`sr-only` 跳过链接（照 Open WebUI）；对话框统一用 `ui/primitives/Dialog` 实现 focus trap（purrcat 有约 18 个手写 `fixed inset-0` 壳，无 Escape、无焦点陷阱）。
 
@@ -722,33 +735,70 @@ purrcat 的教训与缺陷各一条：
 
 照抄 purrcat 的**结构**（`src/i18n.tsx`）：单文件字典、`LocaleProvider` + `useTranslation()`、`t('chat.switchSession')` 点分 key、localStorage 持久化、`documentElement.lang` 同步、命名空间分组。Avid 的命名空间：`common / chat / tools / approvals / tasks / sessions / skills / errors`。
 
-v1 只出一份 `zh-CN`，但**按双语字典的形状写**（顶层就是 `{'zh-CN': {...}}`），将来加语言是补一个对象而不是重构。两处 purrcat 的不一致要避开：① 它是中文项目却把默认语言定成 `en-US`，且 `index.html` 硬编码 `lang="zh-CN"` 之后又被运行时覆盖——Avid 默认 `zh-CN`，并让 `index.html` 的 `lang` 与默认值一致（否则首屏会闪一次语言切换，读屏器也会先按错的语言发音）；② 它的 `t()` 缺失时回落 `en-US`、再缺返回 key 本身，这个回落链保留，但**回落到 key 本身必须在开发模式报错**（否则漏翻只在用户眼前暴露），这也正好接上「lint 禁止 JSX 内联字面量」那条。lint 禁止 JSX 内联字面量（Onyx 的 `i18n/no-raw-jsx-text` 形态），这样中文手写体子集（§8.3）与翻译都能机械处理。
+v1 只出一份 `zh-CN`，但**按双语字典的形状写**（顶层就是 `{'zh-CN': {...}}`），将来加语言是补一个对象而不是重构。两处 purrcat 的不一致要避开：① 它是中文项目却把默认语言定成 `en-US`，且 `index.html` 硬编码 `lang="zh-CN"` 之后又被运行时覆盖——Avid 默认 `zh-CN`，并让 `index.html` 的 `lang` 与默认值一致（否则首屏会闪一次语言切换，读屏器也会先按错的语言发音）；② 它的 `t()` 缺失时回落 `en-US`、再缺返回 key 本身，这个回落链保留，但**回落到 key 本身必须在开发模式报错**（否则漏翻只在用户眼前暴露），这也正好接上「lint 禁止 JSX 内联字面量」那条。lint 禁止 JSX 内联字面量（Onyx 的 `i18n/no-raw-jsx-text` 形态）。
 
-### 8.9 涂鸦风的成本与视觉回归
+### 8.9 玻璃的代价与视觉回归
 
-**为什么这套风格是便宜的**（这是它值得照做的主要原因）：硬偏移阴影是 `box-shadow`，点阵是一次 `radial-gradient`，笔触是 `repeating-linear-gradient`，手绘轮廓是几百字节的内联 SVG——**没有位图纹理、没有 SVG 滤镜、没有旋转的文本、没有逐元素生成的手绘路径**。对照：rough.js 或 `feTurbulence` 那类「真随机手绘」方案会给每个元素加一层滤镜，在长列表里直接拖垮渲染。
+**代价实测**（2026-09-22，阶段 23b；203 条目的长会话、1440×900、headless Chromium；
+可复现命令见 `web/scripts/measure-glass.mjs`）：
 
-需要设限的三处：
-
-1. `filter: drop-shadow(...)` 只用于一级入口的手绘 SVG（≤6 个）——它比 `box-shadow` 贵；列表内一律 `box-shadow`。
-2. `backdrop-blur` 在大面积遮罩上是长任务来源（purrcat 52 处）。规则：遮罩默认纯色；模糊仅在 ≥960px 且非批量列表时启用；`prefers-reduced-transparency: reduce` 时关闭。
-3. `transition-all` 换成显式属性（`transform` / `box-shadow` / `background-color`），避免 hover 触发全属性比对。
-
-**视觉回归的稳定性**（涂鸦风与截图门禁的固有冲突，必须显式处理）：大量小位移与硬阴影会产生亚像素噪声。规则：截图前 `await document.fonts.ready`、注入 `* { transition: none !important; animation: none !important }`、硬阴影与位移**只用整数像素**、`maxDiffPixelRatio` 写进配置并给出理由、自托管字体固定版本（不跟随系统回退）。
-
-**噪声下限已实测**（2026-09-22，阶段 23a；1440×900、`deviceScaleFactor: 1`、`reducedMotion: reduce`、每次新开 browser context）：把**同一份构建**在 5 个状态上各截两遍，其中 1 个状态出现 **3 个像素不同、单通道最大差 4/255**，位置固定为导航列第一个条目按钮的 1px 左边框（x=12–13, y=68–165）——即整数像素的硬阴影与墨边仍会在 1px 边框上留下亚像素光栅化差异。因此截图门禁的容差取 **≤3 像素且单通道差 ≤4**（等价于 `maxDiffPixels: 3`）；写 0 会让同一份构建自己报红，把门禁退化成「每次都点同意」。对照方法本身也是这条结论的一部分：同进程、同一份数据（会话只造一次，id 与相对时间两遍相同），两次截图之间只替换静态目录内容——否则会话 id 与「几分钟前」会先自己造成差异。
-
-### 8.10 从 purrcat 抄什么、改什么
-
-| 维度 | 抄 | 改 |
+| 配置 | 帧间隔 p50 / p95 | 长任务 |
 |---|---|---|
-| 视觉语言 | 九个机制全部保留（§8.1），包括三个圆角常量、按偏移分层的硬阴影、按压位移、点阵纸、胶带便签、粗笔画图标 | 全部 token 化：498 处阴影 → 8 个 `--sticker-*`；41 处内联圆角 → 5 个 `--sketch-r*`；738 处 hex / 57 个唯一值 → 三个色域分开（UI / 状态 / 终端）+ 语义角色表 |
-| 布局 | 纸张画布、弹性对话卡、320 侧栏、`resize-y` 检查器、面板打开时压缩主列、模态倾斜反向抵消 | 加断点与窄屏降级；倾斜与点阵在窄屏减半。**替换它的 `isCompact` 判据**（`innerWidth < screen.width/2` 是桌面窗口启发式，到了浏览器里语义不对），改用视口断点（§8.6） |
-| 组件 | 审批队列形状、文件变更面板形状、Markdown 渲染映射、空态、ID 便签、头部工具按钮 + 徽标、消息动作行、分组窗口化、就地切子面板 | 拆层（L0–L4）、单文件 ≤200 行、统一 Dialog、`props: any`（约 137 处 / 95 键的大对象）全部换成显式类型或 store selector |
-| 字体 | 自托管、不用 Google Fonts（首屏白屏的教训） | 换掉 Comic Sans：自托管开源手写体的拉丁子集；中文用系统栈；正文永不用手写体 |
-| 状态 | 单文件字典 i18n 的形状；交互 ID 丢弃过期响应；内容未变返回旧引用免重渲染；就绪探针轮询 + 超时错误页 | 三域切分（§3.5）：服务端状态进 TanStack Query，事件进 reducer；画布类状态不再「localStorage 与服务端各存一份」 |
-| 门禁 | — | 补 a11y（axe 阻塞 + 基线）、对比度（alpha 合成）、reduced-motion、视觉回归稳定性、字体与纹理零外部请求、桌面壳样式隔离 |
-| 不做 | — | 首页、Web 终端、IDEPanel、Electron 壳（v1）、Memory/Market/Evolve/Editor 页面 |
+| 现状（面板类带 blur） | 16.0 / 17.0 ms | 0 次 |
+| 关掉 blur | 16.0 / 17.0 ms | 0 次 |
+| 再关掉投影（零玻璃基线） | 16.0 / 17.0 ms | 0 次 |
+| 违反「列表不模糊」（时间线条目也 blur） | 16.0 / 17.0 ms | 0 次 |
+| 现状 + **运行期插画底** | 16.0 / 17.0 ms | **1 次 / 57 ms** |
+| 关掉 blur + 插画底 | 16.0 / 17.0 ms | 0 次 |
+
+结论按实测写，不按预期写：
+
+1. **默认背景（CSS 光斑）下，玻璃在滚动期间没有可测代价**：四种配置的帧间隔逐档相同、
+   长任务都是 0。同屏带 `backdrop-filter` 的元素实测 **4 个**。
+2. **唯一出现长任务的场景是"模糊一幅有细节的插画底"**（1 次 57 ms），关掉 blur 即消失；
+   而它**不可稳定复现**（同配置再跑一遍是 0 次）——更像首次合成的一次性开销，不是每帧成本。
+   这条对应旧 §8.7 那条"大面积模糊"的老担心：它在**有插画**时才成立。
+3. 于是模糊规则改写成三条可执行的上限（原规则是「遮罩默认纯色；模糊仅在 ≥960px 且非批量
+   列表时启用」，已被本节取代）：
+   - **(a) 同屏可模糊元素数 ≤ 12**（实测 4，留 3 倍余量）。只允许 `.surface-panel` /
+     `.surface-main` / `.surface-sidebar` / `.id-tag` 与对话框外壳带模糊。
+   - **(b) 时间线列表内的卡片只半透明、不模糊**。**必须说清：这一条是保守选择，不是实测
+     结论**——上面第 4 行表明违反它也没测出代价。留它的理由是列表元素数随数据无上界，
+     而唯一出现代价的那一档正是"模糊面积大 + 背景有细节"。**重新考虑的信号**：在窄屏或
+     更大条目量下测出 `rule-broken` 与现状的帧率差。
+   - **(c) 选了插画背景时单独重测**：那一档是唯一有长任务的，而 N 目前只按无插画的情况冻。
+4. 仍然禁止：SVG 滤镜（`feTurbulence` / `feDisplacementMap`）、位图纹理进仓、`transition-all`。
+   `prefers-reduced-transparency` 不是本标准的要求（Chromium 只实现了 `reduce-motion`）；
+   真正需要的是 §8.7 的 `reduce-motion` 归零。
+
+**视觉回归**（阶段 23b 起有基线：`web/e2e/visual.spec.ts` + `web/e2e/visual.spec.ts-snapshots/`）：
+
+- **按表面截图，不截整页**。整页会把导航列带进来，而它的内容是"这套 e2e 跑到现在攒下的
+  所有会话"——跑第二遍就不一样，基线会天天报红。表面截图只取决于该用例自己造的数据。
+  覆盖五种表面：会话落点页、对话卡（时间线 + 输入条）、审批待决、任务板面板、技能目录面板。
+- **时钟必须在 `page.goto` 之前冻结**，且时刻要**相对数据**取。审批卡那句"还有 30 秒"是
+  `expiresAt - Date.now()`：导航之后再冻只冻住一个已经算好的值（秒数继续跳）；冻在绝对
+  常数上则差值随真实时钟漂移（差的是"几小时前"的那个小时数）。两条都是实测踩出来的。
+- **ID 标签遮罩**（`.id-tag`）：会话/运行 id 是随机的，那是数据不是观感。
+- **容差 ≤3 像素且单通道 ≤4**（`maxDiffPixels: 3`）。来历是 23a 实测的噪声下限：同一份
+  构建在 5 个状态上各截两遍，其中 1 个状态出现 3 像素不同、单通道最大差 4/255，位置固定为
+  导航列第一个条目按钮的 1px 左边框。写 0 会让同一份构建自己报红，门禁随即退化成
+  "每次改动都点一下同意"。
+- **报警已验证**：把 `--r-card` 从 18px 故意改成 30px → 落点页基线 409 像素不同、测试红；
+  还原后恢复绿。稳定性：连跑 9 遍（含 20s 间隔）全部通过。
+
+### 8.10 与 purrcat 的关系（已完成替换）
+
+阶段 14 冻结的涂鸦语言是"照 purrcat 抄并 token 化"；阶段 23b 把它整体换掉。留下来的是
+**与语言无关**的那部分：分层与门禁（L0–L4、`check:layers` / `check:tokens` / `check:style`）、
+三域切分、单文件规模约束、Markdown 渲染映射、审批队列与分组窗口化的交互形状、i18n 的
+单文件字典结构。
+
+丢掉的是**语言本身**：九个机制、手写体、`--sketch-*` / `--sticker-*` / `--tilt-*` /
+`--hatch-*` / `--paper-*` 全部 token 与类名，以及 33 条把取值钉死的断言。
+
+一条可复用的教训：**`ui/` 之外的类名不含语言名**（23b 的判据 Ac9）——它让下一次换语言
+只动 L0/L1。这条现在有机械守卫（`check:style` 的词表）。
 
 ## 9. 性能与体积
 
@@ -764,9 +814,9 @@ v1 只出一份 `zh-CN`，但**按双语字典的形状写**（顶层就是 `{'z
 | P6 | 长会话 | 注入 1000 条条目：未虚拟化时 DOM 节点数 ≤800 且 p95 帧 ≤33ms；若引入虚拟化则 p95 ≤16.7ms | 注入脚本 + 滚动测量 |
 | P7 | 重连不放大 | 退避 1s→30s（±30% 抖动）；10 分钟内重连次数有上界；重连不触发全量 entries 重取 | 断言 REST 调用次数（拦截统计） |
 | P8 | 构建墙钟 | 只记录，不做门禁 | `time pnpm -C web build` |
-| P9 | 字体与纹理字节 | 自托管手写体拉丁子集 ≤60 KB woff2；`dist` 中位图纹理 0 个（favicon/logo 除外且 ≤32 KB）；**运行时对 `fonts.googleapis.com` 的请求 0 次** | `gate:size` 里一并统计字体；`grep -r fonts.googleapis web/dist` 无匹配 |
+| P9 | 字体、纹理与样式表字节 | 自托管字体 **0 B**（阶段 23b 弃用手写体）；`dist` 中位图纹理 0 个（favicon/logo 除外且 ≤32 KB）；**样式表 gzip ≤16 KB**（23b 新增，实测 5.5 KB）；运行时对 `fonts.googleapis.com` 的请求 0 次 | `gate:size` 里一并统计 CSS / 字体 / 纹理；`grep -r fonts.googleapis web/dist` 无匹配 |
 
-**涂鸦风的成本结构**（与 P1–P9 的关系）：这套风格便宜——硬偏移阴影是 `box-shadow`、点阵与笔触是一次 CSS 渐变、手绘轮廓是几百字节内联 SVG，**没有位图纹理、没有 SVG 滤镜、不旋转正文**。三处需要设限：`filter: drop-shadow` 只给 ≤6 个入口 SVG；`backdrop-blur` 大面积遮罩默认关；`transition-all` 换显式属性。详见 §8.9。
+**新语言的成本结构**（与 P1–P9 的关系）：渐变背景与高光边都是纯 CSS，**没有位图纹理、没有 SVG 滤镜、不旋转任何东西**。代价集中在 `backdrop-filter`——实测（§8.9）：CSS 光斑底下它在滚动期间没有可测代价；唯一出现长任务的是「模糊一幅有细节的插画底」（1 次 57 ms，且不可稳定复现）。因此设三条上限：同屏可模糊元素数 ≤12、列表内不模糊、选了插画底时单独重测。详见 §8.9。
 
 **P1 的起点值不是对标结论**：调研里明确警告不要沿用 OpenHands 的 450 KiB——那个常量只是通用 `vendor` 组的 `maxSize`（拆分阈值），且有两个被有意豁免并越线的块，仓库里没有产物体积门禁（`dev/research/agent-frontend-survey.md:522`、`dev/research/agent-frontend-survey-final.md:327-331`）。因此规则是：**门禁必须先存在，阈值必须来自 Avid 自己的首次测量**（记录在 `web/budget.json`，带 `frozen_at` 与测量环境），起点值只用来在第一次测量前拦住明显失控的引入。把「450 KB」当成达标依据是重复别人犯过的错。
 
@@ -931,11 +981,11 @@ v1 只出一份 `zh-CN`，但**按双语字典的形状写**（顶层就是 `{'z
 | C11 | 无静默失败 | `pnpm -C web run lint`：`catch` 块为空或有 `/* noop */` 即失败；每个 `src/api` 请求必须有超时与 `AbortSignal` |
 | C12 | 降级路径可用 | `pnpm -C web run test:degraded`：用 Playwright 阻断 `/events` 请求 → 断言 UI 自动切到轮询、顶部出现降级提示、运行仍能推进到终态 |
 | C13 | delta 是订阅而非默认 | `pnpm -C web run test:deltas`：不带 `?deltas=1` 订阅时不产生任何 delta 帧；带上时收到 delta 且不影响最终状态（与 B8 的前端部分呼应） |
-| C14 | 涂鸦语言 token 化 | `pnpm -C web run lint`：`shadow-[…]`、内联 `borderRadius`、内联 `fontFamily`、`dark:`、内建调色板类在 `ui/` 之外的组件里出现即失败（对应参照实现的 498 / 41 / 228 / 738 处重复） |
-| C15 | 形状与阴影不漂移 | 形状只能取 `--sketch-r1/r2/r3/chip/blob`，高度只能取 `--sticker-1..16`；lint 要求同级相邻卡片不同形（连续两张同形即失败），且 `--sticker-*` 只允许作为高度语义使用 |
-| C16 | 手写字体不依赖系统、不联外网 | `grep -rn "Comic Sans" web/src` 零命中；`grep -r "fonts.googleapis\|fonts.gstatic" web/dist web/src` 零命中；字体文件在 `web/dist/assets` 内且 ≤60 KB |
-| C17 | 无位图纹理 | `gate:size` 断言 `web/dist` 内 `*.png|jpg|webp|gif` 仅 favicon/logo，且合计 ≤32 KB；点阵与笔触必须是 CSS 渐变 |
-| C18 | 倾斜与可读性 | `pnpm -C web run lint`：正文、代码、工具输出、输入框容器不得带 rotate；倾斜只出现在装饰外壳且必须反向抵消内部内容；`--tilt-6` 只允许用于 ≤48px 的元素 |
+| C14 | 玻璃语言 token 化 | `pnpm -C web run lint`：`shadow-[…]`、内联 `borderRadius`、内联 `fontFamily`、`dark:`、内建调色板类在 `ui/` 之外的组件里出现即失败；模糊与玻璃取值只能来自 `--glass-*` |
+| C15 | 圆角与投影不漂移 | 圆角只能取 `--r-chip/face/card/panel/pill`，投影只能取 `--lift-1/2/3`；`check:style` 禁止内联圆角与阴影。**形状轮换那条已删**：新语言没有这个机制，`e2e/messages.spec.ts` 反过来断言「所有消息卡片同形」 |
+| C16 | 字体零外部请求、零自托管文件 | `grep -r "fonts.googleapis\|fonts.gstatic" web/dist web/src` 零命中；`gate:size` 的 `font_bytes` 现在是 **0**（手写体已弃用，字体只剩系统栈） |
+| C17 | 无位图纹理 | `gate:size` 断言 `web/dist` 内 `*.png/jpg/webp/gif` 仅 favicon/logo，且合计 ≤32 KB；光斑背景必须是 CSS 渐变（参照物的整幅插画因此**不进仓**：要么不做，要么做成运行期选图，见 §8.9） |
+| C18 | 模糊预算与 CSS 体积 | 同屏 `backdrop-filter` 元素数 ≤12；时间线列表内的卡片不得带模糊；`gate:size` 新增 `css_gzip_bytes`——此前门禁**完全不量 CSS**，而视觉改动几乎全在 CSS 里（见 §9） |
 | C19 | reduced-motion 全覆盖 | Playwright：以 `prefers-reduced-motion: reduce` 打开 → 所有 hover/active 位移、旋转过渡、`animate-pulse` 的时长为 0；颜色变化保留 |
 | C20 | 桌面壳样式不影响 Web | 浏览器（非桌面壳）下 `document.elementFromPoint(x, 16)` 必须是页面内容而不是拖拽条；`-webkit-app-region` 只在 `html[data-shell="desktop"]` 下生效 |
 | C21 | 装饰层不进无障碍树 | axe 通过；且断言手绘 blob/胶带/点阵容器均为 `aria-hidden="true"`，每个入口按钮的可访问名来自内部文字 |
@@ -1000,10 +1050,10 @@ F0 的价值不依赖前端：它把「工具是否开始过」「压缩是否�
 11. 事件流静默 30s 的兜底阈值（I13/B15）取自 OpenHands 的常量，在 Avid 的运行时长分布下是否合适未验证。
 12. 服务端分页默认 `limit=100` / 硬上限 500（I14）是借鉴 Langflow 事故后的取值，Avid 的条目长度分布不同，可能需要调整。
 13. `GET /api/sessions` 的 O(会话数 × 文件大小) 代价在 Web 首屏暴露后的真实耗时未测（§6.1）。
-14. 手写体拉丁子集的最终体积（≤60 KB 是预算不是实测）与「拉丁手写体 + 中文系统字体」混排的可接受度——未做视觉验证。
+14. ~~手写体拉丁子集的最终体积与中西混排可接受度~~ **已了结**：阶段 23b 弃用了自托管手写体（理由见 §8.3），`font_bytes` 预算重冻为 0，这条不再有对象。
 15. 中文手写体子集（§8.3 的 F4 路径）的字形数与体积是估算（300–600 字形 / 120–300 KB），未跑 `pyftsubset`。
 16. 涂鸦风的 `resize-y` 检查器在触屏与键盘操作下的可用性未验证（原生 resize 手柄对手指与键盘都不友好）。
 17. 硬阴影分档（1–16px）与 `--avid-text-scale` 联动后的层级观感未验证。
-18. 视觉回归的稳定性已实测：同一份构建在两遍对照里仍会留下 3 像素（单通道 ≤4/255）的 1px 边框噪声，容差按此冻结（§8.9）。**仍未做的**是把它接成 CI 门禁与铺开覆盖状态——阶段 23a 只做了手工的前后对照（5 个状态），基线文件还没入库。
+18. 视觉回归**已落地**：容差按实测冻成 `maxDiffPixels: 3`（同一份构建截两遍差 3 像素、单通道 ≤4），基线（5 种表面）已入库，并验证过「改一个 token 就报警」（§8.9）。**仍未做的**是把它接进 CI——e2e 仍不进 CI（N7），基线只在本地跑。
 19. 时间线分组窗口化的四个阈值（20 条/组、150px 回位、400ms 冷却、50px 贴底）是从 purrcat 的实现抄来的，未在 Avid 的条目长度分布下验证；它们只影响手感，不改协议。
 20. 输入框 ≤0.5deg 倾斜在中英混排长文本下的实际观感未验证——如果可读性被判定受影响，直接归零（这是一条纯视觉取舍，推翻成本为零）。

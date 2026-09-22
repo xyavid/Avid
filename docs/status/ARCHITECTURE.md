@@ -148,6 +148,7 @@ Web:  POST /api/sessions/{id}/runs                │
 | A10 | `on_message` 的接线只允许在 4 个文件（循环、recorder、CLI、svc） | `:144-154` |
 | A11 | `web/`、`svc/` 里不出现 `append_message` / `.commit(`——recorder 是唯一写入者 | `:157-162` |
 | A12 | 前端在 `src/api/` 之外不直连第三方 URL（`__tests__/` 夹具豁免） | `:168-177` |
+| C22 / 对比度 / 体积 | 前端侧：字体声明即加载 + 层级只用 `--z-*`（`check:tokens`）；token 表里声明的对比度配对按 alpha 合成 ≥4.8（`check:contrast`）；首屏 JS / 样式表 / 字体 / 纹理字节（`gate:size`，预算见 `web/budget.json`） | `web/scripts/*.mjs`，命令与口径见 `web/README.md` |
 | A13 | `runtime/` → `policy/` 的边**双向**钉住（见下表） | `:245-276` |
 | A14 | **产品代码不许 import `benchmarks`**；仪器留在 `src/` 之外，`runs/` 不入库 | `:311-328` |
 | 事件契约 | 内核 `EVENT_TYPES` 与前端联合类型成员集合相等；三档声明一致；心跳/兜底常量三处同一个对象 | `tests/test_event_contract.py` |
