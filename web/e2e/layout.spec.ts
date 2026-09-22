@@ -306,8 +306,9 @@ test('会话头部：常驻胶带不压标题，且没有重复与无作用的�
   await page.goto(`${BASE}/sessions/${sessionId}`)
   await page.waitForTimeout(400)
 
-  // 「上下文占用」已删：那条只反映"最后一次压缩的 after/before"，平时恒为空，
-  // 显示的不是实时占用。
+  // 头部不再有上下文占用那一行：旧的那条只反映"最后一次压缩的 after/before"，
+  // 平时恒为空，显示的不是实时占用。现在的占用读数在**输入条那一行**，而且明细只在
+  // 悬浮气泡里挂载——这里（头部、未悬浮）一个都命中不到。
   await expect(page.getByText('上下文占用')).toHaveCount(0)
 
   // 三种卡片宽度：默认、开检查器后（宽档检查器占 26rem）、再收起导航
