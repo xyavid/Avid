@@ -59,7 +59,7 @@ export function Composer({
   }
 
   return (
-    <div className="sketch-chip tilt-input mx-0 flex flex-col gap-2 bg-input p-3">
+    <div className="surface-chip tilt-input mx-0 flex flex-col gap-2 bg-input p-3">
       <div className="tilt-input-content flex flex-col gap-2">
         <TextArea
           aria-label={t('chat.placeholder')}

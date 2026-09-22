@@ -30,9 +30,9 @@ export function Dialog({
     <RadixDialog.Root open={open} onOpenChange={onOpenChange}>
       <RadixDialog.Portal>
         <RadixDialog.Overlay className="fixed inset-0 z-modal bg-ink/40" />
-        <RadixDialog.Content className="sketch-panel tilt-shell fixed left-1/2 top-1/2 z-modal w-[min(92vw,44rem)] -translate-x-1/2 -translate-y-1/2 p-6">
+        <RadixDialog.Content className="surface-panel tilt-shell fixed left-1/2 top-1/2 z-modal w-[min(92vw,44rem)] -translate-x-1/2 -translate-y-1/2 p-6">
           <div className="tilt-content">
-            <RadixDialog.Title className="font-sketch text-lg">{title}</RadixDialog.Title>
+            <RadixDialog.Title className="font-display text-lg">{title}</RadixDialog.Title>
             {description ? (
               <RadixDialog.Description className="mt-1 text-sm text-ink/70">
                 {description}
@@ -49,7 +49,7 @@ export function Dialog({
               <button
                 type="button"
                 aria-label="close"
-                className="press press-2 sketch-chip absolute -right-3 -top-3 h-8 w-8 font-sketch"
+                className="press press-2 surface-chip absolute -right-3 -top-3 h-8 w-8 font-display"
               >
                 ×
               </button>

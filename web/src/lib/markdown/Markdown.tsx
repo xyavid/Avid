@@ -23,21 +23,21 @@ function Code({ className, children }: { className?: string; children?: ReactNod
     return <code className={clsx('font-mono text-xs', className)}>{children}</code>
   }
   return (
-    <code className="rounded-sketch-1 border-hair border-ink bg-input px-1 font-mono text-xs">
+    <code className="rounded-face border-hair border-ink bg-input px-1 font-mono text-xs">
       {children}
     </code>
   )
 }
 
 const COMPONENTS: Components = {
-  h1: ({ children }) => <h1 className="ink-rule mb-2 pb-1 font-sketch text-lg">{children}</h1>,
-  h2: ({ children }) => <h2 className="ink-rule mb-2 pb-1 font-sketch text-base">{children}</h2>,
-  h3: ({ children }) => <h3 className="ink-rule mb-1 font-sketch text-sm">{children}</h3>,
+  h1: ({ children }) => <h1 className="ink-rule mb-2 pb-1 font-display text-lg">{children}</h1>,
+  h2: ({ children }) => <h2 className="ink-rule mb-2 pb-1 font-display text-base">{children}</h2>,
+  h3: ({ children }) => <h3 className="ink-rule mb-1 font-display text-sm">{children}</h3>,
   blockquote: ({ children }) => (
     <blockquote className="my-2 border-l-4 border-accent pl-3 text-ink/70">{children}</blockquote>
   ),
   pre: ({ children }) => (
-    <pre className="term my-3 overflow-x-auto rounded-sketch-2 p-3 shadow-sticker-4">{children}</pre>
+    <pre className="term my-3 overflow-x-auto rounded-card p-3 shadow-lift-4">{children}</pre>
   ),
   code: Code,
   table: ({ children }) => (
@@ -46,16 +46,16 @@ const COMPONENTS: Components = {
     </div>
   ),
   th: ({ children }) => (
-    <th className="border-hair border-ink bg-sand px-2 py-1 text-left font-sketch">{children}</th>
+    <th className="border-hair border-ink bg-sand px-2 py-1 text-left font-display">{children}</th>
   ),
   td: ({ children }) => <td className="border-hair border-ink px-2 py-1">{children}</td>,
   a: ({ href, children }) => (
-    <a href={href} className="ink-rule font-sketch">
+    <a href={href} className="ink-rule font-display">
       {children}
     </a>
   ),
   img: ({ src, alt }) => (
-    <img src={src} alt={alt ?? ''} className="max-w-full rounded-sketch-1 border-hair border-ink" />
+    <img src={src} alt={alt ?? ''} className="max-w-full rounded-face border-hair border-ink" />
   ),
 }
 

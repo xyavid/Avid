@@ -18,7 +18,7 @@ export function Tooltip({ label, children, side = 'bottom' }: TooltipProps) {
           <RadixTooltip.Content
             side={side}
             sideOffset={6}
-            className="sketch-chip z-toast max-w-xs px-2 py-1 text-xs"
+            className="surface-chip z-toast max-w-xs px-2 py-1 text-xs"
           >
             {label}
           </RadixTooltip.Content>

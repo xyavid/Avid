@@ -41,7 +41,7 @@ function Facts({ approval, open, expired, decided }: {
         <div className="flex flex-col gap-1">
           <p className="text-xs text-ink/70">{t('approvals.reason', { reason: approval.reason })}</p>
           <pre aria-label={t('approvals.toolArguments')}
-            className="term scroll-area max-h-48 overflow-x-auto rounded-sketch-1 p-2">
+            className="term scroll-area max-h-48 overflow-x-auto rounded-face p-2">
             {JSON.stringify(approval.arguments, null, 2)}
           </pre>
         </div>
@@ -94,12 +94,12 @@ export function ApprovalBar({ approval, busy = false, onAnswer }: ApprovalBarPro
     }
   }
   return (
-    <div className="sketch-card flex flex-col gap-2 p-3" onKeyDown={onKeyDown}>
+    <div className="surface-card flex flex-col gap-2 p-3" onKeyDown={onKeyDown}>
       <div className="flex flex-wrap items-center gap-2">
         <Badge tone={decided ? (approval.decision === 'allow' ? 'ok' : 'danger') : 'warn'}>
           {t('approvals.title')}
         </Badge>
-        <span className="rounded-sketch-1 bg-mark/40 px-2 py-0.5 font-mono text-xs">{approval.tool}</span>
+        <span className="rounded-face bg-mark/40 px-2 py-0.5 font-mono text-xs">{approval.tool}</span>
         {approval.expiresAt > 0 ? (
           <span className="font-mono text-xs text-ink/70">
             {t('approvals.expires', { time: relativeTime(approval.expiresAt - Date.now(), locale) })}

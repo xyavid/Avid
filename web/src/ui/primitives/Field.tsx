@@ -19,7 +19,7 @@ export interface FieldProps {
 export function Field({ label, hint, error, htmlFor, children }: FieldProps) {
   return (
     <div className="flex flex-col gap-1">
-      <label htmlFor={htmlFor} className="font-sketch text-xs text-ink/70">
+      <label htmlFor={htmlFor} className="font-display text-xs text-ink/70">
         {label}
       </label>
       {children}
@@ -52,7 +52,7 @@ export function TextArea({ className, ...rest }: TextareaHTMLAttributes<HTMLText
 
 export function Select({ className, children, ...rest }: SelectHTMLAttributes<HTMLSelectElement>) {
   return (
-    <select {...rest} className={clsx(CONTROL, 'font-sketch', className)}>
+    <select {...rest} className={clsx(CONTROL, 'font-display', className)}>
       {children}
     </select>
   )

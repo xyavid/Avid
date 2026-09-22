@@ -42,7 +42,7 @@ test('会话落点页给的是指路文案，不是「还没有会话」', async
   // 导航列里可能正列着一堆会话（「会话」不是导航项之后，这个页面只作为根路径与未知
   // 路径的落点），所以「还没有会话」说出口就是错的——那句是空工作区文件夹的文案。
   await page.goto(`${BASE}/sessions`)
-  const landing = page.locator('section.sketch-main')
+  const landing = page.locator('section.surface-main')
   await expect(landing.getByText('从左侧选一个会话开始')).toBeVisible()
   await expect(landing.getByText('还没有会话')).toHaveCount(0)
 })
@@ -77,7 +77,7 @@ async function openInspector(page: Page): Promise<void> {
     .filter({ hasText: 'CALL' })
     .first()
     .click()
-  const card = page.locator('section.sketch-card').filter({ hasText: 'CALL' }).first()
+  const card = page.locator('section.surface-card').filter({ hasText: 'CALL' }).first()
   await card.getByRole('button', { name: '查看' }).click()
 }
 

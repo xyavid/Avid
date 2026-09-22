@@ -52,7 +52,7 @@ export function SessionItem({
 
   return (
     <div
-      className={`sketch-chip press press-2 flex flex-col gap-1 p-2 ${
+      className={`surface-chip press press-2 flex flex-col gap-1 p-2 ${
         active ? 'bg-mark/40' : 'bg-card'
       }`}
     >
@@ -80,7 +80,7 @@ export function SessionItem({
           onClick={onSelect}
           aria-current={active ? 'true' : undefined}
         >
-          <span className="truncate font-sketch text-sm">
+          <span className="truncate font-display text-sm">
             {session.name ?? t('sessions.unnamed')}
           </span>
           <span className="shrink-0 font-mono text-[10px] text-ink/70">{timeLabel}</span>

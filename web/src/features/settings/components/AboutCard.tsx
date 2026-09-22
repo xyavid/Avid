@@ -74,7 +74,7 @@ export function FeaturesTable({ features }: { features: Record<string, number> }
 export function AboutCard({ meta }: { meta: Meta }) {
   const { t } = useTranslation()
   return (
-    <div className="sketch-chip flex flex-col gap-2 bg-sand p-3">
+    <div className="surface-chip flex flex-col gap-2 bg-sand p-3">
       <MetaRow label={t('common.settings.apiVersion')}>
         <span className="font-mono">{meta.api_version}</span>
       </MetaRow>

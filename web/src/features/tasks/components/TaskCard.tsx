@@ -51,7 +51,7 @@ export function TaskCard({ task, index }: TaskCardProps) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   return (
-    <article className={clsx('sketch-card', shapeFor(index))}>
+    <article className={clsx('surface-card', shapeFor(index))}>
       <Button
         variant="secondary"
         size="sm"
@@ -60,7 +60,7 @@ export function TaskCard({ task, index }: TaskCardProps) {
         onClick={() => setOpen((value) => !value)}
       >
         <span className="flex flex-col items-start gap-1">
-          <span className="font-sketch text-sm">{task.subject}</span>
+          <span className="font-display text-sm">{task.subject}</span>
           {task.owner ? (
             <span className="flex items-center gap-1 font-mono text-xs text-ink/70">
               <span>{t('tasks.owner')}</span>

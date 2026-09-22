@@ -32,7 +32,7 @@ export function BranchList({ branches, current, onSelect }: BranchListProps) {
             aria-current={branch.name === current ? 'true' : undefined}
             onClick={() => onSelect(branch.name)}
           >
-            <span className="font-sketch">{branch.name}</span>
+            <span className="font-display">{branch.name}</span>
             <span className="ml-auto text-[10px] text-ink/70">
               {t('branches.entryCount', { count: branch.entry_count })}
             </span>

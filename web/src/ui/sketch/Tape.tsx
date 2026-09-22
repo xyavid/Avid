@@ -14,13 +14,13 @@ export interface TapeProps {
 export function Tape({ label, value, className, emptyText }: TapeProps) {
   if (!value) {
     return (
-      <span className={`tape-empty font-mono ${className ?? ''}`} title={`${label}: ${emptyText}`}>
+      <span className={`id-tag-empty font-mono ${className ?? ''}`} title={`${label}: ${emptyText}`}>
         {emptyText}
       </span>
     )
   }
   return (
-    <span className={`tape ${className ?? ''}`} title={`${label}: ${value}`}>
+    <span className={`id-tag ${className ?? ''}`} title={`${label}: ${value}`}>
       <span className="font-sans opacity-70">{label}</span> <span>{value}</span>
     </span>
   )

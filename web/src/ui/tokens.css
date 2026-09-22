@@ -149,7 +149,7 @@
   --z-shell-chrome: 300;
 
   /* ---- 字体 ---- */
-  --font-sketch: 'Avid Sketch', 'Segoe Print', cursive;
+  --font-display: 'Avid Sketch', 'Segoe Print', cursive;
   --font-sans: system-ui, -apple-system, 'Segoe UI', 'Noto Sans CJK SC',
     'PingFang SC', 'Microsoft YaHei', sans-serif;
   --font-mono: ui-monospace, 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas,

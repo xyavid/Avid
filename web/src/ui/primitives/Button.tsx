@@ -12,7 +12,7 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 // 高度只用 --sticker 档位表达；按压位移 = 本档偏移（.press-2，档位随之缩放）。
 //
-// 变体只有三种，**每一个都自带方框**：primary / secondary / danger 都走 `.sketch-chip`
+// 变体只有三种，**每一个都自带方框**：primary / secondary / danger 都走 `.surface-chip`
 // （墨线边 + --sketch-r-chip 圆角 + --sticker-2 档硬阴影），悬停时由 sketch.css 抬升一档，
 // 按住时阴影归零、位移等于当前档偏移。
 //
@@ -48,11 +48,11 @@ export function Button({
       disabled={disabled || loading}
       aria-busy={loading || undefined}
       className={clsx(
-        'press press-2 inline-flex shrink-0 items-center justify-center gap-2 rounded-chip border-hair border-ink font-sketch leading-none',
+        'press press-2 inline-flex shrink-0 items-center justify-center gap-2 rounded-chip border-hair border-ink font-display leading-none',
         'disabled:cursor-not-allowed disabled:opacity-50',
         VARIANTS[variant],
         SIZES[size],
-        'sketch-chip',
+        'surface-chip',
         className,
       )}
     >

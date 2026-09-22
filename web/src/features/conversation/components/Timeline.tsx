@@ -61,7 +61,7 @@ export function Timeline({
 
         {blocks.length === 0 ? (
           <div className="empty-note mx-auto mt-8 max-w-md">
-            <p className="font-sketch text-base">{t('chat.empty.title')}</p>
+            <p className="font-display text-base">{t('chat.empty.title')}</p>
             <p className="mt-1 text-xs">{t('chat.empty.hint')}</p>
           </div>
         ) : null}

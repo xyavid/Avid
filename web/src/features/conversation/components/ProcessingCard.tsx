@@ -19,12 +19,12 @@ export function ProcessingCard({ phaseLabel, round, tokens, activeTool }: Proces
   const toggle = useUiStore((state) => state.toggleThinking)
 
   return (
-    <div className="sketch-chip flex flex-col gap-1 p-2">
+    <div className="surface-chip flex flex-col gap-1 p-2">
       <div className="flex items-center gap-2">
         <Badge tone="info" pulse>
           {t('tools.processing')}
         </Badge>
-        <span className="font-sketch text-xs">{phaseLabel}</span>
+        <span className="font-display text-xs">{phaseLabel}</span>
         <span className="font-mono text-[11px] text-ink/70">
           {t('chat.round', { round })} · {t('chat.tokens', { tokens })}
         </span>

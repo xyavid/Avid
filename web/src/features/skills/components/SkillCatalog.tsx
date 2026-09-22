@@ -7,8 +7,8 @@ import type { Skill } from '../../../api/types'
 /** 服务端错误码是稳定契约：先查 errors.<code>，缺词条时回落 errors.unknown。 */
 function SkillItem({ skill }: { skill: Skill }) {
   return (
-    <li className="sketch-chip flex flex-col gap-1 p-3">
-      <span className="font-sketch text-sm">{skill.name}</span>
+    <li className="surface-chip flex flex-col gap-1 p-3">
+      <span className="font-display text-sm">{skill.name}</span>
       <span className="truncate text-xs text-ink/70">{skill.description}</span>
     </li>
   )
@@ -18,7 +18,7 @@ function SkillsError({ error, onRetry }: { error: unknown; onRetry: () => void }
   const { t } = useTranslation()
   return (
     <div className="empty-note flex flex-col items-center gap-2">
-      <p className="font-sketch text-danger">{t('errors.title')}</p>
+      <p className="font-display text-danger">{t('errors.title')}</p>
       <p>{errorMessage(t, error)}</p>
       <Button size="sm" onClick={onRetry}>
         {t('common.retry')}
@@ -34,9 +34,9 @@ export function SkillCatalog() {
   const skills = query.data ?? []
 
   return (
-    <section className="sketch-panel flex flex-col gap-3 p-4">
+    <section className="surface-panel flex flex-col gap-3 p-4">
       <header className="flex flex-col gap-1">
-        <h1 className="font-sketch text-lg">{t('skills.title')}</h1>
+        <h1 className="font-display text-lg">{t('skills.title')}</h1>
         <p className="text-xs text-ink/70">{t('skills.hint')}</p>
         <p className="text-xs text-ink/70">{t('skills.count', { count: skills.length })}</p>
       </header>

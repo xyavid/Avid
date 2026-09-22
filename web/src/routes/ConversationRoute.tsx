@@ -142,8 +142,8 @@ export function ConversationRoute() {
 
   if (!sessionId) {
     return (
-      <section className="sketch-main flex flex-1 flex-col items-center justify-center gap-2 p-8">
-        <h1 className="font-sketch text-xl">{t('sessions.title')}</h1>
+      <section className="surface-main flex flex-1 flex-col items-center justify-center gap-2 p-8">
+        <h1 className="font-display text-xl">{t('sessions.title')}</h1>
         {/* 指路，不是「还没有会话」：导航列里可能正列着一堆会话（会话不是导航项，
             这个页面只作为根路径与未知路径的落点）。 */}
         <p className="empty-note max-w-md">{t('sessions.choose')}</p>

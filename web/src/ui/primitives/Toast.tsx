@@ -47,7 +47,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         {items.map((item) => (
           <p
             key={item.id}
-            className={`sketch-chip max-w-sm px-3 py-2 text-sm ${TONES[item.tone]}`}
+            className={`surface-chip max-w-sm px-3 py-2 text-sm ${TONES[item.tone]}`}
             onAnimationEnd={() =>
               setItems((current) => current.filter((entry) => entry.id !== item.id))
             }

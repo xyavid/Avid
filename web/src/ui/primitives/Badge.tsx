@@ -33,7 +33,7 @@ export function Badge({
     <span
       {...rest}
       className={clsx(
-        'inline-flex items-center gap-1 rounded-chip border-hair border-ink px-2 py-0.5 text-xs font-sketch',
+        'inline-flex items-center gap-1 rounded-chip border-hair border-ink px-2 py-0.5 text-xs font-display',
         TONES[tone],
         pulse && 'pulse',
         className,

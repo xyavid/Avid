@@ -25,7 +25,7 @@ function TaskError({ error, onRetry }: { error: unknown; onRetry: () => void }) 
   const { t } = useTranslation()
   return (
     <div className="empty-note flex flex-col items-center gap-2">
-      <p className="font-sketch text-danger">{t('errors.title')}</p>
+      <p className="font-display text-danger">{t('errors.title')}</p>
       <p>{errorMessage(t, error)}</p>
       <Button size="sm" onClick={onRetry}>
         {t('common.retry')}
@@ -40,9 +40,9 @@ export function TaskBoard() {
   const { tasks, counts, pending, error, refetch } = useTaskView()
 
   return (
-    <section className="sketch-panel flex flex-col gap-3 p-4">
+    <section className="surface-panel flex flex-col gap-3 p-4">
       <header className="flex flex-col gap-1">
-        <h1 className="font-sketch text-lg">{t('tasks.title')}</h1>
+        <h1 className="font-display text-lg">{t('tasks.title')}</h1>
         <p className="text-xs text-ink/70">{t('tasks.readonly')}</p>
         <p className="text-xs text-ink/70">{t('tasks.count', { count: tasks.length })}</p>
       </header>

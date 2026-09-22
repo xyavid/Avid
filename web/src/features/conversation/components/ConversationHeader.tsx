@@ -44,7 +44,7 @@ export function ConversationHeader(props: ConversationHeaderProps) {
       <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           <div className="flex min-w-0 items-center gap-2">
-            <h1 className="truncate font-sketch text-xl">
+            <h1 className="truncate font-display text-xl">
               {props.sessionName ?? t('sessions.unnamed')}
             </h1>
             <Badge tone={phaseTone(props.phase)}>{t(`chat.status.${props.phase}`)}</Badge>
@@ -55,7 +55,7 @@ export function ConversationHeader(props: ConversationHeaderProps) {
           </div>
 
           {props.workspaceName ? (
-            <p className="truncate font-sketch text-[11px] text-ink/70">
+            <p className="truncate font-display text-[11px] text-ink/70">
               {t('chat.workspace', { name: props.workspaceName })}
             </p>
           ) : null}

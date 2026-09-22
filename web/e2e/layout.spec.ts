@@ -197,7 +197,7 @@ test('收起导航后：轨道内的按钮不越界、不压到会话卡', async
       }
     }
     const navElement = document.querySelector('nav') as HTMLElement
-    const card = document.querySelector('section.sketch-main') as HTMLElement
+    const card = document.querySelector('section.surface-main') as HTMLElement
     const hits = (a: ReturnType<typeof box>, b: ReturnType<typeof box>) =>
       !(a.right <= b.left + 1 || b.right <= a.left + 1 || a.bottom <= b.top + 1 || b.bottom <= a.top + 1)
     const cardBox = box(card)
@@ -317,7 +317,7 @@ test('会话头部：常驻胶带不压标题，且没有重复与无作用的�
       // 检查器由**工具卡**的「查看」打开（条目级的「查看原始 JSON」已删，
       // 头部那个开关也早删了）。工具卡默认折叠，先点开那张 CALL 卡。
       await page.getByRole('button').filter({ hasText: 'CALL' }).first().click()
-      const card = page.locator('section.sketch-card').filter({ hasText: 'CALL' }).first()
+      const card = page.locator('section.surface-card').filter({ hasText: 'CALL' }).first()
       await card.getByRole('button', { name: '查看' }).click()
     }
     if (step === '再收起导航') {
@@ -332,22 +332,22 @@ test('会话头部：常驻胶带不压标题，且没有重复与无作用的�
       }
       const intersects = (a: ReturnType<typeof box>, b: ReturnType<typeof box>) =>
         !(a.right <= b.left + 1 || b.right <= a.left + 1 || a.bottom <= b.top + 1 || b.bottom <= a.top + 1)
-      const header = document.querySelector('section.sketch-main header') as HTMLElement
+      const header = document.querySelector('section.surface-main header') as HTMLElement
       const tapes = Array.from(header.querySelectorAll('[title]')).filter((element) =>
-        element.className.includes('tape'),
+        element.className.includes('id-tag'),
       )
       const buttons = Array.from(header.querySelectorAll('button'))
       const title = header.querySelector('h1') as HTMLElement
       return {
         cardWidth: Math.round(
-          (document.querySelector('section.sketch-main') as HTMLElement).getBoundingClientRect()
+          (document.querySelector('section.surface-main') as HTMLElement).getBoundingClientRect()
             .width,
         ),
         tapes: tapes.length,
         buttons: buttons.length,
         collisions: tapes
-          .filter((tape) => intersects(box(tape), box(title)))
-          .map((tape) => (tape.textContent ?? '').trim().slice(0, 8)),
+          .filter((tag) => intersects(box(tag), box(title)))
+          .map((tag) => (tag.textContent ?? '').trim().slice(0, 8)),
       }
     })
 

@@ -63,7 +63,7 @@ test('检查器可就地查看工具输出（全文 / diff / 原始 JSON）', as
   await call.click()
 
   // 展开后的工具卡自带「查看」：开检查器（就地切换，不进 URL 历史）。
-  const card = page.locator('section.sketch-card').filter({ hasText: 'CALL' }).first()
+  const card = page.locator('section.surface-card').filter({ hasText: 'CALL' }).first()
   await card.getByRole('button', { name: '查看' }).click()
   await expect(page.getByRole('tab', { name: '全文' })).toBeVisible()
   // 全文里有工具返回内容（限定在检查器内：时间线的工具卡也有同一段文本）

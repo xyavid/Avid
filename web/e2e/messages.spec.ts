@@ -56,7 +56,7 @@ async function openSession(page: Page): Promise<void> {
  * 定位消息卡片必须用**精确**角色名：`hasText` 不区分大小写，而用户消息里带着
  * 工作区路径 `/home/fishy/Avid`，用 `hasText: 'Avid'` 会把用户卡也匹配进来。
  */
-function cardWithRole(page: Page, role: string, variant = 'sketch-card'): Locator {
+function cardWithRole(page: Page, role: string, variant = 'surface-card'): Locator {
   return page
     .getByRole('log')
     .locator(`article.${variant}`)
@@ -72,7 +72,7 @@ function assistantCards(page: Page): Locator {
 }
 
 function assistantChips(page: Page): Locator {
-  return cardWithRole(page, 'Avid', 'sketch-chip')
+  return cardWithRole(page, 'Avid', 'surface-chip')
 }
 
 /** 窗口化默认只渲染尾部一组：要看全量条目先展开。 */
@@ -171,7 +171,7 @@ test('角色名与图标同在一行，accessible name 由文字承担', async (
 
 test('形状按条目轮换：相邻消息卡片不同形', async ({ page }) => {
   await openSession(page)
-  const cards = page.getByRole('log').locator('article.sketch-card')
+  const cards = page.getByRole('log').locator('article.surface-card')
   // 消息卡片才是轮换对象：这里包含用户卡与模型卡（同级卡片）
   const count = await cards.count()
   expect(count, '至少要有两张消息卡片才能测轮换').toBeGreaterThan(1)

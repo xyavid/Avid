@@ -57,7 +57,7 @@ function AppearanceSection() {
 
   return (
     <section className="flex flex-col gap-3">
-      <h2 className="font-sketch text-base">{t('common.settings.appearance')}</h2>
+      <h2 className="font-display text-base">{t('common.settings.appearance')}</h2>
       <ChoiceRow
         label={t('common.settings.textScale')}
         options={SCALES.map((value) => ({ value, label: String(value) }))}
@@ -84,7 +84,7 @@ function BehaviorSection() {
 
   return (
     <section className="flex flex-col gap-3">
-      <h2 className="font-sketch text-base">{t('common.settings.behavior')}</h2>
+      <h2 className="font-display text-base">{t('common.settings.behavior')}</h2>
       <Field label={t('common.settings.autoApprove')} htmlFor="settings-auto-approve">
         <span className="w-control">
           <Input
@@ -103,7 +103,7 @@ function EngineSection({ meta }: { meta: Meta }) {
   const { t } = useTranslation()
   return (
     <section className="flex flex-col gap-3">
-      <h2 className="font-sketch text-base">{t('common.settings.engine')}</h2>
+      <h2 className="font-display text-base">{t('common.settings.engine')}</h2>
       <MetaRow label={t('common.settings.model')}>
         {meta.capabilities.model ?? (
           <span className="text-ink/70">{t('common.settings.modelMissing')}</span>
@@ -133,7 +133,7 @@ function MetaError({ error, onRetry }: { error: unknown; onRetry: () => void }) 
   const { t } = useTranslation()
   return (
     <div className="empty-note flex flex-col items-center gap-2">
-      <p className="font-sketch text-danger">{t('errors.title')}</p>
+      <p className="font-display text-danger">{t('errors.title')}</p>
       <p>{errorMessage(t, error)}</p>
       <Button size="sm" onClick={onRetry}>
         {t('common.retry')}
@@ -148,8 +148,8 @@ export function SettingsPanel() {
   const meta = useMeta()
 
   return (
-    <section className="sketch-panel flex flex-col gap-4 p-4">
-      <h1 className="font-sketch text-lg">{t('common.settings.title')}</h1>
+    <section className="surface-panel flex flex-col gap-4 p-4">
+      <h1 className="font-display text-lg">{t('common.settings.title')}</h1>
       <AppearanceSection />
       <BehaviorSection />
       {meta.isPending ? (

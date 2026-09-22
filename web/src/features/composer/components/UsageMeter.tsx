@@ -178,7 +178,7 @@ export function UsageDetail({ usage }: { usage: UsageReport }) {
                 <span
                   className={clsx('block h-2 w-2 shrink-0 rounded-chip', PART_BAR[part.key])}
                 />
-                <span className="flex-1 font-sketch">{t(PART_LABEL[part.key])}</span>
+                <span className="flex-1 font-display">{t(PART_LABEL[part.key])}</span>
                 <span className="font-mono text-ink/70">
                   {`~${formatTokens(part.tokens)}`}
                 </span>
@@ -233,7 +233,7 @@ export function UsageDetail({ usage }: { usage: UsageReport }) {
 function DetailRow({ label, value }: { label: string; value: ReactNode }) {
   return (
     <li className="flex items-center justify-between gap-2">
-      <span className="font-sketch text-ink/70">{label}</span>
+      <span className="font-display text-ink/70">{label}</span>
       <span className="font-mono text-ink/70">{value}</span>
     </li>
   )

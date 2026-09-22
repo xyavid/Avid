@@ -44,7 +44,7 @@ export function ConversationView(props: ConversationViewProps) {
   const activeTool = view.tools.find((tool) => tool.status === 'running')?.tool ?? null
 
   return (
-    <section className="sketch-main flex h-full min-h-0 flex-col overflow-hidden">
+    <section className="surface-main flex h-full min-h-0 flex-col overflow-hidden">
       <ConversationHeader
         sessionName={props.sessionName}
         workspaceName={props.workspaceName ?? null}

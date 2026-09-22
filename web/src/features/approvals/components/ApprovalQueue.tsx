@@ -21,7 +21,7 @@ export function ApprovalQueue({ approvals, busy = false, onAnswer }: ApprovalQue
   return (
     <section className="flex flex-col gap-2" aria-label={t('approvals.title')}>
       <header className="flex items-center gap-2">
-        <h3 className="font-sketch text-sm">{t('approvals.title')}</h3>
+        <h3 className="font-display text-sm">{t('approvals.title')}</h3>
         <Badge tone={pending.length ? 'warn' : 'ok'} count={pending.length} pulse={pending.length > 0}>
           {pending.length ? t('approvals.pending', { count: pending.length }) : t('approvals.none')}
         </Badge>
@@ -43,7 +43,7 @@ export function ApprovalQueue({ approvals, busy = false, onAnswer }: ApprovalQue
 
       {resolved.length > 0 ? (
         <details className="text-xs">
-          <summary className="cursor-pointer font-sketch">
+          <summary className="cursor-pointer font-display">
             {t('approvals.answered.allow')} / {t('approvals.answered.deny')}（{resolved.length}）
           </summary>
           <ul className="mt-2 space-y-1">

@@ -6,7 +6,7 @@
  *
  * 顺序约定：本文件必须在 main.tsx 里**先于** tokens.css 导入，于是 @tailwind
  * utilities 在产物里排在本文件的构件类之后——`shadow-none` 这类工具类才能覆盖
- * `.sketch-chip`。两个文件各自被 Tailwind 处理一次，所以这里不能写 @layer。
+ * `.surface-chip`。两个文件各自被 Tailwind 处理一次，所以这里不能写 @layer。
  *
  * 三条禁令由 scripts/check-style.mjs 守着：
  *   · 组件里不得出现 shadow-[…] / 内联 borderRadius / 内联 fontFamily；
@@ -16,7 +16,7 @@
 
 /* ---------------- 纸面 ---------------- */
 
-.paper-canvas {
+.app-backdrop {
   position: fixed;
   inset: 0;
   background-color: rgb(var(--avid-paper-rgb));
@@ -28,7 +28,7 @@
 
 @media (max-width: 960px) {
   /* 窄屏把点阵与倾斜都减半：拥挤时涂鸦会变成噪音。 */
-  .paper-canvas {
+  .app-backdrop {
     background-image: var(--paper-dot-narrow);
     background-size: var(--paper-size-narrow);
   }
@@ -36,25 +36,25 @@
 
 /* ---------------- 卡片与面板（形状轮换用 .shape-1/2/3） ---------------- */
 
-.sketch-card {
+.surface-card {
   @apply border-bold border-ink bg-card;
   border-radius: var(--sketch-r1);
   box-shadow: var(--sticker-4);
 }
 
-.sketch-panel {
+.surface-panel {
   @apply border-bold border-ink bg-card;
   border-radius: var(--sketch-r2);
   box-shadow: var(--sticker-8);
 }
 
-.sketch-main {
+.surface-main {
   @apply border-bold border-ink bg-card;
   border-radius: var(--sketch-r3);
   box-shadow: var(--sticker-12);
 }
 
-.sketch-chip {
+.surface-chip {
   @apply border-hair border-ink bg-card;
   border-radius: var(--sketch-r-chip);
   box-shadow: var(--sticker-2);
@@ -101,13 +101,13 @@
 
 /* 有框按钮的悬停：抬升一档（--sticker-2 → --sticker-3），同时把按压位移改成
    「新档的偏移」，于是位移永远等于当前阴影偏移；按住时阴影归零。
-   只作用于 <button>，不牵连用 .sketch-chip 做容器的卡片（如会话列表项）。 */
-button.sketch-chip.press:hover:not(:disabled) {
+   只作用于 <button>，不牵连用 .surface-chip 做容器的卡片（如会话列表项）。 */
+button.surface-chip.press:hover:not(:disabled) {
   box-shadow: var(--sticker-3);
   --press-offset: calc(3px * var(--avid-scale));
 }
 
-button.sketch-chip.press:hover:not(:disabled):active {
+button.surface-chip.press:hover:not(:disabled):active {
   box-shadow: none;
 }
 
@@ -170,14 +170,14 @@ button.sketch-chip.press:hover:not(:disabled):active {
 
 /* ---------------- 胶带与便签（会话 / 运行 ID 常驻可见） ---------------- */
 
-.tape {
+.id-tag {
   @apply border-hair border-ink px-2 py-0.5 font-mono text-[10px];
   background-color: rgb(var(--avid-mark-rgb) / 70%);
   border-radius: var(--sketch-r-chip);
   transform: rotate(var(--tilt-2));
 }
 
-.tape-empty {
+.id-tag-empty {
   @apply border-hair border-dashed border-ink/40 px-2 py-0.5 font-mono text-[10px];
   background-color: rgb(var(--avid-sand-rgb) / 60%);
   border-radius: var(--sketch-r-chip);

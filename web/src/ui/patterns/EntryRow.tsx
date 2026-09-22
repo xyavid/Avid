@@ -1,7 +1,7 @@
 /**
  * 时间线条目：用户是右侧便签，模型回复是左侧对话框，工具结果与 notice 是 chip。
  *
- * 模型回复与用户消息是**同一族卡片**（`sketch-card`：墨框 + 手绘形状 + `--sticker-4`
+ * 模型回复与用户消息是**同一族卡片**（`surface-card`：墨框 + 手绘形状 + `--sticker-4`
  * 硬阴影），差别只在方向与角色标记——参照实现 purrcat 的对话框就是这一套
  * （`bg-paper` + `border-4 border-ink` + 大硬阴影 + 小角度倾斜），这里把它的外壳
  * 语言用在消息上，尺寸按消息收敛。形状按 `shapeIndex` 轮换，相邻卡片不同形。
@@ -51,7 +51,7 @@ const NOTICE_KEY = { compaction: 'chat.notice.compaction' } as const
  */
 function Role({ label, mark = 'avid' }: { label: string; mark?: 'avid' | 'user' }) {
   return (
-    <p className="flex items-center gap-1 font-sketch text-xs text-ink/70">
+    <p className="flex items-center gap-1 font-display text-xs text-ink/70">
       {mark === 'user' ? <UserMark className="text-ink" /> : <AvidMark className="text-ink" />}
       {label}
     </p>
@@ -97,7 +97,7 @@ export const EntryRow = memo(function EntryRow({
   if (entry.kind === 'user') {
     return (
       <article
-        className={clsx('sketch-card ml-auto w-fit max-w-[80%]', shapeFor(shapeIndex), pad)}
+        className={clsx('surface-card ml-auto w-fit max-w-[80%]', shapeFor(shapeIndex), pad)}
       >
         <Role label={t('chat.message.role.user')} mark="user" />
         <p className="whitespace-pre-wrap break-anywhere text-sm">{entry.text}</p>
@@ -108,8 +108,8 @@ export const EntryRow = memo(function EntryRow({
   if (entry.kind === 'notice') {
     const label = entry.notice ? t(NOTICE_KEY[entry.notice]) : ''
     return (
-      <article className="sketch-chip flex w-fit max-w-[32rem] items-center gap-2 px-3 py-1">
-        <span className="shrink-0 font-sketch text-xs">{label}</span>
+      <article className="surface-chip flex w-fit max-w-[32rem] items-center gap-2 px-3 py-1">
+        <span className="shrink-0 font-display text-xs">{label}</span>
         <span className="min-w-0 truncate text-xs text-ink/70">{entry.text}</span>
         {actions}
       </article>
@@ -119,7 +119,7 @@ export const EntryRow = memo(function EntryRow({
     return (
       <article className="flex flex-col gap-1">
         <Badge tone="neutral">{t('chat.message.role.tool')}</Badge>
-        <pre className="term scroll-area max-h-64 overflow-x-auto whitespace-pre-wrap rounded-sketch-2 p-2 shadow-sticker-2">
+        <pre className="term scroll-area max-h-64 overflow-x-auto whitespace-pre-wrap rounded-card p-2 shadow-lift-2">
           {entry.text}
         </pre>
         {actions}
@@ -132,7 +132,7 @@ export const EntryRow = memo(function EntryRow({
     <article
       aria-live={entry.optimistic ? undefined : 'polite'}
       className={clsx(
-        'sketch-card mr-auto flex w-fit max-w-[88%] flex-col gap-1',
+        'surface-card mr-auto flex w-fit max-w-[88%] flex-col gap-1',
         shapeFor(shapeIndex),
         pad,
       )}
