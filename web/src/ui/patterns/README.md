@@ -1,7 +1,7 @@
 # ui/patterns — 会话时间线的渲染库
 
-这一层的职责：把 `events/reducer` 的收敛结果（`TimelineEntry` / `ToolRun` / `ApprovalRequest` /
-`CompactionNote`）翻译成可读的涂鸦界面。**只做渲染**——不取数、不发请求、不做分组判断；
+这一层的职责：把 `events/reducer` 的收敛结果（`TimelineEntry` / `ToolRun` / `ApprovalRequest`）
+翻译成可读的涂鸦界面。**只做渲染**——不取数、不发请求、不做分组判断；
 分组与折叠策略由页面决定，这里只提供零件与默认值。
 
 依赖方向：`patterns → lib/{ansi,diff,markdown,i18n}` 与 `patterns → ui/primitives`。
@@ -39,15 +39,6 @@
 | **手绘标记** | 两枚**静态**内联 SVG，按作者分开：`AvidMark`（角形笔画）给模型，`UserMark`（歪头 + 肩弧）给用户。两者共用同一套笔触契约（`stroke-width 4.5` + `vector-effect: non-scaling-stroke`，颜色 `currentColor`，−2deg 倾斜，`aria-hidden`）。**不复用同一枚**：标记的职责是区分作者，两卡共用一个形状等于没标。§8.1 ⑥ 把「手绘轮廓」限定在一级入口，这里是同一枚路径在列表里复用：没有逐元素生成路径、没有滤镜、没有位图，成本与 §8.9 的结论一致；角色名由旁边文字承担，装饰不进无障碍树。 |
 | **a11y** | `aria-live="polite"` **只加在 durable（`!entry.optimistic`）的 assistant 条目上**：乐观 delta 每帧都在变，播报等于噪音。动作行（复制文本 / 从此处分支）**常驻可见**，不做悬停显形——显隐只是额外一层谜（「有这功能」得先被猜到），而方框与高度档本来就一直在。动作按钮的 accessible name 来自内部文字。「从此处分支」只在条目有 `entryId` 时出现：乐观的 delta 条目还不是分叉点。条目级的「查看原始 JSON」已删除，检查器由工具卡的「查看」打开。 |
 | **交互反馈** | 动作按钮用 `variant="secondary"`：**方框是本身就有的**（墨线边 + `--sketch-r-chip` 圆角 + 纸卡底 + `--sticker-2` 档硬阴影），与「改名」等次级按钮同族；悬停抬升一档（`--sticker-3`）、按住阴影归零且位移等于当前档偏移（`ui/sketch.css` 里对 `button.sketch-chip.press` 统一处理）。`opacity` 不再是这些按钮的设计变量。取值全部来自 `ui/tokens.css`，不要在调用点硬写边框或阴影。 |
-
-## CompactionNotice
-
-| 项 | 约定 |
-| --- | --- |
-| **状态** | 无状态机：压缩是既成事实。显示 `chat.notice.compaction` 标签、`step — detail`、以及 `before → after` 字符数（`tools.chars`）。 |
-| **密度** | 不随密度变化——它是一条窄 chip，放在时间线与检查器里都不该变形。 |
-| **折叠默认值** | 不折叠。压缩事件一天也没几次，藏起来只会让人怀疑上下文去哪了。 |
-| **a11y** | 纯静态文本（读屏器按文档顺序读）。外层不设 `aria-live`：它在时间线里由 `EntryRow` 统一播报，重复播报是 bug。 |
 
 ## ApprovalBar
 

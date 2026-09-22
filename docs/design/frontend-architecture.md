@@ -207,7 +207,7 @@ Avid/
 | 层 | 内容 | 约束 |
 |---|---|---|
 | L0 `ui/tokens.css` + `ui/sketch.css` + `ui/primitives/` | 涂鸦 token（形状/硬阴影/墨线/纸纹/倾斜）+ 无样式原语包装（Radix/Base UI） | 不得出现业务名词；不得 import `state/`、`features/`；六种形状与八个阴影档只在这里定义 |
-| L1 `ui/patterns/` | 有形状无状态：`ToolCallCard`、`ApprovalBar`、`StepGroup`、`EntryRow`、`CompactionNotice` | 只接受 props；不得读 store、不得发请求 |
+| L1 `ui/patterns/` | 有形状无状态：`ToolCallCard`、`ApprovalBar`、`StepGroup`、`EntryRow` | 只接受 props；不得读 store、不得发请求 |
 | L2 `features/*` | 一个业务面一个目录，`components/ hooks/ index.ts` | 可依赖 L0/L1；**feature 之间不得互相 import**（跨 feature 经 store 或 route 组合） |
 | L3 `layouts/AppShell` | 三栏骨架、响应式、键盘图 | 可依赖含 `uiStore`；不得直接读 `runStore` |
 | L4 `routes/` | URL ↔ feature 组合，接查询 hooks 与 store | 唯一允许把查询结果与 store 数据拼在一起的地方 |

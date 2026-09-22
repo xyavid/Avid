@@ -1,6 +1,5 @@
 export { ApprovalBar, relativeTime } from './ApprovalBar'
 export type { ApprovalBarProps } from './ApprovalBar'
-export { CompactionNotice } from './CompactionNotice'
 export { EntryRow } from './EntryRow'
 export type { EntryRowProps } from './EntryRow'
 export { EVENT_GROUP_MIN_SIZE, StepGroup } from './StepGroup'
