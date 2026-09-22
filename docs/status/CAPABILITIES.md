@@ -164,13 +164,14 @@
 落盘失败记日志并跳过本次压缩，不抛异常；摘要失败保留原历史（`compaction.py:113-127, 155-174`）。
 
 压缩发生时发一条 `context_compacted` 事件（带 step/detail/before/after）并累加
-`state.compactions`（`context.py:48-62`）。
+`state.compactions`（`context.py:48-62`）。**"压完还剩多少"由压缩之后下一轮的真实
+`prompt_tokens` 回答**（阶段 22，`state.mark_compacted` → `record_usage`），不在压缩层估算。
 
 ---
 
 ## 6. 会话与分支
 
-公开门面 43 个名字（`src/avid/session/__init__.py:75-125`，由 `tests/test_session_facade.py` 钉住；
+公开门面 45 个名字（`src/avid/session/__init__.py:75-130`，由 `tests/test_session_facade.py` 钉住；
 **改它就是公开接口变更**）。
 
 | 能力 | 说明 | 证据 |
@@ -241,8 +242,16 @@ key 查而不当作文件路径，未命中返回可用清单（`skills.py:108-1
   生产 Web 路径用流式跑主轮次、用非流式跑摘要，两者分开注入，delta 流里因此不会混进摘要文本
   （`src/avid/runtime/loop.py:110-113`、`src/avid/svc/runs.py`）。
 - **超时**：连接 10s、读 60s（`ai/client.py:22-35`）；进程级复用 HTTP 客户端。
-- **用量**：`Turn.usage` 逐轮累加进 `state.tokens`，进 `run_status` 与 Stop 事件；
-  **token 用量不落盘**，也没有成本台账（`src/avid/session/types.py:149` 自述该取舍）。
+- **用量与缓存台账（阶段 22）**：`ai/usage.py` 是唯一的 provider adapter，把四家写法归一成
+  同一个 `Usage`（`prompt_tokens` / `completion_tokens` / `total_tokens` 三基数 +
+  `cache_read_tokens` / `cache_write_tokens`，后两者可空）；OpenAI 的
+  `prompt_tokens_details.cached_tokens` 与 `prompt_cache_hit_tokens`（DeepSeek 系）、Anthropic 的
+  `cache_read_input_tokens` / `cache_creation_input_tokens`、Gemini 的 `usageMetadata.cachedContentTokenCount`
+  都认。流式与非流式两条解析路径共用它。累计量仍逐轮加进 `state.tokens`；
+  `RunState.usage_report()` 另有上下文占用（最近一轮 `prompt_tokens` / 窗口 / 占用率）、
+  缓存（读写 / 命中率）与压缩（次数 / 压缩后读数）三块，进 `run_status` 与 `run_finished`，
+  **按分支落盘**进会话值（`AVID_CONTEXT_WINDOW` 或内置模型名小表提供窗口，查不到就不算占用率）。
+  **没有成本估算**（不做价格表；`runtime-architecture.md` §20）。
 - **错误**：4xx/5xx 一律 `LLMError` 上抛终止运行；上下文超限是唯一会重试的错误（兜底压缩 +
   重试一次）。
 - **联网检索的凭据是独立的**：`web_search` 用 `TAVILY_API_KEY`（可选，另有 `TAVILY_BASE_URL`），
@@ -270,10 +279,10 @@ key 查而不当作文件路径，未命中返回可用清单（`skills.py:108-1
 | `PATCH /api/sessions/{id}` | 改名 |
 | `DELETE /api/sessions/{id}` | 删除 |
 | `GET /api/sessions/{id}/entries` | 条目分页（`branch` 默认 main；默认 `limit=100`、硬上限 500、游标排他） |
-| `GET /api/sessions/{id}/branches` | 分支列表 |
+| `GET /api/sessions/{id}/branches` | 分支列表（每项带该分支最近一次运行的 `usage` 快照，阶段 22） |
 | `POST /api/sessions/{id}/branches` | 在某条目处分叉 |
 | `POST /api/sessions/{id}/runs` | 起一次运行（201，带 `branch` / `permission`） |
-| `GET /api/runs/{id}` | 运行状态（权威终止以此 + 已提交条目为准） |
+| `GET /api/runs/{id}` | 运行状态（权威终止以此 + 已提交条目为准；带 `usage` 快照） |
 | `POST /api/runs/{id}/cancel` | 请求取消（202，下一检查点生效） |
 | `GET /api/runs/{id}/approvals` | 当前待决审批 |
 | `POST /api/runs/{id}/approvals/{aid}` | 答复审批（幂等；换结论 409、过期 410、未知 404） |
@@ -289,8 +298,9 @@ key 查而不当作文件路径，未命中返回可用清单（`skills.py:108-1
 | transient | 1 | `run_status` | 不带 `id`，断了就断了 |
 | delta | 1 | `assistant_delta` | 不带 `id`，可任意丢；默认不投递，需 `?deltas=1`；不落盘、不重放、不占 durable 重放预算 |
 
-**features 开关**（`src/avid/svc/__init__.py:48-59`，全为 `1`）：`approvals`、`cancel`、`tasks`、
-`sessions`、`entries`、`deltas`、`branches`、`workspaces`、`permission_modes`、`workspace_picker`。
+**features 开关**（`src/avid/svc/__init__.py:48-60`，全为 `1`）：`approvals`、`cancel`、`tasks`、
+`sessions`、`entries`、`deltas`、`branches`、`workspaces`、`permission_modes`、`workspace_picker`、
+`usage`。
 客户端读 features 决定启用哪些能力，只在加特性时升 `api_version`。
 
 **并发与保留**：同时最多 24 条 SSE 流（超出 503 `too_many_streams`）；每 run 重放缓冲 512 条
@@ -318,6 +328,11 @@ durable、事件总数上限 4096、终态记录保留 600s 或最多 200 个 ru
 | L4 | `routes/`（会话、任务板、技能目录、设置） | 唯一允许把查询结果与活动状态拼在一起的地方 |
 
 状态分三域：REST 权威域（查询缓存）、活动域（事件流 + 纯 reducer）、界面域（localStorage）。
+
+**用量指示器（阶段 22）**：`features/composer/components/UsageMeter` 挂在输入条那一行、
+发送按钮左侧，显示「上下文 72k/200k（36%）· 缓存 78% · 压缩 2 次」，悬浮给明细。
+实时值取活动域的 `RunView.usage`，落盘值取 `useBranches` 返回的分支 `usage`；
+合并规则是 `pickUsage`（活动域优先、查询域兜底），可空字段一律显示 `—`。
 
 **门禁脚本**（`web/package.json`，`verify` = 前六条串行）：
 
@@ -397,5 +412,6 @@ durable、事件总数上限 4096、终态记录保留 600s 或最多 200 个 ru
 ## 15. 明确没有的能力
 
 长期记忆、沙箱执行、多 provider、多用户与鉴权、中断后恢复运行、SQLite 后端、
-token/成本台账、跨进程的「一个会话一个活动 run」互斥、前端虚拟列表与 subagent 子事件转发
+**成本估算**（token 用量台账本身已落地，阶段 22——占用、缓存读写与命中率、压缩次数，
+按分支落盘）、跨进程的「一个会话一个活动 run」互斥、前端虚拟列表与 subagent 子事件转发
 ——逐条证据与分类见 `CURRENT_STATE.md` §4，数字现状见 `BENCHMARK.md`。

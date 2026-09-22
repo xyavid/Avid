@@ -84,10 +84,11 @@
 | 任务图（跨会话） | 6 个工具；3 状态（`pending`/`in_progress`/`completed`）、2 个动作（`claim`/`complete`）；`blockedBy` 表达依赖、`owner` 表达分工；落在 `.tasks/{id}.json`，id 形如 `task_1a2b3c4d`；完成时报告本次新解锁的下游 | `src/avid/tools/tasks.py:41-64,121-360`、`src/avid/tools/schemas.py:235-301` |
 | 子 agent | `subagent` 一次最多 4 个子任务，并行执行后汇总；子运行结构上去掉 `subagent` 自己（`SUB_TOOLS`）；子 agent 看不到父对话，prompt 必须自包含 | `src/avid/tools/__init__.py:80-81`、`src/avid/tools/subagent.py`、`src/avid/tools/schemas.py:172-203` |
 | 技能 | 目录下 3 个技能（`agent-builder` / `code-review` / `pdf`）；系统提示里只放 `name + description`，正文由 `load_skill` 按需读取；目录在运行开始时重新扫描 | `skills/`、`src/avid/policy/skills.py:65-111`、`src/avid/runtime/state.py:100-123` |
-| 模型接入 | OpenAI 兼容 `/chat/completions` 直连 httpx（不套 SDK）；非流式 `chat_completion` 与流式 `stream_completion` 返回**同形**的 `Turn`；连接超时 10s / 读超时 60s；token 用量逐轮累加 | `src/avid/ai/client.py:22-35`、`src/avid/ai/client.py` 的 `stream_completion`、`src/avid/runtime/loop.py:228-237` |
+| 模型接入 | OpenAI 兼容 `/chat/completions` 直连 httpx（不套 SDK）；非流式 `chat_completion` 与流式 `stream_completion` 返回**同形**的 `Turn`，两条解析路径共用同一个 usage 归一化；连接超时 10s / 读超时 60s | `src/avid/ai/client.py:22-35`、`src/avid/ai/client.py` 的 `stream_completion`、`src/avid/runtime/loop.py:228-237` |
 | Web 与前端 | 22 个 HTTP 端点（会话 / 运行 / 审批 / 事件流 / 任务 / 技能 / 工作区 / 元信息）；18 类事件分三档（16 durable + `run_status` + `assistant_delta`）；时间线 / 任务板 / 技能目录 / 设置四个页面；前端 L0–L4 分层；`pnpm run verify` 串起 6 项检查（分层 / token / 样式 / 类型 / 单测 / 体积） | `src/avid/web/routes/*.py`、`src/avid/runtime/events.py:24-104`、`web/package.json` |
 | CLI | `--agent` / `--yes` / `--permission` / `--workspace` / `--session` / `--new-session` / `--session-name` / `--list-sessions` / `--delete-session`；子命令 `web`、`workspace {add,list,remove,permission}` | `src/avid/cli.py:85-140,317-333` |
-| 可观测 | 逐轮 trace 与 token 用量打到 stderr；事件流 + 运行注册表（重放缓冲 512 条、终态记录保留 600s / 最多 200 个 run）；心跳与兜底常量单点定义 | `src/avid/svc/runs.py:53-65`、`src/avid/runtime/events.py:108-118` |
+| 用量台账（阶段 22） | `ai/usage.py` 把 OpenAI / DeepSeek 兼容 / Anthropic / Gemini 四种 usage 写法归一成同一形状（缓存读/写可空）；`RunState.usage_report()` 单点算上下文占用（最近一轮真实 `prompt_tokens` / 窗口 / 占用率）、缓存命中率与压缩读数；每轮进 `run_status`、终态进 `run_finished` 与 `GET /api/runs/{id}`，并**按分支落盘**进会话值（刷新 / 切会话 / 重启后可见）；窗口来自 `AVID_CONTEXT_WINDOW` 或内置模型名小表，查不到就不算占用率 | `src/avid/ai/usage.py`、`src/avid/runtime/state.py` 的 `usage_report`、`src/avid/svc/sessions.py:list_branches` |
+| 可观测 | 逐轮 trace 与用量打到 stderr（含缓存读与命中率、有窗口时含占用率）；事件流 + 运行注册表（重放缓冲 512 条、终态记录保留 600s / 最多 200 个 run）；心跳与兜底常量单点定义 | `src/avid/cli.py:usage_suffix`、`src/avid/svc/runs.py:53-65`、`src/avid/runtime/events.py:108-118` |
 | 评测与基准 | AvidBench：两套 suite 共 21 条只读 case（v0 12 条 / v1 9 条难度 case，tier 3–5）× bare / core / full 三臂；5 种确定性判定器、无 LLM judge；指标全部从事件流派生；`--suite` 选版本、`--context-chars` 注入阈值（写进 `overrides`）；每次运行落 `result.json` / `trajectory.jsonl` / `answer.txt` | `benchmarks/README.md`、`benchmarks/avidbench/`、`docs/status/BENCHMARK.md` §9–§10 |
 
 逐项参数与端点清单见 `CAPABILITIES.md`——本节只到「能做什么」这一层。
@@ -123,7 +124,7 @@
 | 失败路径有专门机制且有用例 | 跨进程 flock、`os.write` 短写回滚 + 长度校验、`_fsync_dir`、末行残片按原子重写自愈 | `src/avid/session/jsonl.py`、`tests/test_session_jsonl.py` |
 | 读路径有量级门禁 | 200 个会话（每个 60 条）列表**一次都不 open 会话文件**且 < 1.5s；5000 条消息摘要 < 1.0s、重放 < 3.0s | `tests/test_stress.py:79-165` |
 
-另有两处加固：公开门面被钉成 43 个名字（`tests/test_session_facade.py`，改它就是公开接口
+另有两处加固：公开门面被钉成 45 个名字（`tests/test_session_facade.py`，改它就是公开接口
 变更），以及条目提交后不可变、条目树只增不改（`frontend-architecture.md:814` 的 I1）。
 
 **这条结论的边界**（避免读成「会话层没问题」）：

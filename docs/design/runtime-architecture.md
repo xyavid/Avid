@@ -1272,3 +1272,63 @@ round=5  （收尾）                 → 模型自己说明"tests 仍被 endpoi
   会话 id 或加索引；② 出现"以为建在 A、实际建在 B"的事故 → 建会话已一律必填归属，
   届时查预选规则（`is_default` → 最近使用）是否误导；③ 审批卡片需要按风险分色 / 分组 → 加结构化的 `warning` / `target` 字段；
   ④ 多机或多人共享工作区 → 注册表与文件锁都要重做（本设计明确不覆盖）。
+
+## 20. 落地记录（阶段 22，上下文占用与 cache hit 台账）
+
+规格口径见 `docs/guide/web-ui.md` §3.3（界面显示什么）与本节（为什么落在这些地方）。
+本阶段没有新增事件类型、没有改会话的线格式，改动集中在"谁拥有哪几个数"。
+
+### 20.1 三类数据各有归属
+
+| 数据 | 归属 | 依据（判据 3 / 6：唯一知道者 / 唯一写者） |
+|---|---|---|
+| `cache.read_tokens` / `cache.write_tokens` | `ai/usage.py`（provider adapter） | 三家字段名与语义互不相通：Anthropic 的 `input_tokens` **不含**缓存部分、OpenAI 的 `prompt_tokens` **含**，Gemini 用另一套驼峰名。只有紧邻传输层的地方知道方言。把嗅探放进 runtime 会让内核认识协议 |
+| `context.tokens` / `context_window` / `utilization` | `RunState`（Agent Runtime） | 它是运行状态自身的量，事件、REST 与落盘三处必须同源。全仓只有一个 `usage_report()` 计算点；窗口来自配置（`AVID_CONTEXT_WINDOW` > 内置模型名小表 > 不知道） |
+| `compaction.count` / `last_compaction_tokens` / `last_step` | `RunState`（**独立于前两者**） | 压缩是第三条机制：`context.announce()` 只负责"记一次 + 等下一轮读数"，"压完还剩多少"由**下一次真实模型调用**回答。本地估算会与计费口径打架，所以宁可先给 `null`（界面 `—`） |
+
+两处**刻意的口径差异**写在 `ai/usage.py` 的模块文档里：Anthropic 系换算时
+`prompt_tokens = input + read + write`；非 Anthropic 系没有"写入缓存"这个计数，因此
+`cache_write_tokens` 是 `None` 而不是 0。命中率的分母统一取含命中部分的输入总量，
+所以这个比值跨 provider 可比（`hit_ratio()` 单点实现，谎报超过 1.0 时截断）。
+
+### 20.2 落盘选"会话值"，不选"新条目类型"
+
+历史可见性的要求是：切换会话、刷新页面、重启 `avid web` 之后进入一个会话，仍能看到该
+会话该分支的占用与命中。落点选了会话的**值**（`avid.usage`，key = 分支名，覆盖式）：
+
+- **解决了什么**：值机制本来就装"必须持久化但不是消息"的东西，形状是 JSON 对象，
+  `STORAGE_VERSION` 与 JSONL 线格式一行不改（旧文件照读，`tests/test_usage.py` 有一条
+  重开文件的往返断言）。消息投影 `_TRANSCRIPT_TYPES` 只认 `message` / `notice`，
+  值天然不进模型历史。
+- **牺牲了什么**：一个分支只留最近一次读数，没有"每次运行一条"的历史曲线。
+- **为什么按分支而不是按会话**：运行总跑在某条链上，合成一个数会让"切到另一条分支"
+  显示上一条链的占用。
+- **什么信号出现时重新考虑**：需要按运行回看占用曲线（例如做成本报表）→ 加一条
+  `usage` 条目类型（`Entry` 需要载荷字段，届时是线格式变更）；或者需要跨会话聚合 →
+  把台账提到工作区级。
+- **写入点仍只有 `SessionRecorder`**（不变量 I2）：新增 `record_usage()`，由
+  `svc/runs.py` 在终态时调用。`RunState` 不认识会话，会话包也不认识运行状态。
+
+### 20.3 观测的两条通道，以及一处顺序修正
+
+- **实时**：每轮 `run_status`（transient，不占重放预算）带 `usage_report()` 快照，
+  `_observe` 同时回填 `RunRecord.usage`，于是 SSE 与 `GET /api/runs/{id}` 同值。
+- **进入会话**：`GET /api/sessions/{id}/branches` 的 `BranchOut.usage` 读一次
+  `scan_values(USAGE_NS)` 就拿到该会话所有分支的读数（一次扫描，不按分支查）。
+- **顺序**：用量值在**宣告终态之前**落盘。客户端收到 `run_finished` 就会重取分支列表，
+  写在宣告之后的话"重取"与"落盘"谁先到就是竞态，界面会停在上一次的读数上。
+- **顺带修掉一个静默缺口**：状态翻转与终态事件现在在**同一段临界区**里改
+  （`record.condition`）。此前 `record.status` 先置终态、中间还可以干别的活，而订阅者
+  按 `record.terminal` 判断"还有没有后续事件"——那段时间里它会看到"已终态且缓冲里没有
+  终态事件"，于是直接返回，缺的那条是**静默**的。阶段 22 在中间插了一次会话写入，
+  把窗口从"一次赋值"放大到毫秒级，这条才稳定复现（`tests/test_run_events.py` 有回归）。
+
+### 20.4 适用条件与失效信号
+
+- **成立条件**：provider 会通过 OpenAI 兼容响应上报 usage（至少 `prompt_tokens`）；
+  模型窗口要么显式配、要么在内置表里，否则只报 tokens 不报占用率。
+- **失效信号**：① 出现新的 usage 方言（同一家换字段名）→ 在 `ai/usage.py` 加一条
+  判别分支 + 一组 fixture，`normalize_usage` 的优先级表是单点；② 需要成本估算 →
+  新增价格表（缓存读/写与普通输入单价不同，本阶段明确不做）；③ 需要按运行回看历史 →
+  见 §20.2 的条目类型方案；④ 出现"窗口表给错分母"的误判 → 优先修表，或把占用率改成
+  只显示 tokens（宁可少一个数，不要一个错的分母）。

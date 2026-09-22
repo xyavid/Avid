@@ -182,6 +182,9 @@ Web:  POST /api/sessions/{id}/runs                │
   transient 不带 `id`；delta 不带 `id` 且默认不投递（消费方用 `?deltas=1` 显式订阅）。
 - 重放纪律：`after` 是客户端已知的最大 durable `seq`；`_has_gap` 为真或跟随时游标被淘汰 →
   先发一条 durable `resync`；delta 不重放也不占 durable 预算（`svc/runs.py:378-483`）。
+- **用量快照走既有事件**（阶段 22）：每轮 `run_status`（transient）与终态 `run_finished`
+  （durable）带同一份 `RunState.usage_report()`；`GET /api/runs/{id}` 与分支列表的
+  `BranchOut.usage` 读的是同一份计算（`runtime-architecture.md` §20）。加它没有新增事件类型。
 - **客户端可见的时间常量只有一个出处**（`events.py:108-118`）：`/api/meta` 公布的
   `stream.heartbeat_seconds`、SSE 生成器的心跳、前端据此设的超时必须是同一个数，否则
   「客户端等得比心跳久」这类错位只能靠人发现。

@@ -171,6 +171,36 @@ zenity/kdialog → Windows（WSL 互操作）→ osascript 依次探测，`GET /
 就是当前档的名字，把鼠标停在它上面（或键盘聚焦它）会弹出**当前档**那一句说明，切换到别的档
 提示跟着变。可访问名仍由 `aria-label="权限模式"` 提供，`getByLabel('权限模式')` 照常定位得到。
 
+## 3.3 用量指示器：上下文占用与缓存命中（阶段 22）
+
+权限模式那一行、发送按钮左侧常驻一行读数：
+
+```
+上下文 72k/200k（36%） · 缓存 78% · 压缩 2 次
+```
+
+三段分别是当前运行的**上下文占用**（最近一轮模型调用的真实 `prompt_tokens` / 模型窗口）、
+**缓存命中率**（命中读 / 输入总量）与**压缩次数**。鼠标停上去（或键盘 Tab 到它）显示明细：
+输入、窗口、缓存读、缓存写、命中率、压缩后读数与最近一次压缩的步骤名。
+
+口径与「看不到就显示 `—`」的规则（都出自 `RunState.usage_report()` 这一处计算）：
+
+- **占用**用 provider 上报的真实值，不是本地估算。同一份上下文会被反复计费，所以会话头部的
+  累计 `tokens`（这次运行一共花了多少）与这里的"现在占了多少"是两个数。
+- **窗口**先看 `AVID_CONTEXT_WINDOW`，其次内置的模型名小表，都查不到就只报 tokens、不显示
+  百分比（错的分母比没有分母更糟）。显式配置写成 `128k` 这类非数字会直接报错，不静默回落。
+- **缓存**以 provider usage 为准：OpenAI 的 `prompt_tokens_details.cached_tokens`、DeepSeek
+  的 `prompt_cache_hit_tokens`、Anthropic 的 `cache_read_input_tokens` /
+  `cache_creation_input_tokens`、Gemini 的 `cachedContentTokenCount` 都会归一化。这家没有
+  写入缓存计数（OpenAI 系）时那一格显示 `—`，不当成 0。命中率分母是含命中部分的输入总量。
+- **压缩后读数**是压缩发生**之后**下一轮的真实 `prompt_tokens`；压完没再调用模型就是 `—`。
+- 端点不认 `stream_options.include_usage` 时整块读数缺失，显示「用量 —」而不是「上下文 0」。
+
+实时值来自事件流（每轮 `run_status` 带一份快照），落盘值来自分支列表
+（`GET /api/sessions/{id}/branches` 的 `usage`，按**分支**记账）。刷新页面、切换会话、
+重启 `avid web` 之后显示的是该分支最近一次运行的读数，运行中的实时值优先；切换分支时各显示
+各的链，没跑过的分支显示「—」。
+
 ## 4. 验证
 
 前端的 `pnpm -C web run verify` 覆盖四道门禁 + 类型检查 + 单测 + 体积（`check:layers`
@@ -210,6 +240,10 @@ curl -s -o /dev/null -w '%{http_code} %{content_type}\n' localhost:8765/api/nope
 ```
 
 ## 5. 明确未做（与本轮范围对应）
+
+- **成本与延迟台账**：只记 token 用量、缓存读写与压缩读数（阶段 22），**不按价格表折算
+  金额**，也不给每次模型调用记时延。折算成本要一张随 provider 与缓存档位变动的价格表，
+  那是另一件事；触发条件见 `runtime-architecture.md` §20.4。
 
 - **前端写文件 / Web 终端 / 桌面壳**：不做（§5.5）；人类要改文件或改任务状态，走
   `/api/runs` 让 agent 调用工具，权限闸门与审计因此不被绕过。
