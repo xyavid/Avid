@@ -18,6 +18,14 @@
  *   9. i18n key 完整性：源码里 `t('x.y')` 用到的 key 必须都在 `dictionary.ts`。
  *  10. `.tsx` 的 JSX 文本节点不得含字母或中日韩文字（`src/lib/i18n/**`、
  *      `src/ui/**` 例外；后者只允许符号）。
+ *  12. 档位只能取 token：`rounded-sm|md|lg|xl|2xl|3xl|full` 与
+ *      `shadow-sm|md|lg|xl|2xl|inner` 是 Tailwind 内建的字面值档位，禁止使用
+ *      （圆角取 `--r-*`、投影取 `--lift-*`）。之前只禁了 `shadow-[…]` 与内联
+ *      `borderRadius`——那两个禁令拦不住 `rounded-xl` 这类写法，于是"圆角只能取
+ *      `--r-*`"这句声明当时是空话。
+ *  13. 模糊只来自 `ui/glass.css`，且**只能落在允许的面板类上**（模糊预算的结构那一半，
+ *      见设计文档 §8.9）。另一半"同屏元素数 ≤12"是运行期属性，静态查不了，由实测的
+ *      4 个 + 3 倍余量支撑。
  *
  * 注释先剥掉再匹配：设计文档与本文件的注释里会写 `z-[…`、`transition-all` 这些
  * 反面样本，不剥注释会自伤。`stripComments` 保留字符串字面量（className 在字符串里）
@@ -30,6 +38,33 @@ import { fileURLToPath } from 'node:url'
 
 const WEB_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const SRC = join(WEB_ROOT, 'src')
+
+const GLASS_CSS_REL = 'src/ui/glass.css'
+
+/** 把一份 CSS 拆成 `{selector, body, line}`；@规则（@media）递归进它的块。 */
+function cssRules(source, baseLine = 1) {
+  const rules = []
+  let index = 0
+  let line = baseLine
+  while (index < source.length) {
+    const open = source.indexOf('{', index)
+    if (open === -1) break
+    const selector = source.slice(index, open).trim()
+    let depth = 1
+    let cursor = open + 1
+    while (cursor < source.length && depth > 0) {
+      if (source[cursor] === '{') depth += 1
+      else if (source[cursor] === '}') depth -= 1
+      cursor += 1
+    }
+    const body = source.slice(open + 1, cursor - 1)
+    if (selector.startsWith('@')) rules.push(...cssRules(body, line))
+    else rules.push({ selector, body, line })
+    line += (source.slice(index, cursor).match(/\n/g) ?? []).length
+    index = cursor
+  }
+  return rules
+}
 
 const violations = []
 
@@ -169,6 +204,12 @@ const TAILWIND_PALETTE =
   /\b(bg|text|border|from|to|via|ring|fill|stroke|divide|outline|shadow|accent|caret|decoration|placeholder)-(slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-\d{2,3}\b/g
 const JSX_LITERAL = />([^<>{}]*[A-Za-z\u4e00-\u9fff][^<>{}]*)</g
 const EMPTY_CATCH = /(?<![\w.$])catch\s*(?:\([^)]*\))?\s*\{\s*\}/g
+// 内建档位：前后都要求界外字符，否则 `rounded-chip` 会被 `\brounded\b` 误命中。
+const TAILWIND_STEP = /(?<![\w-])(?:rounded-(?:sm|md|lg|xl|2xl|3xl|full)|shadow-(?:sm|md|lg|xl|2xl|inner)|rounded)(?![\w-])/g
+const BLUR_UTILITY = /(?<![\w-])backdrop-blur[\w-]*/g
+const BLUR_INLINE = /\b(?:backdropFilter|WebkitBackdropFilter)\s*[:=]/g
+/** 允许带 backdrop-filter 的选择器（模糊预算的结构那一半）。 */
+const BLUR_SELECTORS = ['.surface-panel', '.surface-main', '.surface-sidebar', '.id-tag']
 const FETCH_CALL = /\bfetch(?:Impl)?\s*\(/g
 
 const files = [...walk(SRC, ['.ts', '.tsx']), ...walk(SRC, ['.css'])]
@@ -236,6 +277,45 @@ for (const file of files) {
     each(/\brotate-/g, code, (match) => {
       report(file, lineAt(code, match.index), 'rotate- 只允许出现在装饰外壳（src/ui/**、src/layouts/**）')
     })
+  }
+
+  // ---- 规则 12：档位只能取 token ----
+  each(TAILWIND_STEP, code, (match) => {
+    report(
+      file,
+      lineAt(code, match.index),
+      `档位只能取 token：圆角用 --r-*（rounded-chip/face/card/panel/pill）、投影用 --lift-*；不要用 Tailwind 内建档位 ${match[0]}`,
+    )
+  })
+
+  // ---- 规则 13：模糊只来自 glass.css，且只落在允许的选择器上 ----
+  if (rel === GLASS_CSS_REL) {
+    // 先剥注释再解析：不然选择器会把上一条注释一起吃进去（`.id-tag` 前面挂着一段
+    // `/* ---- ID 标签 ---- */`，于是它永远不等于允许清单里的那一项）。
+    for (const rule of cssRules(stripComments(raw))) {
+      if (!/backdrop-filter/i.test(rule.body)) continue
+      const selectors = rule.selector.split(',').map((part) => part.trim())
+      const bad = selectors.filter((selector) => !BLUR_SELECTORS.includes(selector))
+      if (bad.length > 0) {
+        report(
+          file,
+          rule.line,
+          `backdrop-filter 只允许落在 ${BLUR_SELECTORS.join(' / ')}（列表内的卡片不模糊，§8.9）：${bad.join(' / ')}`,
+        )
+      }
+    }
+  } else {
+    each(BLUR_UTILITY, code, (match) => {
+      report(file, lineAt(code, match.index), `模糊只能来自 ui/glass.css 的 --glass-blur：不要用 ${match[0]}`)
+    })
+    each(BLUR_INLINE, code, (match) => {
+      report(file, lineAt(code, match.index), '模糊只能来自 ui/glass.css 的 --glass-blur：不要内联 backdropFilter')
+    })
+    if (isCss) {
+      each(/backdrop-filter/gi, code, (match) => {
+        report(file, lineAt(code, match.index), 'backdrop-filter 只允许出现在 src/ui/glass.css')
+      })
+    }
   }
 
   // ---- 规则 7 / 11：catch 必须处理 ----

@@ -220,7 +220,9 @@ zenity/kdialog → Windows（WSL 互操作）→ osascript 依次探测，`GET /
 前端的 `pnpm -C web run verify` 覆盖四道门禁 + 类型检查 + 单测 + 体积（`check:layers`
 → `check:tokens` → `lint` → `typecheck`（`tsc -b --noEmit`）→ `vitest run` →
 `gate:size`）。Playwright 的 `test:e2e` **不在**其中：它要一个活的内核进程与真实模型
-（`AVID_E2E=1`），不适合放进每次提交都跑的门禁，按需单独执行（见下）。
+（`AVID_E2E=1`），不适合放进每次提交都跑的门禁，按需单独执行（见下）。**它也不进 CI**：
+CI 里没有模型与密钥、而脚本模型服务又不在仓库里（`dev/` 不入库），所以"把 e2e 接进 CI"
+的第一步是先把那个服务变成受审的仓库文件——见 §5 的「明确未做」。
 
 ```bash
 # 内核侧
@@ -236,16 +238,16 @@ uv run pytest -q tests/test_web_boundaries.py      # A1–A6/A10–A12 grep 门�
 pnpm -C web run verify                             # layers + tokens + lint + vitest + 体积门禁
 pnpm -C web run check:layers                       # 网络出口唯一、feature 不互相 import
 pnpm -C web run check:tokens                       # 字体声明即加载、层级只用 --z-*
-pnpm -C web run lint                               # 样式/token/裸元素/i18n key 完整性
-pnpm -C web test                                   # reducer / coalescer / SSE 解析单测
-pnpm -C web build && pnpm -C web run gate:size     # 体积与纹理门禁
+pnpm -C web run lint                               # 样式/token/档位/模糊预算/裸元素/i18n key 完整性
+pnpm -C web run check:contrast                     # token 表里声明的对比度配对（按 alpha 合成）
+pnpm -C web test                                   # reducer / coalescer / SSE 解析 / 定时与缩放规则单测
+pnpm -C web build && pnpm -C web run gate:size     # 首屏 JS / 样式表 / 字体 / 纹理字节
 
-# 浏览器（需先 pnpm -C web exec playwright install chromium）
-AVID_E2E=1 pnpm -C web test:e2e                    # 首屏 / 路由 / 会话流程 / 布局 / 消息卡片 / 交互反馈 / 分支
-
-# 浏览器 + 流式：内核以 AVID_E2E_STREAM=1 起（不注入 chat，svc 因而走生产路径），
-# dev/tmp/e2e_server.py 会把 stream_completion 换成「按脚本产出再分片」的假实现。
-AVID_PORT=8877 AVID_E2E_STREAM=1 uv run --extra web python dev/tmp/e2e_server.py
+# 浏览器（47 条：功能 + 5 条视觉基线；需先 pnpm -C web exec playwright install chromium）
+# 前置：**一个脚本模型内核**（不需要模型与密钥）。那个服务在仓库里没有——
+# `dev/` 是过程目录、不入库；自备一个能注入 `chat` / `stream_completion` 的装配即可，
+# 形状见 web/e2e/README.md「用脚本模型跑」。
+AVID_PORT=8877 AVID_E2E_STREAM=1 uv run --extra web python <你的脚本模型服务.py>
 AVID_BASE_URL=http://127.0.0.1:8877 AVID_E2E=1 pnpm -C web test:e2e
 
 # 手验
@@ -263,12 +265,14 @@ curl -s -o /dev/null -w '%{http_code} %{content_type}\n' localhost:8765/api/nope
   `/api/runs` 让 agent 调用工具，权限闸门与审计因此不被绕过。
 - **流式渲染库（streamdown 类）**：不做——delta 只到「乐观条目 + rAF 合并」这一层，
   Markdown 在 durable 消息到达时整条渲染。失效信号是接入 delta 后帧率不达标。
-- **Playwright 用例**（a11y / 视觉回归 / 键盘 / 降级）：脚手架在 `web/e2e/`，需要
-  `pnpm -C web exec playwright install chromium` 与 `AVID_E2E=1` 才跑；用脚本模型跑时
-  先 `pnpm -C web build`（`dev/tmp/e2e_server.py` 服务 `web/dist`），细节见 `web/e2e/README.md`。
+- **Playwright 用例**（功能 42 条 + 视觉基线 5 条）：脚手架在 `web/e2e/`，需要
+  `pnpm -C web exec playwright install chromium` 与 `AVID_E2E=1` 才跑；前置是一个脚本模型
+  内核（**不在仓库里**，见上），细节见 `web/e2e/README.md`。
   已落地的是首屏、四条路由、提交→审批→完成、检查器、布局（含中档抽屉）、消息卡片（含两枚
-  角色标记）、交互反馈、分支旅程、流式收敛与工作区/权限选择器；a11y / 视觉回归 / 降级仍
-  只有约定没有用例。
+  角色标记）、交互反馈、分支旅程、流式收敛、工作区/权限选择器、背景插画，以及 5 张视觉基线
+  （阶段 23b，容差按实测的 3 像素）。**仍未做**：a11y（axe）、降级路径的用例；**e2e 入 CI**
+  ——它有一条具体的前置（把脚本模型服务移进仓库），以及一条跨环境问题（视觉基线在别的字体栈
+  上会红，需要 Playwright 官方容器钉环境）。两条都记在 `web/e2e/README.md`。
 
 ## 6. 布局与交互约定（别改回去）
 

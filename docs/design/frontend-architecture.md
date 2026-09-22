@@ -24,7 +24,7 @@
 | D9 | 视觉方向 = **涂鸦潦草风，照 purrcat 实现并 token 化**（**已被阶段 23b 替换为暖羊皮纸 + 液态玻璃，见 §8**）；落地靠 token 单点 + 会失败的样式禁令 + a11y 阻塞门禁 | 语言在 purrcat 里已经成形，但 738 处 hex / 498 处硬阴影 / 228 处内联手写字体全部未 token 化——这是「真实重复」的教科书案例 | 初期写组件的摩擦变大；偏离 token 的临时样式会被拦 |
 | D10 | v1 **不做**：首页、Web 终端、IDE 面板、桌面壳、多用户/鉴权、中文手写体、i18n 框架、前端侧任务写操作、subagent 子事件转发、虚拟列表 | 每一条都有明确的重新考虑信号（§5.5、§16） | 形态朴素 |
 
-**当前基线（写作时实测）**：内核运行期依赖只有 `httpx>=0.27`（`pyproject.toml:7`）；参照实现 purrcat 的 UI 为 React 18 + Vite 5 + Tailwind 3，视觉语言已成形但未 token 化（738 hex / 498 硬阴影 / 295 墨边 / 228 内联手写字体，§8.0）；`agent_loop` 的对外观察点只有 `on_message`（`src/avid/runtime/loop.py:96,103`）；模型调用非流式（`src/avid/ai/client.py:166-178`）；本机 Node `v24.15.0`、pnpm `10.29.3`、uv `0.12.9`；仓库无 CI（无 `.github/`）。
+**当前基线（写作时实测）**：内核运行期依赖只有 `httpx>=0.27`（`pyproject.toml:7`）；参照实现 purrcat 的 UI 为 React 18 + Vite 5 + Tailwind 3，视觉语言已成形但未 token 化（738 hex / 498 硬阴影 / 295 墨边 / 228 内联手写字体，§8.0）；`agent_loop` 的对外观察点只有 `on_message`（`src/avid/runtime/loop.py:96,103`）；模型调用非流式（`src/avid/ai/client.py:166-178`）；本机 Node `v24.15.0`、pnpm `10.29.3`、uv `0.12.9`；**CI 已存在**（`.github/workflows/ci.yml`，三个 job：内核 ruff/mypy/pytest、stress 门禁、前端 install→build→`verify`）——本节其余数字仍是写作时的实测，CI 这一条已按现状更新。
 
 ---
 
@@ -995,11 +995,11 @@ v1 只出一份 `zh-CN`，但**按双语字典的形状写**（顶层就是 `{'z
 | C11 | 无静默失败 | `pnpm -C web run lint`：`catch` 块为空或有 `/* noop */` 即失败；每个 `src/api` 请求必须有超时与 `AbortSignal` |
 | C12 | 降级路径可用 | `pnpm -C web run test:degraded`：用 Playwright 阻断 `/events` 请求 → 断言 UI 自动切到轮询、顶部出现降级提示、运行仍能推进到终态 |
 | C13 | delta 是订阅而非默认 | `pnpm -C web run test:deltas`：不带 `?deltas=1` 订阅时不产生任何 delta 帧；带上时收到 delta 且不影响最终状态（与 B8 的前端部分呼应） |
-| C14 | 玻璃语言 token 化 | `pnpm -C web run lint`：`shadow-[…]`、内联 `borderRadius`、内联 `fontFamily`、`dark:`、内建调色板类在 `ui/` 之外的组件里出现即失败；模糊与玻璃取值只能来自 `--glass-*` |
-| C15 | 圆角与投影不漂移 | 圆角只能取 `--r-chip/face/card/panel/pill`，投影只能取 `--lift-1/2/3`；`check:style` 禁止内联圆角与阴影。**形状轮换那条已删**：新语言没有这个机制，`e2e/messages.spec.ts` 反过来断言「所有消息卡片同形」 |
+| C14 | 玻璃语言 token 化 | `pnpm -C web run lint`（`check-style` 规则 1–4、12）：颜色字面量只在 `tokens.css`；`shadow-[…]` / `z-[…]` / 内联 `borderRadius` / 内联 `fontFamily` / `dark:` / 内建调色板类 / **Tailwind 内建档位（`rounded-xl`、`shadow-lg` 这类）** 全部即失败。最后一条是 23c 补的：此前只禁了 `shadow-[…]` 与内联圆角，拦不住 `rounded-xl`，于是「圆角只能取 `--r-*`」当时是空话 |
+| C15 | 圆角与投影不漂移 | 圆角只能取 `--r-chip/face/card/panel/pill`（`rounded-chip/face/card/panel/pill`），投影只能取 `--lift-1/2/3`；由 C14 的档位禁令 + 内联样式禁令共同守住。**形状轮换那条已删**：新语言没有这个机制，`e2e/messages.spec.ts` 反过来断言「所有消息卡片同形」 |
 | C16 | 字体零外部请求、零自托管文件 | `grep -r "fonts.googleapis\|fonts.gstatic" web/dist web/src` 零命中；`gate:size` 的 `font_bytes` 现在是 **0**（手写体已弃用，字体只剩系统栈） |
 | C17 | 无位图纹理 | `gate:size` 断言 `web/dist` 内 `*.png/jpg/webp/gif` 仅 favicon/logo，且合计 ≤32 KB；光斑背景必须是 CSS 渐变（参照物的整幅插画因此**不进仓**：要么不做，要么做成运行期选图，见 §8.9） |
-| C18 | 模糊预算与 CSS 体积 | 同屏 `backdrop-filter` 元素数 ≤12；时间线列表内的卡片不得带模糊；`gate:size` 新增 `css_gzip_bytes`——此前门禁**完全不量 CSS**，而视觉改动几乎全在 CSS 里（见 §9） |
+| C18 | 模糊预算与 CSS 体积 | **结构那一半是机械的**（`check:style` 规则 13）：`backdrop-filter` 只允许出现在 `src/ui/glass.css`，且只允许落在 `.surface-panel` / `.surface-main` / `.surface-sidebar` / `.id-tag` 四个选择器上——**列表内的卡片（`.surface-card` / `.surface-chip`）不得带模糊**，组件里用 `backdrop-blur-*` 或内联 `backdropFilter` 也即失败（四条反例都实测会红）。**运行期那一半（同屏 ≤12）静态查不了**：它由实测的 4 个 + 3 倍余量支撑，见 §8.9。`gate:size` 另有 `css_gzip_bytes`——此前门禁**完全不量 CSS**，而视觉改动几乎全在 CSS 里（见 §9） |
 | C19 | reduced-motion 全覆盖 | Playwright：以 `prefers-reduced-motion: reduce` 打开 → 所有 hover/active 位移、旋转过渡、`animate-pulse` 的时长为 0；颜色变化保留 |
 | C20 | 桌面壳样式不影响 Web | 浏览器（非桌面壳）下 `document.elementFromPoint(x, 16)` 必须是页面内容而不是拖拽条；`-webkit-app-region` 只在 `html[data-shell="desktop"]` 下生效 |
 | C21 | 装饰层不进无障碍树 | axe 通过；且断言手绘 blob/胶带/点阵容器均为 `aria-hidden="true"`，每个入口按钮的可访问名来自内部文字 |

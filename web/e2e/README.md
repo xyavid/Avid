@@ -25,20 +25,31 @@ AVID_E2E=1 pnpm test:e2e
 
 ### 用脚本模型跑（不需要真模型与密钥）
 
-`dev/tmp/e2e_server.py` 起的是同一套 svc/web，只把模型与工具换成脚本。它服务
-**`web/dist`**（当前 checkout 构建出来的前端），所以先构建：
+**这一步的前置服务不在仓库里**，先说清楚：`dev/` 是过程目录、整目录不入库，所以
+「起一个脚本模型内核」这件事必须自备。它要有四个性质（照这四条写一个几十行的装配即可，
+真实装配的形状见 `dev/tmp/e2e_server.py`，但那个文件只存在于开发机上）：
+
+1. **同一个 `create_app` + `Services`**，只把模型与工具换成脚本——不是另写一个假服务，
+   否则用例测的就不是生产装配；
+2. 注入 `chat`（`AVID_E2E_STREAM=1` 时改注入 `stream_completion`，于是 svc 走生产路径、
+   delta 真的经 SSE 出去）；
+3. **服务 `web/dist`** 而不是 `src/avid/web/static`——后者是 `copy:dist` 的产物，容易停在
+   上一版（改了前端却测出「选择器不存在」）；
+4. `AVID_HOME` 与工作区根都指到临时目录——否则跑一次 e2e 就把仓库目录登记进用户真实的
+   `~/.avid/workspaces.json`，并把测试垃圾会话写进真实会话列表。
 
 ```bash
-pnpm -C web build                                  # 必须；缺 index.html 会直接报错退出
+pnpm -C web build                                  # 必须；缺 index.html 时你那个服务应直接报错退出
 AVID_API_KEY=test AVID_MODEL=test-model AVID_PORT=8877 \
-  uv run --extra web python dev/tmp/e2e_server.py  # 终端 1
+  uv run --extra web python <你的脚本模型服务>.py   # 终端 1
 cd web && AVID_E2E=1 AVID_BASE_URL=http://127.0.0.1:8877 pnpm test:e2e   # 终端 2
 ```
 
 两个环境变量值得知道：
 
 * `AVID_E2E_STREAM=1`：走**生产路径**（不注入 chat），delta 会真的经 SSE 到浏览器。
-  `streaming.spec.ts` 需要它——脚本模型在非流式路径下不产生 delta，那条会失败（其余 35 项两种模式都过）。
+  `streaming.spec.ts` 需要它——脚本模型在非流式路径下不产生 delta，那条会失败
+  （其余用例两种模式都过）。
 * `AVID_PORT` / `AVID_BASE_URL`：本机 8765 常被别的进程占着，换端口即可，两边要一致。
 * `AVID_E2E_PICK_FILE`：新增工作区的用例没法点真对话框（会挂住等人），所以服务端用它把
   选择器换成 `cat <该文件>`：**写路径 = 用户选了那个文件夹，写空 = 用户点了取消**。
@@ -51,6 +62,22 @@ cd web && AVID_E2E=1 AVID_BASE_URL=http://127.0.0.1:8877 pnpm test:e2e   # 终�
 AVID_E2E=1 pnpm exec playwright test e2e/smoke.spec.ts
 AVID_E2E=1 pnpm exec playwright test --ui
 ```
+
+## 为什么不进 CI（阶段 23c 的决策）
+
+**结论：不接。** 两条理由都是具体的，不是"以后再说"：
+
+1. **CI 里没有模型与密钥，而脚本模型服务不在仓库里**（上面那四条前置）。所以"把 e2e 接进
+   CI"的第一步其实是另一件事：**把那个服务变成受审的仓库文件**（它要读 `~/` 与工作区、
+   要写临时目录、要能注入模型——审查面不小），再接一个与 `web` job 并列的 job。
+2. **视觉基线是环境绑定的**。那 5 张基线是在本机这套字体栈上截的（Linux/WSL + 系统 CJK
+   字体），CI 的镜像字体不同 ⇒ 基线必红。Playwright 的标准解法是把 job 放进它的官方容器
+   镜像里把环境钉死，而那会让"接 e2e"变成"接 e2e + 换运行环境 + 重截一次基线"。
+
+**重新考虑的信号**：① 有人愿意把那 42 条功能用例的服务器移进仓库（那是一件独立的事，
+值得单开一步）；② 出现"改了前端 CI 全绿、本地才发现 e2e 红"的实际事故。在那之前，
+e2e 与视觉基线都是**交付前的手动自检**——它的价值已经兑现过（23b 的两处真实回退就是它
+抓出来的：`:active` 被 `:hover` 盖住、背景插画退化路径撞 CSP），只是没进自动门禁。
 
 ## 视觉回归基线
 

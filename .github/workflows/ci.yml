@@ -63,6 +63,6 @@ jobs:
       - name: 构建（gate:size 的输入）
         working-directory: web
         run: pnpm run build
-      # verify = check:layers + check:tokens + lint + typecheck + vitest + gate:size
+      # verify = check:layers + check:tokens + lint + check:contrast + typecheck + vitest + gate:size
       - working-directory: web
         run: pnpm run verify

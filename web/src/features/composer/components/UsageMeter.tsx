@@ -111,7 +111,7 @@ export function UsageMeter({ sessionId, branch }: UsageMeterProps) {
                 percent: formatPercent(utilization),
               })}
             </span>
-            <span className="block h-1.5 w-16 overflow-hidden rounded-full border-hair border-ink/20 bg-sand">
+            <span className="block h-1.5 w-16 overflow-hidden rounded-pill border-hair border-ink/20 bg-sand">
               <span
                 className={clsx('block h-full', TONE_BAR[tone])}
                 style={{ width: `${barPercent(utilization)}%` }}
@@ -163,7 +163,7 @@ export function UsageDetail({ usage }: { usage: UsageReport }) {
 
       {parts.length > 0 ? (
         <>
-          <span className="flex h-1.5 overflow-hidden rounded-full border-hair border-ink/20 bg-sand">
+          <span className="flex h-1.5 overflow-hidden rounded-pill border-hair border-ink/20 bg-sand">
             {parts.map((part) => (
               <span
                 key={part.key}
