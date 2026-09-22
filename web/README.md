@@ -14,8 +14,8 @@ pnpm test           # vitest：reducer / coalescer / SSE 解析（纯函数，�
 pnpm run check:layers   # A8：网络出口唯一、feature 不互相 import、store 写入口收敛
 pnpm run check:tokens   # C22：字体声明即加载、z-index 只用 --z-*
 pnpm lint               # A9/C11/C14/C15/C18：token、裸元素、i18n key 完整性、空 catch
-pnpm run gate:size      # C1/P9/C17：体积预算 + 显式豁免 + 字体/纹理字节
-pnpm run verify         # 以上全部（不含 build 与 e2e）
+pnpm run gate:size      # C1/P9/C17：体积预算 + 显式豁免 + 字体/纹理字节（读 dist/）
+pnpm run verify         # 以上全部（不含 build 与 e2e；gate:size 依赖 dist/，先 pnpm build）
 AVID_E2E=1 pnpm test:e2e    # Playwright 14 项（需先 pnpm exec playwright install chromium）
 ```
 

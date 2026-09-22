@@ -57,9 +57,12 @@ jobs:
           cache-dependency-path: web/pnpm-lock.yaml
       - working-directory: web
         run: pnpm install --frozen-lockfile
-      # verify = check:layers + check:tokens + lint + vitest + gate:size
+      # gate:size 的输入是 dist/（web/scripts/gate-size.mjs:71-80），而 dist/ 不入库：
+      # 不先 build，它只会回一句「先 pnpm build」然后 exit 1。顺带把 `vite build`
+      # 本身纳入门禁——此前 CI 只跑过 tsc，打包链坏了没人知道。
+      - name: 构建（gate:size 的输入）
+        working-directory: web
+        run: pnpm run build
+      # verify = check:layers + check:tokens + lint + typecheck + vitest + gate:size
       - working-directory: web
         run: pnpm run verify
-      - name: 类型检查（verify 里没有 tsc）
-        working-directory: web
-        run: pnpm exec tsc -b
