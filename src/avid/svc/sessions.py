@@ -22,6 +22,7 @@ from typing import Any
 
 from ..session import (
     DEFAULT_BRANCH,
+    USAGE_NS,
     BranchScan,
     SessionBranchExistsError,
     SessionError,
@@ -221,13 +222,23 @@ class SessionService:
     # ---------------- 分支 ----------------
 
     def list_branches(self, session_id: str) -> dict[str, Any]:
-        """分支列表（含链尾与条数）。
+        """分支列表（含链尾、条数与**该分支最近一次运行的用量快照**）。
 
         条数要沿 parent 链走一趟，所以是 O(分支数 × 链长)。当前规模（分支个位数、
         条目数百）付得起；触发条件是长会话里分支列表明显变慢，届时把条数冗余成值。
+
+        用量快照一次 ``scan_values`` 全拿（它是会话值，key 就是分支名）：界面进会话
+        或切换会话时，用同一个请求就能把"上次用了多少上下文、命中多少"画出来，
+        不必再问一次服务端，也不必等下一次模型调用。
         """
         with self._session(session_id) as session:
-            branches = [self._branch_to_dict(session, name) for name in session.branch_names()]
+            usage_by_branch = {
+                item.key: item.value for item in session.scan_values(USAGE_NS)
+            }
+            branches = [
+                self._branch_to_dict(session, name, usage_by_branch.get(name))
+                for name in session.branch_names()
+            ]
         return {"session_id": session_id, "branches": branches}
 
     def create_branch(
@@ -251,13 +262,17 @@ class SessionService:
             return self._branch_to_dict(session, chosen)
 
     @staticmethod
-    def _branch_to_dict(session: Any, name: str) -> dict[str, Any]:
+    def _branch_to_dict(
+        session: Any, name: str, usage: Any = None
+    ) -> dict[str, Any]:
         target = session.branch(name)
         return {
             "name": name,
             "tip_entry_id": None if target is None else target.get_tip_id(),
             "entry_count": 0 if target is None else len(target.find_entries(BranchScan())),
             "is_default": name == DEFAULT_BRANCH,
+            # None = 这个分支还没跑过（或端点没上报用量）。界面显示「—」，不猜。
+            "usage": usage,
         }
 
     @staticmethod

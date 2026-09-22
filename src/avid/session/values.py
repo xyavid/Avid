@@ -2,8 +2,8 @@
 
 pi 把"不是消息但必须持久化"的东西一律做成值——分支头、会话名、条目标签、
 待定帧、操作状态，于是存储层只需要两种东西：条目与地址化的值。Avid 沿用这个
-形状，但只做标量（取舍 A4：列表与 prefix 扫描的使用者只有 fork 与待定帧，
-两者都不在本阶段），保留地址见下。
+形状，值取 JSON 标量或**小对象**（`avid.usage` 的运行用量快照是第一个对象值），
+但**不做列表与 prefix 扫描**（取舍 A4：那两样的使用者只有 fork 与待定帧）。
 
 地址里的 namespace 与 key 都不允许空 namespace 或 NUL——它们是程序错误，
 不是运行时状况，所以抛 ``TypeError``（与 pi 一致）。
@@ -19,6 +19,10 @@ from .types import ValueDeleteWrite, ValueSetWrite
 SESSION_NAME_NS = "avid.session.name"
 ENTRY_LABEL_NS = "avid.entry.label"
 BRANCH_TIP_NS = "avid.branch.tip"
+# 运行用量台账（阶段 22）：每个分支一个地址，值是 `RunState.usage_report()` 的快照。
+# 为什么要落盘：刷新页面、切换会话、重启 `avid web` 之后，界面仍要能显示"这个分支
+# 上一次运行用了多少上下文、缓存命中了多少"——这些数只活在一次运行里。
+USAGE_NS = "avid.usage"
 
 # 默认分支名。单点定义在这里（值的地址就是分支的表示），recorder 与读侧都引用它。
 # 会话 `create` 不隐式建分支，所以「还没有任何分支值」的会话由读侧把 main 视作
@@ -53,6 +57,15 @@ def entry_label(entry_id: str) -> ValueAddress:
 
 def branch_tip(branch: str) -> ValueAddress:
     return ValueAddress(BRANCH_TIP_NS, branch)
+
+
+def branch_usage(branch: str) -> ValueAddress:
+    """某分支最近一次运行的用量快照。
+
+    按**分支**记账而不是按会话：运行总是跑在某条链上，不同链的上下文本来就不同，
+    合成一个数会让"切到另一条分支"显示成上一条链的占用。
+    """
+    return ValueAddress(USAGE_NS, branch)
 
 
 def set_value(address: ValueAddress, next_value: Any) -> ValueSetWrite:

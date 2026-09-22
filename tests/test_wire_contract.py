@@ -34,8 +34,11 @@ from avid.web.schemas import (
     BranchListOut,
     BranchOut,
     BuildInfo,
+    CacheUsageOut,
     CancelOut,
     Capabilities,
+    CompactionUsageOut,
+    ContextUsageOut,
     EntryOut,
     EntryPageOut,
     ErrorOut,
@@ -49,6 +52,7 @@ from avid.web.schemas import (
     SkillOut,
     StreamInfo,
     TaskOut,
+    UsageOut,
     WorkspaceOut,
     WorkspaceRef,
 )
@@ -65,6 +69,11 @@ PAIRS: list[tuple[type, str]] = [
     (EntryPageOut, "EntryPage"),
     (BranchOut, "Branch"),
     (BranchListOut, "BranchList"),
+    # 用量台账（阶段 22）：四个模型成一套，字段名三处一致
+    (UsageOut, "UsageReport"),
+    (ContextUsageOut, "ContextUsage"),
+    (CacheUsageOut, "CacheUsage"),
+    (CompactionUsageOut, "CompactionUsage"),
     # 运行与审批
     (RunOut, "Run"),
     (RunCreatedOut, "RunCreated"),
@@ -153,6 +162,13 @@ def test_live_payloads_carry_every_declared_field(client):
         (SessionSummary, http.get("/api/sessions").json()["sessions"][0]),
         (SessionDetail, http.get(f"/api/sessions/{session_id}").json()),
         (EntryPageOut, http.get(f"/api/sessions/{session_id}/entries").json()),
+        # 分支列表带用量快照（阶段 22）。新建会话还没有 branch 值，但服务端把 main
+        # 作为隐式默认返回，所以这里一定至少有一项。
+        (BranchListOut, http.get(f"/api/sessions/{session_id}/branches").json()),
+        (
+            BranchOut,
+            http.get(f"/api/sessions/{session_id}/branches").json()["branches"][0],
+        ),
         (WorkspaceOut, workspace),
     ]
     for model, payload in checks:

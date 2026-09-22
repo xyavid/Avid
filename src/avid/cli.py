@@ -25,7 +25,8 @@ from datetime import datetime
 from pathlib import Path
 
 from .ai.client import LLMError, ask
-from .ai.config import ConfigError, load_config
+from .ai.config import Config, ConfigError, load_config
+from .ai.usage import Usage, hit_ratio
 from .policy.permission import DEFAULT_MODE, MODE_LABELS, MODES
 from .runtime.loop import RoundLimitExceeded, agent_loop
 from .session import (
@@ -195,12 +196,35 @@ def main(argv: list[str] | None = None) -> int:
     print(reply.text)
     print(
         f"--- model={reply.model or config.model}"
-        f" prompt={reply.usage.prompt_tokens}"
-        f" completion={reply.usage.completion_tokens}"
-        f" total={reply.usage.total_tokens} ---",
+        f"{usage_suffix(reply.usage, config)} ---",
         file=sys.stderr,
     )
     return 0
+
+
+def usage_suffix(usage: Usage, config: Config) -> str:
+    """一行的用量摘要：三基数 + 缓存读写/命中率 + 上下文占用（窗口不认识就不写）。
+
+    与 Web 界面同一口径（都走 ``ai/usage.py`` 的归一化）：``缓存`` 只在这次上报
+    真的带了这个数时才出现，缺失时整段省略——命令行不该为"没有这个数"编一个 0。
+    """
+    parts = [
+        f"prompt={usage.prompt_tokens}",
+        f"completion={usage.completion_tokens}",
+        f"total={usage.total_tokens}",
+    ]
+    if usage.cache_read_tokens is not None:
+        parts.append(f"cache_read={usage.cache_read_tokens}")
+        ratio = hit_ratio(usage)
+        if ratio is not None:
+            parts.append(f"hit={ratio:.0%}")
+    if usage.cache_write_tokens is not None:
+        parts.append(f"cache_write={usage.cache_write_tokens}")
+    window = config.context_window
+    if window:
+        parts.append(f"window={window}")
+        parts.append(f"util={usage.prompt_tokens / window:.0%}")
+    return " " + " ".join(parts)
 
 
 def _run_session(args: argparse.Namespace, config) -> int:

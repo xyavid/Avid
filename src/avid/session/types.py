@@ -146,7 +146,12 @@ class BranchScan:
 
 @dataclass(frozen=True)
 class SessionStats:
-    """会话统计。pi 这里还有 usage 台账，Avid 的 token 用量目前不落盘（取舍 A3）。"""
+    """会话统计。只有条数：**运行用量不在这里**。
+
+    阶段 22 把用量落在会话**值**里（`values.py` 的 `USAGE_NS`，按分支一个地址），
+    理由是它要按分支查、且与"会话整体有多少条消息"无关；塞进统计会逼着每次读统计
+    都反查分支。pi 把 usage 放这里，Avid 的取舍见 `runtime-architecture.md` §20.2。
+    """
 
     message_count: int
 

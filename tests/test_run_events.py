@@ -19,6 +19,7 @@ from support import (
     new_session,
     tool_call,
     wait_for,
+    wait_handle_released,
     wait_terminal,
 )
 
@@ -591,10 +592,115 @@ def test_injected_reminder_is_persisted_as_a_notice_entry(sandbox):
     assert kinds.count(events.TODO_REMINDER) == 1
     assert kinds.count(events.USER_MESSAGE) == 1
 
-    # 投影不变：提醒仍在模型的历史里
-    session = services.repo.open(services.runs.find_metadata(record.session_id))
-    try:
-        history = [str(message.get("content") or "") for message in messages_for_branch(session)]
-    finally:
-        session.close()
+    # 投影不变：提醒仍在模型的历史里。
+    #
+    # 直读会话文件要先等运行线程交还句柄，再持句柄锁打开：`record.terminal` 说的是
+    # "注册表已定终态"，句柄是紧接着才交还的（见 `support.wait_handle_released`）。
+    wait_handle_released(services, record.session_id)
+    with services.runs.session_lock(record.session_id):
+        session = services.repo.open(services.runs.find_metadata(record.session_id))
+        try:
+            history = [
+                str(message.get("content") or "")
+                for message in messages_for_branch(session)
+            ]
+        finally:
+            session.close()
     assert sum("[提醒]" in text for text in history) == 1
+
+
+# ---------------- 阶段 22：用量快照 ----------------
+
+#: 脚本模型的用量（`support.make_turn`）：prompt=1 / completion=2 / total=3。
+SCRIPT_USAGE = {"context": {"tokens": 1, "window": None, "utilization": None}}
+
+
+def test_run_status_carries_the_usage_snapshot_every_round(sandbox):
+    """每轮模型调用后都有一份统一 schema 的快照——界面据此实时显示占用与命中。"""
+    tools = RecordingTools().registry("read_file")
+    services = build(
+        sandbox,
+        ScriptedChat(make_turn("", [tool_call("read_file")]), make_turn("好")),
+        tools,
+    )
+    record = run_to_end(services)
+
+    snapshots = [
+        event.data["usage"]
+        for event in collect(services, record.run_id)
+        if event.type == events.RUN_STATUS and "usage" in event.data
+    ]
+    assert len(snapshots) == 2  # 两轮，两份
+    assert snapshots[-1]["context"] == SCRIPT_USAGE["context"]
+    # 测试模型不在内置窗口表里 → 没有分母，也不猜占用率。
+    assert snapshots[-1]["context"]["window"] is None
+    # 脚本模型没上报缓存计数：None（「—」），不是 0。
+    assert snapshots[-1]["cache"] == {
+        "read_tokens": None,
+        "write_tokens": None,
+        "hit_ratio": None,
+    }
+    assert snapshots[-1]["compaction"]["count"] == 0
+
+
+def test_terminal_event_and_rest_view_share_the_final_snapshot(sandbox):
+    """run_finished 带最终快照（durable，流里就拿到），REST 视图同源。"""
+    tools = RecordingTools().registry("read_file")
+    services = build(
+        sandbox,
+        ScriptedChat(make_turn("", [tool_call("read_file")]), make_turn("好")),
+        tools,
+    )
+    record = run_to_end(services)
+    events_list = collect(services, record.run_id)
+
+    finished = next(e for e in events_list if e.type == events.RUN_FINISHED)
+    assert finished.data["usage"] == record.usage
+    assert record.usage["context"]["tokens"] == 1
+    # 累计量仍是运行账单（两轮 × total 3），与"占用"不是一回事。
+    assert record.tokens == 6
+    assert services.runs.get(record.run_id).to_dict()["usage"] == record.usage
+
+
+def test_usage_is_persisted_into_the_session_for_the_branch(sandbox):
+    """落盘：分支列表带该分支最近一次运行的快照（刷新与重启后靠它）。"""
+    from avid.session import USAGE_NS, branch_usage
+
+    tools = RecordingTools().registry("read_file")
+    services = build(sandbox, ScriptedChat(make_turn("答")), tools)
+    record = run_to_end(services)
+
+    listed = services.sessions.list_branches(record.session_id)["branches"]
+    main = next(item for item in listed if item["name"] == "main")
+    assert main["usage"]["context"]["tokens"] == 1
+
+    # 直读会话文件：先等句柄交还，再持锁打开（与上面那条同理）。
+    wait_handle_released(services, record.session_id)
+    with services.runs.session_lock(record.session_id):
+        session = services.repo.open(services.runs.find_metadata(record.session_id))
+        try:
+            stored = session.scan_values(USAGE_NS)
+        finally:
+            session.close()
+    assert [item.key for item in stored] == ["main"]
+    assert stored[0].value == main["usage"]
+    # 地址构造器与写入侧用的是同一个（namespace 与 key 都得对得上）。
+    assert branch_usage("main").key == "main"
+
+
+def test_terminal_flag_and_terminal_event_land_together(sandbox):
+    """`record.terminal` 为真 ⇒ 终态事件**已经在缓冲里**。
+
+    订阅者就是按这条判断"还有没有后续事件"的（`record.terminal` 且缓冲没有新事件
+    就直接返回）。两者分开写——先置状态、中间再干别的活（阶段 22 起中间有一次
+    会话写入）——订阅者会在那段时间里看到"已终态 + 缓冲里没有终态事件"，于是
+    静默少收一条终态。所以这里**什么也不等**：终态刚置位就立刻订阅。
+    """
+    tools = RecordingTools().registry("read_file")
+    services = build(sandbox, many_rounds(2), tools)
+    record = run_to_end(services)
+    assert record.terminal
+
+    got = collect(services, record.run_id)
+    assert got, "订阅一条事件都没收到"
+    assert got[-1].type == events.RUN_FINISHED

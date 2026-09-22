@@ -86,6 +86,8 @@ class RunRecord:
     status: str = "running"  # running | awaiting_approval | finished | failed | cancelled
     round: int = 0
     tokens: int = 0
+    # 统一 usage schema 的最近一份快照（`RunState.usage_report()`）。None = 还没有读数。
+    usage: dict[str, Any] | None = None
     text: str = ""
     error: dict[str, Any] | None = None
     cancel_requested: bool = False
@@ -107,6 +109,9 @@ class RunRecord:
     condition: threading.Condition = field(default_factory=threading.Condition)
     approvals: ApprovalTable | None = None
     state: RunState | None = None
+    # 本次运行的唯一落库者（由运行线程装配后写回）：`_finish` 要用它在宣告终态
+    # **之前**把用量快照写进会话值。
+    recorder: SessionRecorder | None = None
     # 注入消息的标注：id(message) → "todo" | "nudge"。由 on_event 先标、on_message 后取。
     injected: dict[int, str] = field(default_factory=dict)
 
@@ -127,6 +132,7 @@ class RunRecord:
             "finished_at": self.finished_at,
             "round": self.round,
             "tokens": self.tokens,
+            "usage": self.usage,
             "error": self.error,
             "cancel_requested": self.cancel_requested,
             "cancel_reason": self.cancel_reason,
@@ -550,9 +556,13 @@ class RunRegistry:
             workspace_root=workspace.root,
             permission=permission or workspace.default_permission,
         )
+        # 记录器在 try 里建：`load_config` 失败时它不存在，`_finish` 也就没有可落的
+        # 用量（record.recorder 保持 None，落盘那一步自动跳过）。
         try:
             config = load_config()
             recorder = SessionRecorder(session, branch)
+            # 交给记录：`_finish` 要能在宣告终态之前把用量快照落盘。
+            record.recorder = recorder
             recorder.ensure_branch()
             history = messages_for_branch(session, recorder.branch)
             messages = [*history, {"role": "user", "content": prompt}]
@@ -563,6 +573,8 @@ class RunRegistry:
                 observer=lambda event: self._observe(record, event),
                 permission_mode=permission or workspace.default_permission,
                 workspace_root=workspace.root,
+                # 占用率的分母跟着这次运行实际的模型配置走。
+                context_window=config.context_window,
             )
             record.state = state
             # 线程启动到这一刻之间有一段（装配记录器、读历史、扫描技能）：
@@ -614,6 +626,9 @@ class RunRegistry:
                         logger.warning(
                             "关闭会话 %s 失败", record.session_id, exc_info=True
                         )
+            # 句柄已交还：记录里不再留它的引用。终态记录还要留一段时间（重连对账会
+            # 按 run_id 回查），留着 recorder 就等于留着一个已关闭的会话对象。
+            record.recorder = None
 
     def _observe(self, record: RunRecord, event: RunEvent) -> None:
         """内核观察者 → 注册表事件：补上 run_id/seq/ts，并标注注入消息。
@@ -638,6 +653,9 @@ class RunRegistry:
                 record.round = int(event.data["round"])
             if "tokens" in event.data:
                 record.tokens = int(event.data["tokens"])
+            # usage 同理：SSE 是实时的，但刷新页面后前端读的是 REST，两者必须一致。
+            if isinstance(event.data.get("usage"), dict):
+                record.usage = event.data["usage"]
         self.emit(record, event.type, **event.data)
 
     def _message_sink(
@@ -673,7 +691,7 @@ class RunRegistry:
         return sink
 
     def _finish(self, record: RunRecord, type: str, **data: Any) -> None:
-        record.status = (
+        status = (
             "finished"
             if type == events.RUN_FINISHED
             else "cancelled"
@@ -681,9 +699,49 @@ class RunRegistry:
             else "failed"
         )
         record.finished_at = events.now_ms()
-        self.emit(record, type, **data)
+        # 终态也带上用量快照：run_finished 是 durable 的，订阅者据此在流里就拿到
+        # 最终读数（不必等 REST 对账）；取消与失败同样有占用，所以三种终态都带。
+        if record.state is not None:
+            record.usage = record.state.usage_report()
+            data.setdefault("usage", record.usage)
+        # **先落盘再宣告终态**：客户端收到 run_finished 就会去重取分支列表
+        # （`refresh()`），那一读必须已经能看到这次的读数。写在宣告之后的话，
+        # 重取与落盘谁先到就是竞态，界面会停在上一次运行的数上。
+        #
+        # 这一步是慢操作（会话写入 + fsync），所以它必须在**任何状态翻转之前**：
+        # 见下面那段临界区。
+        self._persist_usage(record)
+        with record.condition:
+            # 状态与终态事件在同一段临界区里改。订阅者判断"还有没有后续事件"读的是
+            # `record.terminal`（在同一个 condition 下）：两者分开写的话，中间那一段
+            # 时间里订阅者会看到"已终态 + 缓冲里没有终态事件"，于是按"没有更多事件了"
+            # 直接返回——缺口是静默的（以前窗口只有一个赋值那么窄，但同样是错的）。
+            record.status = status
+            self.emit(record, type, **data)
         logger.info("运行 %s 结束：%s", record.run_id, record.status)
         self._sweep()
+
+    def _persist_usage(self, record: RunRecord) -> None:
+        """把这次的用量快照写进会话值（按分支，覆盖式）。
+
+        三种终态都写：取消与失败一样产生上下文占用，用户回到这个会话时该看到
+        "上一次跑到哪、用了多少"，而不是更早那次成功运行的旧数。
+
+        **没有读数就不写**：端点不认 ``stream_options.include_usage`` 时快照是全
+        null，写进去会让界面把"没有数据"当成"跑过一次但没用量"。
+        """
+        state = record.state
+        recorder = record.recorder
+        if recorder is None or state is None:
+            return
+        report = state.usage_report()
+        if report["context"]["tokens"] is None and report["compaction"]["count"] == 0:
+            return
+        record.usage = report
+        try:
+            recorder.record_usage(report)
+        except SessionError:  # 落盘失败不该掩盖运行结果
+            logger.warning("会话 %s 的 usage 落库失败", record.session_id, exc_info=True)
 
     def _sweep(self) -> None:
         """回收终态运行记录与不再需要的句柄锁。

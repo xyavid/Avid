@@ -7,6 +7,7 @@
 
 import pytest
 
+from avid.ai.client import Usage
 from avid.ai.config import Config
 from avid.ai.transcript import Transcript
 from avid.policy import compaction as compact
@@ -149,6 +150,33 @@ def test_multiple_steps_in_one_round_all_count(monkeypatch):
     context.prepare(Transcript([user()]), state, config=CONFIG, summarize=summarize)
 
     assert state.compactions == 2
+
+
+def test_compaction_arms_the_next_real_reading(monkeypatch):
+    """压缩之后要等下一轮真实读数：编排只置"等读数"的标志，回填由 record_usage 做。
+
+    为什么不在压缩那一层估算：省了多少只有模型说了算，本地猜一个数会与计费口径打架。
+    """
+    monkeypatch.setattr(
+        compact,
+        "tool_result_budget",
+        lambda t, **k: compact.CompactReport("tool_result_budget", "落盘 1 项", 300, 100),
+    )
+    monkeypatch.setattr(compact, "snip_compact", lambda t, **k: None)
+
+    state = RunState(context_window=200_000)
+    state.record_usage(Usage(150_000, 1, 150_001))
+    context.prepare(Transcript([user()]), state, config=CONFIG, summarize=summarize)
+
+    # 压完还没调用模型：不给数（界面显示「—」），也不猜。
+    assert state.usage_report()["compaction"]["last_compaction_tokens"] is None
+
+    state.record_usage(Usage(40_000, 1, 40_001))
+    assert state.usage_report()["compaction"] == {
+        "count": 1,
+        "last_compaction_tokens": 40_000,
+        "last_step": "tool_result_budget",
+    }
 
 
 def test_reactive_announces_and_counts(monkeypatch):

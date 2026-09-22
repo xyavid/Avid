@@ -823,3 +823,62 @@ def test_spa_fallback_serves_index_but_missing_assets_are_404(sandbox):
         assert missing.json()["error"]["code"] == "asset_not_found"
     finally:
         services.close()
+
+
+# ---------------- 阶段 22：用量快照 ----------------
+
+def test_branch_list_carries_persisted_usage(bundle):
+    """落盘的用量随分支列表回来：进会话、切会话、重启服务后都能看到。"""
+    client, _ = bundle(chat=ScriptedChat(make_turn("答")))
+    session_id = create_session(client).json()["id"]
+
+    # 还没跑过：null（界面显示「—」），不是一份零值报告。
+    fresh = client.get(f"/api/sessions/{session_id}/branches").json()["branches"][0]
+    assert fresh["usage"] is None
+
+    started = client.post(
+        f"/api/sessions/{session_id}/runs", json={"prompt": "问题", "auto_approve": True}
+    )
+    run_id = started.json()["run_id"]
+    assert wait_for(lambda: client.get(f"/api/runs/{run_id}").json()["status"] == "finished")
+
+    run = client.get(f"/api/runs/{run_id}").json()
+    # 脚本模型的用量是 prompt=1 / completion=2 / total=3（support.make_turn）。
+    assert run["usage"]["context"]["tokens"] == 1
+    assert run["usage"]["cache"]["hit_ratio"] is None
+    # 没有 AVID_CONTEXT_WINDOW，模型名 test-model 也不在内置表里 → 没有分母，不猜占用率。
+    assert run["usage"]["context"]["window"] is None
+    assert run["usage"]["context"]["utilization"] is None
+
+    branches = client.get(f"/api/sessions/{session_id}/branches").json()["branches"]
+    main = next(item for item in branches if item["name"] == "main")
+    assert main["usage"] == run["usage"]
+
+
+def test_usage_is_per_branch_not_per_session(bundle):
+    """切换分支时看到的是那条链自己的读数；没跑过的分支是 null。"""
+    client, _ = bundle(chat=ScriptedChat(make_turn("主线"), make_turn("分支上")))
+    session_id = create_session(client).json()["id"]
+
+    first = client.post(
+        f"/api/sessions/{session_id}/runs",
+        json={"prompt": "跑一下", "auto_approve": True, "branch": "main"},
+    )
+    assert wait_for(
+        lambda: client.get(f"/api/runs/{first.json()['run_id']}").json()["status"]
+        == "finished"
+    )
+
+    entries = client.get(f"/api/sessions/{session_id}/entries?order=asc").json()["entries"]
+    fork = client.post(
+        f"/api/sessions/{session_id}/branches", json={"at": entries[-1]["entry_id"]}
+    ).json()
+    assert fork["usage"] is None  # 新分支还没跑过
+
+    branches = {
+        item["name"]: item
+        for item in client.get(f"/api/sessions/{session_id}/branches").json()["branches"]
+    }
+    assert set(branches) == {"main", fork["name"]}
+    assert branches["main"]["usage"]["context"]["tokens"] == 1
+    assert branches[fork["name"]]["usage"] is None

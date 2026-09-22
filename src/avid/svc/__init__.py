@@ -56,6 +56,7 @@ FEATURES: dict[str, int] = {
     "workspaces": 1,  # 阶段 18：工作区注册表 + 按工作区建会话
     "permission_modes": 1,  # 阶段 18：POST /runs 接受 permission（strict/workspace/system）
     "workspace_picker": 1,  # 新增工作区：POST /workspaces/pick 弹宿主机文件夹选择器
+    "usage": 1,  # 阶段 22：分支带用量快照；run_status / run_finished 带统一 usage schema
 }
 
 # 事件流相关常量对客户端可见（`/api/meta` 公布它们，前端据此设超时与对账阈值）。

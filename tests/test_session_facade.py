@@ -42,7 +42,9 @@ EXPECTED = {
     "STORAGE_VERSION",
     # 值
     "DEFAULT_BRANCH",
+    "USAGE_NS",
     "branch_tip",
+    "branch_usage",
     "entry_label",
     "session_name",
     "set_value",

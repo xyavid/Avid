@@ -194,11 +194,50 @@ class EntryPageOut(BaseModel):
     truncated_tail: bool = False
 
 
+# ---------------- 用量台账（阶段 22） ----------------
+#
+# 形状由 `runtime/state.py` 的 `RunState.usage_report()` 单点决定，这里只是它的
+# 线格式。四个模型都进 `test_wire_contract.py` 的 PAIRS：字段名在 pydantic、
+# `web/src/api/types.ts` 与服务端真实响应三处机械比对。
+
+
+class ContextUsageOut(BaseModel):
+    """上下文占用。None 表示"没有这个数"（没读数 / 不认识该模型的窗口）→ 界面「—」。"""
+
+    tokens: int | None = None
+    window: int | None = None
+    utilization: float | None = None
+
+
+class CacheUsageOut(BaseModel):
+    """缓存读/写与命中率。写计数只有 Anthropic 系会上报，其余为 None。"""
+
+    read_tokens: int | None = None
+    write_tokens: int | None = None
+    hit_ratio: float | None = None
+
+
+class CompactionUsageOut(BaseModel):
+    """压缩次数与"压完还剩多少"（= 压缩后下一轮的真实 prompt_tokens）。"""
+
+    count: int = 0
+    last_compaction_tokens: int | None = None
+    last_step: str | None = None
+
+
+class UsageOut(BaseModel):
+    context: ContextUsageOut
+    cache: CacheUsageOut
+    compaction: CompactionUsageOut
+
+
 class BranchOut(BaseModel):
     name: str
     tip_entry_id: str | None = None
     entry_count: int = 0
     is_default: bool = False
+    # 该分支最近一次运行的用量快照（会话值，落盘；None = 还没跑过）。
+    usage: UsageOut | None = None
 
 
 class BranchListOut(BaseModel):
@@ -255,6 +294,8 @@ class RunOut(BaseModel):
     finished_at: int | None = None
     round: int = 0
     tokens: int = 0
+    # 统一 usage schema 的最近一份快照；None = 还没有读数。
+    usage: UsageOut | None = None
     error: dict[str, Any] | None = None
     cancel_requested: bool = False
     cancel_reason: str | None = None
@@ -373,8 +414,11 @@ __all__ = [
     "ApprovalListOut",
     "ApprovalOut",
     "BuildInfo",
+    "CacheUsageOut",
     "CancelOut",
     "Capabilities",
+    "CompactionUsageOut",
+    "ContextUsageOut",
     "CreateSessionIn",
     "EntryOut",
     "EntryPageOut",
@@ -400,6 +444,7 @@ __all__ = [
     "StreamInfo",
     "TaskListOut",
     "TaskOut",
+    "UsageOut",
     "classify_tool_status",
     "event_payload",
 ]

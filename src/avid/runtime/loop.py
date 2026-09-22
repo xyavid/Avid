@@ -177,6 +177,8 @@ def agent_loop(
         ledger=ledger,
         workspace_root=workspace_root,
         hooks=hooks,
+        # 窗口是模型配置的一部分，占用率的分母因此跟着 config 走（不再多一个参数）。
+        context_window=config.context_window,
     )
     system_prompt = state.system_prompt(system)
 
@@ -234,15 +236,18 @@ def agent_loop(
                 max_tokens=max_tokens,
             )
 
-        state.tokens += turn.usage.total_tokens
+        state.record_usage(turn.usage)
         transcript.append(turn.message)
         emit(turn.message)
+        # usage 快照跟着**这一轮的**真实读数走（transient 事件，不进重放预算）：
+        # 前端据此实时显示占用与命中；刷新后由会话里落盘的值接上。
         state.emit(
             events.RUN_STATUS,
             round=round_index,
             tokens=state.tokens,
             activity="model",
             finish_reason=turn.finish_reason,
+            usage=state.usage_report(),
         )
         logger.info(
             "round=%d finish=%s tool_calls=%d tokens=%d",

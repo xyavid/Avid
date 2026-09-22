@@ -4,7 +4,8 @@
 一次 ``append_message`` 就是一次提交，于是"每条结算消息一条记录"这件事与
 循环的进度天然对齐——崩在任意一条之后，之前的内容都已经在文件里。
 
-会话名与分支名由调用方决定：本模块只负责"消息进、条目出"。
+会话名与分支名由调用方决定：本模块只负责"消息进、条目出"（外加运行用量台账的
+一次值写入，见 :meth:`SessionRecorder.record_usage`）。
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from typing import Any
 
 from .session import SessionBranch, StorageBackedSession
 from .types import MESSAGE_ENTRY, NOTICE_ENTRY
-from .values import DEFAULT_BRANCH
+from .values import DEFAULT_BRANCH, branch_usage
 
 logger = logging.getLogger("avid.session.recorder")
 
@@ -60,3 +61,16 @@ class SessionRecorder:
     @property
     def count(self) -> int:
         return len(self.entry_ids)
+
+    def record_usage(self, payload: dict[str, Any]) -> None:
+        """把一次运行的用量快照写进会话值（按分支，覆盖式）。
+
+        为什么不落成条目：用量不是模型看到的历史，而 ``messages_for_branch`` 只投影
+        ``message`` / ``notice`` 两类条目——落成条目要么污染历史，要么得再加一条
+        "哪些类型不算历史"的例外。值机制本来就装"必须持久化但不是消息"的东西，
+        形状也不动存储格式（``STORAGE_VERSION`` 不变）。
+
+        覆盖式：一个分支只保留最近一次运行的读数，正是"进入会话时看当前占用"要的。
+        """
+        self.session.set_value(branch_usage(self.branch), payload)
+        logger.debug("会话落库 usage：分支 %s", self.branch)

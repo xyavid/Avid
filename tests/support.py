@@ -151,6 +151,22 @@ def wait_terminal(record: Any, timeout: float = 5.0) -> bool:
     return wait_for(lambda: record.terminal, timeout)
 
 
+def wait_handle_released(services: Any, session_id: str, timeout: float = 5.0) -> None:
+    """等运行线程把会话句柄交还。
+
+    `record.terminal` 只说明"注册表已定终态"，而句柄是运行线程**紧接着**才交还的：
+    终态事件之后还有 ``finally``（弹注册表、关句柄）。测试要自己 ``repo.open`` 直读
+    文件时必须等这一条，否则会撞上 ``SessionAlreadyOpenError``——服务端读路径不走
+    这条路（``SessionService._session`` 用"活动句柄回退 + 句柄锁"），所以它不受影响。
+
+    这条竞态在阶段 22 之前就存在，只是窗口窄到看不出来；终态路径多了一次会话写入
+    之后稳定复现（HEAD 10/10 通过、改动后约 70% 失败），于是把同步条件补对。
+    """
+    assert wait_for(
+        lambda: services.runs.active_run_id(session_id) is None, timeout
+    ), f"运行没有交还会话句柄：{session_id}"
+
+
 def collect(services: Any, run_id: str, after: int = 0, deltas: bool = False) -> list:
     """把订阅到的帧收完（跳过心跳）。运行结束时生成器会自然结束。"""
     return [

@@ -150,6 +150,8 @@ export interface Run {
   finished_at: number | null
   round: number
   tokens: number
+  /** 最近一份 usage 快照；null = 还没有读数。 */
+  usage: UsageReport | null
   error: { code: string; message: string } | null
   cancel_requested: boolean
   cancel_reason: string | null
@@ -189,12 +191,44 @@ export interface Task {
   dependency_titles: Record<string, string>
 }
 
+/**
+ * 统一 usage 快照（阶段 22）——与 `RunState.usage_report()`、服务端 `UsageOut` 同形。
+ *
+ * 可空字段的 `null` 一律表示**没有这个数**（端点没上报用量 / 不认识该模型的窗口 /
+ * 这家没有写入缓存的计数），界面显示「—」；不要当 0 渲染，"未上报"与"确实为 0"不同。
+ */
+export interface ContextUsage {
+  tokens: number | null
+  window: number | null
+  utilization: number | null
+}
+
+export interface CacheUsage {
+  read_tokens: number | null
+  write_tokens: number | null
+  hit_ratio: number | null
+}
+
+export interface CompactionUsage {
+  count: number
+  last_compaction_tokens: number | null
+  last_step: string | null
+}
+
+export interface UsageReport {
+  context: ContextUsage
+  cache: CacheUsage
+  compaction: CompactionUsage
+}
+
 export interface Branch {
   name: string
   /** 链尾条目 id；空分支为 null。 */
   tip_entry_id: string | null
   entry_count: number
   is_default: boolean
+  /** 该分支最近一次运行的用量快照（落盘；null = 还没跑过）。 */
+  usage: UsageReport | null
 }
 
 export interface BranchList {

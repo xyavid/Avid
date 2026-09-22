@@ -14,6 +14,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from ..ai.usage import Usage, hit_ratio
 from ..policy.permission import (
     DEFAULT_MODE,
     MODE_SYSTEM,
@@ -74,7 +75,26 @@ class RunState:
     tool_calls: int = 0
     denials: int = 0
     compactions: int = 0
+    # 累计用量：整个运行所有轮次 total_tokens 之和。它**不是**上下文占用——
+    # 占用看下面的 `last_usage.prompt_tokens`（同一份上下文会被反复计费）。
     tokens: int = 0
+
+    # ---------------- usage 台账（阶段 22）----------------
+    #
+    # 上下文记账归运行状态自己掌握：循环每轮只把 provider 的 `Usage` 交进来一次，
+    # 「占用多少 / 命中率多少 / 压缩后是多少」全在这里算，事件、REST 与落盘因此同源。
+    # 字段一律可空：`None` 表示"没有这个数"，界面显示「—」，不用 0 冒充。
+
+    # 最近一轮模型调用的用量（含 prompt_tokens 与缓存读写）。
+    last_usage: Usage | None = None
+    # 模型上下文窗口。None = 不认识这个模型（占用率不可计算）。
+    context_window: int | None = None
+    # 最近一次压缩之后**下一轮真实读数**：压缩省了多少只有模型说了算。
+    last_compaction_tokens: int | None = None
+    # 那一次压缩是哪一步（micro_compact / compact_history …），供明细显示。
+    last_compaction_step: str | None = None
+    # 已经压过、还没等到下一轮读数：由 `mark_compacted` 置位，`record_usage` 消费。
+    compact_pending: bool = False
 
     # 同名同参工具的重复次数（键是 `名字:规范化参数`），由 `repeat_call_hook` 读写。
     # 挂在运行状态上而不是回调闭包里：一次运行一份，新的用户输入换一份新的 RunState，
@@ -108,6 +128,7 @@ class RunState:
         ledger: ApprovalLedger | None = None,
         workspace_root: str | None = None,
         hooks: "hooks_module.HookRegistry | None" = None,
+        context_window: int | None = None,
     ) -> "RunState":
         """建一份运行状态，并**重新扫描一次技能目录**——磁盘变了，下次运行就生效。"""
         return cls(
@@ -117,6 +138,7 @@ class RunState:
             permission_mode=validate_mode(permission_mode or DEFAULT_MODE),
             ledger=ledger if ledger is not None else ApprovalLedger(),
             workspace_root=workspace_root,
+            context_window=context_window,
             # 技能目录跟着运行级工作区根（没有工作区根时回落到 cwd）。
             skills=SkillLoader(default_skills_dir(workspace_root)).scan(),
             hooks=hooks if hooks is not None else hooks_module.DEFAULT_HOOKS,
@@ -174,6 +196,68 @@ class RunState:
             "tool_calls": self.tool_calls,
             "denials": self.denials,
             "compactions": self.compactions,
+        }
+
+    # ---------------- usage 台账 ----------------
+
+    def record_usage(self, usage: Usage) -> None:
+        """记一轮模型调用的用量。**唯一**写这些字段的地方（循环只调它一次）。
+
+        压缩后的读数在同一处回填：``mark_compacted`` 之后的第一轮 ``prompt_tokens``
+        正是"压完还剩多少"，不需要另做一次本地估算——估算会与计费口径打架。
+        """
+        self.tokens += usage.total_tokens
+        self.last_usage = usage
+        if self.compact_pending:
+            self.last_compaction_tokens = usage.prompt_tokens
+            self.compact_pending = False
+
+    def mark_compacted(self, step: str) -> None:
+        """一次压缩真的发生了（``policy/compaction`` 给出了报告）。
+
+        压缩计数与"等下一轮读数"一起记：两者必须同时发生，所以只有一个入口。
+        """
+        self.compactions += 1
+        self.last_compaction_step = step
+        self.compact_pending = True
+
+    def usage_report(self) -> dict[str, Any]:
+        """统一 usage schema —— 事件、REST 与落盘共用这一个计算点。
+
+        形状（阶段 22 与前端、与落盘一致）::
+
+            {"context": {"tokens", "window", "utilization"},
+             "cache": {"read_tokens", "write_tokens", "hit_ratio"},
+             "compaction": {"count", "last_compaction_tokens", "last_step"}}
+
+        可空字段一律 ``None`` 表示"没有这个数"：窗口不认识该模型、这次上报里没有
+        用量、这家没有写入缓存的计数——三种情况界面都显示「—」，绝不用 0 冒充。
+        """
+        usage = self.last_usage
+        if usage is not None and usage.prompt_tokens <= 0 and usage.total_tokens <= 0:
+            # 全零 = 这次没有用量上报（端点不认 `stream_options.include_usage`）；
+            # 真实请求不可能一个输入 token 都没有，所以它与"用了 0 个"不同。
+            usage = None
+        prompt = None if usage is None else usage.prompt_tokens
+        window = self.context_window
+        return {
+            "context": {
+                "tokens": prompt,
+                "window": window,
+                "utilization": (
+                    prompt / window if prompt is not None and window else None
+                ),
+            },
+            "cache": {
+                "read_tokens": None if usage is None else usage.cache_read_tokens,
+                "write_tokens": None if usage is None else usage.cache_write_tokens,
+                "hit_ratio": None if usage is None else hit_ratio(usage),
+            },
+            "compaction": {
+                "count": self.compactions,
+                "last_compaction_tokens": self.last_compaction_tokens,
+                "last_step": self.last_compaction_step,
+            },
         }
 
     def todo_reminder(self, threshold: int) -> str | None:

@@ -7,7 +7,7 @@
 * 仓库：`MemorySessionRepo` / `JsonlSessionRepo`（同一套一致性用例跑两个后端）
 * 写入与投影：`SessionRecorder` 是唯一写入者；`messages_for_branch` /
   `entries_to_messages` / `repair_incomplete_batches` 是读出来的投影
-* 值：`session_name` / `branch_tip` / `entry_label` 这些地址构造器
+* 值：`session_name` / `branch_tip` / `branch_usage` / `entry_label` 这些地址构造器
 * 错误：`SessionError` 一族（调用方按它们分支）
 
 **存储内部件不在门面里**：`JsonlStorage` / `MemoryStorage` / `JsonlHeader` /
@@ -65,7 +65,9 @@ from .types import (
 )
 from .values import (
     DEFAULT_BRANCH,
+    USAGE_NS,
     branch_tip,
+    branch_usage,
     entry_label,
     session_name,
     set_value,
@@ -102,7 +104,9 @@ __all__ = [
     "STORAGE_VERSION",
     # 值
     "DEFAULT_BRANCH",
+    "USAGE_NS",
     "branch_tip",
+    "branch_usage",
     "entry_label",
     "session_name",
     "set_value",
