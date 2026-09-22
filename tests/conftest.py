@@ -21,6 +21,9 @@ def model_env(request, monkeypatch):
     monkeypatch.setenv("AVID_API_KEY", "test-key")
     monkeypatch.setenv("AVID_MODEL", "test-model")
     monkeypatch.delenv("AVID_BASE_URL", raising=False)
+    # 关掉"问 provider 要窗口"的探测：单测不打真实端点（要验它自己注入 MockTransport
+    # 并把这一项打开，见 tests/test_usage.py）。
+    monkeypatch.setenv("AVID_MODEL_INFO", "off")
 
 
 @pytest.fixture(autouse=True)

@@ -22,9 +22,16 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
-from ..ai.client import DEFAULT_MAX_TOKENS, PromptTooLongError, Turn, chat_completion
+from ..ai.client import (
+    DEFAULT_MAX_TOKENS,
+    PromptTooLongError,
+    Turn,
+    chat_completion,
+    fetch_context_length,
+)
 from ..ai.config import Config, load_config
 from ..ai.transcript import Transcript
 from ..tools import TOOL_IMPLS, TOOLS, ToolImpl
@@ -160,6 +167,13 @@ def agent_loop(
     ``ledger`` / ``workspace_root`` 全部以那份 state 为准（唯一权威，不做合并）。
     """
     config = config or load_config()
+    if config.context_window is None:
+        # 环境变量与内置表都没给窗口时，问一次 provider 的 `/models`（失败回 None，
+        # 进程内缓存）。放在这里是因为**所有**运行路径都经过它：CLI、Web、子 agent
+        # 因此不必各接一遍。占用率缺分母只是少一个数，不该拦住任何一次运行。
+        probed = fetch_context_length(config)
+        if probed:
+            config = replace(config, context_window=probed)
     summarize = summarize or chat
     tools = TOOLS if tools is None else tools
     registry = TOOL_IMPLS if registry is None else registry
@@ -181,6 +195,12 @@ def agent_loop(
         # 窗口是模型配置的一部分，占用率的分母因此跟着 config 走（不再多一个参数）。
         context_window=config.context_window,
     )
+    # 探测结果要落到 state 上：svc 的路径**先**建 state（带上 config.context_window，
+    # 那一刻还是 None）**再**进循环，探测只发生在这里；不回填的话 Web 界面永远看不到
+    # 占用率（CLI 那条路径因为 for_run 就在下面，天然拿得到）。
+    if state.context_window is None:
+        state.context_window = config.context_window
+
     system_prompt = state.system_prompt(system)
 
     trigger = _submit_input(transcript, state, [str(item["function"]["name"]) for item in tools])

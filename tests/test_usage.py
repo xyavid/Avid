@@ -11,6 +11,7 @@ import pytest
 
 from avid.ai.config import (
     ENV_CONTEXT_WINDOW,
+    Config,
     ConfigError,
     load_config,
     window_for,
@@ -162,3 +163,108 @@ def test_invalid_explicit_window_fails_loudly(raw):
         return
     with pytest.raises(ConfigError):
         load_config(env)
+
+
+# ---------------- 窗口探测（问 provider 的 /models） ----------------
+
+@pytest.fixture
+def probe_on(monkeypatch):
+    """打开探测：conftest 对**每个**用例都设了 `AVID_MODEL_INFO=off`（不打真实端点），
+    要验探测本身的用例在这里把它删掉——缺省即开。"""
+    monkeypatch.delenv("AVID_MODEL_INFO", raising=False)
+
+
+@pytest.fixture
+def probe_cache():
+    """清掉进程内探测缓存：它是跨用例的（真实运行时正是靠它只问一次）。"""
+    from avid.ai import client as client_module
+
+    with client_module._MODEL_WINDOW_LOCK:
+        client_module._MODEL_WINDOWS.clear()
+    yield
+    with client_module._MODEL_WINDOW_LOCK:
+        client_module._MODEL_WINDOWS.clear()
+
+
+def model_listing(*entries):
+    return {"data": [dict(entry) for entry in entries]}
+
+
+def probe(config, payload, *, status=200, transport_calls=None):
+    """用 MockTransport 跑一次探测，返回 (窗口, transport 调用次数)。"""
+    import httpx
+
+    from avid.ai.client import fetch_context_length
+
+    calls = transport_calls if transport_calls is not None else []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        assert request.headers["authorization"] == "Bearer test-key"
+        if not isinstance(payload, dict):
+            return httpx.Response(status, text=str(payload))
+        return httpx.Response(status, json=payload)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http:
+        return fetch_context_length(config, client=http), calls
+
+
+def test_probe_reads_context_length_from_the_provider(probe_cache, probe_on):
+    """自建网关/新模型的窗口只有服务商知道：问一次 /models 就能算占用率了。"""
+    config = Config(api_key="test-key", base_url="https://gw.test/v1", model="vendor/x-flash")
+    payload = model_listing(
+        {"id": "vendor/other", "context_length": 8_000},
+        {"id": "vendor/x-flash", "context_length": 1_000_000},
+    )
+    window, calls = probe(config, payload)
+    assert window == 1_000_000
+    assert calls == ["https://gw.test/v1/models"]
+
+
+@pytest.mark.parametrize(
+    "payload,status",
+    [
+        (model_listing({"id": "vendor/other", "context_length": 8_000}), 200),  # 没列这个模型
+        (model_listing({"id": "vendor/x-flash"}), 200),  # 列了但没有窗口字段
+        ({"error": "nope"}, 401),  # 鉴权失败
+        ("<html>gateway</html>", 200),  # 不是 JSON
+        ({"data": "nonsense"}, 200),  # 结构不合约定
+    ],
+)
+def test_probe_returns_none_on_anything_unusable(probe_cache, probe_on, payload, status):
+    """问不到就是没有：不抛错、不影响模型调用，界面照旧只报 tokens。"""
+    config = Config(api_key="test-key", base_url="https://gw.test/v1", model="vendor/x-flash")
+    window, _ = probe(config, payload, status=status)
+    assert window is None
+
+
+def test_probe_never_raises_on_network_error(probe_cache, probe_on):
+    import httpx
+
+    from avid.ai.client import fetch_context_length
+
+    def boom(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("unreachable", request=request)
+
+    config = Config(api_key="test-key", base_url="https://gw.test/v1", model="vendor/x-flash")
+    with httpx.Client(transport=httpx.MockTransport(boom)) as http:
+        assert fetch_context_length(config, client=http) is None
+
+
+def test_probe_is_cached_and_idempotent(probe_cache, probe_on):
+    """同进程只问一次（成功与失败都缓存）：一次运行里被反复调用也不打端点。"""
+    config = Config(api_key="test-key", base_url="https://gw.test/v1", model="vendor/x-flash")
+    payload = model_listing({"id": "vendor/x-flash", "context_length": 200_000})
+    first, calls = probe(config, payload)
+    second, _ = probe(config, payload, transport_calls=calls)
+    assert first == second == 200_000
+    assert calls == ["https://gw.test/v1/models"]  # 第二次没再发请求
+
+
+def test_probe_can_be_switched_off(probe_cache, monkeypatch):
+    """`AVID_MODEL_INFO=off` 时不联网：单测与明确不想探测的部署都靠它。"""
+    monkeypatch.setenv("AVID_MODEL_INFO", "off")
+    config = Config(api_key="test-key", base_url="https://gw.test/v1", model="vendor/x-flash")
+    window, calls = probe(config, model_listing({"id": "vendor/x-flash", "context_length": 1}))
+    assert window is None
+    assert calls == []

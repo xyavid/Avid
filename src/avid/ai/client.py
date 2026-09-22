@@ -17,7 +17,7 @@ from typing import Any
 
 import httpx
 
-from .config import Config
+from .config import Config, model_info_enabled
 from .usage import Usage as Usage  # 再导出：`from avid.ai.client import Usage` 的老路径照旧
 from .usage import normalize_usage
 
@@ -44,6 +44,81 @@ def shared_client() -> httpx.Client:
         if _CLIENT is None or _CLIENT.is_closed:
             _CLIENT = httpx.Client(timeout=_timeout())
         return _CLIENT
+
+
+# ---------------- 模型窗口探测 ----------------
+#
+# 环境变量与内置表都查不到窗口时，问一次 `{base_url}/models`：OpenAI 兼容网关普遍在
+# 这里给 `context_length`（本机在用的 api.commandcode.ai 就是），于是"占用率"能在
+# 不改配置的前提下显示出来。
+#
+# 三条纪律：**问不到就回 None**（绝不抛错、绝不猜）、**进程内缓存**（成功与失败都缓存
+# 一次，重启进程才会重试）、**只在窗口缺失时问**（调用点负责，见 `runtime/loop.py`）。
+
+#: 探测超时：这是元数据请求，不该跟模型调用共用 60 秒读超时。
+MODEL_INFO_TIMEOUT_SECONDS = 5.0
+
+#: (base_url, model) → 窗口 或 None。None 也缓存：失败不重试，免得每轮都打端点。
+_MODEL_WINDOWS: dict[tuple[str, str], int | None] = {}
+_MODEL_WINDOW_LOCK = threading.Lock()
+
+#: 各家中等价的名字（OpenRouter 用 context_length，vLLM 用 max_model_len，等等）。
+_WINDOW_KEYS = ("context_length", "context_window", "max_model_len", "max_context_length")
+
+
+def _window_of(item: Mapping[str, Any]) -> int | None:
+    for key in _WINDOW_KEYS:
+        value = item.get(key)
+        if isinstance(value, bool):  # `True` 是 int 的子类，必须排掉
+            continue
+        if isinstance(value, int) and value > 0:
+            return value
+    return None
+
+
+def fetch_context_length(
+    config: Config, *, client: httpx.Client | None = None
+) -> int | None:
+    """问 provider 要这个模型的上下文窗口。**任何失败都回 None**。
+
+    为什么要它：占用率的分母只在内置表里有值时才有，而自建网关/新模型的窗口只有
+    服务商知道。问不到（网络、鉴权、端点不认、模型没列出来）就退回"只报 tokens"，
+    不影响任何一次模型调用。
+
+    ``AVID_MODEL_INFO=off`` 关掉它（单测与明确不想联网的部署用）。
+    """
+    if not model_info_enabled():
+        return None
+    key = (config.base_url, config.model)
+    with _MODEL_WINDOW_LOCK:
+        if key in _MODEL_WINDOWS:
+            return _MODEL_WINDOWS[key]
+    found = _ask_context_length(config, client=client)
+    with _MODEL_WINDOW_LOCK:
+        _MODEL_WINDOWS[key] = found
+    return found
+
+
+def _ask_context_length(
+    config: Config, *, client: httpx.Client | None = None
+) -> int | None:
+    url = f"{config.base_url.rstrip('/')}/models"
+    headers = {"Authorization": f"Bearer {config.api_key}"}
+    http = client or shared_client()
+    try:
+        response = http.get(url, headers=headers, timeout=MODEL_INFO_TIMEOUT_SECONDS)
+        if response.status_code != 200:
+            return None
+        data = response.json()
+    except (httpx.HTTPError, ValueError):
+        return None
+    items = data.get("data") if isinstance(data, Mapping) else None
+    if not isinstance(items, list):
+        return None
+    for item in items:
+        if isinstance(item, Mapping) and str(item.get("id")) == config.model:
+            return _window_of(item)
+    return None
 
 
 class LLMError(Exception):

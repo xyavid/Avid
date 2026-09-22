@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 from support import ScriptedChat, make_turn
 
+from avid.ai.config import Config
 from avid.ai.usage import Usage
 from avid.policy.compaction import CompactReport
 from avid.runtime import context
@@ -242,3 +243,66 @@ def test_parts_are_none_without_readings_or_chars():
     zero_chars.record_prompt_parts(system=0, tools=0, messages=0)
     zero_chars.record_usage(Usage(100, 1, 101))
     assert zero_chars.usage_report()["context"]["parts"] is None
+
+
+# ---------------- 窗口探测接进运行路径 ----------------
+
+def _window_probe(monkeypatch, *, window=200_000):
+    """把 provider 的 /models 换成 MockTransport，并打开探测（conftest 默认关掉）。"""
+    import httpx
+
+    from avid.ai import client as client_module
+
+    monkeypatch.delenv("AVID_MODEL_INFO", raising=False)
+    with client_module._MODEL_WINDOW_LOCK:
+        client_module._MODEL_WINDOWS.clear()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url).endswith("/models")
+        return httpx.Response(
+            200, json={"data": [{"id": "test-model", "context_length": window}]}
+        )
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(client_module, "shared_client", lambda: http)
+    monkeypatch.setattr(
+        "avid.runtime.loop.shared_client", lambda: http, raising=False
+    )
+    return http
+
+
+def test_loop_probes_the_window_and_reports_utilization(monkeypatch):
+    """表里查不到、env 也没配时，循环在发请求前问一次 /models，占用率因此有分母。
+
+    两条路径都要覆盖：CLI（`agent_loop` 自己建 state）与 Web（svc 先建 state 再进循环，
+    探测结果必须回填进那份 state）。
+    """
+    from avid.runtime.loop import agent_loop
+
+    http = _window_probe(monkeypatch)
+    try:
+        config = Config(api_key="test-key", base_url="https://gw.test/v1", model="test-model")
+        assert config.context_window is None
+
+        built = RunState(observer=lambda event: None)
+        agent_loop(
+            [{"role": "user", "content": "问题"}],
+            config=config,
+            chat=ScriptedChat(make_turn("答")),
+            state=built,
+        )
+        report = built.usage_report()
+        assert report["context"]["window"] == 200_000
+        assert report["context"]["utilization"] is not None
+
+        # 探测结果是进程内缓存：第二次运行不再打端点。
+        fresh = RunState(observer=lambda event: None)
+        agent_loop(
+            [{"role": "user", "content": "又一轮"}],
+            config=config,
+            chat=ScriptedChat(make_turn("答")),
+            state=fresh,
+        )
+        assert fresh.usage_report()["context"]["window"] == 200_000
+    finally:
+        http.close()

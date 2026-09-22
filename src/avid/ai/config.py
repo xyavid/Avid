@@ -12,8 +12,20 @@ ENV_API_KEY = "AVID_API_KEY"
 ENV_BASE_URL = "AVID_BASE_URL"
 ENV_MODEL = "AVID_MODEL"
 ENV_CONTEXT_WINDOW = "AVID_CONTEXT_WINDOW"
+# 关掉"向 provider 问模型窗口"的探测（实现见 `ai/client.py::fetch_context_length`）。
+# 取值 off / 0 / false / no 都算关；缺省 = 开。单测把它关掉，免得去打真实端点。
+ENV_MODEL_INFO = "AVID_MODEL_INFO"
 
 REQUIRED = (ENV_API_KEY, ENV_MODEL)
+
+#: `ENV_MODEL_INFO` 的关闭取值（大小写无关）。
+_MODEL_INFO_OFF = ("off", "0", "false", "no")
+
+
+def model_info_enabled(source: Mapping[str, str] | None = None) -> bool:
+    """要不要问 provider 的 `/models`。缺省开——它只在窗口查不到时才发一次请求。"""
+    env = os.environ if source is None else source
+    return env.get(ENV_MODEL_INFO, "").strip().lower() not in _MODEL_INFO_OFF
 
 # 内置的模型窗口表（前缀匹配）。它只用来算「上下文占用率」这一个比值，所以
 # **只列确定知道的值**，查不到一律回 None（界面显示 tokens 与「—」）。
