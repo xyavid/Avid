@@ -631,7 +631,13 @@ def test_run_status_carries_the_usage_snapshot_every_round(sandbox):
         if event.type == events.RUN_STATUS and "usage" in event.data
     ]
     assert len(snapshots) == 2  # 两轮，两份
-    assert snapshots[-1]["context"] == SCRIPT_USAGE["context"]
+    context = snapshots[-1]["context"]
+    assert context["tokens"] == SCRIPT_USAGE["context"]["tokens"]
+    assert context["window"] is None
+    # 分块：三块之和 = 真实总数（系统提示与工具定义各占一部分，对话消息拿走余数）
+    parts = context["parts"]
+    assert parts is not None
+    assert sum(parts.values()) == context["tokens"]
     # 测试模型不在内置窗口表里 → 没有分母，也不猜占用率。
     assert snapshots[-1]["context"]["window"] is None
     # 脚本模型没上报缓存计数：None（「—」），不是 0。
@@ -704,3 +710,36 @@ def test_terminal_flag_and_terminal_event_land_together(sandbox):
     got = collect(services, record.run_id)
     assert got, "订阅一条事件都没收到"
     assert got[-1].type == events.RUN_FINISHED
+
+
+def test_loop_records_the_three_prompt_parts(sandbox):
+    """分块真的被记下来：系统提示词与工具定义从不发给前端，只有内核在发请求前算得到。
+
+    脚本模型的 usage 是 1 个 token（`support.make_turn`），整数分配下三块里只有一个能
+    拿到 1——所以这里显式给一份**大**用量，才看得出三块都有份额。
+    """
+    from avid.ai.client import Turn, Usage
+
+    turn = Turn(
+        message={"role": "assistant", "content": "好"},
+        text="好",
+        tool_calls=[],
+        usage=Usage(prompt_tokens=1_000, completion_tokens=5, total_tokens=1_005),
+        model="m",
+        finish_reason="stop",
+    )
+    tools = RecordingTools().registry("read_file")
+    services = build(sandbox, ScriptedChat(turn), tools)
+    record = run_to_end(services)
+
+    snapshots = [
+        event.data["usage"]["context"]
+        for event in collect(services, record.run_id)
+        if event.type == events.RUN_STATUS and "usage" in event.data
+    ]
+    parts = snapshots[-1]["parts"]
+    assert parts is not None
+    assert sum(parts.values()) == 1_000
+    assert parts["system"] > 0, parts   # 系统提示词
+    assert parts["tools"] > 0, parts    # 工具定义（15 个工具的 JSON）
+    assert parts["messages"] > 0, parts  # 对话消息（余数在这里）

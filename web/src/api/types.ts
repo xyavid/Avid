@@ -197,10 +197,19 @@ export interface Task {
  * 可空字段的 `null` 一律表示**没有这个数**（端点没上报用量 / 不认识该模型的窗口 /
  * 这家没有写入缓存的计数），界面显示「—」；不要当 0 渲染，"未上报"与"确实为 0"不同。
  */
+/** 三块文本的**估算** token（按字符占比分配真实总数，三块之和 = tokens）。 */
+export interface ContextParts {
+  system: number
+  tools: number
+  messages: number
+}
+
 export interface ContextUsage {
   tokens: number | null
   window: number | null
   utilization: number | null
+  /** null = 还没有分块数据（没读数 / 这一轮没记字符数）→ 不画堆叠条。 */
+  parts: ContextParts | null
 }
 
 export interface CacheUsage {

@@ -2,12 +2,13 @@ import * as RadixTooltip from '@radix-ui/react-tooltip'
 import type { ReactNode } from 'react'
 
 export interface TooltipProps {
-  label: string
+  /** 气泡内容：短说明用字符串，结构化明细（清单 / 进度条）可以直接给 JSX。 */
+  label: ReactNode
   children: ReactNode
   side?: 'top' | 'right' | 'bottom' | 'left'
 }
 
-/** 提示气泡：accessible name 始终来自按钮内部文字，这里只是补充说明。 */
+/** 提示气泡：accessible name 始终来自触发元素的文字，这里只是补充说明。 */
 export function Tooltip({ label, children, side = 'bottom' }: TooltipProps) {
   return (
     <RadixTooltip.Provider delayDuration={300}>

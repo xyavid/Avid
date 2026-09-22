@@ -35,6 +35,33 @@ if TYPE_CHECKING:  # 与 loop.py 同理：AskUser 只出现在注解里
 TODO_REMINDER_AFTER_ROUNDS = 3
 
 
+def _split_context(
+    tokens: int | None, chars: tuple[int, int, int] | None
+) -> dict[str, int] | None:
+    """把真实的 ``prompt_tokens`` 按三块（system / tools / messages）的**字符占比**分配。
+
+    为什么不用"每 token 多少字符"的绝对系数：那类系数在中英混排下必然偏（同样字符数的
+    英文与中文 token 数差好几倍），而占比只用三块之间的**相对**量，误差小得多。
+    三块之和**恰好等于** ``tokens``（余数给对话消息），于是界面上的堆叠条与总数永远
+    对得上——前端会给每块加 `~` 并注明这是估算。
+
+    缺任一前提（没有真实总数、或这一轮没记字符数）就返回 ``None``：不猜。
+    """
+    if tokens is None or chars is None:
+        return None
+    total = sum(chars)
+    if total <= 0:
+        return None
+    system, tools, _ = chars
+    system_tokens = tokens * system // total
+    tools_tokens = tokens * tools // total
+    return {
+        "system": system_tokens,
+        "tools": tools_tokens,
+        "messages": tokens - system_tokens - tools_tokens,
+    }
+
+
 @dataclass
 class RunState:
     # 运行级开关
@@ -95,6 +122,10 @@ class RunState:
     last_compaction_step: str | None = None
     # 已经压过、还没等到下一轮读数：由 `mark_compacted` 置位，`record_usage` 消费。
     compact_pending: bool = False
+    # 这次请求的三块文本各占多少**字符**（system / tools / messages），由循环在真正
+    # 发请求前记下。字符不是 token：它只用来把真实 `prompt_tokens` 按占比分给三块
+    # （`_split_context`），所以这里存事实、不做换算。
+    prompt_parts: tuple[int, int, int] | None = None
 
     # 同名同参工具的重复次数（键是 `名字:规范化参数`），由 `repeat_call_hook` 读写。
     # 挂在运行状态上而不是回调闭包里：一次运行一份，新的用户输入换一份新的 RunState，
@@ -221,14 +252,25 @@ class RunState:
         self.last_compaction_step = step
         self.compact_pending = True
 
+    def record_prompt_parts(self, *, system: int, tools: int, messages: int) -> None:
+        """记下这次请求三块文本的字符数（循环在发请求前调用）。
+
+        正文之外的两块（系统提示、工具定义）只在循环里可得——它们从不发给前端，
+        所以"上下文被谁占了"必须由内核自己算并随快照带出去。
+        """
+        self.prompt_parts = (max(0, system), max(0, tools), max(0, messages))
+
     def usage_report(self) -> dict[str, Any]:
         """统一 usage schema —— 事件、REST 与落盘共用这一个计算点。
 
         形状（阶段 22 与前端、与落盘一致）::
 
-            {"context": {"tokens", "window", "utilization"},
+            {"context": {"tokens", "window", "utilization", "parts"},
              "cache": {"read_tokens", "write_tokens", "hit_ratio"},
              "compaction": {"count", "last_compaction_tokens", "last_step"}}
+
+        ``context.parts`` 是三块文本的**估算** token（按字符占比分配真实总数，
+        见 `_split_context`）：``None`` = 没有这一轮的分块数据。
 
         可空字段一律 ``None`` 表示"没有这个数"：窗口不认识该模型、这次上报里没有
         用量、这家没有写入缓存的计数——三种情况界面都显示「—」，绝不用 0 冒充。
@@ -247,6 +289,7 @@ class RunState:
                 "utilization": (
                     prompt / window if prompt is not None and window else None
                 ),
+                "parts": _split_context(prompt, self.prompt_parts),
             },
             "cache": {
                 "read_tokens": None if usage is None else usage.cache_read_tokens,

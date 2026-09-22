@@ -226,7 +226,12 @@ describe('工具调用收敛', () => {
 
 describe('usage 快照收敛（阶段 22）', () => {
   const snapshot = {
-    context: { tokens: 72_000, window: 200_000, utilization: 0.36 },
+    context: {
+      tokens: 72_000,
+      window: 200_000,
+      utilization: 0.36,
+      parts: { system: 2_000, tools: 6_000, messages: 64_000 },
+    },
     cache: { read_tokens: 56_000, write_tokens: null, hit_ratio: 0.778 },
     compaction: { count: 2, last_compaction_tokens: 42_000, last_step: 'micro_compact' },
   }
@@ -238,7 +243,15 @@ describe('usage 快照收敛（阶段 22）', () => {
     const later = applyEvent(
       first,
       ev('run_status', null, {
-        usage: { ...snapshot, context: { tokens: 90_000, window: 200_000, utilization: 0.45 } },
+        usage: {
+          ...snapshot,
+          context: {
+            tokens: 90_000,
+            window: 200_000,
+            utilization: 0.45,
+            parts: { system: 2_000, tools: 8_000, messages: 80_000 },
+          },
+        },
       }),
     )
     expect(later.usage?.context.tokens).toBe(90_000)

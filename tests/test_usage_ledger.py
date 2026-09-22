@@ -28,7 +28,7 @@ from avid.session import (
 def test_report_is_all_none_before_the_first_model_call():
     report = RunState().usage_report()
     assert report == {
-        "context": {"tokens": None, "window": None, "utilization": None},
+        "context": {"tokens": None, "window": None, "utilization": None, "parts": None},
         "cache": {"read_tokens": None, "write_tokens": None, "hit_ratio": None},
         "compaction": {"count": 0, "last_compaction_tokens": None, "last_step": None},
     }
@@ -38,7 +38,12 @@ def test_report_shows_occupancy_cache_and_compaction():
     state = RunState(context_window=200_000)
     state.record_usage(Usage(72_000, 10, 72_010, cache_read_tokens=56_000))
     report = state.usage_report()
-    assert report["context"] == {"tokens": 72_000, "window": 200_000, "utilization": 0.36}
+    assert report["context"] == {
+        "tokens": 72_000,
+        "window": 200_000,
+        "utilization": 0.36,
+        "parts": None,  # 没记字符数就不给分块，不猜
+    }
     assert report["cache"]["read_tokens"] == 56_000
     assert report["cache"]["hit_ratio"] == pytest.approx(0.77777, rel=1e-4)
     assert report["cache"]["write_tokens"] is None
@@ -194,3 +199,46 @@ def services_close_when_done(services, session_id: str) -> bool:
     from support import wait_for
 
     return wait_for(lambda: services.runs.active_run_id(session_id) is None)
+
+def test_parts_allocate_the_real_total_by_char_share():
+    """分块：按字符占比分配**真实的** prompt_tokens，三块之和恰好等于总数。
+
+    为什么用占比而不是"每 token 多少字符"：后者在中英混排下必然偏；占比只用三块之间的
+    相对量。余数归到对话消息，于是界面上的堆叠条与总数永远对得上。
+    """
+    state = RunState(context_window=200_000)
+    state.record_prompt_parts(system=2_000, tools=6_000, messages=64_000)
+    state.record_usage(Usage(72_000, 10, 72_010))
+
+    parts = state.usage_report()["context"]["parts"]
+    assert parts is not None
+    assert sum(parts.values()) == 72_000
+    assert parts["system"] == 2_000  # 字符占比 2/72 → token 占比同理
+    assert parts["tools"] == 6_000
+    assert parts["messages"] == 64_000
+
+
+def test_parts_absorb_the_rounding_remainder_into_messages():
+    """不能整除时余数给对话消息：三块之和必须等于真实总数，不能少几个 token。"""
+    state = RunState()
+    state.record_prompt_parts(system=1, tools=1, messages=1)
+    state.record_usage(Usage(10, 0, 10))
+
+    parts = state.usage_report()["context"]["parts"]
+    assert parts is not None
+    assert sum(parts.values()) == 10
+    assert parts["system"] == 3 and parts["tools"] == 3 and parts["messages"] == 4
+
+
+def test_parts_are_none_without_readings_or_chars():
+    """缺任一前提就不给分块：没读数、没字符数、字符数全零。"""
+    assert RunState().usage_report()["context"]["parts"] is None
+
+    no_chars = RunState()
+    no_chars.record_usage(Usage(100, 1, 101))
+    assert no_chars.usage_report()["context"]["parts"] is None
+
+    zero_chars = RunState()
+    zero_chars.record_prompt_parts(system=0, tools=0, messages=0)
+    zero_chars.record_usage(Usage(100, 1, 101))
+    assert zero_chars.usage_report()["context"]["parts"] is None

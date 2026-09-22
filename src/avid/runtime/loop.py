@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
@@ -192,6 +193,19 @@ def agent_loop(
         system_prompt = f"{system_prompt}\n\n" + "\n".join(injected)
     emit(transcript.as_messages()[index])
 
+    def note_prompt_parts() -> None:
+        """发请求前记下三块文本的字符数。
+
+        系统提示与工具定义**从不发给前端**（前端只有对话条目），所以"上下文被谁占了"
+        只能在发请求的这一刻、由内核自己算并随快照带出去；分配成 token 由
+        ``RunState.usage_report()`` 做（按字符占比，不引入绝对系数）。
+        """
+        state.record_prompt_parts(
+            system=len(system_prompt),
+            tools=len(json.dumps(tools, ensure_ascii=False)) if tools else 0,
+            messages=transcript.estimate_chars(),
+        )
+
     for round_index in range(1, max_rounds + 1):
         state.round = round_index
         state.check_cancelled()  # 检查点 1：每轮开始前（§7.4）
@@ -214,6 +228,7 @@ def agent_loop(
         context.prepare(transcript, state, config=config, summarize=summarize, budget=budget)
 
         # 模型调用；报上下文超限时兜底压缩并重试一次（整个运行最多一次）
+        note_prompt_parts()
         try:
             turn = chat(
                 config,
@@ -228,6 +243,8 @@ def agent_loop(
             state.retried = True
             logger.warning("compact: 模型报上下文超限，兜底压缩后重试一次")
             context.reactive(transcript, state, config=config, summarize=summarize, budget=budget)
+            # 兜底压缩改过候选消息，分块要按**这一次**的实际请求重算。
+            note_prompt_parts()
             turn = chat(
                 config,
                 transcript.as_messages(),

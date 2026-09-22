@@ -201,12 +201,26 @@ class EntryPageOut(BaseModel):
 # `web/src/api/types.ts` 与服务端真实响应三处机械比对。
 
 
+class ContextPartsOut(BaseModel):
+    """三块文本各占多少 token：**按字符占比**把真实 ``prompt_tokens`` 分配出来的估算。
+
+    三块之和恰好等于 :class:`ContextUsageOut` 的 ``tokens``；界面给每块加 `~`
+    并注明是估算。系统提示与工具定义从不发给前端，所以只能由内核算。
+    """
+
+    system: int = 0
+    tools: int = 0
+    messages: int = 0
+
+
 class ContextUsageOut(BaseModel):
     """上下文占用。None 表示"没有这个数"（没读数 / 不认识该模型的窗口）→ 界面「—」。"""
 
     tokens: int | None = None
     window: int | None = None
     utilization: float | None = None
+    # None = 还没有分块数据（没读数，或这一轮没记字符数）→ 界面不画堆叠条。
+    parts: ContextPartsOut | None = None
 
 
 class CacheUsageOut(BaseModel):
@@ -418,6 +432,7 @@ __all__ = [
     "CancelOut",
     "Capabilities",
     "CompactionUsageOut",
+    "ContextPartsOut",
     "ContextUsageOut",
     "CreateSessionIn",
     "EntryOut",

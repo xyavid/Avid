@@ -38,6 +38,7 @@ from avid.web.schemas import (
     CancelOut,
     Capabilities,
     CompactionUsageOut,
+    ContextPartsOut,
     ContextUsageOut,
     EntryOut,
     EntryPageOut,
@@ -72,6 +73,7 @@ PAIRS: list[tuple[type, str]] = [
     # 用量台账（阶段 22）：四个模型成一套，字段名三处一致
     (UsageOut, "UsageReport"),
     (ContextUsageOut, "ContextUsage"),
+    (ContextPartsOut, "ContextParts"),
     (CacheUsageOut, "CacheUsage"),
     (CompactionUsageOut, "CompactionUsage"),
     # 运行与审批
