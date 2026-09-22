@@ -65,8 +65,9 @@ function AppearanceSection() {
   /**
    * 选图 → 缩放编码 → 存进界面域。
    *
-   * 三类失败照各自的下一步报，不混成一句「出错了」（`toBackdropDataUrl` 抛的 code 直接
-   * 映射到词条）。写盘的配额错误单独兜：那时图已经编好了，是"放不下"而不是"图不行"。
+   * 失败照各自的下一步报，不混成一句「出错了」。**逐档显式映射而不是拼 key**：拼出来的键
+   * 绕过 `check-style` 的 i18n 完整性检查，漏了要到运行时才看得见（§8.8 里已经写过这条）。
+   * 写盘的配额错误单独兜：那时图已经编好了，是"放不下"而不是"图不行"。
    */
   const handleArt = async (file: File | undefined) => {
     if (!file) return
@@ -77,12 +78,19 @@ function AppearanceSection() {
       try {
         setBackdropArt(dataUrl)
       } catch {
-        setArtError(t('common.settings.backdrop.failed.quota'))
+        setArtError(t('common.settings.backdrop.failedQuota'))
       }
     } catch (error) {
       const code = error instanceof Error ? error.message : ''
-      const key = `common.settings.backdrop.failed.${code.replace(/-/g, '_')}`
-      setArtError(t(key))
+      setArtError(
+        code === 'not-an-image'
+          ? t('common.settings.backdrop.failedNotImage')
+          : code === 'too-large'
+            ? t('common.settings.backdrop.failedTooLarge')
+            : code === 'decode-failed'
+              ? t('common.settings.backdrop.failedDecode')
+              : t('common.settings.backdrop.failed'),
+      )
     } finally {
       setArtBusy(false)
     }

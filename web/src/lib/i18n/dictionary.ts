@@ -59,11 +59,12 @@ export const DICTIONARY: Record<Locale, Entry> = {
     'common.settings.backdrop.hint':
       '选一张本机图片当背景（等比缩到 1920px 再存在本机）。图片不进仓库，也不上传。',
     'common.settings.backdrop.clear': '清除背景插画',
-    'common.settings.backdrop.failed.not_an_image': '这不是图片文件。',
-    'common.settings.backdrop.failed.decode_failed': '这张图读不出来，换一张试试。',
-    'common.settings.backdrop.failed.too_large':
+    'common.settings.backdrop.failed': '这张图用不了，换一张试试。',
+    'common.settings.backdrop.failedNotImage': '这不是图片文件。',
+    'common.settings.backdrop.failedDecode': '这张图读不出来，换一张试试。',
+    'common.settings.backdrop.failedTooLarge':
       '这张图压完还是太大（超过本机存储能给这个功能的空间），换一张小一点的。',
-    'common.settings.backdrop.failed.quota':
+    'common.settings.backdrop.failedQuota':
       '本机存储写不进去了。先清掉别的偏好或换一张更小的图，再试一次。',
     'common.settings.behavior': '行为',
     'common.settings.autoApprove': '起运行时跳过审批（硬拒绝仍生效）',
