@@ -122,7 +122,7 @@ describe('UsageMeter', () => {
       }),
     )
     withLocale(<UsageMeter sessionId="s1" branch="main" />)
-    expect(screen.getByTestId('usage-meter').textContent).toContain('上下文已用 1%')
+    expect(screen.getByTestId('usage-meter').textContent).toContain('上下文已用 0.5%')
   })
 
   it('用量按分支记账：别的分支的读数不串台', () => {
@@ -143,6 +143,8 @@ describe('UsageMeter', () => {
     const text = screen.getByTestId('usage-meter').textContent ?? ''
     expect(text).toContain('上下文 12k')
     expect(text).toContain('缓存 —')
+    // 没有分母时把原因写在脸上：不然这一行看起来像"功能坏了"。
+    expect(text).toContain('窗口未知')
   })
 })
 
@@ -250,6 +252,7 @@ describe('UsageDetail（悬浮明细）', () => {
     const text = screen.getByTestId('usage-detail').textContent ?? ''
     expect(text).not.toContain('系统提示词')
     expect(text).toContain('上下文占用')  // 没有窗口就不摆占用率
+    expect(text).toContain('窗口未知：可设 AVID_CONTEXT_WINDOW')
     expect(text).toContain('3k')
     expect(text).toContain('缓存读')
     expect(text).toContain('0%')

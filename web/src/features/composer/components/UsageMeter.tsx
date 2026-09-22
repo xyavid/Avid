@@ -121,6 +121,13 @@ export function UsageMeter({ sessionId, branch }: UsageMeterProps) {
         )}
         <span className="text-ink/40">·</span>
         <span className="text-ink/60">{cache}</span>
+        {usage.context.window === null ? (
+          <>
+            <span className="text-ink/40">·</span>
+            {/* 没有分母时把原因写在脸上：不然这一行看起来像"功能坏了"。 */}
+            <span className="text-ink/50">{t('usage.meter.windowUnknown')}</span>
+          </>
+        ) : null}
       </span>
     </Tooltip>
   )
@@ -180,6 +187,10 @@ export function UsageDetail({ usage }: { usage: UsageReport }) {
           </ul>
           <p className="text-ink/50">{t('usage.detail.estimated')}</p>
         </>
+      ) : null}
+
+      {window === null ? (
+        <p className="text-ink/50">{t('usage.detail.windowUnknown')}</p>
       ) : null}
 
       <ul className="flex flex-col gap-1">

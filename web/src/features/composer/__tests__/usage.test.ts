@@ -72,6 +72,13 @@ describe('formatPercent', () => {
     expect(formatPercent(1)).toBe('100%')
   })
 
+  it('不足 1% 保留一位小数：大窗口下 0.3% 不该显示成 0%', () => {
+    expect(formatPercent(0.003)).toBe('0.3%')
+    expect(formatPercent(0.0099)).toBe('1.0%')
+    expect(formatPercent(0.01)).toBe('1%')
+    expect(formatPercent(0)).toBe('0%')
+  })
+
   it('null 显示「—」：没有命中数据与命中率 0% 是两件事', () => {
     expect(formatPercent(null)).toBe('—')
     expect(formatPercent(Number.NaN)).toBe('—')
@@ -97,10 +104,14 @@ describe('usageTone', () => {
 describe('barPercent', () => {
   it('四舍五入成 0–100 的整数，越界截断', () => {
     expect(barPercent(0.364)).toBe(36)
-    expect(barPercent(0.005)).toBe(1)
     expect(barPercent(1.5)).toBe(100)
     expect(barPercent(-0.2)).toBe(0)
     expect(barPercent(null)).toBe(0)
+  })
+
+  it('有占用但不足一格时露一个最小宽度，零占用仍是 0', () => {
+    expect(barPercent(0.003)).toBe(2)
+    expect(barPercent(0)).toBe(0)
   })
 })
 

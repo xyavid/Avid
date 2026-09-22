@@ -20,10 +20,20 @@ export function usageTone(utilization: number | null): UsageTone {
   return 'neutral'
 }
 
-/** 进度条宽度（0–100 的整数）。没有占用率时给 0：调用方按 `null` 决定画不画。 */
+/**: 有占用但不足一格时露出的最小宽度（%）。 */
+export const MIN_BAR_PERCENT = 2
+
+/**
+ * 进度条宽度（0–100 的整数）。没有占用率时给 0：调用方按 `null` 决定画不画。
+ *
+ * 有占用但四舍五入到 0 时给一个最小可见宽度：1M 窗口下真实占用长期不足 1%，
+ * 条永远是空的会让人以为这个数没取到。**只放大条，不放大数字**——旁边的百分比
+ * 仍然是 `0.3%`，读数不受影响。
+ */
 export function barPercent(utilization: number | null): number {
   if (utilization === null || !Number.isFinite(utilization)) return 0
-  return Math.min(100, Math.max(0, Math.round(utilization * 100)))
+  if (utilization <= 0) return 0
+  return Math.min(100, Math.max(MIN_BAR_PERCENT, Math.round(utilization * 100)))
 }
 
 export interface UsagePart {
@@ -85,8 +95,15 @@ function trim(value: number): string {
   return fixed.endsWith('.0') ? fixed.slice(0, -2) : fixed
 }
 
-/** 比值 → 整数百分比：0.778 → 78%、0.36 → 36%。null 一律「—」。 */
+/**
+ * 比值 → 百分比：0.778 → 78%、0.36 → 36%。null 一律「—」。
+ *
+ * 不足 1% 时保留一位小数（0.003 → 0.3%）：大窗口（1M）下真实占用长期不到 1%，
+ * 四舍五入成「0%」会让人以为这个数没取到——那不是精度问题，是读错。
+ */
 export function formatPercent(ratio: number | null): string {
   if (ratio === null || !Number.isFinite(ratio)) return '—'
-  return `${Math.round(ratio * 100)}%`
+  const percent = ratio * 100
+  if (percent > 0 && percent < 1) return `${percent.toFixed(1)}%`
+  return `${Math.round(percent)}%`
 }
