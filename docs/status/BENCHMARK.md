@@ -85,7 +85,7 @@ stress job 跑 `pytest -q -m stress`（`.github/workflows/ci.yml:25-37`）。
 | 首屏 JS gzip 合计（4 块） | **184,160 B**（raw 579,261 B） | 460,800 B |
 | 单块最大（`vendor`） | 63,912 B gzip（raw 195,814 B） | 358,400 B |
 | 字体 0 个文件 | 0 B | 0 B |
-| 样式表（.css） | 5,629 B gzip | 16,384 B |
+| 样式表（.css） | 5,630 B gzip | 16,384 B |
 | 位图纹理 0 个 | 0 B | 32,768 B |
 | 外部字体请求 | 未命中 | — |
 
