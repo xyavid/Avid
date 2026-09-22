@@ -1283,7 +1283,7 @@ round=5  （收尾）                 → 模型自己说明"tests 仍被 endpoi
 | 数据 | 归属 | 依据（判据 3 / 6：唯一知道者 / 唯一写者） |
 |---|---|---|
 | `cache.read_tokens` / `cache.write_tokens` | `ai/usage.py`（provider adapter） | 三家字段名与语义互不相通：Anthropic 的 `input_tokens` **不含**缓存部分、OpenAI 的 `prompt_tokens` **含**，Gemini 用另一套驼峰名。只有紧邻传输层的地方知道方言。把嗅探放进 runtime 会让内核认识协议 |
-| `context.tokens` / `context_window` / `utilization` | `RunState`（Agent Runtime） | 它是运行状态自身的量，事件、REST 与落盘三处必须同源。全仓只有一个 `usage_report()` 计算点；窗口来自配置（`AVID_CONTEXT_WINDOW` > 内置模型名小表 > 不知道） |
+| `context.tokens` / `context_window` / `utilization` / `parts` | `RunState`（Agent Runtime） | 它是运行状态自身的量，事件、REST 与落盘三处必须同源。全仓只有一个 `usage_report()` 计算点；窗口来自配置（`AVID_CONTEXT_WINDOW` > 内置模型名小表 > 不知道）；`parts` 是三块文本的估算 token，由循环在发请求前记下的**字符数**按占比分配——系统提示词与工具定义从不发给前端，所以"上下文被谁占了"只能在这里算 |
 | `compaction.count` / `last_compaction_tokens` / `last_step` | `RunState`（**独立于前两者**） | 压缩是第三条机制：`context.announce()` 只负责"记一次 + 等下一轮读数"，"压完还剩多少"由**下一次真实模型调用**回答。本地估算会与计费口径打架，所以宁可先给 `null`（界面 `—`） |
 
 两处**刻意的口径差异**写在 `ai/usage.py` 的模块文档里：Anthropic 系换算时
@@ -1323,7 +1323,23 @@ round=5  （收尾）                 → 模型自己说明"tests 仍被 endpoi
   终态事件"，于是直接返回，缺的那条是**静默**的。阶段 22 在中间插了一次会话写入，
   把窗口从"一次赋值"放大到毫秒级，这条才稳定复现（`tests/test_run_events.py` 有回归）。
 
-### 20.4 适用条件与失效信号
+### 20.4 三块细分：只有占比，没有绝对系数
+
+明细里的「系统提示词 / 工具定义 / 对话消息」需要内核侧数据：这两块正文**从不发给前端**
+（前端只有对话条目），所以循环在发请求前记下三者各自多少**字符**（`len(system_prompt)`、
+工具定义的 JSON 文本长度、`Transcript.estimate_chars()`），`usage_report()` 再按字符占比把
+**真实的** `prompt_tokens` 分配给三块。
+
+- **解决了什么**：界面上能回答"上下文被谁占了"，而三块之和恰好等于真实总数（余数归对话
+  消息），堆叠条与总数永远对得上；不需要"每 token 多少字符"这类绝对系数——它在中文、
+  英文、JSON 三种文本混在一起时必然偏。
+- **牺牲了什么**：三块之间的**比例**准确，单块的绝对值只是估算（界面给每块加 `~`，
+  并在卡片里注明「分块按字符占比估算」）；工具定义的 token 与 JSON 字符数的比例也和
+  纯文本不完全一致。
+- **什么信号出现时重新考虑**：需要按块算钱（那时要按 provider 的分项计费口径来），或
+  出现"分块比例明显不对"的实测反例（例如工具定义占比被系统性低估）。
+
+### 20.5 适用条件与失效信号
 
 - **成立条件**：provider 会通过 OpenAI 兼容响应上报 usage（至少 `prompt_tokens`）；
   模型窗口要么显式配、要么在内置表里，否则只报 tokens 不报占用率。

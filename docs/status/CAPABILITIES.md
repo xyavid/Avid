@@ -248,7 +248,8 @@ key 查而不当作文件路径，未命中返回可用清单（`skills.py:108-1
   `prompt_tokens_details.cached_tokens` 与 `prompt_cache_hit_tokens`（DeepSeek 系）、Anthropic 的
   `cache_read_input_tokens` / `cache_creation_input_tokens`、Gemini 的 `usageMetadata.cachedContentTokenCount`
   都认。流式与非流式两条解析路径共用它。累计量仍逐轮加进 `state.tokens`；
-  `RunState.usage_report()` 另有上下文占用（最近一轮 `prompt_tokens` / 窗口 / 占用率）、
+  `RunState.usage_report()` 另有上下文占用（最近一轮 `prompt_tokens` / 窗口 / 占用率 /
+  **三块字符占比分配**：系统提示词与工具定义从不发给前端，只有内核在发请求前算得到）、
   缓存（读写 / 命中率）与压缩（次数 / 压缩后读数）三块，进 `run_status` 与 `run_finished`，
   **按分支落盘**进会话值（`AVID_CONTEXT_WINDOW` 或内置模型名小表提供窗口，查不到就不算占用率）。
   **没有成本估算**（不做价格表；`runtime-architecture.md` §20）。
@@ -330,7 +331,9 @@ durable、事件总数上限 4096、终态记录保留 600s 或最多 200 个 ru
 状态分三域：REST 权威域（查询缓存）、活动域（事件流 + 纯 reducer）、界面域（localStorage）。
 
 **用量指示器（阶段 22）**：`features/composer/components/UsageMeter` 挂在输入条那一行、
-发送按钮左侧，显示「上下文 72k/200k（36%）· 缓存 78% · 压缩 2 次」，悬浮给明细；
+发送按钮左侧，显示「上下文已用 36%」+ 迷你进度条 + 「缓存命中 78%」；占用率按
+≤60% / 60–85% / >85% 三档上色。悬浮明细（`UsageDetail`）给三块估算的堆叠条与清单
+（系统提示词 / 工具定义 / 对话消息，每块带 `~`）、以及缓存读写、命中率与压缩的真实读数。
 内核没在 `features` 里声明 `usage` 时它不渲染（旧内核上不留空读数）。
 实时值取活动域的 `RunView.usage`，落盘值取 `useBranches` 返回的分支 `usage`；
 合并规则是 `pickUsage`（活动域优先、查询域兜底），可空字段一律显示 `—`。
