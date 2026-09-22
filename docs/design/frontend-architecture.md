@@ -2,7 +2,7 @@
 
 **状态**：设计，未实施（本文写作时仓库代码零改动）。
 **依据**：按 `docs/design/architecture-criteria.md` 的 12 组检查点逐条推导；每条取舍写「解决了什么 / 牺牲了什么 / 在什么条件下成立 / 什么信号出现时重新考虑」。
-**证据来源**：仓库内文件用 `path:line`；调研结论用 `dev/research/*.md:line`（过程文档，不入库，引用时同时写明样本与 commit）。未取得证据的一律标 **未验证假设**。
+**证据来源**：仓库内文件用 `path:line`；调研结论用 `dev/research/*.md:line`（过程文档，不入库，引用时同时写明样本与 commit）。未取得证据的一律标 **未验证假设**。2026-09-22 清理冗余调研产物时删除了 `agent-frontend-survey-addendum.md` 与 `agent-frontend-impl-survey.md` 两份并发稿，上文 4 处引用它们的锚点已就地标注为不可复核；合并定稿 `agent-frontend-survey-final.md` 与详情分册 `agent-frontend-survey-deepdive.md` 保留。
 **前置阅读**：`docs/design/runtime-architecture.md`（内核四层与不变量 I1–I7）、`dev/plan/roadmap.md`（已完成阶段）。
 **产出图**：`dev/architecture/phase-14-frontend.svg`（过程文档，只存本地）。
 **视觉方向**：涂鸦潦草风，参照 `dev/tmp/purrcat-src/ui/` 的实现（见 §8）。
@@ -242,7 +242,7 @@ Avid/
 - **服务端状态不在 localStorage 里留副本**：本地反面样本 purrcat 把画布图既 persist 到 `localStorage` 又存在服务端（`dev/tmp/purrcat-src/ui/src/store/flowStore.ts:42,304`），两份真相必然分叉。Avid 的界面域只存**纯 UI 偏好**。
 - **服务端对象身份不由前端发明**：`entry_id`、`run_id`、`approval_id` 一律服务端生成。乐观渲染允许用临时 id，但 durable 事件到达时就地替换；本地反面样本 purrcat 在导出画布时随机重生成节点 ID（`flowStore.ts:207-211`），导致后端按 ID 记的状态失配。
 - **取数位置纪律**：需要数据的组件自己取数（在 L2 `features/*` 的 hook 里），**禁止**在 route 顶层取数再逐层透传。这是调研里唯一写成文字的取数位置约束（Onyx 强制 `useSWR` 在使用组件内、pending 给 loader，`dev/research/agent-frontend-survey.md:828`）；反面是本地 purrcat，`ChatPage.tsx` 1799 行 / 104 个 `useState` 把全部数据从页面顶部透传下去。
-- **渲染状态机 ≠ 调度状态机**：前端可以有 `idle | submitting | streaming | awaiting_approval | cancelling | done | failed` 的渲染状态（Onyx 的 `ChatState` 同形：`input|loading|streaming|toolBuilding|uploading`，`dev/research/agent-frontend-stack-survey.md:540`），但它**不决定何时继续或何时询问**——那是内核的事。「等待人工批准」在这套状态里是**独立状态**，不是一条普通消息；Continue、n8n、gemini-cli 三家独立收敛到这个形状（`dev/research/agent-frontend-survey-addendum.md:258-265`）。
+- **渲染状态机 ≠ 调度状态机**：前端可以有 `idle | submitting | streaming | awaiting_approval | cancelling | done | failed` 的渲染状态（Onyx 的 `ChatState` 同形：`input|loading|streaming|toolBuilding|uploading`，`dev/research/agent-frontend-stack-survey.md:540`），但它**不决定何时继续或何时询问**——那是内核的事。「等待人工批准」在这套状态里是**独立状态**，不是一条普通消息；Continue、n8n、gemini-cli 三家独立收敛到这个形状（`dev/research/agent-frontend-survey-addendum.md:258-265`；**该文件已于 2026-09-22 清理中删除，锚点不可复核**）。
 
 ---
 
@@ -329,7 +329,7 @@ Avid/
 - **I5（不丢）**：每个 durable 消息事件携带**完整**内容（`assistant_message.data.content` 就是最终文本）。因此 delta 全丢也不影响正确性；这条同时是 a11y 的落点（§8.5）。
 - **I4（单调）**：一个 run 内 durable 事件的 `seq` 由唯一发射线程分配，严格递增、不重复。
 
-**游标是 `seq`，不是时间戳**：断线补齐用 `Last-Event-ID`（就是最后一个 durable `seq`）。OpenHands 明确把旧的 `resend_mode` / `after_timestamp` 换成 `after_seq`，理由是时间戳比较的是各端的本地钟（`dev/research/agent-frontend-survey-verified-addendum.md:37`、`dev/research/agent-frontend-survey-supplement.md:145`）。因此 Avid 的事件里可以有 `ts` 用于显示，但**补齐只认 `seq`**；跨机时间只用于 UI 的相对时间显示，且以服务端时钟为准（LibreChat 的 `elapsedMs` 用服务端时钟规避跨机漂移，`dev/research/agent-frontend-impl-survey.md:274`）。
+**游标是 `seq`，不是时间戳**：断线补齐用 `Last-Event-ID`（就是最后一个 durable `seq`）。OpenHands 明确把旧的 `resend_mode` / `after_timestamp` 换成 `after_seq`，理由是时间戳比较的是各端的本地钟（`dev/research/agent-frontend-survey-verified-addendum.md:37`、`dev/research/agent-frontend-survey-supplement.md:145`）。因此 Avid 的事件里可以有 `ts` 用于显示，但**补齐只认 `seq`**；跨机时间只用于 UI 的相对时间显示，且以服务端时钟为准（LibreChat 的 `elapsedMs` 用服务端时钟规避跨机漂移，`dev/research/agent-frontend-impl-survey.md:274`；**该文件已于 2026-09-22 清理中删除，锚点不可复核**）。
 
 ### 5.3 事件类型与现有机制的映射
 
@@ -385,7 +385,7 @@ Avid/
 6. **解析失败不静默丢弃**：SSE 行按 `\n\n` 分帧并保留半行缓冲（n8n 的 `data:` 行解析带半行 buffer，`dev/research/agent-frontend-stack-survey.md:485`）；一条帧的 `data` 解析失败时，**请求 `resync` 并标记该 run 为「视图待重建」**，不跳过。反面是 Dify：`JSON.parse` 失败即丢弃该行，分块边界切在 JSON 中间时该事件直接消失且无法察觉（`dev/research/agent-frontend-survey-final.md:414`）。
 7. **权威终止不在流里**：`run_finished` 只是提示，权威事实是**运行注册表状态 + 已提交的条目**。OpenHands 在这件事上自陈有竞态：WS 的 `FINISHED` 帧不可作为唯一依据，必须回落到全量状态快照，并设 `TERMINAL_HARD_FALLBACK_SECS = 30.0` 兜底（`dev/research/agent-frontend-survey-verified-addendum.md:442-443`）。Avid 的对应实现：事件流静默超过 30s 或流结束时，客户端 `GET /runs/{run_id}` + `GET /sessions/{id}/entries` 对账；若注册表说已结束而前端没收到终止事件，就按持久层重建视图并提示「事件流不完整，已重建」。
 
-**取消**：`POST /runs/{id}/cancel` → 标记 → 内核在**下一个检查点**停止（§7.4）→ 已产生的消息照常已落库 → `run_cancelled` durable 事件 → 前端把状态改为「已取消」而不是「失败」（取消不是错误：错误层要静默处理 abort，只有真正需要用户行动的失败才走可见路径，`dev/research/agent-frontend-survey-addendum.md:203`）。取消**不**由客户端断开连接触发：与 Langflow 故意用 `Connection: close` + 0.1s 轮询做「关页面即停」相反（`dev/research/agent-frontend-survey-addendum-verified.md:166-168`），Avid 的 run 是**会持久化的**，关掉页面或刷新不能算取消；取消必须是一次显式命令。代价是「关了页面 run 还在跑」，对冲是运行状态始终可查（`GET /runs/{id}`）与 `run_status` 的累计 token。
+**取消**：`POST /runs/{id}/cancel` → 标记 → 内核在**下一个检查点**停止（§7.4）→ 已产生的消息照常已落库 → `run_cancelled` durable 事件 → 前端把状态改为「已取消」而不是「失败」（取消不是错误：错误层要静默处理 abort，只有真正需要用户行动的失败才走可见路径，`dev/research/agent-frontend-survey-addendum.md:203`；**该文件已于 2026-09-22 清理中删除，锚点不可复核**）。取消**不**由客户端断开连接触发：与 Langflow 故意用 `Connection: close` + 0.1s 轮询做「关页面即停」相反（`dev/research/agent-frontend-survey-addendum-verified.md:166-168`），Avid 的 run 是**会持久化的**，关掉页面或刷新不能算取消；取消必须是一次显式命令。代价是「关了页面 run 还在跑」，对冲是运行状态始终可查（`GET /runs/{id}`）与 `run_status` 的累计 token。
 
 **降级**：事件流不可用（代理不支持、连接被反复中断）时，前端降级为轮询 `GET /runs/{id}` + 条目增量，UI 顶部显示「实时通道不可用，正在轮询」。Langflow 的 `STREAMING/DIRECT/POLLING` 三档自动降级是现成形态（`dev/research/agent-frontend-survey-addendum-verified.md:166-168`）。代价写清：轮询下首 token 延迟与请求量都变差，因此轮询间隔是 1s 起步并随运行时长退避；这是**降级路径**，不是默认路径。
 
@@ -467,7 +467,7 @@ data: {"run_id":"run_...","seq":null,"text":"…"}      ← 无 id 行，不参�
 
 - `GET /api/meta` 返回 `api_version`（整数，破坏性变更时 +1）、`event_types`（完整清单）与 **`features`（特性表）**。
 - **按特性分支，不按版本号分支**：客户端读 `features`（例如 `{"deltas":1,"approvals":1,"cancel":1,"tasks":1,"branches":0}`）决定启用哪些能力，只在客户端构建的 `api_version` 与内核声明**不兼容**时才失败收敛。形态取自 OpenHands 的两层防护——构建期钉死版本 + 运行期按特性协商（`AGENT_SERVER_VERSION_TOO_OLD` + feature→minVersion 表 + `/server_info` 缓存，`dev/research/agent-frontend-survey-verified-addendum.md:418-423`）。特性表比单一版本号更耐漂移：加一个可选事件不会让所有旧前端罢工。
-- 失败收敛的具体表现：显示「界面与内核版本不兼容，请重新构建 `web/`」并禁用提交，而不是尽力渲染（LibreChat 的协议协商就是这个形状，`dev/research/agent-frontend-impl-survey.md:274`）。
+- 失败收敛的具体表现：显示「界面与内核版本不兼容，请重新构建 `web/`」并禁用提交，而不是尽力渲染（LibreChat 的协议协商就是这个形状，`dev/research/agent-frontend-impl-survey.md:274`；**该文件已于 2026-09-22 清理中删除，锚点不可复核**）。
 - **机械检查（先做这个，不上生成器）**：`tests/test_event_contract.py` 解析 `web/src/events/types.ts` 的联合类型成员集合，与 `runtime/events.py` 的 `EVENT_TYPES` 比较集合相等。理由：生成式契约不是免费的——Dify 生成前要打 6 类规范化补丁、OpenHands 要维护公开面过滤 + 人工 `allowClientOnly` 清单并已出现生成源 1.47.0 与运行时 1.49.1 的静默漂移（`dev/research/agent-frontend-survey-final.md:41`）。在「事件数量 × 变更频率」超过人工同步成本之前，一条集合相等测试比一套生成器便宜（这条判据取自 `dev/research/agent-frontend-survey-final.md:478`）。
 - **升级到生成器的条件与路径**（写清以便将来照做）：事件类型 ≥ 25 个，或单次迭代要改 ≥ 3 个事件的载荷结构时，改用 FastAPI 的 OpenAPI 做**类型生成**（hey-api，只生成类型不生成方法体，OpenHands 的形态），门禁用 Dify 的「CI 先删再生成再 diff」（`dev/research/agent-frontend-survey-final.md:118`）。
 - **破坏性变更的跑道**（生成器时代才需要，现在记录以免将来临时发明）：OpenHands 的做法是 5 个 minor 版本的弃用跑道 + 用 `oasdiff` 对比上一个 PyPI 发布 + CI 校验弃用话术；弱 schema 的允许清单必须带 `reason` / `owner` / `expiry` / `follow_up` 四个字段（`dev/research/agent-frontend-survey-verified-addendum.md:435-439`）。Avid 当前的规模不需要它，但**契约一旦开始生成，废弃就必须有到期日**，否则抽象会永久滞留。
