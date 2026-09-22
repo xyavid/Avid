@@ -251,7 +251,9 @@ key 查而不当作文件路径，未命中返回可用清单（`skills.py:108-1
   `RunState.usage_report()` 另有上下文占用（最近一轮 `prompt_tokens` / 窗口 / 占用率 /
   **三块字符占比分配**：系统提示词与工具定义从不发给前端，只有内核在发请求前算得到）、
   缓存（读写 / 命中率）与压缩（次数 / 压缩后读数）三块，进 `run_status` 与 `run_finished`，
-  **按分支落盘**进会话值（`AVID_CONTEXT_WINDOW` 或内置模型名小表提供窗口，查不到就不算占用率）。
+  **按分支落盘**进会话值（窗口按 `AVID_CONTEXT_WINDOW` → 内置模型名小表 → **provider 的
+  `/models`**（`context_length`，进程内缓存、失败静默、`AVID_MODEL_INFO=off` 关掉）取值；
+  三条都没有就只报 tokens、不算占用率）。
   **没有成本估算**（不做价格表；`runtime-architecture.md` §20）。
 - **错误**：4xx/5xx 一律 `LLMError` 上抛终止运行；上下文超限是唯一会重试的错误（兜底压缩 +
   重试一次）。

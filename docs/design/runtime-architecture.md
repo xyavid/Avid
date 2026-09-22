@@ -1283,7 +1283,7 @@ round=5  （收尾）                 → 模型自己说明"tests 仍被 endpoi
 | 数据 | 归属 | 依据（判据 3 / 6：唯一知道者 / 唯一写者） |
 |---|---|---|
 | `cache.read_tokens` / `cache.write_tokens` | `ai/usage.py`（provider adapter） | 三家字段名与语义互不相通：Anthropic 的 `input_tokens` **不含**缓存部分、OpenAI 的 `prompt_tokens` **含**，Gemini 用另一套驼峰名。只有紧邻传输层的地方知道方言。把嗅探放进 runtime 会让内核认识协议 |
-| `context.tokens` / `context_window` / `utilization` / `parts` | `RunState`（Agent Runtime） | 它是运行状态自身的量，事件、REST 与落盘三处必须同源。全仓只有一个 `usage_report()` 计算点；窗口来自配置（`AVID_CONTEXT_WINDOW` > 内置模型名小表 > 不知道）；`parts` 是三块文本的估算 token，由循环在发请求前记下的**字符数**按占比分配——系统提示词与工具定义从不发给前端，所以"上下文被谁占了"只能在这里算 |
+| `context.tokens` / `context_window` / `utilization` / `parts` | `RunState`（Agent Runtime） | 它是运行状态自身的量，事件、REST 与落盘三处必须同源。全仓只有一个 `usage_report()` 计算点；窗口来自配置链（`AVID_CONTEXT_WINDOW` > 内置模型名小表 > 问一次 provider 的 `/models` > 不知道；探测在 `agent_loop` 解析配置处发生一次并回填进 state，失败静默、进程内缓存）；`parts` 是三块文本的估算 token，由循环在发请求前记下的**字符数**按占比分配——系统提示词与工具定义从不发给前端，所以"上下文被谁占了"只能在这里算 |
 | `compaction.count` / `last_compaction_tokens` / `last_step` | `RunState`（**独立于前两者**） | 压缩是第三条机制：`context.announce()` 只负责"记一次 + 等下一轮读数"，"压完还剩多少"由**下一次真实模型调用**回答。本地估算会与计费口径打架，所以宁可先给 `null`（界面 `—`） |
 
 两处**刻意的口径差异**写在 `ai/usage.py` 的模块文档里：Anthropic 系换算时
@@ -1344,7 +1344,9 @@ round=5  （收尾）                 → 模型自己说明"tests 仍被 endpoi
 - **成立条件**：provider 会通过 OpenAI 兼容响应上报 usage（至少 `prompt_tokens`）；
   模型窗口要么显式配、要么在内置表里，否则只报 tokens 不报占用率。
 - **失效信号**：① 出现新的 usage 方言（同一家换字段名）→ 在 `ai/usage.py` 加一条
-  判别分支 + 一组 fixture，`normalize_usage` 的优先级表是单点；② 需要成本估算 →
+  判别分支 + 一组 fixture，`normalize_usage` 的优先级表是单点；①' provider 的 `/models`
+  不给窗口（或给错）→ 界面会显示「窗口未知」，此时手配 `AVID_CONTEXT_WINDOW`；探测失败
+  按进程缓存，重启进程才会重试；② 需要成本估算 →
   新增价格表（缓存读/写与普通输入单价不同，本阶段明确不做）；③ 需要按运行回看历史 →
   见 §20.2 的条目类型方案；④ 出现"窗口表给错分母"的误判 → 优先修表，或把占用率改成
   只显示 tokens（宁可少一个数，不要一个错的分母）。
