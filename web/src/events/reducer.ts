@@ -316,7 +316,7 @@ export function applyEvent(view: RunView, event: EventEnvelope): RunView {
         round: Number(event.data.round ?? next.round),
         tokens: Number(event.data.tokens ?? next.tokens),
         // 快照缺失时保留上一份：状态事件不该把已知的读数抹成空。
-        usage: (event.data.usage as UsageReport | undefined) ?? next.usage,
+        usage: event.data.usage ?? next.usage,
         activity: String(event.data.activity ?? next.activity),
       }
     case 'run_finished':
@@ -325,7 +325,7 @@ export function applyEvent(view: RunView, event: EventEnvelope): RunView {
         phase: 'done',
         finishedAt: event.ts,
         tokens: Number(event.data.tokens ?? next.tokens),
-        usage: (event.data.usage as UsageReport | undefined) ?? next.usage,
+        usage: event.data.usage ?? next.usage,
       }
     case 'run_failed':
       return {

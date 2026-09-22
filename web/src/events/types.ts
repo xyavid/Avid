@@ -6,7 +6,7 @@
  * 加一个事件要同时改两侧，否则测试失败——这就是不上生成器时代的漂移检查。
  */
 
-import type { PermissionMode } from '../api/types'
+import type { PermissionMode, UsageReport } from '../api/types'
 
 // EVENTS:BEGIN
 export type AvidEventType =
@@ -113,6 +113,8 @@ export interface EventData {
   before?: number
   after?: number
   tokens?: number
+  /** 统一 usage 快照（阶段 22）：run_status 每轮、run_finished 终态。 */
+  usage?: UsageReport
   activity?: string
   finish_reason?: string
   text?: string
