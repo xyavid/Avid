@@ -38,7 +38,13 @@ from .session import (
 )
 from .svc.workspaces import WorkspaceInvalid, bound_workspace
 from .tools import TOOLS, workspace
-from .web.app import LOOPBACK_HOSTS, trusted_hosts
+from .web.app import (
+    LOOPBACK_HOSTS,
+    STATIC_DIR,
+    frontend_drift_warning,
+    load_build_info,
+    trusted_hosts,
+)
 from .workspaces import (
     Workspace,
     WorkspaceError,
@@ -445,6 +451,11 @@ def _run_web(argv: list[str]) -> int:
         "开发期前端：pnpm -C web dev（Vite 代理 /api → 本进程）",
         file=sys.stderr,
     )
+    # 产物漂移：`avid web` 服务的是 copy:dist 的那一份，源码比它新时它在**忠实地发旧页面**。
+    # 这里说出来而不是等人比对页脚的构建戳——这个坑仓库注释里点过名，但仍然靠人记得。
+    drift = frontend_drift_warning(STATIC_DIR, load_build_info(STATIC_DIR))
+    if drift:
+        print(f"⚠ {drift}", file=sys.stderr)
     if args.reload:
         if args.workspace:
             print(

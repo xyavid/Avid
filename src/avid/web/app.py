@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -139,6 +140,57 @@ def load_build_info(static_dir: Path) -> dict[str, Any]:
         except (OSError, ValueError):
             logger.warning("构建戳读不了：%s", stamp)
     return {"git_sha": None, "built_at": None, "source": "dev"}
+
+
+def _parse_built_at(value: object) -> float | None:
+    """``.build.json`` 里的 ISO 时间戳 → epoch 秒；解析不了给 None。"""
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _newest_mtime(root: Path) -> float:
+    newest = 0.0
+    for path in root.rglob("*"):
+        if path.is_file():
+            newest = max(newest, path.stat().st_mtime)
+    return newest
+
+
+def frontend_drift_warning(static_dir: Path, build: dict[str, Any]) -> str | None:
+    """前端源码比静态产物新时给一句人话，否则 None。
+
+    ``avid web`` 服务的是 ``src/avid/web/static/``（``copy:dist`` 的产物），**不是**
+    ``web/dist``。于是「改了前端、也 build 了、忘了 copy:dist」的结果是它在**忠实地发一份
+    旧页面**——而界面上没有任何东西提示这件事（构建戳只在设置页显示，除非你去比对它是不是
+    当前 HEAD）。这个坑仓库里点过名（``dev/tmp/e2e_server.py`` 特意改成服务 ``web/dist``
+    就是因为它），但仍然靠人记得，所以把它变成启动时的一句话。
+
+    判据是 mtime 而不是 git sha：打包进 wheel 时没有 ``web/`` 目录、也没有 ``.git``，
+    那条路径上不存在这种漂移（直接返回 None）。代价是"改了前端源码但产物更新"这种情形
+    只能靠时间戳判断——够用，且不需要在启动路径上起子进程。
+    """
+    built = _parse_built_at(build.get("built_at"))
+    if built is None:
+        return None
+    parents = static_dir.resolve().parents
+    if len(parents) < 4:
+        return None
+    source = parents[3] / "web" / "src"
+    if not source.is_dir():
+        return None
+    newest = _newest_mtime(source)
+    if newest <= built:
+        return None
+    stamp = datetime.fromtimestamp(newest, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return (
+        f"前端源码比静态产物新（源码 {stamp} > 产物 {build.get('built_at')}）："
+        "`avid web` 服务的是 src/avid/web/static/，先跑 "
+        "`pnpm -C web build && pnpm -C web run copy:dist`，否则它会发一份旧页面。"
+    )
 
 
 def _envelope(code: str, message: str, detail: dict[str, Any] | None = None) -> dict:

@@ -149,7 +149,7 @@
 | 评测集 | **有**：两套 suite 共 21 条只读 case（v0 12 / v1 9 条 tier 3–5） | `benchmarks/cases/`、`tests/test_bench_cases.py` |
 | 通过率 / 效果基线 | **有**：v0 与 v1 各自的基线 | `BENCHMARK.md` §9.2 / §10.2 |
 | 回归对比机制 | **有且真跑过**：同 suite、同 commit、只改 `--context-chars`，三档（§10.3） | `benchmarks/runs/v1-tight*/`（不入库） |
-| 性能预算 | **已冻结** | `web/budget.json` 的 `frozen_at`（阶段 23b 重冻：首屏 JS gzip 实测 187,246 B / 460,800 B；样式表 gzip 5,629 B / 16,384 B；字体 0 B / 0 B） |
+| 性能预算 | **已冻结** | `web/budget.json` 的 `frozen_at`（阶段 23b 重冻：首屏 JS gzip 实测 187,249 B / 460,800 B；样式表 gzip 5,629 B / 16,384 B；字体 0 B / 0 B） |
 | 效果类门禁 | marker 有（`-m eval` / `-m eval_smoke`），**按设计默认不跑**；另有一条 A14 边界门禁 | `pyproject.toml` 的 `addopts`、`tests/test_web_boundaries.py` |
 | **区分度** | **仍然没有**：v1 的 9 条难度 case 上三臂 9/9；94 次工具调用里 72 次是 `bash` | `BENCHMARK.md` §10.2 |
 | **压缩可评估性** | **不成立**：45 次运行最大 transcript 4,657 字符，而默认阈值 400,000——**差 86 倍**，阈值从未被触达 | `BENCHMARK.md` §10.3 |

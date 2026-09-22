@@ -7,7 +7,10 @@ SSE 分帧与 ``Last-Event-ID`` 重放、事件契约与特性表、构建戳缺
 from __future__ import annotations
 
 import json
+import os
+import pathlib
 import threading
+from datetime import datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -25,6 +28,7 @@ from avid.runtime import events
 from avid.session import SessionRecorder
 from avid.svc import API_VERSION, FEATURES, Services
 from avid.web import create_app
+from avid.web.app import frontend_drift_warning, load_build_info
 from avid.web.schemas import classify_tool_status
 
 
@@ -823,6 +827,59 @@ def test_spa_fallback_serves_index_but_missing_assets_are_404(sandbox):
         assert missing.json()["error"]["code"] == "asset_not_found"
     finally:
         services.close()
+
+
+# ---------------- 产物漂移告警（阶段 23c） ----------------
+
+
+def _layout(root: pathlib.Path, *, built_at: str, source_at: str) -> pathlib.Path:
+    """造一个最小仓库布局：`src/avid/web/static/.build.json` + `web/src/**`。
+
+    时间用 ISO 写而不是 epoch 数字：读用例的人一眼能看出谁比谁新。
+    """
+    static = root / "src" / "avid" / "web" / "static"
+    static.mkdir(parents=True)
+    (static / ".build.json").write_text(json.dumps({"built_at": built_at}), encoding="utf-8")
+    source = root / "web" / "src"
+    source.mkdir(parents=True)
+    touched = source / "App.tsx"
+    touched.write_text("export const x = 1\n", encoding="utf-8")
+    epoch = datetime.fromisoformat(source_at.replace("Z", "+00:00")).timestamp()
+    os.utime(touched, (epoch, epoch))
+    return static
+
+
+def test_frontend_drift_warning_fires_when_source_is_newer(tmp_path):
+    """源码比产物新 → 说出那句人话（这正是"改了前端忘了 copy:dist"的那一步）。"""
+    static = _layout(
+        tmp_path, built_at="2026-09-22T10:00:00Z", source_at="2026-09-22T12:00:00Z"
+    )
+
+    warning = frontend_drift_warning(static, load_build_info(static))
+
+    assert warning is not None
+    assert "copy:dist" in warning, "告警必须给出可执行的下一步"
+    assert "src/avid/web/static" in warning, "要说清它服务的是哪一份产物"
+
+
+def test_frontend_drift_warning_is_silent_when_artifact_is_fresh(tmp_path):
+    """产物比源码新 → 不报警。反例那半条：一个永远响的告警会被忽略，等于没有。"""
+    static = _layout(
+        tmp_path, built_at="2026-09-22T12:00:00Z", source_at="2026-09-22T10:00:00Z"
+    )
+
+    assert frontend_drift_warning(static, load_build_info(static)) is None
+
+
+def test_frontend_drift_warning_skips_when_source_is_absent(tmp_path):
+    """打包进 wheel：没有 web/ 目录、没有源码可比较 → 静默（那条路径上不存在漂移）。"""
+    static = tmp_path / "src" / "avid" / "web" / "static"
+    static.mkdir(parents=True)
+    (static / ".build.json").write_text(
+        json.dumps({"built_at": "2026-09-22T10:00:00Z"}), encoding="utf-8"
+    )
+
+    assert frontend_drift_warning(static, load_build_info(static)) is None
 
 
 # ---------------- 阶段 22：用量快照 ----------------

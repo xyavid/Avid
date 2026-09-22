@@ -10,6 +10,8 @@ pnpm install
 pnpm dev            # Vite（代理 /api → 127.0.0.1:8765），需另起 `uv run avid web`
 pnpm build          # tsc -b + vite build → dist/
 pnpm run copy:dist  # dist → ../src/avid/web/static + .build.json 构建戳
+                    # `avid web` 服务的是**这一份**、不是 web/dist。改了前端只 build 不 copy
+                    # 的话，它会忠实地发一份旧页面；启动时会有一条 ⚠ 告警指出这件事。
 pnpm test           # vitest：reducer / coalescer / SSE 解析（纯函数，无浏览器）
 pnpm run check:layers   # A8：网络出口唯一、feature 不互相 import、store 写入口收敛
 pnpm run check:tokens   # C22：字体声明即加载、z-index 只用 --z-*

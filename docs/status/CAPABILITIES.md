@@ -350,7 +350,7 @@ durable、事件总数上限 4096、终态记录保留 600s 或最多 200 个 ru
 | `typecheck` | `tsc -b --noEmit` |
 | `test` | vitest |
 | `gate:size` | 首屏 JS 逐块 gzip 上限、字体/纹理体积、不得回带 Google Fonts；上限来自 `web/budget.json` |
-| `copy:dist` | 把 `web/dist/**` 复制进 `src/avid/web/static/` 并写构建戳 |
+| `copy:dist` | 把 `web/dist/**` 复制进 `src/avid/web/static/` 并写构建戳。`avid web` 服务的是这一份（不是 `web/dist`）——源码比产物新时启动会打一条 ⚠ 告警指出该跑它 |
 
 ---
 

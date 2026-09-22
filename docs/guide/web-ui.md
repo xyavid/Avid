@@ -33,7 +33,7 @@ pnpm -C web dev                                 # 终端 B：Vite，代理 /api 
 ```bash
 pnpm -C web install
 pnpm -C web build
-pnpm -C web run copy:dist        # dist → src/avid/web/static + 构建戳
+pnpm -C web run copy:dist        # dist → src/avid/web/static + 构建戳（`avid web` 发的是这一份）
 uv run avid web --port 8765      # 静态资源与 API 同源
 ```
 
@@ -251,7 +251,7 @@ AVID_PORT=8877 AVID_E2E_STREAM=1 uv run --extra web python <你的脚本模型�
 AVID_BASE_URL=http://127.0.0.1:8877 AVID_E2E=1 pnpm -C web test:e2e
 
 # 手验
-curl -s localhost:8765/api/meta | head -c 300
+curl -s localhost:8765/api/meta | head -c 300   # 其中的 build.git_sha 是那种产物的提交戳
 curl -s -o /dev/null -w '%{http_code} %{content_type}\n' localhost:8765/api/nope   # 404 application/json
 ```
 
