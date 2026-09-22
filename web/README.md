@@ -19,6 +19,11 @@ pnpm run verify         # 以上全部（不含 build 与 e2e）
 AVID_E2E=1 pnpm test:e2e    # Playwright 14 项（需先 pnpm exec playwright install chromium）
 ```
 
+**Node ≥ 22.22**：jsdom 30 依赖 undici 8，后者调 `node:worker_threads.markAsUncloneable`
+（Node ≥ 22.19 才有）。版本不够时 `pnpm install` 会因为 `.npmrc` 的 `engine-strict`
+直接失败——没有这道检查的话依赖装得下、纯函数用例也全绿，只在用 jsdom 的那条用例上留
+一条 unhandled error。下限写在 `package.json` 的 `engines`；CI 与本机基线都是 24。
+
 ## 导航列
 
 宽档默认 320px；**收起后是 64px 图标轨**，收起态的头部必须竖排——`图标 + 文字`两个按钮

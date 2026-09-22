@@ -46,7 +46,13 @@ jobs:
           version: 9
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # 24 = 本机基线（`docs/design/frontend-architecture.md` 的「当前基线」）。
+          # Node 20 装得下依赖、其余门禁也照过，但 jsdom 30 → undici 8 用了
+          # `node:worker_threads.markAsUncloneable`（Node ≥ 22.19 才有），于是要等
+          # vitest 起 jsdom 时才炸成一条 unhandled error。同一个下限也写进
+          # web/package.json 的 engines，由 web/.npmrc 的 engine-strict 在
+          # `pnpm install` 阶段就失败。
+          node-version: 24
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - working-directory: web

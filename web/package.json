@@ -4,6 +4,9 @@
   "version": "0.0.1",
   "type": "module",
   "description": "Avid 前端：会话时间线、审批队列、任务板、技能目录与设置",
+  "engines": {
+    "node": ">=22.22.2"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
