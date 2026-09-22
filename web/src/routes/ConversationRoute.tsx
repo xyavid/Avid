@@ -11,29 +11,27 @@ import {
   useSession,
   useStartRun,
 } from '../api/queries'
-import type { Entry, PermissionMode } from '../api/types'
-import { ApprovalQueue } from '../features/approvals'
-import { BranchSelector } from '../features/branches'
-import { buildStartRunInput, Composer, resolvePermissionMode } from '../features/composer'
-import { ConversationView } from '../features/conversation'
+import type { PermissionMode } from '../api/types'
+import { buildStartRunInput, resolvePermissionMode } from '../features/composer'
+import { findToolText, flattenEntries } from '../features/conversation'
 import type { InspectorSelection } from '../features/inspector'
-import { Inspector } from '../features/inspector'
-import { InspectorSlot } from '../layouts/InspectorSlot'
 import { useTranslation } from '../lib/i18n'
 import { runStoreActions, useRunView } from '../state/runStore'
 import { useUiStore } from '../state/uiStore'
 import type { TimelineEntry, ToolRun } from '../lib/timeline'
-import { RunStreamProvider, useRunStreamState } from './useRunStream'
-
-function flatten(pages: { entries: Entry[] }[] | undefined): Entry[] {
-  if (!pages) return []
-  return pages.flatMap((page) => page.entries)
-}
+import { ConversationSurface } from './ConversationSurface'
+import { RunStreamProvider } from './useRunStream'
 
 /** 服务端把 main 作为隐式默认返回（新建会话还没有任何分支值）。 */
 const DEFAULT_BRANCH = 'main'
 
-/** L4：会话工作面。唯一把查询结果与活动域拼在一起的地方。 */
+/**
+ * L4：会话工作面。数据与副作用都在这里，摆法交给 `ConversationSurface`。
+ *
+ * 本轮拆开之前这个文件是 307 行：上半是接线、下半是一个 22 字段 props 的装配组件，
+ * 中间隔着一大段 props 声明。两者关心的东西不同——这里关心「数据从哪来、什么时候复位、
+ * 哪些动作发什么请求」，surface 关心「谁在哪个槽里、忙的时候哪个入口禁用」。
+ */
 export function ConversationRoute() {
   const { t } = useTranslation()
   const { sessionId = null } = useParams()
@@ -93,7 +91,7 @@ export function ConversationRoute() {
   )
 
   // 权威视图来自条目：首屏、刷新、resync、断线对账、换分支都走这一条。
-  const flat = useMemo(() => flatten(entries.data?.pages), [entries.data])
+  const flat = useMemo(() => flattenEntries(entries.data?.pages), [entries.data])
   useEffect(() => {
     // 用 entries.data 而不是 flat.length 判断：空分支也要重建，否则会留着上一条链的视图。
     if (!entries.data) return
@@ -117,12 +115,9 @@ export function ConversationRoute() {
 
   const inspectTool = useCallback(
     (run: ToolRun) => {
-      const entry = view.entries.find(
-        (item) => item.kind === 'tool' && item.toolCallId === run.toolCallId,
-      )
       setSelection({
         title: run.tool || run.toolCallId,
-        text: entry?.text ?? '',
+        text: findToolText(view.entries, run.toolCallId),
         arguments: run.arguments,
       })
       setInspectorTab('content')
@@ -158,7 +153,7 @@ export function ConversationRoute() {
 
   return (
     <RunStreamProvider runId={runId} onResync={refresh}>
-      <ConversationBody
+      <ConversationSurface
         sessionId={sessionId}
         sessionName={session.data?.name ?? null}
         workspaceName={session.data?.workspace?.name ?? null}
@@ -206,102 +201,5 @@ export function ConversationRoute() {
         density={density}
       />
     </RunStreamProvider>
-  )
-}
-
-interface BodyProps {
-  sessionId: string
-  sessionName: string | null
-  /** 会话归属的工作区名（可能为 null）；route 从会话详情取，feature 之间不互相 import。 */
-  workspaceName: string | null
-  truncatedTail: boolean
-  entriesLoading: boolean
-  /** 当前查看的分支（本地视图状态，服务端没有「当前分支」）。 */
-  branch: string
-  /** 这次运行的权限模式（已按工作区默认回落，不是 null）。 */
-  permission: PermissionMode
-  /** 服务端说这个会话有活动 run：切换与分叉都会失败，先把入口禁掉。 */
-  hasActiveRun: boolean
-  density: 'compact' | 'comfy'
-  inspectorOpen: boolean
-  inspectorTab: 'content' | 'diff' | 'json'
-  selection: InspectorSelection | null
-  onSend: (prompt: string) => void
-  onStop: () => void
-  onAnswer: (approvalId: string, decision: 'allow' | 'deny') => void
-  answering: boolean
-  onInspectTool: (run: ToolRun) => void
-  onFork: (entry: TimelineEntry) => void
-  onSwitchBranch: (name: string) => void
-  onPermissionChange: (mode: PermissionMode) => void
-  setInspectorTab: (tab: 'content' | 'diff' | 'json') => void
-  onCloseInspector: () => void
-}
-
-function ConversationBody(props: BodyProps) {
-  const view = useRunView()
-  const { degraded, reconnectAttempt, refresh } = useRunStreamState()
-  const busy = ['submitting', 'streaming', 'awaiting_approval', 'cancelling'].includes(view.phase)
-
-  return (
-    <>
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <ConversationView
-          sessionId={props.sessionId}
-          sessionName={props.sessionName}
-          workspaceName={props.workspaceName}
-          truncatedTail={props.truncatedTail}
-          view={view}
-          density={props.density}
-          loading={props.entriesLoading}
-          degraded={degraded}
-          reconnectAttempt={reconnectAttempt}
-          onInspectTool={props.onInspectTool}
-          onFork={props.onFork}
-          onRefetch={refresh}
-          branchSlot={
-            <BranchSelector
-              sessionId={props.sessionId}
-              current={props.branch}
-              disabled={busy || props.hasActiveRun}
-              onSwitch={props.onSwitchBranch}
-            />
-          }
-          approvalsSlot={
-            <ApprovalQueue
-              approvals={view.approvals}
-              // 只在本条答复的请求在飞时禁用：运行处于 awaiting_approval 时按钮必须可点。
-              busy={props.answering}
-              onAnswer={props.onAnswer}
-            />
-          }
-          composerSlot={
-            <Composer
-              busy={busy}
-              canSend={true}
-              stopping={view.phase === 'cancelling'}
-              permission={props.permission}
-              onPermissionChange={props.onPermissionChange}
-              onSend={props.onSend}
-              onStop={props.onStop}
-              sessionId={props.sessionId}
-              branch={props.branch}
-            />
-          }
-        />
-      </div>
-      {props.inspectorOpen ? (
-        <InspectorSlot>
-          <Inspector
-            open={props.inspectorOpen}
-            tab={props.inspectorTab}
-            density={props.density}
-            selection={props.selection}
-            onTabChange={props.setInspectorTab}
-            onClose={props.onCloseInspector}
-          />
-        </InspectorSlot>
-      ) : null}
-    </>
   )
 }

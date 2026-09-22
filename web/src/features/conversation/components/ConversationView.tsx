@@ -5,6 +5,7 @@ import { useTranslation } from '../../../lib/i18n'
 import type { Density } from '../../../lib/density'
 import type { TimelineEntry, ToolRun } from '../../../lib/timeline'
 import type { RunView } from '../../../events/reducer'
+import { isActivePhase } from '../lib/phase'
 import { ConversationHeader } from './ConversationHeader'
 import { ProcessingCard } from './ProcessingCard'
 import { StatusBanner } from './StatusBanner'
@@ -30,8 +31,6 @@ export interface ConversationViewProps {
   branchSlot?: ReactNode
 }
 
-const BUSY_PHASES = new Set(['submitting', 'streaming', 'awaiting_approval', 'cancelling'])
-
 /** 模块级函数：行内箭头每次渲染都换身份，会让 `EntryRow` 的 memo 失效。 */
 function copyText(text: string): void {
   void navigator.clipboard?.writeText(text)
@@ -41,7 +40,7 @@ function copyText(text: string): void {
 export function ConversationView(props: ConversationViewProps) {
   const { t } = useTranslation()
   const { view } = props
-  const busy = BUSY_PHASES.has(view.phase)
+  const busy = isActivePhase(view.phase)
   const activeTool = view.tools.find((tool) => tool.status === 'running')?.tool ?? null
 
   return (
