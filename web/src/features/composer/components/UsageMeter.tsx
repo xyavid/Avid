@@ -1,5 +1,5 @@
 import type { UsageReport } from '../../../api/types'
-import { useBranches } from '../../../api/queries'
+import { useBranches, useMeta } from '../../../api/queries'
 import { useTranslation } from '../../../lib/i18n'
 import { useRunSelector } from '../../../state/runStore'
 import { Tooltip } from '../../../ui/primitives'
@@ -25,13 +25,21 @@ export interface UsageMeterProps {
  *
  * 为什么用工具提示装明细而不是铺在行里：这行是输入区，常驻的只有三个数；完整读数
  * （输入、窗口、缓存读写、命中率、压缩后）放在悬浮说明里，不抢输入的注意力。
+ *
+ * **按能力表分支**（同 `features.deltas`）：内核没在 `/api/meta` 里声明 `usage` 时
+ * 整个指示器不画——旧内核上它只会永远挂着一个「用量 —」，那比没有更让人困惑。
+ * 三个 hook 都在分支之前调用（hooks 规则）：判定只决定**渲染什么**，不决定调用什么。
  */
 export function UsageMeter({ sessionId, branch }: UsageMeterProps) {
   const { t } = useTranslation()
+  const meta = useMeta()
   const live = useRunSelector((view) => view.usage)
   const branches = useBranches(sessionId)
   const saved = branches.data?.branches.find((item) => item.name === branch)?.usage ?? null
   const usage = pickUsage(live, saved)
+
+  // meta 还没到（首屏）也先不画：宁可晚一拍，也不要在能力未知时先占一行位置。
+  if (meta.data?.features.usage !== 1) return null
 
   if (!usage) {
     return (

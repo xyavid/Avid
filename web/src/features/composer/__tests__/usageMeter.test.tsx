@@ -12,10 +12,22 @@ import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const branches = vi.hoisted(() => ({ value: undefined as unknown }))
+const meta = vi.hoisted(() => ({ value: undefined as unknown }))
 
 vi.mock('../../../api/queries', () => ({
   useBranches: () => ({ data: branches.value }),
+  useMeta: () => ({ data: meta.value }),
 }))
+
+/**
+ * 摆好 `/api/meta` 的能力表：`1` = 正常内核，`undefined` = 旧内核（表里没有这一项），
+ * `0` = 声明了但不可用。
+ *
+ * 不要给它默认参数：`featuresUsage(undefined)` 会触发默认值，把"旧内核"静默换成"正常"。
+ */
+function featuresUsage(value: number | undefined): void {
+  meta.value = value === undefined ? { features: {} } : { features: { usage: value } }
+}
 
 import type { ReactNode } from 'react'
 
@@ -60,6 +72,7 @@ function liveUsage(usage: UsageReport): void {
 
 beforeEach(() => {
   branches.value = undefined
+  featuresUsage(1)
   useRunStore.setState((state) => ({
     view: { ...state.view, seq: 0, usage: null },
   }))
@@ -70,6 +83,19 @@ afterEach(() => {
 })
 
 describe('UsageMeter', () => {
+  it('内核没声明 features.usage 时整个指示器不画（旧内核上不留一个「用量 —」）', () => {
+    savedOn('main', report())
+    featuresUsage(undefined)
+    withLocale(<UsageMeter sessionId="s1" branch="main" />)
+    expect(screen.queryByTestId('usage-meter')).toBeNull()
+  })
+
+  it('features.usage = 0 同样不画：能力表说的是"实际可用"', () => {
+    featuresUsage(0)
+    withLocale(<UsageMeter sessionId="s1" branch="main" />)
+    expect(screen.queryByTestId('usage-meter')).toBeNull()
+  })
+
   it('没有读数时显示「用量 —」，不显示 0', () => {
     withLocale(<UsageMeter sessionId="s1" branch="main" />)
     expect(screen.getByTestId('usage-meter').textContent).toBe('用量 —')
