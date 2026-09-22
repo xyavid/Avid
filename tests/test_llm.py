@@ -72,6 +72,48 @@ def test_missing_usage_falls_back_to_zero():
     assert reply.usage.total_tokens == 0
 
 
+def test_cache_counters_are_normalized_on_both_paths():
+    """非流式与流式走**同一个**归一化：`prompt_tokens_details.cached_tokens` 都要读出来。
+
+    两条路径各自解析响应（`parse_turn` / `StreamState.to_turn`）。只给一条接线的话，
+    命中率会"整条返回时看得见、流式时看不见"——那正是 F3 要消灭的分叉。
+    """
+    body = {
+        "model": "test-model",
+        "choices": [{"message": {"role": "assistant", "content": "hi"}}],
+        "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 5,
+            "total_tokens": 105,
+            "prompt_tokens_details": {"cached_tokens": 64},
+        },
+    }
+    direct = parse_turn(body)
+    assert direct.usage.cache_read_tokens == 64
+    assert direct.usage.cache_write_tokens is None
+
+    # 流式：末帧只带 usage（choices 为空是合法的）。
+    streamed = merge_stream_chunk(StreamState(), {**body, "choices": []}).to_turn()
+    assert streamed.usage == direct.usage
+
+
+def test_deepseek_style_cache_field_is_recognized_at_the_client_seam():
+    """OpenAI 兼容端点不止一种写法（DeepSeek 用 `prompt_cache_hit_tokens`）。"""
+    turn = parse_turn(
+        {
+            "model": "deepseek-chat",
+            "choices": [{"message": {"role": "assistant", "content": "hi"}}],
+            "usage": {
+                "prompt_tokens": 200,
+                "completion_tokens": 7,
+                "total_tokens": 207,
+                "prompt_cache_hit_tokens": 180,
+            },
+        }
+    )
+    assert turn.usage.cache_read_tokens == 180
+
+
 # ---------- prompt_too_long ----------
 
 

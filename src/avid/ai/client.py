@@ -18,6 +18,8 @@ from typing import Any
 import httpx
 
 from .config import Config
+from .usage import Usage as Usage  # 再导出：`from avid.ai.client import Usage` 的老路径照旧
+from .usage import normalize_usage
 
 TIMEOUT_SECONDS = 60.0
 # 连接超时单独收紧：端点不可达时不该等满 60 秒（读超时仍给长回答留足）。
@@ -74,13 +76,6 @@ def _prompt_too_long(response: httpx.Response) -> bool:
 
 
 @dataclass(frozen=True)
-class Usage:
-    prompt_tokens: int
-    completion_tokens: int
-    total_tokens: int
-
-
-@dataclass(frozen=True)
 class Reply:
     text: str
     usage: Usage
@@ -126,12 +121,8 @@ def build_request(
 
 
 def _usage_of(data: Mapping[str, Any]) -> Usage:
-    raw = data.get("usage") or {}
-    return Usage(
-        prompt_tokens=int(raw.get("prompt_tokens", 0)),
-        completion_tokens=int(raw.get("completion_tokens", 0)),
-        total_tokens=int(raw.get("total_tokens", 0)),
-    )
+    """响应信封 → 统一口径。方言识别全在 ``ai/usage.py``（流式与非流式共用它）。"""
+    return normalize_usage(data)
 
 
 def _content_text(raw: Any) -> str:
