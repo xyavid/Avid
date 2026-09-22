@@ -26,7 +26,7 @@
 | 有「改动前后对比」机制吗？ | **有，而且本轮真跑过一次**：同 commit、同 suite，只差 `--context-chars`（§10.3）。结论是机制没被触达，差值只是抖动——这条对照因此还给出了抖动尺子（full ±10% / core ±4%） |
 | 有防退化的复杂度门禁吗？ | **有**：3 条 stress 用例（§3.1） |
 | 有体积/资源上限吗？ | **有且已冻结**：`web/budget.json` 的 `frozen_at` 已填，首屏 JS gzip 实测 184,160 B / 460,800 B（§3.2） |
-| 有测试规模的数字吗？ | 有静态计数（§3.3）与**本轮实测的收集数**（938 收集 / 933 passed / 5 deselected）；但测试项数是**实现规模**，不是能力或效果指标 |
+| 有测试规模的数字吗？ | 有静态计数（§3.3）与**本轮实测的收集数**（1015 收集 / 1010 passed / 5 deselected）；但测试项数是**实现规模**，不是能力或效果指标 |
 
 一句话概括现状：**仓库现在既有仪器也有尺子**——两套 suite 的基线、可复核的抖动幅度、以及
 「跨 suite 不可比」的版本规则；它**还回答不了**"哪个机制更有用"，因为唯一被证明能拉开差距的
@@ -98,17 +98,17 @@ stress job 跑 `pytest -q -m stress`（`.github/workflows/ci.yml:25-37`）。
 
 | 指标 | 值 | 怎么数的 |
 |---|---|---|
-| 内核测试函数 | **674** 个，分布在 **41** 个 `tests/test_*.py`（另有 3 个支撑文件，`tests/` 共 44 个 `.py`） | `grep -h '^def test_' tests/*.py \| wc -l` |
-| 内核测试收集数（**本轮实测**） | **938 收集**，其中 **933 passed / 5 deselected**（commit `de3035c`，本机 WSL2 / Python 3.12.3；5 = 3 条 stress + 2 条 eval 薄壳） | `uv run pytest -q` |
-| `parametrize` | **27** 处 | `grep -c parametrize` 逐个文件求和 |
-| 内核测试代码量 | 12,620 行（`tests/*.py`） | `wc -l tests/*.py` |
+| 内核测试函数 | **725** 个，分布在 **44** 个 `tests/test_*.py`（另有 3 个支撑文件，`tests/` 共 47 个 `.py`） | `grep -h '^def test_' tests/*.py \| wc -l` |
+| 内核测试收集数（**本轮实测**） | **1015 收集**，其中 **1010 passed / 5 deselected**（commit `7c70cc4`，本机 WSL2 / Python 3.12.3；5 = 3 条 stress + 2 条 eval 薄壳） | `uv run pytest -q` |
+| `parametrize` | **32** 处 | `grep -c parametrize` 逐个文件求和 |
+| 内核测试代码量 | 13,560 行（`tests/*.py`） | `wc -l tests/*.py` |
 | 评测仪器规模 | 16 个 Python 文件 / 1,738 行，外带 **21 条 case**（v0 12 + v1 9）与 **225 个 fixture 文件**（`benchmarks/`，**不进 wheel**） | `find benchmarks -name '*.py' \| wc -l`、`wc -l` |
-| 前端 vitest | **74** 条，10 个文件（全在 `__tests__/` 下） | `^\s*(it\|test)\(` 计数（静态，本版未重测） |
+| 前端 vitest | **92** 条，12 个文件（全在 `__tests__/` 下） | `pnpm -C web run test` 实测；静态计数同为 92 |
 | 浏览器 e2e | **37** 条 `test(`，9 个 spec | 逐文件计数（静态，本版未重测） |
 | `skip` / `xfail` / `skipif` | **0** | `grep` 零命中——没有靠跳过兜绿的用例；评测的 `eval` marker 是「默认不跑」，不是 skip |
 
 **口径警告**：674 是**函数数**；pytest 的收集数会被 `parametrize` 展开，所以上表把两者分开列，
-并给出**本轮实测的收集数**（938 收集 / 933 passed / 5 deselected）。测试项数增长在任何情况下都
+并给出**本轮实测的收集数**（1015 收集 / 1010 passed / 5 deselected）。测试项数增长在任何情况下都
 **不能**当作能力或性能指标——它只说明实现规模。
 
 ### 3.4 门禁与 CI：抓什么、抓不到什么
@@ -132,7 +132,7 @@ a11y 与视觉回归（没有用例）、性能回归（只有 stress 的复杂�
 
 | 指标 | 各文件写的值 | 出处（均为本地记录，除注明） | 本文件处置 |
 |---|---|---|---|
-| 内核测试规模 | `822 passed + 3 deselected`；`869`；`863`；`844`；`835`；`832`；`711` | `dev/review/fix-progress.md:103`；`dev/plan/roadmap.md` 各阶段条目 | **本轮已重测并只认一个口径**：938 收集 / 933 passed / 5 deselected（commit `de3035c`，本机）。历史值不再引用；以后只认「pytest 收集数 + 环境」这一种写法 |
+| 内核测试规模 | `822 passed + 3 deselected`；`869`；`863`；`844`；`835`；`832`；`711` | `dev/review/fix-progress.md:103`；`dev/plan/roadmap.md` 各阶段条目 | **本轮已重测并只认一个口径**：1015 收集 / 1010 passed / 5 deselected（commit `7c70cc4`，本机）。历史值不再引用；以后只认「pytest 收集数 + 环境」这一种写法 |
 | 内核测试耗时 | `711 tests in 8.99s` | `dev/review/architecture-review.md:7`、`dev/review/tests.md:14` | 仅历史值；本机与 CI 环境不同，不可比 |
 | 浏览器 e2e | `40 项全通过`、`38`、`36`、`35`；静态 **37** | `dev/plan/roadmap.md:192,179,169,150`；静态计数见 §3.3 | 静态与记录不一致（差额未解释）。以**重测**为准 |
 | 首屏 JS gzip | 5 个值（见 §3.2） | `dev/review/*`、`dev/plan/roadmap.md` | **本轮消歧**：实测 184,160 B，与本地记录的最后值 184,311 B 差 0.08%；阈值同轮冻结（§3.2） |
