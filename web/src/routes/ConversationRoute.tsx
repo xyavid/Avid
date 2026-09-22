@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
 
 import {
+  queryKeys,
   useAnswerApproval,
   useCancelRun,
   useCreateBranch,
@@ -42,6 +44,7 @@ export function ConversationRoute() {
   const cancelRun = useCancelRun()
   const answer = useAnswerApproval()
   const createBranch = useCreateBranch()
+  const queryClient = useQueryClient()
   const view = useRunView()
 
   const density = useUiStore((state) => state.density)
@@ -105,7 +108,12 @@ export function ConversationRoute() {
   const refresh = useCallback(() => {
     void refetchEntries()
     void refetchSession()
-  }, [refetchEntries, refetchSession])
+    // 运行结束会在会话里写一次用量快照，而用量是从分支查询读的：不失效它，
+    // 界面上会一直显示上一次运行的读数（活动域被 reset 之后就露馅了）。
+    void queryClient.invalidateQueries({
+      queryKey: queryKeys.branches(sessionId ?? ''),
+    })
+  }, [refetchEntries, refetchSession, queryClient, sessionId])
 
   const inspectTool = useCallback(
     (run: ToolRun) => {
@@ -276,6 +284,8 @@ function ConversationBody(props: BodyProps) {
               onPermissionChange={props.onPermissionChange}
               onSend={props.onSend}
               onStop={props.onStop}
+              sessionId={props.sessionId}
+              branch={props.branch}
             />
           }
         />

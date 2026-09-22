@@ -15,7 +15,7 @@
  */
 
 import type { EventEnvelope, MessagePayload, ToolCallPayload } from './types'
-import type { Entry } from '../api/types'
+import type { Entry, UsageReport } from '../api/types'
 import type {
   ApprovalRequest,
   CompactionNote,
@@ -43,6 +43,12 @@ export interface RunView {
   seq: number
   round: number
   tokens: number
+  /**
+   * 统一 usage 快照（阶段 22）：run_status 每轮刷新，run_finished 补最终值。
+   * null = 还没有读数（或切换会话/分支后已被 reset 清空）——此时界面回落到
+   * 分支查询里落盘的那一份，而不是显示 0。
+   */
+  usage: UsageReport | null
   activity: string
   entries: TimelineEntry[]
   tools: ToolRun[]
@@ -67,6 +73,7 @@ export function emptyView(sessionId: string | null = null): RunView {
     seq: 0,
     round: 0,
     tokens: 0,
+    usage: null,
     activity: '',
     entries: [],
     tools: [],
@@ -308,6 +315,8 @@ export function applyEvent(view: RunView, event: EventEnvelope): RunView {
         ...next,
         round: Number(event.data.round ?? next.round),
         tokens: Number(event.data.tokens ?? next.tokens),
+        // 快照缺失时保留上一份：状态事件不该把已知的读数抹成空。
+        usage: (event.data.usage as UsageReport | undefined) ?? next.usage,
         activity: String(event.data.activity ?? next.activity),
       }
     case 'run_finished':
@@ -316,6 +325,7 @@ export function applyEvent(view: RunView, event: EventEnvelope): RunView {
         phase: 'done',
         finishedAt: event.ts,
         tokens: Number(event.data.tokens ?? next.tokens),
+        usage: (event.data.usage as UsageReport | undefined) ?? next.usage,
       }
     case 'run_failed':
       return {

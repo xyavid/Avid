@@ -223,3 +223,43 @@ describe('工具调用收敛', () => {
     expect(view.tools[0]?.truncated).toBe(true)
   })
 })
+
+describe('usage 快照收敛（阶段 22）', () => {
+  const snapshot = {
+    context: { tokens: 72_000, window: 200_000, utilization: 0.36 },
+    cache: { read_tokens: 56_000, write_tokens: null, hit_ratio: 0.778 },
+    compaction: { count: 2, last_compaction_tokens: 42_000, last_step: 'micro_compact' },
+  }
+
+  it('run_status 每轮刷新快照，run_finished 补最终值', () => {
+    const first = applyEvent(emptyView(SESSION), ev('run_status', null, { usage: snapshot }))
+    expect(first.usage).toEqual(snapshot)
+
+    const later = applyEvent(
+      first,
+      ev('run_status', null, {
+        usage: { ...snapshot, context: { tokens: 90_000, window: 200_000, utilization: 0.45 } },
+      }),
+    )
+    expect(later.usage?.context.tokens).toBe(90_000)
+
+    const done = applyEvent(later, ev('run_finished', 4, { usage: snapshot }))
+    expect(done.usage).toEqual(snapshot)
+  })
+
+  it('状态事件不带 usage 时保留上一份，不抹成空', () => {
+    const withUsage = applyEvent(emptyView(SESSION), ev('run_status', null, { usage: snapshot }))
+    const withoutUsage = applyEvent(withUsage, ev('run_status', null, { round: 2, tokens: 5 }))
+    expect(withoutUsage.usage).toEqual(snapshot)
+  })
+
+  it('全空视图的 usage 是 null：界面据此回落查询域（落盘值）或显示「—」', () => {
+    expect(emptyView(SESSION).usage).toBeNull()
+  })
+
+  it('用条目重建视图不会清掉实时快照（resync 期间读数要连续）', () => {
+    const withUsage = applyEvent(emptyView(SESSION), ev('run_status', null, { usage: snapshot }))
+    const rebuilt = viewFromEntries(withUsage, [])
+    expect(rebuilt.usage).toEqual(snapshot)
+  })
+})

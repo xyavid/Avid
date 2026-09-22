@@ -5,6 +5,7 @@ import { useTranslation } from '../../../lib/i18n'
 import { useUiStore } from '../../../state/uiStore'
 import type { PermissionMode } from '../../../api/types'
 import { PermissionSelector } from './PermissionSelector'
+import { UsageMeter } from './UsageMeter'
 
 export interface ComposerProps {
   busy: boolean
@@ -15,6 +16,9 @@ export interface ComposerProps {
   onPermissionChange: (mode: PermissionMode) => void
   onSend: (prompt: string) => void
   onStop: () => void
+  /** 会话 id 与当前分支：用量指示器按它们取"该分支上一次运行"的落盘读数。 */
+  sessionId: string | null
+  branch: string
 }
 
 /**
@@ -23,6 +27,8 @@ export interface ComposerProps {
  *
  * 权限模式选择器挂在这里（提交动作的同域）：它是**本次提交**的一个参数，不是全局设置。
  * 运行中禁用——权限在 run 开始时定下，中途换档不会作用到正在跑的这一轮。
+ * 用量指示器（阶段 22）挂在同一行的空位右端、紧邻发送按钮左侧：它说的也是"这次
+ * 提交/这次运行"的上下文账，和权限模式是同一层的运行期事实。
  */
 export function Composer({
   busy,
@@ -32,6 +38,8 @@ export function Composer({
   onPermissionChange,
   onSend,
   onStop,
+  sessionId,
+  branch,
 }: ComposerProps) {
   const { t } = useTranslation()
   const draft = useUiStore((state) => state.draft)
@@ -77,6 +85,11 @@ export function Composer({
               onChange={onPermissionChange}
               disabled={busy || !canSend}
             />
+          </div>
+          {/* 中间这段吃掉剩余宽度并把指示器顶到右端：它因此紧邻发送/停止按钮左侧，
+              窄屏换行时也不会压住权限选择器。 */}
+          <div className="flex min-w-0 flex-1 items-end justify-end">
+            <UsageMeter sessionId={sessionId} branch={branch} />
           </div>
           <div className="flex items-center justify-end gap-2">
             {busy ? (

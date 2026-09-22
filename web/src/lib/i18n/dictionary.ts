@@ -112,6 +112,23 @@ export const DICTIONARY: Record<Locale, Entry> = {
     'chat.degraded': '实时通道不可用，正在轮询',
     'chat.reconnect': '连接中断，正在重连（第 {attempt} 次）',
     'chat.draft.restored': '已恢复未发送的草稿',
+    // 用量指示器（阶段 22）：常驻一行，明细在悬浮说明里。所有数字由 `formatTokens`
+    // /`formatPercent` 格式化后传进来；`—` 表示"没有这个数"，不是 0。
+    'usage.meter.empty': '用量 —',
+    'usage.meter.contextTokens': '上下文 {tokens}',
+    'usage.meter.contextOfWindow': '上下文 {tokens}/{window}',
+    'usage.meter.contextOfWindowPercent': '上下文 {tokens}/{window}（{percent}）',
+    'usage.meter.cacheHit': '缓存 {percent}',
+    'usage.meter.cacheUnknown': '缓存 —',
+    'usage.meter.compaction': '压缩 {count} 次',
+    'usage.detail.input': '输入 {tokens}',
+    'usage.detail.window': '窗口 {tokens}',
+    'usage.detail.read': '缓存读 {tokens}',
+    'usage.detail.write': '缓存写 {tokens}',
+    'usage.detail.hit': '命中率 {percent}',
+    'usage.detail.compactions': '压缩 {count} 次',
+    'usage.detail.lastCompaction': '压缩后 {tokens}',
+    'usage.detail.lastStep': '最近一步 {step}',
 
     // ---------------- tools ----------------
     'tools.call': 'CALL',
