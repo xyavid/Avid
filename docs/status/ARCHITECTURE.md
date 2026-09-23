@@ -226,7 +226,7 @@ durable）、I13 权威终止以注册表 + 已提交条目为准、I14 列表�
 | 模型 | 配置错误 | `run_failed{code:"config_error"}` |
 | 会话 | `SessionError` | `run_failed{code:"session_error"}` |
 | 程序 | 任何其它异常 | `run_failed{code:"internal"}`，绝不静默死线程 |
-| 未收敛 | 轮数耗尽 | `RoundLimitExceeded` → `run_failed{code:"round_limit"}` |
+| 未收敛 | 显式配了轮数闸门（`AVID_MAX_ROUNDS`）且耗尽 | `RoundLimitExceeded` → `run_failed{code:"round_limit"}` |
 | 权限 | 四层裁决拒绝 | 回文本按类分档（硬拒绝 / 危险 / 越界 / 用户拒绝）给不同下一步 |
 | 权限 | 审批超时/取消/结束/重启 | 一律 `deny`（失败关闭） |
 | 压缩 | 落盘失败 | 记日志、跳过本次压缩，不抛；工具输出截断退回「只留头部」 |

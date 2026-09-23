@@ -348,7 +348,7 @@ Avid/
 | `context_compacted` | `context.announce()`（`context.py:48-56`）已有 `CompactReport` 与计数 | 让 observer 收一份 report |
 | `todo_reminder` / `stop_nudge` | `loop.py:131-136` 与 `:189-194` 的注入点（文本分别是 `[提醒]` 前缀与 `nudge`） | 循环侧观察点（避免靠解析文本前缀区分） |
 | `run_finished` | `agent_loop` 正常返回（`loop.py:199`） | svc |
-| `run_failed` | `LLMError` / `RoundLimitExceeded`（`loop.py:43`、`client.py:20`） | svc |
+| `run_failed` | `LLMError` / `RoundLimitExceeded`（只在显式配了轮数闸门时出现） | svc |
 | `run_cancelled` | 新增的取消路径（§7.4） | 内核 |
 | `resync` | 游标落在缓冲之外 | `svc/runs.py` |
 
@@ -849,7 +849,7 @@ v1 只出一份 `zh-CN`，但**按双语字典的形状写**（顶层就是 `{'z
 | 临时失败（模型 5xx、网络抖动） | `LLMError` 抛出 | svc → `run_failed{code:"llm_error"}` | **不自动重试**（当前内核行为，`client.py:156-161`）；用户可重新提交 | 已落库的消息保留；重新提交时从会话续接 |
 | 永久失败（模型 401/403） | `LLMError` | 同上 | 否 | UI 提示检查配置（`config.py` 的报错文本已经包含变量名与修复命令） |
 | 上下文超限 | `PromptTooLongError`（`client.py:24`） | 循环内部处理 | 兜底压缩后**重试一次**（`loop.py:150-162`） | 压缩事件可见（§7.3） |
-| 轮数耗尽 | `RoundLimitExceeded`（`loop.py:43`） | svc → `run_failed{code:"round_limit"}` | 否 | 会话里有完整中间过程，可人工续接 |
+| 轮数耗尽（**仅当显式配了 `AVID_MAX_ROUNDS`**） | `RoundLimitExceeded` | svc → `run_failed{code:"round_limit"}` | 否 | 会话里有完整中间过程，可人工续接 |
 | 业务拒绝（工具返回「错误：…」） | `tool_call_finished{status:"failed"}` | 模型与用户都能看到 | 由模型决定 | transcript 合法，循环继续 |
 | 权限拒绝（硬拒绝） | `tool_call_denied{kind:"hard"}` | 同上 | 否；文案已说明「不要重试」 | 同上 |
 | 权限拒绝（用户拒绝/超时） | `approval_resolved{decision:"deny"}` | 同上 | 模型被明确告知「不要重复提交」（`hooks.py:138-141`） | 同上 |
@@ -948,7 +948,7 @@ v1 只出一份 `zh-CN`，但**按双语字典的形状写**（顶层就是 `{'z
 | A2 | 只有 `web/` 认识 HTTP 框架 | `grep -rln "fastapi" src/avid --include=*.py` → 全部落在 `src/avid/web/` | 无匹配 |
 | A3 | 循环未被改造成调度器 | `grep -c "trigger_hooks" src/avid/runtime/loop.py` → 2；`grep -rn "while \|for round" src/avid/svc src/avid/web` → 无匹配；`grep -c "on_message\|on_event" src/avid/runtime/loop.py` 只增观察点 | 2 / — |
 | A4 | `svc` 不 import `web` | `grep -rn "avid.web\|from \.\.web" src/avid/svc` → 无匹配 | — |
-| A5 | 第二个接线点不复制内核 | `svc/runs.py` 调 `agent_loop`，且不出现 `MAX_ROUNDS`/`RoundLimitExceeded` 之外的重试逻辑：`grep -rn "RoundLimitExceeded\|LLMError" src/avid/svc` → 仅捕获与映射 | — |
+| A5 | 第二个接线点不复制内核 | `svc/runs.py` 调 `agent_loop`，且不出现 `RoundLimitExceeded`/`LLMError` 之外的重试逻辑：`grep -rn "RoundLimitExceeded\|LLMError" src/avid/svc` → 仅捕获与映射 | — |
 | A6 | 事件名单点 | `grep -rn "\"tool_call_started\"\|\"run_finished\"" src/avid --include=*.py \| grep -v events.py` → 只出现在测试与 `web` 的映射表 | — |
 | A7 | 两侧事件清单一致 | `uv run pytest tests/test_event_contract.py -q` → 1 passed；断言 `EVENT_TYPES` 集合 == 从 `web/src/events/types.ts` 解析出的成员集合 | — |
 | A8 | 网络出口唯一、feature 不互相 import | `pnpm -C web run check:layers` → exit 0；规则：`src/**`（除 `src/api/**`）出现 `fetch(`/`EventSource(`/`new WebSocket(` 即失败；`features/a` import `features/b` 即失败 | — |

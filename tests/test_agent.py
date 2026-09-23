@@ -206,6 +206,43 @@ def test_round_limit_raises_instead_of_returning_partial_text():
         )
 
 
+def test_no_round_limit_by_default_so_a_plain_task_finishes():
+    """缺省无上限：12 轮工具调用仍是普通任务，不该被判成「未收敛」。
+
+    这是一条回归用例：旧代码把上限写死成 8，实测「逐轮读 9 个文件」这种小任务直接
+    抛 RoundLimitExceeded。上限现在只在有人显式设闸门时存在。
+    """
+    chat = FakeChat(
+        *[make_turn("读一个", [tool_call("read_file")]) for _ in range(12)],
+        make_turn("都读完了"),
+    )
+    messages = [{"role": "user", "content": "读 12 个文件"}]
+
+    assert (
+        agent_loop(
+            messages,
+            config=CONFIG,
+            chat=chat,
+            registry={"read_file": lambda a: "内容"},
+        )
+        == "都读完了"
+    )
+
+
+def test_config_max_rounds_still_acts_as_a_gate_when_set():
+    """闸门没被删掉，只是不再默认打开：显式配置的预算照旧生效。"""
+    capped = Config(api_key="k", base_url="https://api.test/v1", model="m", max_rounds=3)
+    chat = FakeChat(*[make_turn("还在调工具", [tool_call("read_file")]) for _ in range(3)])
+    messages = [{"role": "user", "content": "读"}]
+
+    with pytest.raises(RoundLimitExceeded) as exc:
+        agent_loop(
+            messages, config=capped, chat=chat, registry={"read_file": lambda a: "内容"}
+        )
+
+    assert "3" in str(exc.value)
+
+
 # ---------- ② PreToolUse ----------
 
 

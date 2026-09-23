@@ -33,8 +33,11 @@ SUB_SYSTEM = (
     "不要反问、不要索要更多信息，用你能用的工具自己解决。"
 )
 
-SUBAGENT_MAX_TURNS = 30
-
+# 轮数上限不再由这里写死：子 agent 与主循环共用**同一道**可选闸门
+# （`config.max_rounds` / `AVID_MAX_ROUNDS`，缺省无上限）。以前写死 30，等于给每个
+# 子任务塞了一个主任务没有的预算——同一件事在主 agent 里能做完，派给子 agent 反而
+# 因为"回话超过 30 轮"被判失败。它真正需要的边界是墙钟预算（下面那个）。
+#
 # 整批共用一个墙钟预算，不是每个子任务各 300 秒——否则 N 个任务最坏要等 N×300 秒。
 SUBAGENT_TIMEOUT_SECONDS = 300.0
 
@@ -73,16 +76,17 @@ def run_subagent(
     from . import SUB_HANDLERS, SUB_TOOLS
 
     messages = [{"role": "user", "content": prompt}]
+    cfg = config or load_config()
     try:
         text = agent_loop(
             messages,
             system=SUB_SYSTEM,
             tools=SUB_TOOLS,
             registry=SUB_HANDLERS,
-            config=config or load_config(),
+            config=cfg,
             chat=chat,
             auto_approve=auto_approve,
-            max_rounds=SUBAGENT_MAX_TURNS,
+            # 轮数上限**不在这里设**：交给 cfg.max_rounds 的统一策略（缺省无上限）。
             ask=ask,
             permission_mode=permission_mode,
             ledger=ledger,
@@ -90,9 +94,12 @@ def run_subagent(
             hooks=hooks,
         )
     except RoundLimitExceeded:
-        return (
-            f"Subagent stopped after {SUBAGENT_MAX_TURNS} turns without a final answer."
-        )
+        # 只有调用方显式设了闸门才会走到这里（缺省无上限 ⇒ 正常收敛）。文案仍然带上
+        # 实际数字，便于对照是哪一个预算把子任务截断了。
+        limit = cfg.max_rounds
+        if limit is None:
+            return "Subagent stopped at its configured turn limit without a final answer."
+        return f"Subagent stopped after {limit} turns without a final answer."
 
     return _no_summary(text)
 

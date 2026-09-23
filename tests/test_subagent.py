@@ -9,7 +9,6 @@ from avid.tools import SUB_HANDLERS, SUB_TOOLS, TOOLS
 from avid.tools.subagent import (
     MAX_PARALLEL,
     SUB_SYSTEM,
-    SUBAGENT_MAX_TURNS,
     run_subagent,
     subagent,
 )
@@ -45,8 +44,11 @@ def test_sub_tools_exclude_subagent():
     assert names == set(SUB_HANDLERS)
 
 
-def test_max_turns_is_30():
-    assert SUBAGENT_MAX_TURNS == 30
+def test_subagent_has_no_turn_cap_of_its_own():
+    """子 agent 不再自带轮数上限——上限只从 config/AVID_MAX_ROUNDS 来。"""
+    import avid.tools.subagent as sub
+
+    assert not hasattr(sub, "SUBAGENT_MAX_TURNS")
 
 
 def test_sub_system_asks_for_a_self_contained_summary():
@@ -233,10 +235,30 @@ def test_run_subagent_initialises_messages_with_the_prompt(monkeypatch):
     assert seen["system"] == SUB_SYSTEM
     assert seen["tools"] is SUB_TOOLS
     assert seen["registry"] is SUB_HANDLERS
-    assert seen["max_rounds"] == SUBAGENT_MAX_TURNS
+    # 轮数上限不再由 subagent 写死：不传 max_rounds，让循环走 config 的统一策略
+    # （缺省无上限）。写死一个值会让子任务带上主任务没有的预算。
+    assert "max_rounds" not in seen
 
 
-def test_run_subagent_maps_turn_limit_to_the_required_message(monkeypatch):
+def test_run_subagent_maps_a_configured_turn_limit_to_its_message(monkeypatch):
+    from avid.runtime import loop as agent_module
+
+    def fake_loop(*args, **kwargs):
+        raise agent_module.RoundLimitExceeded("超了")
+
+    monkeypatch.setattr(agent_module, "agent_loop", fake_loop)
+
+    capped = Config(
+        api_key="k", base_url="https://api.test/v1", model="m", max_rounds=30
+    )
+    assert (
+        run_subagent("随便", config=capped)
+        == "Subagent stopped after 30 turns without a final answer."
+    )
+
+
+def test_run_subagent_turn_limit_message_without_a_cap(monkeypatch):
+    """缺省无上限：异常若仍出现（例如别的调用方设了闸门），文案不许编造一个数字。"""
     from avid.runtime import loop as agent_module
 
     def fake_loop(*args, **kwargs):
@@ -246,7 +268,7 @@ def test_run_subagent_maps_turn_limit_to_the_required_message(monkeypatch):
 
     assert (
         run_subagent("随便", config=CONFIG)
-        == "Subagent stopped after 30 turns without a final answer."
+        == "Subagent stopped at its configured turn limit without a final answer."
     )
 
 
