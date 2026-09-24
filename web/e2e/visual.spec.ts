@@ -52,7 +52,7 @@ async function json<T>(response: { ok(): boolean; json(): Promise<unknown>; text
   return (await response.json()) as T
 }
 
-/** 起一次运行并等它挂起在审批上（脚本模型第一轮先要一次 bash）。 */
+/** 起一次运行并等它挂起在审批上（脚本模型的第一次调用要落在 REVIEW 上，见 `e2e/README.md`）。 */
 async function startRun(request: APIRequestContext, sessionId: string, prompt: string): Promise<{
   runId: string
   approvalId: string
@@ -60,7 +60,7 @@ async function startRun(request: APIRequestContext, sessionId: string, prompt: s
 }> {
   const run = await json<{ run_id: string }>(
     await request.post(`${BASE}/api/sessions/${sessionId}/runs`, {
-      data: { prompt, branch: 'main', auto_approve: false, permission: 'strict' },
+      data: { prompt, branch: 'main', auto_approve: false, permission: 'manual' },
     }),
   )
   for (let attempt = 0; attempt < 100; attempt += 1) {

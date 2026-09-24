@@ -66,25 +66,26 @@ test('选工作区建会话、选权限模式提交，两个值都进请求体',
     // ---- 2. 权限模式随 POST /runs 发出 ----
     const permission = page.getByLabel(PERMISSION_LABEL)
     await expect(permission).toBeVisible()
-    // 缺省不该是 system：工作区没登记默认权限时两侧都回落到 strict。
-    await expect(permission).toHaveValue('strict')
+    // 缺省不该是 full：工作区没登记默认权限时两侧都回落到 manual（阶段 26 的三档预设）。
+    await expect(permission).toHaveValue('manual')
 
     // 说明改成了**组件外面的气泡**：未悬停时不挂载（不占方框里的任何空间），悬停才浮现在
     // 控件上方，内容跟着当前档走。
     const hint = page.locator('#permission-mode-hint')
     await expect(page.getByText('权限模式', { exact: true })).toHaveCount(0) // 上方标签已删
     await expect(hint, '未悬停时气泡不存在').toHaveCount(0)
-    // 方框按控件自身收尺寸：外层容器与控件同宽同高，说明不再为它预留一行。
+    // 方框按控件自身收尺寸：外层容器与控件**同高**，说明不再为它预留一行。
+    // 只比高度不比宽度：阶段 26 之后这一格里还并排放着沙箱标记（`SandboxStatus`），
+    // 宽度相等不再是"没有预留说明行"的判据；高度相等仍然是。
     const controlBox = await permission.boundingBox()
     const wrapperBox = await permission.locator('..').boundingBox()
     if (!controlBox || !wrapperBox) throw new Error('权限控件没有几何信息')
     expect(Math.abs(wrapperBox.height - controlBox.height), '方框高度 = 控件高度（无预留说明行）')
       .toBeLessThanOrEqual(1)
-    expect(Math.abs(wrapperBox.width - controlBox.width), '方框宽度 = 控件宽度').toBeLessThanOrEqual(1)
 
     await permission.hover()
     await expect(hint, '悬停后气泡出现').toBeVisible({ timeout: 3_000 })
-    await expect(hint).toHaveText('严格：每个受管动作都要问')
+    await expect(hint).toHaveText('手动：沙箱内免问；危险命令与越界一律问你')
 
     // 气泡在组件**外面**、且在**上方**（不是控件方框内部的那行字）。
     const tipBox = await hint.boundingBox()
@@ -95,11 +96,11 @@ test('选工作区建会话、选权限模式提交，两个值都进请求体',
     const runRequest = page.waitForRequest(
       (req) => req.method() === 'POST' && req.url().includes(`/api/sessions/${sessionId}/runs`),
     )
-    await permission.selectOption('system')
+    await permission.selectOption('auto')
     // 切档后气泡里的那句话跟着变；鼠标移开气泡又消失（不占视觉空间，但也不丢给读屏）。
     // `steps` 是必须的：单步瞬移只派发一个 pointermove，而 Radix 判"离开宽容区"的监听是
     // 在 pointerleave 之后才挂上的（详见 interaction.spec.ts 里同一处的注释）。
-    await expect(hint).toHaveText('系统级：默认免问，仅危险命令问')
+    await expect(hint).toHaveText('自动：沙箱内免问；越界与危险由分类器裁决，判不准即拒（不问你）')
     await page.mouse.move(0, 0, { steps: 12 })
     await expect(hint, '移开后气泡卸载').toHaveCount(0)
 
@@ -110,11 +111,11 @@ test('选工作区建会话、选权限模式提交，两个值都进请求体',
 
     // 三档的值就是服务端的 Literal，非法值会被 422 挡掉。
     expect(started.postDataJSON()).toMatchObject({
-      permission: 'system',
+      permission: 'auto',
       prompt: `权限模式用例-${stamp}`,
     })
 
-    // 系统级下这条工作区内的 bash 不再问：不再出现审批条，消息直接落到时间线。
+    // auto 下危险命令交给分类器、不问你：不再出现审批条，消息直接落到时间线。
     await expect(page.getByRole('log').getByText(`权限模式用例-${stamp}`)).toBeVisible({
       timeout: 15_000,
     })

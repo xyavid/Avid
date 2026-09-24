@@ -36,7 +36,17 @@ AVID_E2E=1 pnpm test:e2e
 3. **服务 `web/dist`** 而不是 `src/avid/web/static`——后者是 `copy:dist` 的产物，容易停在
    上一版（改了前端却测出「选择器不存在」）；
 4. `AVID_HOME` 与工作区根都指到临时目录——否则跑一次 e2e 就把仓库目录登记进用户真实的
-   `~/.avid/workspaces.json`，并把测试垃圾会话写进真实会话列表。
+   `~/.avid/workspaces.json`，并把测试垃圾会话写进真实会话列表；
+5. **它的第一次工具调用要落在 REVIEW 上**（阶段 26 之后新增的性质）。三档预设里 `manual`
+   与 `auto` 都是"沙箱内免问"，所以 `bash echo hi` 这类工作区内命令**不会**弹审批——
+   而 `conversation.spec.ts`（提交 → 审批 → 完成）、`branches.spec.ts`、`streaming.spec.ts`
+   与视觉基线里的"审批待决"都要等一次真实审批。用一条**危险命令**即可（提权、递归删除、
+   `curl | sh` 等，三种模式一律问一次），例如第一条工具调用发
+   `bash {"command": "sudo true"}`——工具结果是桩，命令不会真的执行。本地那份服务里，
+   这一条就是 `chat()` 第一轮返回的 tool_call。
+
+   为什么写进前置条件而不是把用例改成"审批可来可不来"：审批队列是**被守的对象**，
+   让它可来可不来等于把这条路径的回归悄悄关掉。
 
 ```bash
 pnpm -C web build                                  # 必须；缺 index.html 时你那个服务应直接报错退出
