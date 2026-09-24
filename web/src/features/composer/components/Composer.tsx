@@ -79,7 +79,9 @@ export function Composer({
           <p className="text-xs text-ink-muted">{t('chat.draft.restored')}</p>
         ) : null}
         <div className="flex flex-wrap items-end justify-between gap-2">
-          <div className="w-52 min-w-0">
+          {/* 方框按控件自身内容收宽（`w-fit`），不再按说明行占位：说明改成了浮在上方的
+              气泡，方框只需要放得下当前档的名字。固定 `w-52` 是给原位说明行留的宽度。 */}
+          <div className="w-fit min-w-0">
             <PermissionSelector
               value={permission}
               onChange={onPermissionChange}

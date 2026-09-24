@@ -1,9 +1,9 @@
-import { Select } from '../../../ui/primitives'
+import { Select, Tooltip } from '../../../ui/primitives'
 import { useTranslation } from '../../../lib/i18n'
 import { isPermissionMode, PERMISSION_MODES } from '../lib/permission'
 import type { PermissionMode } from '../../../api/types'
 
-/** 说明行的 id：控件用 `aria-describedby` 连上它（也顺便给 e2e 一个稳定锚点）。 */
+/** 气泡的 id：Radix 会把它同时挂到气泡与触发元素的 `aria-describedby` 上（也是 e2e 的稳定锚点）。 */
 const HINT_ID = 'permission-mode-hint'
 
 export interface PermissionSelectorProps {
@@ -14,19 +14,20 @@ export interface PermissionSelectorProps {
 }
 
 /**
- * 权限模式选择器：三档 + 一行"悬停/聚焦才显形"的说明。
+ * 权限模式选择器：三档 + 悬停/聚焦时浮现在控件**外面**的说明气泡。
  *
  * 值由 L4 route 用 `useState` 持有（照 `branch` 的形态）：它只活在这一个会话视图里，
  * **不写 uiStore**——「上次选了 system，下次打开浏览器仍自动全放行」是安全默认值问题，
  * 不是偏好（`state/uiStore.ts` 开头那条：服务端状态不在本地留副本）。
  *
- * 呈现：没有上方标签（控件里就是当前档的名字），说明仍在控件**下方原位**，只是平时
- * `opacity-0`，悬停或聚焦（含键盘 Tab）时显形。
+ * 呈现（阶段 24 改动）：说明从"控件方框**内部**原位的占位行"挪到了 `Tooltip` 气泡，
+ * 方向朝上（控件在输入条最下一行，往上弹不会被底部裁掉）。
  *
- * 为什么不用 Tooltip 气泡：试过，它要精准停在控件上、还有 300ms 延迟，鼠标移到控件
- * 下方（说明原来的位置）什么都没有——"看不到效果"。规则放在 CSS 里（`group-hover` /
- * `group-focus-within`）没有延迟也没有 JS；占位一直留着，显形时不会把输入条撑高一格。
- * 说明文本始终在 DOM 里，读屏器因此也读得到（不是视觉上藏起来就丢掉信息）。
+ * 为什么改：原位那版要一直留着一行高度给说明占位（不占位就会在显形时把输入条撑高一格），
+ * 于是"悬停才出现"的文字反而常驻吃掉了纵向空间，而它描述的东西本来就不属于控件方框；
+ * 气泡是浮层，不进布局，未悬停时**内容根本不挂载**（不是 opacity 藏起来），
+ * 所以既没有占位也没有额外的方框高度。可访问性不减：Radix 会在打开时把
+ * `aria-describedby` 连到气泡上，键盘 Tab 聚焦同样读得到。
  *
  * 可访问名仍由 `aria-label` 提供（`getByLabel('权限模式')` 照样定位得到）。
  */
@@ -38,11 +39,9 @@ export function PermissionSelector({
   const { t } = useTranslation()
 
   return (
-    <div className="group">
+    <Tooltip id={HINT_ID} side="top" label={t(`permission.hint.${value}`)}>
       <Select
         aria-label={t('permission.label')}
-        // 说明行始终在 DOM 里，所以可以真的把它连到控件上：键盘/读屏聚焦时也读得到。
-        aria-describedby={HINT_ID}
         value={value}
         disabled={disabled}
         onChange={(event) => {
@@ -55,12 +54,6 @@ export function PermissionSelector({
           </option>
         ))}
       </Select>
-      <p
-        id={HINT_ID}
-        className="mt-1 text-xs text-ink-muted opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
-      >
-        {t(`permission.hint.${value}`)}
-      </p>
-    </div>
+    </Tooltip>
   )
 }
