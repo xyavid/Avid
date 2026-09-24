@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { createSession } from './helpers'
+import { createSession, waitForTimeline } from './helpers'
 import type { APIRequestContext, Page } from '@playwright/test'
 
 /**
@@ -59,9 +59,7 @@ async function openSession(page: Page, sessionId: string): Promise<void> {
   await page.goto(`${BASE}/sessions/${sessionId}`)
   await expect(page.getByLabel(COMPOSER_LABEL)).toBeVisible()
   // 等条目真的渲染出来：否则测到的是空会话，输入条可见没有意义。
-  await expect
-    .poll(async () => (await page.getByRole('log').innerText()).length, { timeout: 10_000 })
-    .toBeGreaterThan(50)
+  await waitForTimeline(page)
 }
 
 async function longSession(request: APIRequestContext): Promise<string> {

@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 
-import { createSession, workspaceFolder } from './helpers'
+import { createSession, overlaps, workspaceFolder } from './helpers'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 
@@ -69,23 +69,39 @@ test('选工作区建会话、选权限模式提交，两个值都进请求体',
     // 缺省不该是 system：工作区没登记默认权限时两侧都回落到 strict。
     await expect(permission).toHaveValue('strict')
 
-    // 说明行在控件下方原位、平时透明；悬停或聚焦才显形，内容跟着当前档走。
+    // 说明改成了**组件外面的气泡**：未悬停时不挂载（不占方框里的任何空间），悬停才浮现在
+    // 控件上方，内容跟着当前档走。
     const hint = page.locator('#permission-mode-hint')
-    await expect(hint).toHaveText('严格：每个受管动作都要问')
-    await expect(hint).toHaveCSS('opacity', '0')
     await expect(page.getByText('权限模式', { exact: true })).toHaveCount(0) // 上方标签已删
+    await expect(hint, '未悬停时气泡不存在').toHaveCount(0)
+    // 方框按控件自身收尺寸：外层容器与控件同宽同高，说明不再为它预留一行。
+    const controlBox = await permission.boundingBox()
+    const wrapperBox = await permission.locator('..').boundingBox()
+    if (!controlBox || !wrapperBox) throw new Error('权限控件没有几何信息')
+    expect(Math.abs(wrapperBox.height - controlBox.height), '方框高度 = 控件高度（无预留说明行）')
+      .toBeLessThanOrEqual(1)
+    expect(Math.abs(wrapperBox.width - controlBox.width), '方框宽度 = 控件宽度').toBeLessThanOrEqual(1)
+
     await permission.hover()
-    await expect(hint).toHaveCSS('opacity', '1')
+    await expect(hint, '悬停后气泡出现').toBeVisible({ timeout: 3_000 })
+    await expect(hint).toHaveText('严格：每个受管动作都要问')
+
+    // 气泡在组件**外面**、且在**上方**（不是控件方框内部的那行字）。
+    const tipBox = await hint.boundingBox()
+    if (!tipBox) throw new Error('气泡没有几何信息')
+    expect(overlaps(tipBox, controlBox), '气泡不与控件方框重叠（浮在外部）').toBe(false)
+    expect(tipBox.y + tipBox.height, '气泡在控件上方').toBeLessThanOrEqual(controlBox.y + 1)
 
     const runRequest = page.waitForRequest(
       (req) => req.method() === 'POST' && req.url().includes(`/api/sessions/${sessionId}/runs`),
     )
     await permission.selectOption('system')
-    // 切档后同一行跟着变；鼠标移开又藏起来（不占视觉空间，但也不丢给读屏）。
+    // 切档后气泡里的那句话跟着变；鼠标移开气泡又消失（不占视觉空间，但也不丢给读屏）。
+    // `steps` 是必须的：单步瞬移只派发一个 pointermove，而 Radix 判"离开宽容区"的监听是
+    // 在 pointerleave 之后才挂上的（详见 interaction.spec.ts 里同一处的注释）。
     await expect(hint).toHaveText('系统级：默认免问，仅危险命令问')
-    await expect(hint).toHaveCSS('opacity', '1')
-    await page.mouse.move(0, 0)
-    await expect(hint).toHaveCSS('opacity', '0')
+    await page.mouse.move(0, 0, { steps: 12 })
+    await expect(hint, '移开后气泡卸载').toHaveCount(0)
 
     const composer = page.getByLabel(COMPOSER_LABEL)
     await composer.fill(`权限模式用例-${stamp}`)

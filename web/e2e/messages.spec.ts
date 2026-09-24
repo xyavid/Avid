@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 import type { Locator, Page } from '@playwright/test'
 
-import { lifts, rgba, token } from './helpers'
+import { lifts, rgba, token, waitForTimeline } from './helpers'
 
 /**
  * 消息卡片回归：模型回复与用户消息是**同一族玻璃卡**（同高光边 + 同圆角 + 同投影），
@@ -49,9 +49,7 @@ async function openSession(page: Page): Promise<void> {
   expect(target, '需要一个含工具调用的会话').toBeTruthy()
   await page.goto(`${BASE}/sessions/${target?.id}`)
   await expect(page.getByLabel('输入指令，Enter 发送，Shift+Enter 换行')).toBeVisible()
-  await expect
-    .poll(async () => (await page.getByRole('log').innerText()).length, { timeout: 10_000 })
-    .toBeGreaterThan(50)
+  await waitForTimeline(page)
 }
 
 /**
@@ -75,6 +73,17 @@ function assistantCards(page: Page): Locator {
 
 function assistantChips(page: Page): Locator {
   return cardWithRole(page, 'Avid', 'surface-chip')
+}
+
+/**
+ * 角色标记：卡片**头部那一行**里的图标（`Role` 渲染的 `<p>`）。
+ *
+ * 必须限定在头部：动作行的图标（复制 / 从此处分支）同样是 `svg`，只是挂在 `button` 里。
+ * 从"动作行收成图标按钮"那次改动起，一张卡片里不止一枚 svg，裸 `locator('svg')`
+ * 会把它们一起数进来（本文件那几条断言就是这么红起来的）。
+ */
+function roleMark(card: Locator): Locator {
+  return card.locator('p > svg')
 }
 
 /** 窗口化默认只渲染尾部一组：要看全量条目先展开。 */
@@ -123,7 +132,7 @@ test('模型卡片带 Bot 图标，且它是装饰性的', async ({ page }) => {
   const model = assistantCards(page).first()
   await expect(model).toBeVisible()
 
-  const mark = model.locator('svg')
+  const mark = roleMark(model)
   await expect(mark).toHaveCount(1)
   expect(await mark.getAttribute('aria-hidden'), '装饰不进无障碍树').toBe('true')
 
@@ -145,14 +154,14 @@ test('用户卡片带 User 图标，与模型卡片的图标不同形', async ({
   await expect(user).toBeVisible()
   await expect(model).toBeVisible()
 
-  const userMark = user.locator('svg')
+  const userMark = roleMark(user)
   await expect(userMark, '用户卡也有一枚标记').toHaveCount(1)
   expect(await userMark.getAttribute('aria-hidden'), '装饰不进无障碍树').toBe('true')
 
   const pathsOf = (locator: Locator) =>
     locator.locator('path').evaluateAll((paths) => paths.map((path) => path.getAttribute('d')))
   const userPaths = await pathsOf(userMark)
-  const modelPaths = await pathsOf(model.locator('svg'))
+  const modelPaths = await pathsOf(roleMark(model))
   expect(userPaths, '两枚图标必须不同，否则等于没标作者').not.toEqual(modelPaths)
 
   // 不同图标，但笔触语言一致（同一套图标契约：细笔画 + currentColor）
@@ -173,8 +182,8 @@ test('角色名与图标同在一行，accessible name 由文字承担', async (
   await openSession(page)
   const model = assistantCards(page).first()
   await expect(model.getByText('Avid')).toBeVisible()
-  // 图标 aria-hidden + 文字标签 → 读屏器只念一次角色名
-  await expect(model.locator('[aria-hidden="true"] svg, svg[aria-hidden="true"]')).toHaveCount(1)
+  // 图标 aria-hidden + 文字标签 → 读屏器只念一次角色名（动作行的图标不在这一行里）
+  await expect(model.locator('p > svg[aria-hidden="true"]'), '头部只有一枚装饰图标').toHaveCount(1)
 })
 
 test('消息卡片同形：新语言不再轮换形状', async ({ page }) => {

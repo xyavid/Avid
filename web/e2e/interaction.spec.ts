@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 import type { Locator, Page } from '@playwright/test'
 
-import { brightness, lifts, rgba, token } from './helpers'
+import { brightness, contrastOf, lifts, overlaps, rgba, token, waitForTimeline } from './helpers'
 
 /**
  * 交互反馈回归：**所有行动型按键本身就有方框**（与「改名」同族），悬停抬升一档投影、
@@ -68,9 +68,7 @@ async function openSession(page: Page): Promise<void> {
   expect(target, '需要一个含工具调用的会话').toBeTruthy()
   await page.goto(`${BASE}/sessions/${target?.id}`)
   await expect(page.getByLabel(COMPOSER)).toBeVisible()
-  await expect
-    .poll(async () => (await page.getByRole('log').innerText()).length, { timeout: 10_000 })
-    .toBeGreaterThan(50)
+  await waitForTimeline(page)
 }
 
 test('行动型按键本身就有方框（不依赖悬停）：删除与改名同族', async ({ page }) => {
@@ -241,4 +239,78 @@ test('系统深色方案下样式不变（项目只有一套 token 主题）', a
   expect(dark.borderColor, '深色方案下边框不变').toBe(light.borderColor)
   expect(dark.backgroundColor, '深色方案下玻璃面不变').toBe(light.backgroundColor)
   expect(dark.boxShadow, '深色方案下高度档不变').toBe(light.boxShadow)
+})
+
+/**
+ * 主按钮的实心底：**读 DOM 的计算色，不查 token 表**。
+ *
+ * 这条守的是 `bg-accent-deep` 曾经的那类空洞——类名写对了，但 `tailwind.config.js`
+ * 没绑定 `accent-deep`，Tailwind 于是一条规则都不生成：按钮静默回落到 `.surface-chip`
+ * 的半透明玻璃面 + `text-card` 近白字，白字白底。`check:contrast` 一直验得出那对 token
+ * 是达标的，**它验不出这个类没生成**——只有真的读一遍元素底色才看得见。
+ */
+test('主按钮：底色 = 压深的强调 token，且与字色对比 ≥ 4.5', async ({ page }) => {
+  await openSession(page)
+  const send = page.getByRole('button', { name: '发送' })
+  await expect(send).toBeVisible()
+
+  const style = await look(send)
+  const expected = await token(page, '--avid-accent-deep-rgb')
+  expect(style.backgroundColor, '底色 = --avid-accent-deep-rgb（不是玻璃面）').toBe(
+    `rgb(${expected.split(/\s+/).join(', ')})`,
+  )
+  expect(style.backgroundColor, '底色不可能是半透明玻璃面').not.toContain('rgba')
+
+  const text = await send.evaluate((element) => getComputedStyle(element).color)
+  const ratio = contrastOf(text, style.backgroundColor)
+  expect(ratio, `主按钮文字对比度 ${ratio.toFixed(2)}:1（门槛 4.5）`).toBeGreaterThanOrEqual(4.5)
+})
+
+/**
+ * 条目动作行：图标形 + 悬停才出说明。
+ *
+ * 四件事一起验：① 按钮里没有文字、只有一枚装饰图标；② 可访问名来自 `aria-label`
+ * （图标按钮唯一的命名途径，`getByRole(..., { name })` 也靠它）；③ 未悬停时气泡**不挂载**
+ * （不是 opacity 藏起来，所以不占任何空间）；④ 气泡浮在按钮**外面**（不与按钮方框重叠）。
+ */
+test('条目动作：图标按钮 + 悬停气泡说明（未悬停不占位）', async ({ page }) => {
+  await openSession(page)
+  const log = page.getByRole('log')
+  const copy = log.getByRole('button', { name: '复制文本' }).first()
+
+  await expect(copy.locator('svg'), '一枚图标').toHaveCount(1)
+  expect(await copy.locator('svg').getAttribute('aria-hidden'), '图标是装饰').toBe('true')
+  expect((await copy.innerText()).trim(), '按钮里没有常驻文字').toBe('')
+
+  // 未悬停：气泡内容根本没挂载，因此不可能占位。
+  await expect(page.getByRole('tooltip'), '未悬停时没有气泡').toHaveCount(0)
+
+  await copy.hover()
+  const tip = page.getByRole('tooltip')
+  await expect(tip, '悬停后出现说明').toBeVisible({ timeout: 3_000 })
+  await expect(tip).toHaveText('复制这条消息的正文')
+
+  // 可访问性没被"只有图标"牺牲：Radix 在打开时把触发元素的 aria-describedby 连到气泡上。
+  const describedBy = await copy.getAttribute('aria-describedby')
+  expect(describedBy, '触发元素有 aria-describedby').toBeTruthy()
+  expect(await tip.getAttribute('id'), 'aria-describedby 指向这枚气泡').toBe(describedBy)
+
+  const buttonBox = await copy.boundingBox()
+  const tipBox = await tip.boundingBox()
+  if (!buttonBox || !tipBox) throw new Error('按钮或气泡没有几何信息，无法判断浮层位置')
+  expect(overlaps(tipBox, buttonBox), '气泡浮在按钮方框外面').toBe(false)
+
+  // 鼠标移开：气泡卸载，动作行回到"只有图标"的状态。
+  //
+  // **必须给 `steps`**：Radix 在触发元素 `pointerleave` 之后才（异步）挂上那个判"离开宽容区
+  // 没有"的 document 级 `pointermove` 监听，而单步瞬移只产生**一个** pointermove——它在监听
+  // 注册之前就派发完了，于是气泡原地留着（实测：单步到 (0,0)/(1200,700) 都不关，steps=12
+  // 立刻关）。真实鼠标永远是连续事件流，所以这是 Playwright 单步瞬移的产物，不是产品问题。
+  await page.mouse.move(0, 0, { steps: 12 })
+  await expect(page.getByRole('tooltip'), '移开后气泡消失').toHaveCount(0)
+
+  // 「从此处分支」同一套形态：图标按钮，名字在 aria-label 上。
+  const fork = log.getByRole('button', { name: '从此处分支' }).first()
+  await expect(fork.locator('svg')).toHaveCount(1)
+  expect((await fork.innerText()).trim()).toBe('')
 })

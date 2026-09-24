@@ -135,3 +135,62 @@ export function brightness(filter: string): number {
   const match = /brightness\(([\d.]+)\)/.exec(filter)
   return match ? Number(match[1]) : 1
 }
+
+/** 把 `rgb(r, g, b)` / `rgba(r, g, b, a)` 拆成通道与 alpha（不解析百分比写法）。 */
+export function channels(color: string): { rgb: number[]; alpha: number } {
+  const match = /rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)\s*(?:[,/]\s*([\d.]+)\s*)?\)/.exec(
+    color,
+  )
+  if (!match) throw new Error(`不是可解析的颜色：${color}`)
+  return {
+    rgb: [Number(match[1]), Number(match[2]), Number(match[3])],
+    alpha: match[4] === undefined ? 1 : Number(match[4]),
+  }
+}
+
+/**
+ * WCAG 对比度（`(L1+0.05)/(L2+0.05)`）。**取计算色，不查 token 表**——
+ * `check:contrast` 已经按 alpha 合成验过 token 之间的配对，这里要验的是另一件事：
+ * 页面上那个元素的 `background-color` / `color` 真的是那对值（"类名写对、规则没生成"
+ * 的空洞只有真的读 DOM 才看得见）。
+ */
+export function contrastOf(foreground: string, background: string): number {
+  const luminance = (color: string) => {
+    const { rgb } = channels(color)
+    const [r, g, b] = rgb.map((channel) => {
+      const c = channel / 255
+      return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+    })
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+  }
+  const a = luminance(foreground)
+  const b = luminance(background)
+  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
+}
+
+/** 两个矩形是否重叠（浮层"在组件外面"的判据）。 */
+export function overlaps(
+  a: { x: number; y: number; width: number; height: number },
+  b: { x: number; y: number; width: number; height: number },
+): boolean {
+  return !(a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y)
+}
+
+/**
+ * 等会话时间线真的渲染出内容（打开会话之后各用例的共同前提）。
+ *
+ * 判据是**结构**——至少一条条目 + 一枚动作按钮——而不是 `log.innerText` 的长度：
+ * 长度里计入了动作按钮的可见文字（「复制文本」「从此处分支」），而动作行收成图标按钮
+ * 之后那些字就没了（实测同一会话 56 → 45），于是"长度 > 50 就算加载好了"这条代理
+ * 会随文案漂移：红的不是真的没渲染，而是少了几个字。等结构就不会被文案改动误伤。
+ */
+export async function waitForTimeline(page: Page): Promise<void> {
+  const log = page.getByRole('log')
+  await expect(log.locator('article').first(), '时间线至少渲染出一条条目').toBeVisible({
+    timeout: 10_000,
+  })
+  await expect(
+    log.getByRole('button', { name: '复制文本' }).first(),
+    '条目动作行已渲染（复制是图标按钮，名字在 aria-label 上）',
+  ).toBeVisible({ timeout: 10_000 })
+}
