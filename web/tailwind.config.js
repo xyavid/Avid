@@ -19,6 +19,11 @@ export default {
         input: 'rgb(var(--avid-input-rgb) / <alpha-value>)',
         ink: 'rgb(var(--avid-ink-rgb) / <alpha-value>)',
         accent: 'rgb(var(--avid-accent-rgb) / <alpha-value>)',
+        // primary 按钮的实心底（`Button` 的 `bg-accent-deep`）。这里曾经漏绑：类名写对了，
+        // 但没进这张表，Tailwind 就**一条规则都不生成**，按钮只剩 `.surface-chip` 那层
+        // 半透明玻璃面，配上 `text-card` 的近白字——白字白底，等于看不见。
+        // token 值本身（配 card 字 ≥4.8，check:contrast 一直在验）是对的，缺的只是绑定。
+        'accent-deep': 'rgb(var(--avid-accent-deep-rgb) / <alpha-value>)',
         ok: 'rgb(var(--avid-ok-rgb) / <alpha-value>)',
         warn: 'rgb(var(--avid-warn-rgb) / <alpha-value>)',
         danger: 'rgb(var(--avid-danger-rgb) / <alpha-value>)',
