@@ -294,9 +294,13 @@ def test_workspace_subcommand_add_list_permission_remove(sandbox, capsys, tmp_pa
         cli.main(["workspace", "permission", added[0], "full"])
 
     assert cli.main(["workspace", "remove", added[0]]) == 0
-    assert "磁盘上的会话数据未动" in capsys.readouterr().out
+    # 摘掉 = 立墓碑：候选里没有了，但会话与条目都留着（`add` 同一个路径即撤销）。
+    assert "会话与磁盘数据都留着" in capsys.readouterr().out
     assert cli.main(["workspace", "list"]) == 0
     assert "另一个" not in capsys.readouterr().out
+    assert cli.main(["workspace", "add", str(other), "--name", "另一个"]) == 0
+    assert cli.main(["workspace", "list"]) == 0
+    assert "另一个" in capsys.readouterr().out
 
 
 def test_workspace_subcommand_reports_unknown(monkeypatch, capsys, tmp_path):
