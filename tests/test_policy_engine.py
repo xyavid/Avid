@@ -147,10 +147,57 @@ def test_full_allows_without_asking_but_records_it(sandbox: Path, specs):
     assert specs["full"].approval == APPROVAL_NONE
 
 
-# ---------------------------------------------------------------- 决策表
+def test_decision_exposes_structured_command_result_types(sandbox: Path, specs):
+    """机器调用方不能只靠 bool 区分策略拒绝与需要授权。"""
+    safe = run("bash", {"command": "ls"}, spec=specs["manual"], root=sandbox)
+    assert safe.type == "SAFE_AUTO"
+
+    policy = run("read_file", {"path": "/etc/shadow"}, spec=specs["manual"], root=sandbox)
+    assert policy.type == "POLICY_DENIED"
+
+    approval = run("bash", {"command": "sudo ls"}, spec=specs["manual"], root=sandbox)
+    assert approval.type == "NEEDS_APPROVAL"
+
+    classifier = run("bash", {"command": "sudo ls"}, spec=specs["auto"], root=sandbox)
+    assert classifier.type == "POLICY_DENIED"
 
 
-#: 决策表。**没有回答者**时的终局形状（manual 的 REVIEW 落成拒绝，因为问不到人）。
+def test_unmountable_outside_target_is_sandbox_denied(sandbox: Path, specs):
+    missing = Path("/var/tmp") / f"avid-missing-{sandbox.name}.txt"
+    decision = run("bash", {"command": f"echo hi > {missing}"}, spec=specs["manual"], root=sandbox, ask=lambda *a: True)
+    assert decision.type == "SANDBOX_DENIED"
+    assert decision.operation == "filesystem_write"
+    assert decision.target == str(missing)
+
+
+def test_network_listen_reports_separate_operation(sandbox: Path, specs):
+    decision = run("bash", {"command": "nc -l 8080"}, spec=specs["auto"], root=sandbox)
+    assert (decision.type, decision.operation) == ("SANDBOX_DENIED", "network_listen")
+
+
+def test_restricted_network_is_a_sandbox_denial_not_a_command_failure(sandbox: Path, specs):
+    decision = run("bash", {"command": "curl https://api.example.com"}, spec=specs["manual"], root=sandbox)
+    assert decision.type == "SANDBOX_DENIED"
+    assert decision.code == "SANDBOX_NETWORK_DENIED"
+    assert decision.operation == "network_connect"
+    assert decision.target == "api.example.com"
+
+    full = run("bash", {"command": "curl https://api.example.com"}, spec=specs["full"], root=sandbox)
+    assert full.allowed
+
+
+
+@pytest.mark.parametrize("command", [
+    "rm a.txt", "git commit -m message", "git restore a.txt", "git reset HEAD~1",
+    "find . -exec touch x \\;", "python -c 'print(1)'",
+])
+def test_risky_argv_never_becomes_safe_auto(sandbox: Path, specs, command):
+    manual = run("bash", {"command": command}, spec=specs["manual"], root=sandbox)
+    assert manual.type == "NEEDS_APPROVAL"
+    auto = run("bash", {"command": command}, spec=specs["auto"], root=sandbox)
+    assert auto.type == "POLICY_DENIED"
+
+
 #: 三轴各自的出口在这一张表里一览：同一件事在 manual 是"问不到就拒"、auto 是"分类器
 #: 判死"、full 是"没人拦"，而 deny 那一档三种模式逐字相同。
 TABLE = [
@@ -308,6 +355,12 @@ def test_degraded_sandbox_pushes_managed_tools_back_to_review(sandbox: Path):
     assert run("read_file", {"path": "a.txt"}, spec=manual, root=sandbox).allowed
 
 
+def test_degraded_network_still_fails_closed(sandbox: Path):
+    spec = security(sandbox, "manual", probe=BROKEN_PROBE)
+    decision = run("bash", {"command": "curl https://api.example.com"}, spec=spec, root=sandbox, ask=lambda *a: True)
+    assert (decision.type, decision.code) == ("SANDBOX_DENIED", "SANDBOX_NETWORK_DENIED")
+
+
 def test_full_ignores_degradation(sandbox: Path):
     """full 本来就不要沙箱，所以"沙箱不可用"对它不是降级。"""
     full = security(sandbox, "full", probe=BROKEN_PROBE)
@@ -325,7 +378,26 @@ def test_degraded_state_is_visible_in_the_spec(sandbox: Path):
 # ---------------------------------------------------------------- 能力账本
 
 
-def test_ledger_records_path_capabilities_with_access(sandbox: Path, specs):
+def test_file_tool_outside_read_grant_never_allows_write(sandbox: Path, specs):
+    from avid.runtime.state import RunState
+    from avid.tools.files import write_file
+
+    outside = sandbox.parent / "outside-access.txt"
+    outside.write_text("original")
+    state = RunState.for_run(security=specs["manual"], workspace_root=str(sandbox))
+    state.ledger.remember(("path", str(outside), "ro"))
+    assert "拒绝访问" in write_file({"path": str(outside), "content": "x"}, state=state)
+    assert outside.read_text() == "original"
+
+
+    ledger = ApprovalLedger()
+    ledger.remember(("path", "/etc/hostname", "ro"))
+    multiple = run("bash", {"command": "cat /etc/hostname /etc/hosts"}, spec=specs["manual"], root=sandbox, ledger=ledger)
+    assert multiple.type == "NEEDS_APPROVAL"
+    write = run("bash", {"command": "echo x > /etc/hostname"}, spec=specs["manual"], root=sandbox, ledger=ledger)
+    assert write.type == "NEEDS_APPROVAL"
+
+
     ledger = ApprovalLedger()
     run("bash", {"command": OUTSIDE}, spec=specs["manual"], root=sandbox, ledger=ledger, ask=lambda *a: True)
     assert ledger.path_grants() == (("/etc/hostname", "ro"),)
@@ -405,15 +477,17 @@ def test_approval_answers_grant_read_only_for_reads(sandbox: Path, specs):
 
 
 def test_approval_answers_grant_rw_for_write_commands(sandbox: Path, specs):
+    outside = sandbox.parent / "rw-existing.txt"
+    outside.write_text("original")
     ledger = ApprovalLedger()
     decision = run(
         "bash",
-        {"command": "echo x > /etc/avid-probe.txt"},
+        {"command": f"echo x > {outside}"},
         spec=specs["manual"],
         root=sandbox,
         ledger=ledger,
         ask=lambda *a: True,
     )
     assert decision.allowed
-    assert decision.grants == (("/etc/avid-probe.txt", "rw"),)
+    assert decision.grants == ((str(outside), "rw"),)
     assert specs["manual"].approval == APPROVAL_USER

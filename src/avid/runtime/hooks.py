@@ -255,7 +255,13 @@ def permission_hook(context: dict[str, Any]) -> str | None:
             targets=list(action.targets),
             outside=list(action.outside),
             risks=list(action.risks),
+            capabilities=sorted(action.capabilities),
             network=action.network or None,
+            network_target=action.network_target if action.network else None,
+            decision_type=decision.type,
+            code=decision.code or None,
+            operation=decision.operation or None,
+            target=decision.target or None,
             verdict=decision.verdict,
             decision_kind=decision.kind or None,
             tier=decision.tier or None,
@@ -268,6 +274,8 @@ def permission_hook(context: dict[str, Any]) -> str | None:
         return None
 
     context["denied_kind"] = decision.kind
+    context["denied_type"] = decision.type
+    context["denied_code"] = decision.code or None
     context["denied_reason"] = f"{name}：{decision.reason}"
     context["denied_content"] = decision.message
     return BLOCK

@@ -238,7 +238,7 @@ class RunState:
 
     # ---------------- 权限 ----------------
 
-    def outside_allowed(self, path: object) -> bool:
+    def outside_allowed(self, path: object, access: str = "ro") -> bool:
         """文件工具据此判断越界目标是否已获授权。
 
         只读结果、不做决定：决定由 ``policy.permission.gate`` 做出并写进账本，
@@ -246,7 +246,7 @@ class RunState:
         """
         if self.security is not None and self.security.approval == APPROVAL_NONE:
             return True
-        return self.ledger.outside_allowed(path)
+        return self.ledger.outside_allowed(path, access)
 
     def sandbox_grants(self) -> tuple[tuple[str, str], ...]:
         """本次运行已获准的区外路径（路径, ro/rw）。沙箱组装 argv 时读它。"""

@@ -34,9 +34,12 @@ def _root(state: "RunState | None") -> Path | None:
     return Path(raw) if raw else None
 
 
-def _grant(state: "RunState | None"):
-    """越界授权查询器；None 表示"没有授权"，于是越界一律回绝（失败关闭）。"""
-    return None if state is None else state.outside_allowed
+def _grant(state: "RunState | None", operation: str = "read"):
+    """返回限定 ro/rw 口径的授权查询器；没有状态时越界一律回绝。"""
+    if state is None:
+        return None
+    access = "rw" if operation == "write" else "ro"
+    return lambda path: state.outside_allowed(path, access)
 
 
 def _protected(state: "RunState | None", path: Path, operation: str) -> str | None:
@@ -57,7 +60,7 @@ def _protected(state: "RunState | None", path: Path, operation: str) -> str | No
     # ask 档：full 整圈预授权，或账本里已经记着这一次批准。
     if security.approval == APPROVAL_NONE:
         return None
-    if state is not None and state.ledger.has_capability("path", str(path)):
+    if state is not None and state.ledger.outside_allowed(str(path), "rw" if operation == "write" else "ro"):
         return None
     return f"错误：{rule.reason}（{rule.tier} 策略，需逐次批准）"
 
@@ -146,7 +149,7 @@ def read_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
 
 def write_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     raw = str(args.get("path", ""))
-    path, error = resolve(raw, root=_root(state), outside_ok=_grant(state))
+    path, error = resolve(raw, root=_root(state), outside_ok=_grant(state, "write"))
     if error:
         return f"错误：{error}"
     assert path is not None  # resolve 成功时必有路径
@@ -173,7 +176,7 @@ def write_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
 
 def edit_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     raw = str(args.get("path", ""))
-    path, error = resolve(raw, root=_root(state), outside_ok=_grant(state))
+    path, error = resolve(raw, root=_root(state), outside_ok=_grant(state, "write"))
     if error:
         return f"错误：{error}"
     assert path is not None  # resolve 成功时必有路径

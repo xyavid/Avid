@@ -158,7 +158,50 @@ def test_broker_collects_credential_targets(sandbox):
     assert action.credentials
 
 
-# ---------- 受管工具表 ----------
+@pytest.mark.parametrize("command", [
+    "bash -lc 'ls && rm -rf /'",
+    "sh -c 'rm -rf /'",
+    "FOO=1 bash -c 'rm -rf /'",
+    "echo $(rm -rf /)",
+    "echo `rm -rf /`",
+    "sudo bash -c 'rm -rf /'",
+    "timeout 3 bash -lc 'rm -rf /'",
+])
+def test_nested_shell_cannot_hide_hard_denials(command):
+    assert brokerize("bash", {"command": command}).damage
+
+
+@pytest.mark.parametrize("command, capability", [
+    ("find . -name '*.ts'", "filesystem_read"),
+    ("find . -exec touch x \\;", "shell_execute"),
+    ("find . -delete", "filesystem_delete"),
+    ("base64 file", "filesystem_read"),
+    ("base64 -o output file", "filesystem_write"),
+    ("echo hi > a.txt", "filesystem_write"),
+    ("git push origin main", "external_side_effect"),
+    ("FOO=1 git -C /repo status", "filesystem_read"),
+    ("python -c 'print(1)'", "shell_execute"),
+])
+def test_shell_capabilities_include_arguments_and_structure(command, capability):
+    action = brokerize("bash", {"command": command})
+    assert capability in action.capabilities
+
+
+@pytest.mark.parametrize("command, capability", [
+    ("cat .env", "secret_access"),
+    ("cat ~/.ssh/id_rsa", "credential_access"),
+    ("dd if=/dev/sda of=image", "device_access"),
+    ("nc -l 8080", "network_listen"),
+])
+def test_additional_sensitive_capabilities(command, capability):
+    assert capability in brokerize("bash", {"command": command}).capabilities
+
+
+def test_nested_command_is_never_safe_auto(sandbox):
+    action = brokerize("bash", {"command": "bash -lc 'ls && rm -rf foo'"}, root=str(sandbox))
+    assert action.risks
+
+
 
 
 def test_read_only_tools_are_not_managed():

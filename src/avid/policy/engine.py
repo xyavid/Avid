@@ -29,6 +29,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any, Protocol
 
 from .action import (
@@ -64,12 +65,19 @@ VERDICT_ALLOW = "allow"
 VERDICT_ASK = "ask"
 VERDICT_DENY = "deny"
 
+# 对外的结构化终局。verdict/kind 继续保留，供旧事件与审计消费者兼容。
+SAFE_AUTO = "SAFE_AUTO"
+NEEDS_APPROVAL = "NEEDS_APPROVAL"
+SANDBOX_DENIED = "SANDBOX_DENIED"
+POLICY_DENIED = "POLICY_DENIED"
+
 KIND_HARD = "hard"
 KIND_CREDENTIAL = "credential"
 KIND_RULE = "rule"
 KIND_OUTSIDE = "outside"
 KIND_DANGER = "danger"
 KIND_DEGRADED = "degraded"
+KIND_NETWORK = "network"
 KIND_COST = "cost"
 
 #: 回传给模型的文案。三类拒绝给不同的下一步指引（"永远不许"与"这次不行"对模型意味着
@@ -98,6 +106,10 @@ DEGRADED_MESSAGE = (
     "Permission denied. 原因：沙箱不可用（{reason}），当前模式不再信任自动化放行。"
     "请让用户在 manual 模式下逐条批准，或先装好 bubblewrap。"
 )
+NETWORK_MESSAGE = (
+    "SANDBOX_NETWORK_DENIED: network_connect 被网络沙箱禁止（{reason}）。"
+    "请勿重试同一网络请求；由用户显式调整网络能力或使用已授权的工具。"
+)
 CLASSIFIER_MESSAGE = (
     "Permission denied. 原因：自动审查判定风险过高（{reason}）。"
     "auto 模式下无人可以批准它；请改用非破坏性做法，或让用户切到 manual 后自己批准。"
@@ -114,6 +126,7 @@ MESSAGE_FOR: dict[str, str] = {
     KIND_DANGER: DANGER_MESSAGE,
     KIND_OUTSIDE: OUTSIDE_MESSAGE,
     KIND_DEGRADED: DEGRADED_MESSAGE,
+    KIND_NETWORK: NETWORK_MESSAGE,
     KIND_COST: USER_MESSAGE,
 }
 
@@ -146,10 +159,34 @@ class Decision:
     answered_by: str = ""
     #: 批准时应当授予的能力（路径 → ro/rw）。由沙箱在组装 argv 时使用。
     grants: tuple[tuple[str, str], ...] = ()
+    code: str = ""
+    operation: str = ""
+    target: str = ""
 
     @property
     def allowed(self) -> bool:
         return self.verdict == VERDICT_ALLOW
+
+    @property
+    def type(self) -> str:
+        """规范化的四类命令终局，供工具执行器与 API 使用。
+
+        ``verdict``/``kind`` 是历史兼容字段；这个属性把 Policy、Approval、Sandbox
+        的结果压缩成调用方可稳定分派的类型。``degraded`` 明确属于沙箱边界失败，不能
+        被误报成普通策略拒绝。
+        """
+        if self.verdict == VERDICT_ALLOW:
+            return SAFE_AUTO
+        if self.code.startswith("SANDBOX_") or self.kind in {KIND_DEGRADED, KIND_NETWORK}:
+            return SANDBOX_DENIED
+        if self.answered_by == "user":
+            return NEEDS_APPROVAL
+        return POLICY_DENIED
+
+    @property
+    def command_type(self) -> str:
+        """``type`` 的显式别名，避免调用方与 Python 内建名混淆。"""
+        return self.type
 
     def __bool__(self) -> bool:  # 既有调用方按 bool(decision) 判断
         return self.allowed
@@ -271,6 +308,32 @@ def decide(
         reason = f"{rule.reason}（{rule.tier}）"
         return Decision(VERDICT_DENY, kind, rule.tier, reason, _message(kind, rule.reason))
 
+    # 只读系统 + 单文件能力挂载无法创建不存在的区外路径。
+    if sandbox.enforced and action.tool == "bash" and action.operations[:1] == (OPERATION_WRITE,):
+        missing = next((path for path in action.outside
+                        if not Path(path).exists()
+                        and not Path(path).is_relative_to("/tmp")
+                        and not Path(path).is_relative_to("/dev/tcp")
+                        and not Path(path).is_relative_to("/dev/udp")), None)
+        if missing is not None:
+            return Decision(
+                VERDICT_DENY, KIND_OUTSIDE, "", f"沙箱无法挂载不存在的区外目标 {missing}",
+                f"SANDBOX_FILESYSTEM_DENIED: filesystem_write 超出可挂载的路径（{missing}）。",
+                code="SANDBOX_FILESYSTEM_DENIED", operation="filesystem_write", target=missing,
+            )
+
+    # 沙箱决定资源上限，与命令是否被人批准正交。限制网络时即使审批通过也
+    # 没有出网能力：在执行前告知结构化错误，不能等 curl 的 DNS 错误冒充结论。
+    if action.network and sandbox.network == "restricted":
+        operation = "network_listen" if "network_listen" in action.capabilities else "network_connect"
+        target = action.network_target or "unknown"
+        code = "SANDBOX_NETWORK_DENIED"
+        return Decision(
+            VERDICT_DENY, KIND_NETWORK, "", f"网络沙箱禁止 {operation} {target}",
+            NETWORK_MESSAGE.format(reason=target),
+            code=code, operation=operation, target=target,
+        )
+
     facts = review_facts(action, rule, sandbox)
     if facts is None:
         return Decision(VERDICT_ALLOW, answered_by="policy")
@@ -284,10 +347,13 @@ def decide(
         return Decision(VERDICT_ALLOW, kind, "", reason, answered_by="none", key=key)
 
     # 4 账本复用：同一能力同意过一次就够。
-    if ledger is not None and (
-        ledger.knows(key)
-        or any(ledger.has_capability("path", target) for target in action.outside)
-    ):
+    path_access = access_for(action)
+    paths_granted = bool(action.outside) and all(
+        ledger.knows(("path", target, path_access))
+        or (path_access == "ro" and ledger.knows(("path", target, "rw")))
+        for target in action.outside
+    ) if ledger is not None else False
+    if ledger is not None and (ledger.knows(key) or paths_granted):
         return Decision(VERDICT_ALLOW, kind, "", reason, key=key, answered_by="ledger")
 
     # 5 approval=classifier：确定性审查，判不准即拒。
@@ -371,11 +437,17 @@ __all__ = [
     "DEGRADED_MESSAGE",
     "Decision",
     "HARD_MESSAGE",
+    "NETWORK_MESSAGE",
+    "NEEDS_APPROVAL",
+    "POLICY_DENIED",
+    "SAFE_AUTO",
+    "SANDBOX_DENIED",
     "KIND_COST",
     "KIND_CREDENTIAL",
     "KIND_DANGER",
     "KIND_DEGRADED",
     "KIND_HARD",
+    "KIND_NETWORK",
     "KIND_OUTSIDE",
     "KIND_RULE",
     "Ledger",

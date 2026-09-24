@@ -70,8 +70,12 @@ from .engine import (
     KIND_OUTSIDE,
     KIND_RULE,
     MESSAGE_FOR,
+    NEEDS_APPROVAL,
     OUTSIDE_MESSAGE,
+    POLICY_DENIED,
     RULE_MESSAGE,
+    SAFE_AUTO,
+    SANDBOX_DENIED,
     USER_MESSAGE,
     VERDICT_ALLOW,
     VERDICT_ASK,
@@ -193,9 +197,12 @@ class ApprovalLedger:
                         found[key[1]] = access
             return tuple(sorted(found.items()))
 
-    def outside_allowed(self, path: object) -> bool:
-        """文件工具据此放行越界路径。只读账本，不做任何决定。"""
-        return self.has_capability("path", str(path))
+    def outside_allowed(self, path: object, access: str = "ro") -> bool:
+        """文件工具按访问口径查询路径能力。只读授权永不自动升级为写。"""
+        target = str(path)
+        if access == "rw":
+            return self.knows(("path", target, "rw"))
+        return self.knows(("path", target, "ro")) or self.knows(("path", target, "rw"))
 
     def __len__(self) -> int:  # 便于测试与诊断
         with self._lock:
@@ -461,7 +468,11 @@ __all__ = [
     "NETWORK_RESTRICTED",
     "OPERATION_READ",
     "OPERATION_WRITE",
+    "NEEDS_APPROVAL",
     "OUTSIDE_MESSAGE",
+    "POLICY_DENIED",
+    "SAFE_AUTO",
+    "SANDBOX_DENIED",
     "OUTSIDE_TOOLS_ERROR",
     "PermissionModeError",
     "PolicyConfigError",

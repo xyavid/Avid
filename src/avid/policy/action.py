@@ -31,7 +31,9 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
+from .command_parse import parse_shell
 from .modes import APPROVAL_NONE
 
 # 命令起始位置：行首，或 ; & | 之后；跳过程序路径前缀与常见包装命令。
@@ -213,6 +215,12 @@ def hard_deny(name: str, arguments: Any) -> str | None:
     for pattern, reason in DENY_PATTERNS:
         if re.search(pattern, command, re.MULTILINE):
             return reason
+    facts = parse_shell(command)
+    for segment in facts.segments:
+        candidate = " ".join(segment)
+        for pattern, reason in DENY_PATTERNS:
+            if re.search(pattern, candidate, re.MULTILINE):
+                return reason
     return None
 
 
@@ -238,6 +246,20 @@ def danger_categories(name: str, arguments: Any) -> tuple[str, ...]:
             continue
         if re.search(pattern, command, re.MULTILINE):
             found.append(category)
+    facts = parse_shell(command)
+    for segment in facts.segments:
+        candidate = " ".join(segment)
+        for pattern, category in DANGER_PATTERNS:
+            if category not in found and re.search(pattern, candidate, re.MULTILINE):
+                found.append(category)
+    if "shell_execute" in facts.capabilities and "解释器执行" not in found:
+        found.append("解释器执行")
+    if "filesystem_delete" in facts.capabilities and "删除文件" not in found:
+        found.append("删除文件")
+    if "external_side_effect" in facts.capabilities and "对外副作用" not in found:
+        found.append("对外副作用")
+    if facts.uncertain and "无法证明安全的 shell 结构" not in found:
+        found.append("无法证明安全的 shell 结构")
     return tuple(found)
 
 
@@ -254,11 +276,22 @@ def reaches_network(name: str, arguments: Any) -> bool:
     command = arguments.get("command")
     if not isinstance(command, str):
         return False
-    return any(re.search(pattern, command, re.MULTILINE) for pattern in NETWORK_HINTS)
+    return "network_connect" in parse_shell(command).capabilities or any(
+        re.search(pattern, command, re.MULTILINE) for pattern in NETWORK_HINTS
+    )
+
+
+def network_target(command: str) -> str:
+    """对显式网络命令提取目的地；未知目的地不伪装成可放行。"""
+    url = re.search(r"https?://[^\s'\"|;&()<>]+", command)
+    if url:
+        return urlsplit(url.group(0)).hostname or "unknown"
+    # ssh/scp 常用目标没有 URL；保留参数原样供审计，不主动解析 DNS。
+    host = re.search(r"\b(?:ssh|scp)\s+(?:-[\w-]+\s+)*([^\s;|&]+)", command)
+    return host.group(1) if host else "unknown"
 
 
 def _operations_for(name: str, command: str | None) -> tuple[str, ...]:
-    """读还是写。bash 分不清时按**两个口径都查**（宁可多问一次）。"""
     if name in WRITE_TOOLS:
         return (OPERATION_WRITE,)
     if name in PATH_TOOLS:
@@ -314,6 +347,8 @@ class Action:
     risks: tuple[str, ...] = ()
     damage: str | None = None
     network: bool = False
+    network_target: str = ""
+    capabilities: frozenset[str] = frozenset()
     operations: tuple[str, ...] = ()
     workspace_root: str | None = None
 
@@ -353,6 +388,14 @@ def brokerize(
     if outside and "越界" not in risks:
         risks.append("越界")
     normalized = normalize_command(command) if command else ""
+    if name == "bash" and command:
+        caps = set(parse_shell(command).capabilities)
+    else:
+        caps = {"filesystem_write"} if name in WRITE_TOOLS else {"filesystem_read"} if name in PATH_TOOLS else set()
+    if credentials:
+        caps.add("credential_access")
+    if any(Path(target).name == ".env" or Path(target).name.startswith(".env.") for target in targets):
+        caps.add("secret_access")
 
     return Action(
         tool=name,
@@ -364,6 +407,8 @@ def brokerize(
         risks=tuple(risks),
         damage=hard_deny(name, args),
         network=reaches_network(name, args),
+        network_target=network_target(command) if command else "",
+        capabilities=frozenset(caps),
         operations=_operations_for(name, command),
         workspace_root=root,
     )
