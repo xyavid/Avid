@@ -51,16 +51,8 @@ logger = logging.getLogger("avid.runtime.loop")
 MAX_STOP_BLOCKS = 1
 
 
-class RoundLimitExceeded(RuntimeError):
-    """显式配置的轮数上限被耗尽（`AVID_MAX_ROUNDS` 或 ``max_rounds=``）。
-
-    缺省**不会**发生：循环的终止条件是模型不再请求工具。这个异常只在有人主动设了
-    成本闸门时出现，svc 把它映射成"未完成"而不是内部错误。
-    """
-
-
 class RunCancelled(RuntimeError):
-    """运行被显式取消（与 ``RoundLimitExceeded`` 同类，是终止原因而不是错误）。
+    """运行被显式取消（终止原因，不是错误）。
 
     它只在**步骤边界**抛出：在飞的模型调用或工具调用结束后（§7.4）。已产生
     的消息在产生时就已落库，所以取消不需要补偿写，也不产生伪造的工具结果
@@ -135,10 +127,6 @@ def agent_loop(
     ledger: "ApprovalLedger | None" = None,
     workspace_root: str | None = None,
     max_tokens: int = DEFAULT_MAX_TOKENS,
-    # 轮数上限。None = 用 `config.max_rounds`（环境变量 `AVID_MAX_ROUNDS`），而它
-    # 缺省也是 None —— 也就是**无上限**。显式传正整数才是一道闸门，用于评测这类
-    # 必须固定预算的场合；普通任务不该因为"多读几个文件"被判失败。
-    max_rounds: int | None = None,
     max_stop_blocks: int = MAX_STOP_BLOCKS,
     todo_reminder_after: int = TODO_REMINDER_AFTER_ROUNDS,
     on_message: Callable[[dict[str, Any]], Any] | None = None,
@@ -172,10 +160,11 @@ def agent_loop(
     传了 ``state`` 时 ``auto_approve`` / ``ask`` / ``on_event`` / ``permission_mode`` /
     ``ledger`` / ``workspace_root`` 全部以那份 state 为准（唯一权威，不做合并）。
 
-    ``max_rounds`` 是**可选的**成本闸门：None 表示用 ``config.max_rounds``（环境变量
-    ``AVID_MAX_ROUNDS``），而它缺省同样是 None = 无上限。缺省无上限是有意的：终止条件
-    是"模型不再请求工具"，一个写死的轮数会把普通任务（多读几个文件、多跑几步搜索）
-    变成 ``RoundLimitExceeded``。需要固定预算的场合（评测、子 agent 成本控制）显式传值。
+    循环**没有轮数上限**：终止条件只有"模型不再请求工具"，以及两个取消检查点。
+    这是有意的——轮数不是收敛判据，任何固定数字都会把"多读几个文件"这种普通任务
+    判负（旧代码写死过 8，实测拦下过 9 个文件的简单任务）。限制留在工具层与设置层：
+    单条命令的超时与输出上限（`tools/shell.py`）、工具输出进上下文前的预算
+    （`runtime/hooks.py`）、以及"一步内最多并发几个可并行的调用"。
     """
     config = config or load_config()
     if config.context_window is None:
@@ -188,9 +177,6 @@ def agent_loop(
     summarize = summarize or chat
     tools = TOOLS if tools is None else tools
     registry = TOOL_IMPLS if registry is None else registry
-    # 上限的唯一取值点：显式参数 > 环境变量（已由 load_config 归一进 config）> 无上限。
-    # 归一成 int | None 再进循环，循环里就只有一个判断，不必知道它从哪来。
-    round_limit = config.max_rounds if max_rounds is None else max_rounds
 
     def emit(message: dict[str, Any]) -> None:
         if on_message is not None:
@@ -240,16 +226,10 @@ def agent_loop(
             messages=transcript.estimate_chars(),
         )
 
-    # `itertools.count` 表达"轮次没有天然终点"：上限缺席时它就是不封顶的序列，
-    # 循环的出口只有模型的回答与取消检查点。手写状态机式的循环不行——A3 门禁要求
-    # 这里保持成"一段调度"（tests/test_web_boundaries.py 会读本文件做断言）。
+    # `itertools.count` 表达"轮次没有天然终点"：循环的出口只有模型的回答与取消
+    # 检查点。手写状态机式的循环不行——A3 门禁要求这里保持成"一段调度"
+    # （tests/test_web_boundaries.py 会读本文件做断言）。
     for round_index in itertools.count(1):
-        # 只在一道闸门**确实**存在时才检查它；round_limit 为 None 就没有这个分支。
-        if round_limit is not None and round_index > round_limit:
-            raise RoundLimitExceeded(
-                f"达到轮数上限 {round_limit}（max_rounds 或 AVID_MAX_ROUNDS 指定），"
-                "模型仍在请求工具，未收敛"
-            )
         state.round = round_index
         state.check_cancelled()  # 检查点 1：每轮开始前（§7.4）
 
@@ -365,3 +345,7 @@ def agent_loop(
             }
             transcript.append(message)
             emit(message)
+
+    # 静态检查器不认"无限 for"（`itertools.count` 在它们眼里照样会结束），所以这里
+    # 必须给一个显式出口。运行期不可达：循环只从模型的 return、取消或异常退出。
+    raise AssertionError("轮次循环没有正常出口")

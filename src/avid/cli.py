@@ -28,7 +28,7 @@ from .ai.client import LLMError, ask
 from .ai.config import Config, ConfigError, load_config
 from .ai.usage import Usage, hit_ratio
 from .policy.permission import DEFAULT_MODE, MODE_LABELS, MODES
-from .runtime.loop import RoundLimitExceeded, agent_loop
+from .runtime.loop import agent_loop
 from .session import (
     JsonlSessionMetadata,
     JsonlSessionRepo,
@@ -188,7 +188,7 @@ def main(argv: list[str] | None = None) -> int:
                     permission_mode=args.permission,
                 )
             )
-        except (LLMError, RoundLimitExceeded) as exc:
+        except LLMError as exc:
             print(f"循环中止：{exc}", file=sys.stderr)
             return 1
         return 0
@@ -274,7 +274,7 @@ def _run_session(args: argparse.Namespace, config) -> int:
                 workspace_root=target.root,
                 on_message=recorder.on_message,
             )
-        except (LLMError, RoundLimitExceeded) as exc:
+        except LLMError as exc:
             print(f"循环中止：{exc}", file=sys.stderr)
             return 1
         stats = session.get_stats()

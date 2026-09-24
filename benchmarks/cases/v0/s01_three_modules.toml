@@ -11,7 +11,6 @@ modules/ 下有 m1、m2、m3 三块互相独立的模块，每块的 README.md �
 """
 
 [limits]
-max_rounds = 14
 timeout_seconds = 300
 
 [[graders]]

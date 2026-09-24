@@ -82,7 +82,6 @@ prompt = """
 """
 
 [limits]
-max_rounds = 10                # 循环硬上限（既有机制）
 timeout_seconds = 240          # 墙钟硬超时：到点 state.cancel("timeout")
 
 [[graders]]

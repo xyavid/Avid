@@ -103,7 +103,6 @@ def test_telemetry_matches_run_state_in_both_loops(variant: str):
             config=CONFIG,
             chat=ScriptedChat(*turns_for(case)),
             state=state,
-            max_rounds=case.limits.max_rounds,
             on_message=telemetry.on_message,
         )
     metrics = telemetry.metrics()
@@ -167,7 +166,7 @@ def test_followup_refuses_variants_without_a_session_layer():
 def test_hard_timeout_cancels_through_the_existing_checkpoint():
     case = load_cases(ids=["b01_largest_file"])[0]
     tight = dataclasses.replace(
-        case, limits=Limits(max_rounds=5, timeout_seconds=0.05)
+        case, limits=Limits(timeout_seconds=0.05)
     )
 
     class SlowChat:
@@ -221,7 +220,6 @@ def test_classify_covers_the_five_categories():
 
     assert status("resolved") == ""
     assert status("unresolved") == "能力"
-    assert status("round_limit") == "预算"
     assert status("timeout") == "预算"
     assert status("llm_error") == "模型"
     assert status("error") == "基础设施"

@@ -294,7 +294,6 @@ export const DICTIONARY: Record<Locale, Entry> = {
     'errors.http_error': '请求被拒绝',
     'errors.config_error': '模型配置缺失或不合法（见错误详情里的修复命令）',
     'errors.llm_error': '模型调用失败',
-    'errors.round_limit': '达到轮数上限，模型仍在请求工具，未收敛',
     'errors.session_error': '会话文件读写出错',
     'errors.internal': '内核内部错误',
     'errors.too_many_streams': '同时打开的事件流太多，稍后重试',

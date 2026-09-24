@@ -4,7 +4,7 @@ from avid.ai.client import Turn, Usage
 from avid.ai.config import Config
 from avid.policy.compaction import CompactReport
 from avid.runtime import hooks
-from avid.runtime.loop import RoundLimitExceeded, agent_loop
+from avid.runtime.loop import agent_loop
 from avid.tools import TOOLS
 
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
@@ -192,25 +192,12 @@ def test_non_string_tool_result_is_serialised():
     assert messages[2]["content"] == '{"lines": 3}'
 
 
-def test_round_limit_raises_instead_of_returning_partial_text():
-    chat = FakeChat(*[make_turn("还在调工具", [tool_call("read_file")]) for _ in range(3)])
-    messages = [{"role": "user", "content": "读"}]
+def test_a_plain_task_finishes_no_matter_how_many_rounds_it_takes():
+    """没有轮数上限：12 轮工具调用仍是普通任务，照跑到模型自己收尾。
 
-    with pytest.raises(RoundLimitExceeded):
-        agent_loop(
-            messages,
-            config=CONFIG,
-            chat=chat,
-            registry={"read_file": lambda a: "内容"},
-            max_rounds=3,
-        )
-
-
-def test_no_round_limit_by_default_so_a_plain_task_finishes():
-    """缺省无上限：12 轮工具调用仍是普通任务，不该被判成「未收敛」。
-
-    这是一条回归用例：旧代码把上限写死成 8，实测「逐轮读 9 个文件」这种小任务直接
-    抛 RoundLimitExceeded。上限现在只在有人显式设闸门时存在。
+    回归用例：旧代码把上限写死成 8，实测「逐轮读 9 个文件」这种小任务直接抛
+    RoundLimitExceeded。现在轮数这个限制在内核里不存在（设置里只有终端超时、
+    输出上限与一步内的并发数）。
     """
     chat = FakeChat(
         *[make_turn("读一个", [tool_call("read_file")]) for _ in range(12)],
@@ -227,20 +214,8 @@ def test_no_round_limit_by_default_so_a_plain_task_finishes():
         )
         == "都读完了"
     )
-
-
-def test_config_max_rounds_still_acts_as_a_gate_when_set():
-    """闸门没被删掉，只是不再默认打开：显式配置的预算照旧生效。"""
-    capped = Config(api_key="k", base_url="https://api.test/v1", model="m", max_rounds=3)
-    chat = FakeChat(*[make_turn("还在调工具", [tool_call("read_file")]) for _ in range(3)])
-    messages = [{"role": "user", "content": "读"}]
-
-    with pytest.raises(RoundLimitExceeded) as exc:
-        agent_loop(
-            messages, config=capped, chat=chat, registry={"read_file": lambda a: "内容"}
-        )
-
-    assert "3" in str(exc.value)
+    # 12 轮都真的跑过：模型每轮都被再叫一次，工具结果逐条进上下文。
+    assert len(chat.requests) == 13
 
 
 # ---------- ② PreToolUse ----------
@@ -354,19 +329,29 @@ def test_non_object_arguments_never_reach_pre_tool_use(hook_registry):
     assert "JSON 对象" in messages[2]["content"]
 
 
-def test_denials_still_count_towards_the_round_limit(hook_registry):
+def test_denied_tool_calls_do_not_terminate_the_loop(hook_registry):
+    """被拒的调用既不是失败也不是终点：结果照常回给模型，循环继续到它自己收尾。"""
     hook_registry.register("PreToolUse", lambda ctx: hooks.BLOCK)
-    chat = FakeChat(*[make_turn("", [tool_call("read_file")]) for _ in range(3)])
+    chat = FakeChat(
+        make_turn("", [tool_call("read_file", call_id="c1")]),
+        make_turn("", [tool_call("read_file", call_id="c2")]),
+        make_turn("那我不读了"),
+    )
     messages = [{"role": "user", "content": "读"}]
 
-    with pytest.raises(RoundLimitExceeded):
+    assert (
         agent_loop(
             messages,
             config=CONFIG,
             chat=chat,
             registry={"read_file": lambda a: "内容"},
-            max_rounds=3,
         )
+        == "那我不读了"
+    )
+    # 两次拒绝的文案都进了上下文（模型看得见"被拒了"，不是空结果）。
+    denied = [m for m in messages if m.get("role") == "tool"]
+    assert len(denied) == 2
+    assert all("Permission denied" in m["content"] for m in denied)
 
 
 # ---------- ③ PostToolUse ----------
@@ -731,7 +716,6 @@ def test_reminder_fires_once_per_silent_streak(hook_registry):
         chat=chat,
         registry={"read_file": lambda a: "x"},
         todo_reminder_after=1,
-        max_rounds=7,
     )
 
     assert (

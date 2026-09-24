@@ -3,7 +3,7 @@
 职责边界（设计文档 §3.1）：
 
 * **生命周期**：一个会话同时至多一个活动 run（不变量 I3，仅进程内）；工作线程
-  跑循环，注册表只做编排——它**不重写循环**，``RoundLimitExceeded`` / ``LLMError``
+  跑循环，注册表只做编排——它**不重写循环**，``LLMError`` 一类的内核异常
   只捕获并映射成 ``run_failed{code}``（A5）。
 * **事件与重放**：唯一发射线程分配 ``seq``，有界缓冲保存 durable 与 transient
   事件；游标落在缓冲之外时发 ``resync``，**不允许静默缺口**（I5）。
@@ -27,7 +27,7 @@ from ..ai.client import LLMError, chat_completion, stream_completion
 from ..ai.config import ConfigError, load_config
 from ..runtime import events
 from ..runtime.events import STREAM_HEARTBEAT_SECONDS, RunEvent
-from ..runtime.loop import RoundLimitExceeded, RunCancelled, agent_loop
+from ..runtime.loop import RunCancelled, agent_loop
 from ..runtime.state import RunState
 from ..session import (
     DEFAULT_BRANCH,
@@ -600,8 +600,6 @@ class RunRegistry:
         except RunCancelled as exc:
             record.cancel_reason = str(exc) or "cancelled"
             self._finish(record, events.RUN_CANCELLED, reason=record.cancel_reason)
-        except RoundLimitExceeded as exc:
-            self._fail(record, "round_limit", str(exc))
         except LLMError as exc:
             self._fail(record, "llm_error", str(exc))
         except ConfigError as exc:

@@ -12,7 +12,6 @@ mods/ 下有 12 个模块，每个模块的 README.md 里有一行 value=<整数
 """
 
 [limits]
-max_rounds = 20
 timeout_seconds = 300
 
 [[graders]]

@@ -43,7 +43,6 @@ const KNOWN = new Set([
   'unexpected_response',
   'config_error',
   'llm_error',
-  'round_limit',
   'internal',
   'too_many_streams',
 ])

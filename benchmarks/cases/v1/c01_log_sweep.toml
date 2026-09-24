@@ -11,7 +11,6 @@ parts/ 下有 36 个日志分片。请找出 severity=critical 的那条记录�
 """
 
 [limits]
-max_rounds = 50
 timeout_seconds = 420
 
 [[graders]]

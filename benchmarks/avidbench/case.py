@@ -31,7 +31,6 @@ CATEGORIES = ("basic", "long_horizon", "recovery", "subagent", "task", "session"
 #: 依赖多深 / 上下文多长」计，不按文件数或模块数计。
 TIERS = (1, 2, 3, 4, 5)
 
-DEFAULT_MAX_ROUNDS = 12
 DEFAULT_TIMEOUT_SECONDS = 300.0
 
 
@@ -41,9 +40,13 @@ class CaseError(Exception):
 
 @dataclass(frozen=True)
 class Limits:
-    """一次运行的资源上限。``timeout_seconds`` 是 runner 层的墙钟硬超时。"""
+    """一次运行的资源上限。
 
-    max_rounds: int = DEFAULT_MAX_ROUNDS
+    只有墙钟。**没有轮数上限**：内核循环本身没有这个概念（终止条件是"模型不再请求
+    工具"），评测里再设一个轮数只会把"想得久"误判成"预算不足"。``timeout_seconds``
+    是 runner 层的硬超时，到点置 `RunCancelled("timeout")`。
+    """
+
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
 
 
@@ -72,7 +75,6 @@ class Case:
             "id": self.id,
             "category": self.category,
             "fixture": self.fixture,
-            "max_rounds": self.limits.max_rounds,
             "timeout_seconds": self.limits.timeout_seconds,
             "graders": [dict(spec) for spec in self.graders],
             "followup": self.followup,
@@ -91,15 +93,12 @@ def _limits(raw: Any, path: Path) -> Limits:
         return Limits()
     if not isinstance(raw, dict):
         raise CaseError(f"{path}：[limits] 必须是表")
-    unknown = set(raw) - {"max_rounds", "timeout_seconds"}
+    unknown = set(raw) - {"timeout_seconds"}
     if unknown:
         raise CaseError(f"{path}：[limits] 有未知键 {sorted(unknown)}")
     limits = Limits(
-        max_rounds=int(raw.get("max_rounds", DEFAULT_MAX_ROUNDS)),
         timeout_seconds=float(raw.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS)),
     )
-    if limits.max_rounds < 1:
-        raise CaseError(f"{path}：max_rounds 必须 ≥ 1")
     if limits.timeout_seconds <= 0:
         raise CaseError(f"{path}：timeout_seconds 必须 > 0")
     return limits

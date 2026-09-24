@@ -119,7 +119,7 @@ def test_a4_svc_does_not_import_web():
 
 
 def test_a5_svc_only_maps_kernel_errors():
-    found = hits(files_under("svc"), r"RoundLimitExceeded|LLMError")
+    found = hits(files_under("svc"), r"\bLLMError\b")
     # 只允许出现"捕获并映射"的地方：runs.py 的 except 分支
     assert found, "svc 应当显式把内核异常映射成 run_failed"
     for item in found:

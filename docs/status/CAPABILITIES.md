@@ -117,7 +117,8 @@
 
 | 项 | 值 / 机制 | 证据 |
 |---|---|---|
-| 轮数上限 | **缺省无上限**：循环靠「模型不再请求工具」收敛。需要成本闸门时设 `AVID_MAX_ROUNDS=<正整数>`（或 `max_rounds=`），耗尽抛 `RoundLimitExceeded`，归类为「未完成」而不是错误 | `src/avid/ai/config.py`（`ENV_MAX_ROUNDS`）、`src/avid/runtime/loop.py`（`round_limit` 判断） |
+| 轮数 | **没有轮数上限**，因此也没有这个开关：循环靠「模型不再请求工具」收敛，中途可取消。轮数不是收敛判据——任何固定数字都会把「多读几个文件」判成失败 | `src/avid/runtime/loop.py`（`itertools.count(1)`，循环里没有上限判断） |
+| 一步内的并发 | 一批工具调用**串行**执行（有效并发 = 1）；`subagent` 一次最多派 4 个子任务，整批共用一个 300 秒墙钟预算 | `src/avid/runtime/execution.py`（`execute_batch`）、`src/avid/tools/subagent.py` |
 | Stop 拦截 | `MAX_STOP_BLOCKS = 1`：Stop 回调可以要求「先别退出」，最多补 1 轮 | `loop.py:44, 250-272` |
 | 取消 | 两个检查点（每轮开始前、每批工具执行前）；只在步骤边界抛 `RunCancelled`，不产生伪造的工具结果 | `loop.py:51-57, 186, 274` |
 | TODO 提醒 | 连续 `TODO_REMINDER_AFTER_ROUNDS = 3` 轮未调 `todo_write` 就注入一条提醒（`NOTICE_ENTRY` 类型落库） | `src/avid/runtime/state.py:34, 179-187`、`loop.py:188-198` |

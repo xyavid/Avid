@@ -24,7 +24,7 @@ from typing import Any
 from avid.ai.client import LLMError, chat_completion
 from avid.ai.config import Config
 from avid.runtime.context import ContextBudget
-from avid.runtime.loop import RoundLimitExceeded, RunCancelled
+from avid.runtime.loop import RunCancelled
 from avid.runtime.state import RunState
 from avid.session import MemorySessionRepo, SessionRecorder, messages_for_branch
 
@@ -200,15 +200,12 @@ def _execute(
             config=config,
             chat=chat or chat_completion,
             state=state,
-            max_rounds=case.limits.max_rounds,
             on_message=emit,
             budget=budget,
         )
     except RunCancelled as exc:
         status = "timeout" if state.cancel_reason == "timeout" else "cancelled"
         error = str(exc)
-    except RoundLimitExceeded as exc:
-        status, error = "round_limit", str(exc)
     except LLMError as exc:
         status, error = "llm_error", str(exc)
     except Exception as exc:  # 编排层也要把任何异常变成可观察的终态

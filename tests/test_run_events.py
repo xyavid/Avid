@@ -389,24 +389,11 @@ def test_chat_failures_become_a_terminal_event_with_the_right_code(sandbox, exc,
     assert events.RUN_FINISHED not in [event.type for event in frames]
 
 
-def test_round_limit_failure_is_mapped(sandbox, monkeypatch):
-    """显式设了轮数上限、模型一直在要工具 → 归类为"未完成"而不是内部错误。
+def test_a_run_longer_than_the_old_cap_still_finishes(sandbox):
+    """内核里没有轮数上限：8 轮工具调用（比旧上限多）照常跑到模型自己收尾。
 
-    上限缺省是关的，所以这里必须真的设一道闸门（`AVID_MAX_ROUNDS`）——否则这条
-    用例测的就不是映射，而是"没上限也能跑完"。
+    回归用例：旧代码写死 8 轮，这条运行会被判成 `run_failed{round_limit}`。
     """
-    monkeypatch.setenv("AVID_MAX_ROUNDS", "8")
-    tools = RecordingTools().registry("read_file")
-    services = build(sandbox, many_rounds(8), tools)
-    record = services.runs.start(new_session(services), "跑")
-
-    assert wait_terminal(record), record.status
-    assert record.status == "failed"
-    assert record.error["code"] == "round_limit"
-
-
-def test_long_run_finishes_when_no_round_cap_is_configured(sandbox):
-    """缺省无上限：比旧上限（8）还长的运行照常跑到模型自己收尾。"""
     tools = RecordingTools().registry("read_file")
     services = build(sandbox, many_rounds(8), tools)
     record = services.runs.start(new_session(services), "跑")
@@ -414,6 +401,17 @@ def test_long_run_finishes_when_no_round_cap_is_configured(sandbox):
     assert wait_terminal(record), record.status
     assert record.status == "finished"
     assert record.text == "完成"
+
+
+def test_a_run_of_forty_rounds_still_finishes(sandbox):
+    """再往上也没有截止点：40 轮的工具往返仍然是"跑完"，不是"预算耗尽"。"""
+    tools = RecordingTools().registry("read_file")
+    services = build(sandbox, many_rounds(40), tools)
+    record = services.runs.start(new_session(services), "跑")
+
+    assert wait_terminal(record), record.status
+    assert record.status == "finished"
+    assert record.error is None
 
 
 def test_config_error_failure_is_mapped(sandbox, monkeypatch):

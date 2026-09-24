@@ -33,10 +33,9 @@ SUB_SYSTEM = (
     "不要反问、不要索要更多信息，用你能用的工具自己解决。"
 )
 
-# 轮数上限不再由这里写死：子 agent 与主循环共用**同一道**可选闸门
-# （`config.max_rounds` / `AVID_MAX_ROUNDS`，缺省无上限）。以前写死 30，等于给每个
-# 子任务塞了一个主任务没有的预算——同一件事在主 agent 里能做完，派给子 agent 反而
-# 因为"回话超过 30 轮"被判失败。它真正需要的边界是墙钟预算（下面那个）。
+# 轮数：子 agent 与主循环一样**没有轮数上限**（终止条件只有"模型不再请求工具"与
+# 取消）。它的边界是墙钟预算——下面这个。旧代码写死过 30 轮，等于给子任务塞了一个
+# 主任务没有的预算：同一件事在主 agent 里能做完，派给子 agent 反而被判失败。
 #
 # 整批共用一个墙钟预算，不是每个子任务各 300 秒——否则 N 个任务最坏要等 N×300 秒。
 SUBAGENT_TIMEOUT_SECONDS = 300.0
@@ -72,34 +71,24 @@ def run_subagent(
     被静默绕过**（父运行 strict、子 agent 却按默认值放行），因此有一条专门的用例盯着。
     """
     # 延迟导入：runtime/state.py 要 import 本包来拿工具表，顶部导入会成环。
-    from ..runtime.loop import RoundLimitExceeded, agent_loop
+    from ..runtime.loop import agent_loop
     from . import SUB_HANDLERS, SUB_TOOLS
 
     messages = [{"role": "user", "content": prompt}]
-    cfg = config or load_config()
-    try:
-        text = agent_loop(
-            messages,
-            system=SUB_SYSTEM,
-            tools=SUB_TOOLS,
-            registry=SUB_HANDLERS,
-            config=cfg,
-            chat=chat,
-            auto_approve=auto_approve,
-            # 轮数上限**不在这里设**：交给 cfg.max_rounds 的统一策略（缺省无上限）。
-            ask=ask,
-            permission_mode=permission_mode,
-            ledger=ledger,
-            workspace_root=workspace_root,
-            hooks=hooks,
-        )
-    except RoundLimitExceeded:
-        # 只有调用方显式设了闸门才会走到这里（缺省无上限 ⇒ 正常收敛）。文案仍然带上
-        # 实际数字，便于对照是哪一个预算把子任务截断了。
-        limit = cfg.max_rounds
-        if limit is None:
-            return "Subagent stopped at its configured turn limit without a final answer."
-        return f"Subagent stopped after {limit} turns without a final answer."
+    text = agent_loop(
+        messages,
+        system=SUB_SYSTEM,
+        tools=SUB_TOOLS,
+        registry=SUB_HANDLERS,
+        config=config or load_config(),
+        chat=chat,
+        auto_approve=auto_approve,
+        ask=ask,
+        permission_mode=permission_mode,
+        ledger=ledger,
+        workspace_root=workspace_root,
+        hooks=hooks,
+    )
 
     return _no_summary(text)
 

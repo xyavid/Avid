@@ -12,7 +12,6 @@ prompt = """
 """
 
 [limits]
-max_rounds = 10
 timeout_seconds = 240
 
 [[graders]]

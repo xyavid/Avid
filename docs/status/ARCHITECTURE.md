@@ -143,7 +143,7 @@ Web:  POST /api/sessions/{id}/runs                │
 | A2 | `fastapi` 只允许出现在 `web/`；`uvicorn` 只允许出现在 `cli.py` | `:62-73` |
 | A3 | 循环只表达调度：只有 2 个 hook 触发点、无手写 `while`、`agent_loop` 的调用点固定为 4 个文件（定义、CLI、svc、subagent）；svc/web 不按轮次自推调度 | `:85-111`（计数只覆盖 `src/`；包外第 5 个调用点见 §1 的叶子消费者说明） |
 | A4 | `svc/` 不 import `web/` | `:117-118` |
-| A5 | `RoundLimitExceeded` / `LLMError` 只在 `svc/runs.py` 被捕获并映射 | `:121-126` |
+| A5 | `LLMError` 一类的内核异常只在 `svc/runs.py` 被捕获并映射 | `:121-126` |
 | A6 | 事件名字面量只允许出现在 `runtime/events.py`（其余用常量） | `:132-141` |
 | A10 | `on_message` 的接线只允许在 4 个文件（循环、recorder、CLI、svc） | `:144-154` |
 | A11 | `web/`、`svc/` 里不出现 `append_message` / `.commit(`——recorder 是唯一写入者 | `:157-162` |
@@ -226,7 +226,6 @@ durable）、I13 权威终止以注册表 + 已提交条目为准、I14 列表�
 | 模型 | 配置错误 | `run_failed{code:"config_error"}` |
 | 会话 | `SessionError` | `run_failed{code:"session_error"}` |
 | 程序 | 任何其它异常 | `run_failed{code:"internal"}`，绝不静默死线程 |
-| 未收敛 | 显式配了轮数闸门（`AVID_MAX_ROUNDS`）且耗尽 | `RoundLimitExceeded` → `run_failed{code:"round_limit"}` |
 | 权限 | 四层裁决拒绝 | 回文本按类分档（硬拒绝 / 危险 / 越界 / 用户拒绝）给不同下一步 |
 | 权限 | 审批超时/取消/结束/重启 | 一律 `deny`（失败关闭） |
 | 压缩 | 落盘失败 | 记日志、跳过本次压缩，不抛；工具输出截断退回「只留头部」 |

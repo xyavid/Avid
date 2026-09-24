@@ -11,7 +11,6 @@ reports/ 下有若干期报告。每份报告的第一行写着出报告的日�
 """
 
 [limits]
-max_rounds = 16
 timeout_seconds = 300
 
 [[graders]]

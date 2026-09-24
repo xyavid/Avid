@@ -226,7 +226,6 @@ def agent_loop(
     tools=None, registry=None, config=None, chat=chat_completion,
     auto_approve: bool = False,
     max_tokens: int = DEFAULT_MAX_TOKENS,
-    max_rounds: int | None = None,
     max_stop_blocks: int = MAX_STOP_BLOCKS,
     todo_reminder_after: int = TODO_REMINDER_AFTER_ROUNDS,
 ) -> str:
@@ -234,11 +233,11 @@ def agent_loop(
 
 **公开签名一字不改**——现有 60+ 处测试调用点因此不用改。这是重构"行为不变"最直接的证据形式。
 
-> 后续一次**有意的**签名变更：`max_rounds` 从 `int = MAX_ROUNDS`（写死 8）改成
-> `int | None = None`。原因见 §5.1 的注释与 `CAPABILITIES.md`（轮数上限一行）：
-> 写死的 8 会把"逐轮读 9 个文件"这种普通任务判成未收敛；现在缺省无上限，闸门改由
-> `AVID_MAX_ROUNDS` / 显式 `max_rounds=` 打开。默认值变了，但参数名、位置与语义方向
-> 都没变（传正整数仍是"最多 N 轮"），因此调用点同样不需要改。
+> 后续两次**有意的**签名删除：`max_rounds` 先由 `int = MAX_ROUNDS`（写死 8）改成
+> `int | None = None`，随后**整个参数与 `RoundLimitExceeded` 一起删掉**。原因：轮数不是
+> 收敛判据，写死的 8 会把"逐轮读 9 个文件"这种普通任务判成未收敛，而一个"可选闸门"留着
+> 就仍会被当成产品设置。现在循环没有轮数上限（`itertools.count(1)`），预算只在评测层以
+> 墙钟 `timeout_seconds` 的形式存在。调用点因为少传一个关键字参数而不受影响。
 
 > 阶段 16（F3）在 `chat` 之后补了一个 `summarize=None`（默认回落到 `chat`，所以不改变任何
 > 现有调用点）：流式只该包住**主轮次**，而压缩摘要是通过同一个 `chat` 调用的；不把两者
@@ -257,8 +256,7 @@ agent_loop(messages, ...)
 ├─ emit UserPromptSubmit(transcript.last_user_index())
 │    ├─ block → 返回 ""
 │    └─ injected → 并进 system_prompt 末尾（**不改写用户消息**）
-└─ for round in 1..∞:                            # 上限只在设了 AVID_MAX_ROUNDS 时存在
-     ├─ if 设了上限 且 round > 上限: raise RoundLimitExceeded
+└─ for round in 1..∞:                            # 没有轮数上限
      ├─ state.round = round
      ├─ if state.rounds_since_todo == todo_reminder_after:
      │      transcript.append(提醒)              # 依赖轮次，留在循环里（判据 §2：它确实是循环的事实）
@@ -276,7 +274,7 @@ agent_loop(messages, ...)
      │    └─ 否则 → return turn.text
      └─ outcomes = execution.execute_batch(turn.tool_calls, state=state, ...)
         transcript.append_many(outcomes → tool 消息)
-   raise RoundLimitExceeded                        # 只在设了闸门时可达
+   # 出口只有 return / RunCancelled / 模型异常——没有"轮数耗尽"这一条
 ```
 
 ### 5.2 谁在什么时候读 `Transcript`
@@ -326,7 +324,9 @@ agent_loop(messages, ...)
 | 环境错误 | 落盘失败（压缩） | 记日志、跳过本次压缩 | `policy/compaction.py` |
 | 环境错误 | 摘要调用失败 | 记日志、保留原历史 | `policy/compaction.py` |
 | 程序错误 | hook 抛异常 | 按 block 处理（失败关闭），不影响其它 hook | `runtime/hooks.py` |
-| 未收敛 | 显式配置的轮数闸门耗尽（缺省无此闸门） | `RoundLimitExceeded` | `loop.py` |
+| 取消 | 用户停止 / 评测墙钟到点 | `RunCancelled` → `run_cancelled`（唯一的"提前结束"路径） | `loop.py` |
+
+**未收敛不是失败**：循环没有轮数上限，所以不存在"轮数耗尽"这一类终止原因。想停就取消。
 
 **不做**（pi 有而我们没有，且属于新功能）：崩溃恢复 / checkpoint / 重放、失败重试队列、补偿操作。
 

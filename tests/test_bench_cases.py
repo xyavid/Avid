@@ -69,7 +69,6 @@ def test_every_case_is_decidable():
         assert case.graders, f"{case.id} 没有判定器"
         assert case.prompt.strip()
         assert "回答格式" in case.prompt, f"{case.id} 的 prompt 没写回答格式，判定会脆"
-        assert case.limits.max_rounds >= 1
         assert case.limits.timeout_seconds > 0
         assert {spec["kind"] for spec in case.graders} <= set(KINDS)
 
@@ -151,7 +150,6 @@ def test_difficulty_graders_stay_decidable():
     for case in load_suite("v1"):
         assert {spec["kind"] for spec in case.graders} <= set(KINDS)
         assert "回答格式" in case.prompt, f"{case.id} 没写回答格式"
-        assert case.limits.max_rounds >= 12, f"{case.id} 的轮数上限对难度 case 太紧"
 
 
 def test_fixture_invariant_graders_pass_on_a_pristine_workspace():

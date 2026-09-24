@@ -173,7 +173,7 @@ a11y 与视觉回归（没有用例）、性能回归（只有 stress 的复杂�
 | 任务集 | 参考场景 **R**（读取本地文件 + 计算）的 N 条任务；客观可判、只读无副作用、除模型外不联网 |
 | 主指标 | **通过率**（通过 / 总数）——单一数字，别用复合分 |
 | 次指标 | 失败分类计数（能力不足 / 预算不足 / 工具错误 / 权限拒绝 / 模型错误）、每任务轮数与 token |
-| 环境 | 必须记录：commit、模型名与版本、机器、日期、是否联网、超时与轮数上限设置 |
+| 环境 | 必须记录：commit、模型名与版本、机器、日期、是否联网、超时设置 |
 | 冻结 | 首次测量后把基线值与测量环境写死；`web/budget.json` 的 `frozen_at` 同轮填上，之后只许改注释不许静默改阈值 |
 | 执行 | 独立 marker（如 `-m eval`），**默认不跑**（真模型调用有成本与抖动）；提交前可一键跑；不进 CI 全量 |
 | 对比 | 同一任务集、同一环境跑改动前后两次，**差值写入本文件**——这才叫「改动前后有可对比的评测数字」 |
@@ -225,7 +225,7 @@ a11y 与视觉回归（没有用例）、性能回归（只有 stress 的复杂�
 | 模型 | `deepseek/deepseek-v4.1-flash`（`AVID_MODEL`；base_url `https://api.commandcode.ai/provider/v1`） |
 | 机器 | `LAPTOP-3M7941PJ`，WSL2（`Linux 6.6.87.2-microsoft-standard-WSL2`），32 vCPU，Python 3.12.3 |
 | 日期 | 2026-09-19 09:23:44Z（UTC） |
-| 上限 | 每条 case 的 `max_rounds` 10–16、`timeout_seconds` 240–300（逐条见 `benchmarks/cases/v0/*.toml`） |
+| 上限 | 每条 case 的 `timeout_seconds` 240–300（逐条见 `benchmarks/cases/v0/*.toml`）。**历史上**还有 `max_rounds` 10–16，该机制已删除：轮数不是收敛判据，内核与评测都不再有轮数上限，「预算不足」现在只由墙钟超时产生 |
 | 权限 | `auto_approve=True`（离线跑；因此「拒绝」恒为 0，**不代表**权限层没工作） |
 | 记录 | `benchmarks/runs/baseline/`（**不入库**，`.gitignore`）：每次运行的 `result.json` / `trajectory.jsonl` / `answer.txt` |
 

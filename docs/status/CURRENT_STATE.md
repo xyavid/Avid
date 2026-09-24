@@ -48,7 +48,7 @@
 
 | 层 | 问题 | Avid 的答案 | 现在到什么程度 |
 |---|---|---|---|
-| 能力层 | 想把某类任务交给 agent 自动完成 | 一个能自主多步调用工具的循环 | 已跑通：无轮数上限（需要预算时设 `AVID_MAX_ROUNDS`）、15 个工具、TODO 与任务图、subagent（§3） |
+| 能力层 | 想把某类任务交给 agent 自动完成 | 一个能自主多步调用工具的循环 | 已跑通：没有轮数上限（跑到模型不再请求工具）、15 个工具、TODO 与任务图、subagent（§3） |
 | 工程层 | 用别人的框架 = 黑盒，prompt / 上下文 / 重试 / 权限都改不动 | 每层都是自有代码，边界清晰、可替换 | 已跑通：分层 + `A1`–`A13` 门禁把边界变成会失败的断言（`ARCHITECTURE.md` §4） |
 | 认知层 | 懂概念但没形成可运行整体，改动靠感觉 | 有 trace、有评测集、有基线，改动可度量 | **仪器已就位**：trace + `benchmarks/` 的评测集与基线（§3、`BENCHMARK.md` §9）；但首轮基线没有区分度，所以「改动可度量」目前是**能测**而不是**能判**（§6、§7） |
 
@@ -73,7 +73,7 @@
 
 | 能力 | 关键事实 | 证据 |
 |---|---|---|
-| Agent 循环 | **轮数缺省无上限**（成本闸门可选，见 `AVID_MAX_ROUNDS`）；Stop 被拦最多补 1 轮；两个取消检查点（每轮开始前、每批工具执行前）；设了闸门才可能抛 `RoundLimitExceeded`，且不返回半成品 | `src/avid/runtime/loop.py`、`src/avid/ai/config.py`（`ENV_MAX_ROUNDS`） |
+| Agent 循环 | **没有轮数上限**（也没有这个开关）：跑到模型不再请求工具为止；Stop 被拦最多补 1 轮；两个取消检查点（每轮开始前、每批工具执行前）；取消走 `RunCancelled`，不返回半成品 | `src/avid/runtime/loop.py`（`itertools.count(1)`） |
 | 工具调用协议 | 15 个工具；参数在 `execute_one` 里按**发给模型的那份 schema** 统一校验（required/type/enum/数值边界）；失败按参数错误 / 执行失败 / 业务拒绝三类给不同的下一步；工具失败不中断循环 | `src/avid/tools/__init__.py:47-82`、`src/avid/tools/validate.py`、`src/avid/runtime/loop.py:275-285` |
 | 权限与审批 | 四层裁决（硬拒绝 → 危险命令 → 越界 → 常规规则）× 三档模式（`strict`/`workspace`/`system`）；硬拒绝不可覆盖；危险命令三档一律问一次（按规范化命令原文记账）、越界在严格/工作区档问一次（按绝对路径记账）；审批回调可注入（CLI 读 stdin、Web 走审批队列），subagent 与父运行**共用一本账本** | `src/avid/policy/permission.py:40-160,351-410`、`src/avid/runtime/state.py:46-55` |
 | 工作区 | 用户级注册表 `~/.avid/workspaces.json`；id 由根目录派生（重复登记幂等、索引丢失不丢数据）；运行级工作区根取代模块全局；CLI/Web/前端都能选与新增 | `src/avid/workspaces.py:31-70,113-264`、`src/avid/svc/picker.py` |

@@ -150,7 +150,6 @@ def run_agent(
     config: Config,
     chat: Callable[..., Any],
     state: RunState,
-    max_rounds: int,
     on_message: Callable[[dict[str, Any]], Any] | None = None,
     budget: ContextBudget | None = None,
 ) -> str:
@@ -158,6 +157,9 @@ def run_agent(
 
     ``budget`` 只对 `avid` 循环有效：`bare` 没有任何压缩机制，给它注入阈值等于无声
     无效——所以调用方只在被消融的臂上用（`runner` 就是这么做的，且把它写进 overrides）。
+
+    没有轮数上限：两条循环都不设，预算由 ``case.limits.timeout_seconds`` 的墙钟
+    watchdog 兜。
     """
     system = state.system_prompt(SYSTEM_PROMPT)
     if variant.loop == "bare":
@@ -169,7 +171,6 @@ def run_agent(
             config=config,
             chat=chat,
             state=state,
-            max_rounds=max_rounds,
             on_message=on_message,
         )
     return agent_loop(
@@ -180,7 +181,6 @@ def run_agent(
         config=config,
         chat=chat,
         state=state,
-        max_rounds=max_rounds,
         on_message=on_message,
         budget=budget,
     )

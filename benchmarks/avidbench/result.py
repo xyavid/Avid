@@ -26,7 +26,6 @@ STATUSES = (
     "unscored",
     "timeout",
     "cancelled",
-    "round_limit",
     "llm_error",
     "error",
 )
@@ -52,7 +51,7 @@ def classify(result: "RunResult") -> str:
         return ""
     if result.status == "unresolved":
         return "能力"
-    if result.status in ("round_limit", "timeout"):
+    if result.status == "timeout":
         return "预算"
     if result.status == "llm_error":
         return "模型"

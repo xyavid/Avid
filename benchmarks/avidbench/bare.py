@@ -17,13 +17,13 @@
 
 from __future__ import annotations
 
+import itertools
 from collections.abc import Callable
 from typing import Any
 
 from avid.ai.client import DEFAULT_MAX_TOKENS
 from avid.runtime import events
 from avid.runtime.execution import execute_batch
-from avid.runtime.loop import RoundLimitExceeded
 from avid.runtime.state import RunState
 
 
@@ -36,11 +36,14 @@ def bare_loop(
     config: Any,
     chat: Callable[..., Any],
     state: RunState,
-    max_rounds: int,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     on_message: Callable[[dict[str, Any]], Any] | None = None,
 ) -> str:
-    """跑到模型不再要工具为止。`messages` 原地更新，与 avid loop 的约定一致。"""
+    """跑到模型不再要工具为止。`messages` 原地更新，与 avid loop 的约定一致。
+
+    与 avid loop 一样**没有轮数上限**——对消融实验也要公平：一边有的限制另一边不能有。
+    停下来靠取消检查点，runner 的墙钟 watchdog 正是走它。
+    """
 
     def emit(message: dict[str, Any]) -> None:
         if on_message is not None:
@@ -52,7 +55,7 @@ def bare_loop(
         str(item["function"]["name"]): item["function"]["parameters"] for item in tools
     }
 
-    for round_index in range(1, max_rounds + 1):
+    for round_index in itertools.count(1):
         state.round = round_index
         state.check_cancelled()  # 检查点：硬超时靠它生效
         state.emit(events.RUN_STATUS, round=round_index, tokens=state.tokens, activity="model")
@@ -95,4 +98,5 @@ def bare_loop(
             messages.append(message)
             emit(message)
 
-    raise RoundLimitExceeded(f"达到轮数上限 {max_rounds}，模型仍在请求工具，未收敛")
+    # 与内核循环同形：给静态检查器一个显式出口，运行期不可达。
+    raise AssertionError("轮次循环没有正常出口")
