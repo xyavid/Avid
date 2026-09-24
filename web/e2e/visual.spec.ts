@@ -26,6 +26,18 @@ const BASE = process.env.AVID_BASE_URL ?? 'http://127.0.0.1:8765'
 const COMPOSER = '输入指令，Enter 发送，Shift+Enter 换行'
 const MASK = '.id-tag, .id-tag-empty'
 
+/**
+ * 对话卡头部那行「工作区：<名字>」也要遮。
+ *
+ * 同一条理由的上半截已经在头部注释里写了：会话 id / 运行 id 是**数据**不是观感，所以遮罩。
+ * 工作区名同理——它由**这个进程**注册的工作区决定，而 e2e 服务把工作区根指到
+ * `tempfile.mkdtemp(prefix='avid-e2e-workspace-')`，于是那行里带一个每次起服务都不同的随机
+ * 后缀（实测 `-5cn8fs6s` 与 `-1690olcv` 差 50×8 像素就足以让基线报红，且报的是"对话卡变了"
+ * 这种与改动无关的错）。按文案定位而不是按坐标：文案在字典里，改文案时遮罩失效会让基线
+ * 重新报红（自曝），而不是静默放过。
+ */
+const WORKSPACE_NAME = (page: Page) => page.getByText(/^工作区：/)
+
 /** 截图选项：容差按实测噪声下限，动效冻掉（否则会截到过渡的中间帧）。 */
 const SHOT = { maxDiffPixels: 3, animations: 'disabled' } as const
 
@@ -124,7 +136,10 @@ async function shoot(page: Page, target: ReturnType<Page['locator']>, name: stri
     content: '* { transition: none !important; animation: none !important }',
   })
   await page.evaluate(() => document.fonts.ready)
-  await expect(target).toHaveScreenshot(name, { ...SHOT, mask: [page.locator(MASK)] })
+  await expect(target).toHaveScreenshot(name, {
+    ...SHOT,
+    mask: [page.locator(MASK), WORKSPACE_NAME(page)],
+  })
 }
 
 test('视觉基线：会话落点页', async ({ page }) => {
