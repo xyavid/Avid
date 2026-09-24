@@ -360,22 +360,6 @@ class AnswerApprovalOut(BaseModel):
 # ---------------- 任务 ----------------
 
 
-class TaskOut(BaseModel):
-    id: str
-    subject: str
-    description: str
-    status: str
-    owner: str | None = None
-    blockedBy: list[str] = Field(default_factory=list)
-    can_start: bool = False
-    blocked: bool = False
-    incomplete_dependencies: list[str] = Field(default_factory=list)
-    dependency_titles: dict[str, str] = Field(default_factory=dict)
-
-
-class TaskListOut(BaseModel):
-    tasks: list[TaskOut]
-
 
 class SkillListOut(BaseModel):
     skills: list[SkillOut]
@@ -476,8 +460,6 @@ __all__ = [
     "SkillOut",
     "StartRunIn",
     "StreamInfo",
-    "TaskListOut",
-    "TaskOut",
     "UsageOut",
     "classify_tool_status",
     "event_payload",

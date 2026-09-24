@@ -1,8 +1,8 @@
 """运行级工作区根：一个进程服务多个工作区时，所有落点都必须跟着 state 走。
 
-这是阶段 18 风险最高的一处重构——模块全局 ``WORKSPACE_ROOT`` 有 9 个读取点，
+这是阶段 18 风险最高的一处重构——模块全局 ``WORKSPACE_ROOT`` 有多个读取点，
 漏掉任何一个都会让"这次运行在哪个工作区"出现两套答案（模型看到的路径、bash 的
-cwd、文件工具、任务库、压缩落盘可能各说各话），而单工作区的测试发现不了。
+cwd、文件工具、压缩落盘可能各说各话），而单工作区的测试发现不了。
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import pytest
 
 from avid.policy import compaction
 from avid.runtime.state import RunState
-from avid.tools import shell, tasks
+from avid.tools import shell
 from avid.tools.files import read_file, write_file
 
 
@@ -43,15 +43,6 @@ def test_file_tools_resolve_against_the_run_root(sandbox, other):
     assert read_file({"path": "notes.txt"}, state=state) == "在第二个工作区"
 
 
-def test_task_store_follows_the_run_root(sandbox, other):
-    state = RunState.for_run(workspace_root=str(other))
-
-    tasks.create_task_tool({"subject": "另一个工作区的任务"}, state=state)
-
-    assert (other / ".tasks").is_dir()
-    assert not (sandbox / ".tasks").exists()
-
-
 def test_system_prompt_reports_the_run_root(sandbox, other):
     state = RunState.for_run(workspace_root=str(other))
 
@@ -74,9 +65,7 @@ def test_without_a_run_root_everything_falls_back_to_the_process_root(sandbox):
     state = RunState.for_run()
 
     write_file({"path": "fallback.txt", "content": "默认根"}, state=state)
-    tasks.create_task_tool({"subject": "默认根的任务"}, state=state)
     prompt = state.system_prompt()
 
     assert (sandbox / "fallback.txt").exists()
-    assert (sandbox / ".tasks").is_dir()
     assert f"工作目录：{sandbox}" in prompt

@@ -12,32 +12,18 @@ from ..policy.todo import todo_write
 from .files import edit_file, glob_files, read_file, write_file
 from .schemas import (
     BASH,
-    CAN_START,
-    CLAIM_TASK,
-    COMPLETE_TASK,
-    CREATE_TASK,
     EDIT_FILE,
-    GET_TASK,
     GLOB,
     LOAD_SKILL,
     READ_FILE,
     SUBAGENT,
     TODO_WRITE,
-    UPDATE_TASK,
     WEB_SEARCH,
     WRITE_FILE,
 )
 from .shell import bash
 from .skill import load_skill
 from .subagent import subagent
-from .tasks import (
-    can_start_tool,
-    claim_task_tool,
-    complete_task_tool,
-    create_task_tool,
-    get_task_tool,
-    update_task_tool,
-)
 from .web_search import web_search
 
 # 参数放宽为 ...：多数工具是 (args)，需要运行状态的少数几个是 (args, *, state)。
@@ -51,12 +37,6 @@ TOOLS: list[dict[str, Any]] = [
     EDIT_FILE,
     GLOB,
     TODO_WRITE,
-    CREATE_TASK,
-    UPDATE_TASK,
-    CAN_START,
-    CLAIM_TASK,
-    COMPLETE_TASK,
-    GET_TASK,
     SUBAGENT,
     LOAD_SKILL,
     WEB_SEARCH,
@@ -69,12 +49,6 @@ TOOL_IMPLS: dict[str, ToolImpl] = {
     "edit_file": edit_file,
     "glob": glob_files,
     "todo_write": todo_write,
-    "create_task": create_task_tool,
-    "update_task": update_task_tool,
-    "can_start": can_start_tool,
-    "claim_task": claim_task_tool,
-    "complete_task": complete_task_tool,
-    "get_task": get_task_tool,
     "subagent": subagent,
     "load_skill": load_skill,
     "web_search": web_search,

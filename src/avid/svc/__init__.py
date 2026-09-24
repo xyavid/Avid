@@ -39,7 +39,6 @@ from .runs import (
     RunRegistry,
 )
 from .sessions import SessionService
-from .tasks import TaskService
 from .workspaces import WorkspaceService, bound_workspace, single_workspace
 
 # 破坏性变更时 +1。客户端只在**不兼容**时失败收敛；加可选事件不改它（§6.3）。
@@ -49,7 +48,6 @@ API_VERSION = 1
 FEATURES: dict[str, int] = {
     "approvals": 1,
     "cancel": 1,
-    "tasks": 1,
     "sessions": 1,
     "entries": 1,
     "deltas": 1,  # F3：内核按 SSE 流式解析，delta 经事件流投递（需 ?deltas=1 订阅）
@@ -168,7 +166,6 @@ class Services:
             max_events=max_events,
         )
         self.sessions = SessionService(self.workspaces, self.runs)
-        self.tasks = TaskService(self.workspaces)
         # 事件流的并发额度：进程级一份（每个进程一个线程池）。
         self.streams = StreamSlots()
         self.started_at = now_ms()

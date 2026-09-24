@@ -477,7 +477,6 @@ def test_meta_matches_kernel_and_features_match_endpoints(bundle):
     assert meta["stream"]["heartbeat_seconds"] > 0
 
     # 特性表声明的能力必须真的有端点
-    assert client.get("/api/tasks").status_code == 200
     assert client.get("/api/skills").status_code == 200
     if FEATURES["approvals"]:
         assert client.get("/api/runs/run_x/approvals").status_code == 404  # 存在但 run 未知

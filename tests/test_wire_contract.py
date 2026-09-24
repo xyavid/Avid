@@ -52,7 +52,6 @@ from avid.web.schemas import (
     SessionSummary,
     SkillOut,
     StreamInfo,
-    TaskOut,
     UsageOut,
     WorkspaceOut,
     WorkspaceRef,
@@ -94,8 +93,6 @@ PAIRS: list[tuple[type, str]] = [
     (SkillOut, "Skill"),
     (BuildInfo, "BuildInfo"),
     (ErrorOut, "ErrorEnvelope"),
-    # 任务
-    (TaskOut, "Task"),
 ]
 
 

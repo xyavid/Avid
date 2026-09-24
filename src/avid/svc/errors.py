@@ -87,15 +87,6 @@ class ApprovalConflict(ServiceError):
     status = 409
 
 
-class TaskNotFound(ServiceError):
-    code = "task_not_found"
-    status = 404
-
-
-class TaskCorrupt(ServiceError):
-    code = "task_corrupt"
-    status = 500
-
 
 class SessionReadError(ServiceError):
     """会话文件损坏或读不了。列表路径跳过坏项，单会话路径显式失败。"""

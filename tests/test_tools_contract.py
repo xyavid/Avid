@@ -80,17 +80,11 @@ def test_concurrency_safe_tools_are_read_only_by_name():
         "edit_file",
         "bash",
         "todo_write",
-        "create_task",
-        "update_task",
-        "claim_task",
-        "complete_task",
         "subagent",
     } <= EXCLUSIVE
     assert {
         "read_file",
         "glob",
-        "get_task",
-        "can_start",
         "load_skill",
         "web_search",
     } <= CONCURRENCY_SAFE
@@ -116,18 +110,12 @@ def test_timeout_parameter_matches_the_enforced_cap():
 def test_expected_tools_are_registered():
     assert sorted(NAMES) == [
         "bash",
-        "can_start",
-        "claim_task",
-        "complete_task",
-        "create_task",
         "edit_file",
-        "get_task",
         "glob",
         "load_skill",
         "read_file",
         "subagent",
         "todo_write",
-        "update_task",
         "web_search",
         "write_file",
     ]

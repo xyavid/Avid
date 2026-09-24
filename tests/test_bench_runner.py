@@ -122,7 +122,7 @@ def test_tool_sets_are_the_ablation():
     assert set(bare) == set(CORE_TOOLS)
     assert core == bare, "core 与 bare 必须同工具集，否则量到的是工具差异"
     assert set(core) < full
-    assert {"create_task", "subagent", "todo_write", "load_skill"} <= full
+    assert {"subagent", "todo_write", "load_skill"} <= full
 
 
 def test_bare_runs_without_hooks_and_core_uses_defaults():

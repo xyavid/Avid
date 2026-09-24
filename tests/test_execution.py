@@ -117,7 +117,7 @@ def test_plan_segments_isolates_exclusive_calls(limit, expected):
         call("read_file", call_id="c1"),
         call("write_file", call_id="c2"),
         call("glob", call_id="c3"),
-        call("get_task", call_id="c4"),
+        call("web_search", call_id="c4"),
     ]
 
     assert plan_segments(calls, limit) == expected

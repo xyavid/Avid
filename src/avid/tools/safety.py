@@ -27,9 +27,6 @@ CONCURRENCY_SAFE: frozenset[str] = frozenset(
         "read_file",
         # 列文件名；不写盘。
         "glob",
-        # 读任务图的只读视图（真正改图的是 create/update/claim/complete，都在独占表）。
-        "get_task",
-        "can_start",
         # 按注册表读技能全文；注册表是只读快照。
         "load_skill",
         # 出网检索；每次都独立请求，互不依赖。
@@ -45,12 +42,8 @@ EXCLUSIVE: frozenset[str] = frozenset(
         "edit_file",
         # 起子进程：工作目录、超时、输出、刷屏都与同批的其它调用互相影响。
         "bash",
-        # 共享可变状态（待办清单 / 任务图）。
+        # 共享可变状态（待办清单）。
         "todo_write",
-        "create_task",
-        "update_task",
-        "claim_task",
-        "complete_task",
         # 自己已经有线程池：并进并发段会变成嵌套并发，线程数与预算都失控。
         "subagent",
     }
