@@ -37,8 +37,8 @@
 | **密度** | `compact` → 内边距 `p-2`，`comfy` → `p-3`；只作用于用户卡与 assistant 正文容器。 |
 | **折叠默认值** | 无折叠。notice 文案用 `truncate` + `max-w-[32rem]` 收敛长度，完整内容留给 inspector（`onInspect`）。 |
 | **角色标记** | 两枚 lucide 图标：模型 `Bot`、用户 `User`。同一套图标契约（`strokeWidth 1.75` + `color: currentColor` + `aria-hidden`），**必须不同形**——标记的职责是区分作者，两卡共用一个形状等于没标。`e2e/messages.spec.ts` 断言两枚的 path 数据不相等（防「顺手统一」），另一条断言图标 `aria-hidden`、角色名由旁边的文字承担。**卡片不再轮换形状**：旧语言那三种手绘圆角随机制删除，同一份 spec 反过来断言「所有消息卡片同形」。 |
-| **a11y** | `aria-live="polite"` **只加在 durable（`!entry.optimistic`）的 assistant 条目上**：乐观 delta 每帧都在变，播报等于噪音。动作行（复制文本 / 从此处分支）**常驻可见**，不做悬停显形——显隐只是额外一层谜（「有这功能」得先被猜到），而方框与高度档本来就一直在。动作按钮的 accessible name 来自内部文字。「从此处分支」只在条目有 `entryId` 时出现：乐观的 delta 条目还不是分叉点。条目级的「查看原始 JSON」已删除，检查器由工具卡的「查看」打开。 |
-| **交互反馈** | 动作按钮用 `variant="secondary"`：**方框是本身就有的**（玻璃面 + `--glass-edge` 高光边 + `--r-chip` 圆角 + `--lift-1` 投影），与「改名」等次级按钮同族；悬停抬升一档投影并加一点亮度、按住收掉投影（**不位移**：高度由投影承担，`transform` 不参与表达层级），统一在 `ui/glass.css` 的 `.press` 里定义。`opacity` 不是这些按钮的设计变量。取值全部来自 `ui/tokens.css`，不要在调用点硬写边框、圆角或阴影。 |
+| **a11y** | `aria-live="polite"` **只加在 durable（`!entry.optimistic`）的 assistant 条目上**：乐观 delta 每帧都在变，播报等于噪音。动作行（复制 / 从此处分支两枚**图标按钮**）**常驻可见**，不做悬停显形——显隐只是额外一层谜（「有这功能」得先被猜到），而方框与高度档本来就一直在。图标没有内部文字，accessible name 只能来自 `aria-label`（`chat.message.copy` / `chat.message.fork`），于是 `getByRole('button', { name: '复制文本' })` 这类定位在改动后原样有效；图标本身 `aria-hidden`（名字已由按钮给出）。说明文字只在悬停/聚焦时以 `Tooltip` 气泡浮现在按钮**外面**（`chat.message.copy.hint` / `chat.message.fork.hint`，说清它作用于哪一条消息），未悬停时气泡内容不挂载，不占位。「从此处分支」只在条目有 `entryId` 时出现：乐观的 delta 条目还不是分叉点。条目级的「查看原始 JSON」已删除，检查器由工具卡的「查看」打开。 |
+| **交互反馈** | 动作按钮用 `variant="secondary"` + `size="icon"`：**方框是本身就有的**（玻璃面 + `--glass-edge` 高光边 + `--r-chip` 圆角 + `--lift-1` 投影），与「改名」等次级按钮同族；悬停抬升一档投影并加一点亮度、按住收掉投影（**不位移**：高度由投影承担，`transform` 不参与表达层级），统一在 `ui/glass.css` 的 `.press` 里定义。`opacity` 不是这些按钮的设计变量。取值全部来自 `ui/tokens.css`，不要在调用点硬写边框、圆角或阴影。 |
 
 ## ApprovalBar
 
