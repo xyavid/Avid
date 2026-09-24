@@ -155,7 +155,7 @@ describe('Composer 里的位置', () => {
       <Composer
         busy={false}
         canSend
-        permission="strict"
+        permission="manual"
         onPermissionChange={() => undefined}
         onSend={() => undefined}
         onStop={() => undefined}

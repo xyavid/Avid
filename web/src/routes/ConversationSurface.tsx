@@ -19,7 +19,7 @@ import { Inspector } from '../features/inspector'
 import type { InspectorSelection } from '../features/inspector'
 import { InspectorSlot } from '../layouts/InspectorSlot'
 import type { TimelineEntry, ToolRun } from '../lib/timeline'
-import type { PermissionMode } from '../api/types'
+import type { PermissionMode, SandboxState } from '../api/types'
 import { useRunView } from '../state/runStore'
 import { useRunStreamState } from './useRunStream'
 
@@ -34,6 +34,8 @@ export interface ConversationSurfaceProps {
   branch: string
   /** 这次运行的权限模式（已按工作区默认回落，不是 null）。 */
   permission: PermissionMode
+  /** 服务端上报的沙箱后端（meta 未就绪时为 null）。 */
+  sandbox: SandboxState | null
   /** 服务端说这个会话有活动 run：切换与分叉都会失败，先把入口禁掉。 */
   hasActiveRun: boolean
   density: 'compact' | 'comfy'
@@ -96,6 +98,7 @@ export function ConversationSurface(props: ConversationSurfaceProps) {
               stopping={view.phase === 'cancelling'}
               permission={props.permission}
               onPermissionChange={props.onPermissionChange}
+              sandbox={props.sandbox}
               onSend={props.onSend}
               onStop={props.onStop}
               sessionId={props.sessionId}

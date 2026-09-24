@@ -8,6 +8,7 @@ import {
   useCancelRun,
   useCreateBranch,
   useEntries,
+  useMeta,
   useSession,
   useStartRun,
 } from '../api/queries'
@@ -38,6 +39,9 @@ export function ConversationRoute() {
   const [branch, setBranch] = useState(DEFAULT_BRANCH)
   const entries = useEntries(sessionId, branch)
   const session = useSession(sessionId)
+  // 沙箱后端是**服务端事实**（本机能不能真套沙箱），不是模式的推论：读 meta 的
+  // capabilities.sandbox，界面才能说出"工作区"与"不可用"的差别。
+  const meta = useMeta()
   const startRun = useStartRun()
   const cancelRun = useCancelRun()
   const answer = useAnswerApproval()
@@ -161,6 +165,7 @@ export function ConversationRoute() {
         entriesLoading={entries.isLoading}
         branch={branch}
         permission={permissionMode}
+        sandbox={meta.data?.capabilities?.sandbox ?? null}
         hasActiveRun={Boolean(session.data?.active_run_id)}
         onSwitchBranch={switchBranch}
         onPermissionChange={setPermission}

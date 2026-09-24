@@ -18,7 +18,7 @@ function workspace(id: string, name = id): WorkspaceSummary {
     name,
     created_at: 0,
     last_used_at: 0,
-    default_permission: 'strict',
+    default_permission: 'manual',
     is_default: false,
   }
 }
@@ -33,7 +33,7 @@ function session(id: string, workspaceId: string | null): SessionSummary {
     workspace:
       workspaceId === null
         ? null
-        : { id: workspaceId, root: `/tmp/${workspaceId}`, name: workspaceId, default_permission: 'strict' },
+        : { id: workspaceId, root: `/tmp/${workspaceId}`, name: workspaceId, default_permission: 'manual' },
     message_count: 0,
     active_run_id: null,
     truncated_tail: false,

@@ -22,10 +22,26 @@ export interface Skill {
 }
 
 /**
- * 权限三态（阶段 18）：模式名就是信任边界，`strict ⊇ workspace ⊇ system`。
- * 服务端 `StartRunIn.permission` 是 `Literal[...] | None`，非法值 422。
+ * 三个用户模式（阶段 26）：每个是**三轴预设**，不是一道信任边界的三个刻度。
+ *
+ * `manual` = approval:user + sandbox:workspace + network:restricted
+ * `auto`   = approval:classifier + 同样的沙箱与网络
+ * `full`   = approval:none + sandbox:disabled + network:open（必须显式授权）
+ *
+ * 服务端 `StartRunIn.permission` 是 `Literal[...] | None`，非法值 422；
+ * `full` 还需要 `full_access_ack: true`（见 `needsFullAck`）。
  */
-export type PermissionMode = 'strict' | 'workspace' | 'system'
+export type PermissionMode = 'manual' | 'auto' | 'full'
+
+/** 沙箱后端探测结果（`GET /api/meta` 的 `capabilities.sandbox`）。 */
+export interface SandboxState {
+  backend: string
+  available: boolean
+  network: boolean
+  reason: string | null
+  /** 内核 Landlock ABI 版本；只有 ABI ≥ 4 才能强制网络（这里只做诊断展示）。 */
+  landlock_abi: number | null
+}
 
 /** 系统文件夹选择器的结果：`path` 为 null = 用户取消（不是错误）。 */
 export interface PickFolderResult {
@@ -63,6 +79,8 @@ export interface Capabilities {
   workspace: string
   /** 这台机器上会用到哪个文件夹选择器后端（null = 没有可用的）。诊断用。 */
   workspace_picker: string | null
+  /** 沙箱后端探测结果：界面据此说清"沙箱到底在不在"，而不是照模式猜。 */
+  sandbox: SandboxState
 }
 
 export interface StreamInfo {
@@ -252,4 +270,11 @@ export interface StartRunInput {
   branch?: string
   /** 这次运行的权限模式；缺省由服务端按会话所属工作区的默认权限回落。 */
   permission?: PermissionMode
+  /**
+   * `permission: 'full'` 的**显式授权凭据**。
+   *
+   * 少了它服务端 422：关掉沙箱与网络边界这件事必须是一次有意识的动作，而不是
+   * 选择器上的第三项。由 `buildStartRunInput` 按模式统一填，调用点不必各自记得。
+   */
+  full_access_ack?: boolean
 }

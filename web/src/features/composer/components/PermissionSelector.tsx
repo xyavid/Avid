@@ -1,4 +1,6 @@
-import { Select, Tooltip } from '../../../ui/primitives'
+import { useState } from 'react'
+
+import { Button, Dialog, Select, Tooltip } from '../../../ui/primitives'
 import { useTranslation } from '../../../lib/i18n'
 import { isPermissionMode, PERMISSION_MODES } from '../lib/permission'
 import type { PermissionMode } from '../../../api/types'
@@ -17,19 +19,17 @@ export interface PermissionSelectorProps {
  * 权限模式选择器：三档 + 悬停/聚焦时浮现在控件**外面**的说明气泡。
  *
  * 值由 L4 route 用 `useState` 持有（照 `branch` 的形态）：它只活在这一个会话视图里，
- * **不写 uiStore**——「上次选了 system，下次打开浏览器仍自动全放行」是安全默认值问题，
+ * **不写 uiStore**——「上次选了 full，下次打开浏览器仍自动关沙箱」是安全默认值问题，
  * 不是偏好（`state/uiStore.ts` 开头那条：服务端状态不在本地留副本）。
  *
- * 呈现（阶段 24 改动）：说明从"控件方框**内部**原位的占位行"挪到了 `Tooltip` 气泡，
- * 方向朝上（控件在输入条最下一行，往上弹不会被底部裁掉）。
+ * **`full` 走二次确认**（阶段 26）：选中它不是"换了个档"，而是把最后一道物理边界
+ * 关掉，所以这里不直接 `onChange('full')`，而是先弹一次 Dialog，用户按下
+ * 「我明白，关闭沙箱」才生效。关掉弹窗什么都不发生（选择器回到原值）。
  *
- * 为什么改：原位那版要一直留着一行高度给说明占位（不占位就会在显形时把输入条撑高一格），
- * 于是"悬停才出现"的文字反而常驻吃掉了纵向空间，而它描述的东西本来就不属于控件方框；
- * 气泡是浮层，不进布局，未悬停时**内容根本不挂载**（不是 opacity 藏起来），
- * 所以既没有占位也没有额外的方框高度。可访问性不减：Radix 会在打开时把
- * `aria-describedby` 连到气泡上，键盘 Tab 聚焦同样读得到。
+ * 为什么确认放在 UI 而不是只靠服务端 422：服务端的 `full_access_ack` 是**准入**条件
+ * （少带就拒），它挡不住"误触第三项"这一层；两者是不同的一道。
  *
- * 可访问名仍由 `aria-label` 提供（`getByLabel('权限模式')` 照样定位得到）。
+ * 呈现：说明用 `Tooltip` 气泡（不占布局高度，未悬停时内容不挂载）。
  */
 export function PermissionSelector({
   value,
@@ -37,23 +37,54 @@ export function PermissionSelector({
   disabled = false,
 }: PermissionSelectorProps) {
   const { t } = useTranslation()
+  const [confirming, setConfirming] = useState(false)
 
   return (
-    <Tooltip id={HINT_ID} side="top" label={t(`permission.hint.${value}`)}>
-      <Select
-        aria-label={t('permission.label')}
-        value={value}
-        disabled={disabled}
-        onChange={(event) => {
-          if (isPermissionMode(event.target.value)) onChange(event.target.value)
-        }}
-      >
-        {PERMISSION_MODES.map((mode) => (
-          <option key={mode} value={mode}>
-            {t(`permission.mode.${mode}`)}
-          </option>
-        ))}
-      </Select>
-    </Tooltip>
+    <>
+      <Tooltip id={HINT_ID} side="top" label={t(`permission.hint.${value}`)}>
+        <Select
+          aria-label={t('permission.label')}
+          value={value}
+          disabled={disabled}
+          onChange={(event) => {
+            const next = event.target.value
+            if (!isPermissionMode(next)) return
+            if (next === 'full' && value !== 'full') {
+              setConfirming(true)
+              return
+            }
+            onChange(next)
+          }}
+        >
+          {PERMISSION_MODES.map((mode) => (
+            <option key={mode} value={mode}>
+              {t(`permission.mode.${mode}`)}
+            </option>
+          ))}
+        </Select>
+      </Tooltip>
+      <Dialog
+        open={confirming}
+        onOpenChange={setConfirming}
+        title={t('permission.full.title')}
+        description={t('permission.full.body')}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setConfirming(false)}>
+              {t('common.cancel')}
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => {
+                setConfirming(false)
+                onChange('full')
+              }}
+            >
+              {t('permission.full.confirm')}
+            </Button>
+          </>
+        }
+      />
+    </>
   )
 }

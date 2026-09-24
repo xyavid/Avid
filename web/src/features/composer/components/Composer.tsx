@@ -3,8 +3,9 @@ import { useEffect, useRef } from 'react'
 import { Button, TextArea } from '../../../ui/primitives'
 import { useTranslation } from '../../../lib/i18n'
 import { useUiStore } from '../../../state/uiStore'
-import type { PermissionMode } from '../../../api/types'
+import type { PermissionMode, SandboxState } from '../../../api/types'
 import { PermissionSelector } from './PermissionSelector'
+import { SandboxStatus } from './SandboxStatus'
 import { UsageMeter } from './UsageMeter'
 
 export interface ComposerProps {
@@ -14,6 +15,8 @@ export interface ComposerProps {
   /** 这次运行用哪一档权限（route 已按工作区默认回落过）。 */
   permission: PermissionMode
   onPermissionChange: (mode: PermissionMode) => void
+  /** 服务端上报的沙箱后端（`capabilities.sandbox`）；meta 未就绪时为 null。 */
+  sandbox?: SandboxState | null
   onSend: (prompt: string) => void
   onStop: () => void
   /** 会话 id 与当前分支：用量指示器按它们取"该分支上一次运行"的落盘读数。 */
@@ -36,6 +39,7 @@ export function Composer({
   stopping = false,
   permission,
   onPermissionChange,
+  sandbox = null,
   onSend,
   onStop,
   sessionId,
@@ -81,12 +85,15 @@ export function Composer({
         <div className="flex flex-wrap items-end justify-between gap-2">
           {/* 方框按控件自身内容收宽（`w-fit`），不再按说明行占位：说明改成了浮在上方的
               气泡，方框只需要放得下当前档的名字。固定 `w-52` 是给原位说明行留的宽度。 */}
-          <div className="w-fit min-w-0">
+          <div className="flex w-fit min-w-0 items-center gap-2">
             <PermissionSelector
               value={permission}
               onChange={onPermissionChange}
               disabled={busy || !canSend}
             />
+            {/* 沙箱状态与模式选择器同格：两者说的是同一件事的两半——"选了哪档"与
+                "这台机器上那档实际意味着什么"。full 在这里永远看得见。 */}
+            <SandboxStatus mode={permission} sandbox={sandbox} />
           </div>
           {/* 中间这段吃掉剩余宽度并把指示器顶到右端：它因此紧邻发送/停止按钮左侧，
               窄屏换行时也不会压住权限选择器。 */}

@@ -67,7 +67,7 @@ export const DICTIONARY: Record<Locale, Entry> = {
     'common.settings.backdrop.failedQuota':
       '本机存储写不进去了。先清掉别的偏好或换一张更小的图，再试一次。',
     'common.settings.behavior': '行为',
-    'common.settings.autoApprove': '起运行时跳过审批（硬拒绝仍生效）',
+    'common.settings.autoApprove': '起运行时替所有审批答「是」（硬拒绝与安全策略仍生效，沙箱也仍然生效）',
     'common.settings.engine': '内核',
     'common.settings.model': '模型',
     'common.settings.modelMissing': '未配置（cp .env.example .env 后填 AVID_MODEL）',
@@ -252,14 +252,25 @@ export const DICTIONARY: Record<Locale, Entry> = {
       '还没有工作区。点右上角的 ＋ 挑一个本地文件夹，或在终端里用 `avid workspace add <路径>` 登记一个。',
     'sessions.workspace.failed': '工作区列表没取回来',
 
-    // ---------------- permission ----------------
+    // ---------------- permission（三个模式 = 三轴预设） ----------------
     'permission.label': '权限模式',
-    'permission.mode.strict': '严格',
-    'permission.mode.workspace': '工作区',
-    'permission.mode.system': '系统级',
-    'permission.hint.strict': '严格：每个受管动作都要问',
-    'permission.hint.workspace': '工作区：区内动作免问，越界需同意一次',
-    'permission.hint.system': '系统级：默认免问，仅危险命令问',
+    'permission.mode.manual': '手动',
+    'permission.mode.auto': '自动',
+    'permission.mode.full': '完全访问',
+    'permission.hint.manual': '手动：沙箱内免问；危险命令与越界一律问你',
+    'permission.hint.auto': '自动：沙箱内免问；越界与危险由分类器裁决，判不准即拒（不问你）',
+    'permission.hint.full': '完全访问：不问、不套沙箱、不限制网络。必须显式确认，且不能作为工作区默认',
+    'permission.full.title': '确认关闭沙箱？',
+    'permission.full.body':
+      '完全访问会同时关掉文件系统沙箱与网络边界：agent 的任何命令都以当前用户身份直接执行，' +
+      '可以读写工作区之外的路径、访问网络。这次运行的每一步仍会记进审计，但没有任何东西会拦住它。',
+    'permission.full.confirm': '我明白，关闭沙箱',
+    'permission.sandbox.label': '沙箱',
+    'permission.sandbox.workspace': '工作区（无出网）',
+    'permission.sandbox.disabled': '已禁用',
+    'permission.sandbox.unavailable': '不可用',
+    'permission.sandbox.degraded': '沙箱不可用（{reason}）：受管命令会逐个问你，auto 下直接拒绝',
+    'permission.sandbox.hint': '这次运行的物理边界：{state}。它不由模型决定。',
 
     // ---------------- skills ----------------
     'skills.title': '技能目录',
