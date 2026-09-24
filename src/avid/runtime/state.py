@@ -17,9 +17,11 @@ from typing import TYPE_CHECKING, Any
 
 from ..ai.usage import Usage, hit_ratio
 from ..policy.permission import (
+    APPROVAL_NONE,
     DEFAULT_MODE,
-    MODE_SYSTEM,
     ApprovalLedger,
+    RunSecurity,
+    build_run_security,
     validate_mode,
 )
 from ..policy.skills import SkillLoader, default_skills_dir
@@ -68,9 +70,19 @@ class RunState:
     # 运行级开关
     auto_approve: bool = False
 
-    # 权限模式：名字即信任边界（strict / workspace / system）。默认最严，
+    # 权限模式：三个预设之一（manual / auto / full）。默认 manual，
     # 因为默认值一放宽就是静默放大所有既有调用方的权限。
     permission_mode: str = DEFAULT_MODE
+
+    # 运行级安全规格：三轴 + 四级 deny 阶梯 + 沙箱 + 审计。**唯一**的落点——
+    # 工具执行时用的沙箱、事件里报的三轴、审计里记的裁决全部取自它，不各算一份。
+    # 构造时没给就按 ``permission_mode`` + ``workspace_root`` 现算（见 __post_init__）。
+    security: RunSecurity | None = None
+
+    # full 的显式授权凭据：由 CLI/Web 的接线点传进来（`--allow-full-access` /
+    # `full_access_ack=true`）。没有它就抛 FullAccessError——拒绝启动。
+    full_ack: bool = False
+    grant_source: str = "cli"
 
     # "同意一次即生效"的账本：只活一次运行、只在内存里。子 agent 与父 agent 共用一本。
     ledger: ApprovalLedger = field(default_factory=ApprovalLedger)
@@ -156,6 +168,24 @@ class RunState:
         default_factory=lambda: hooks_module.DEFAULT_HOOKS
     )
 
+    def __post_init__(self) -> None:
+        """把三轴解析成运行级安全规格。构造时没给就现算一份。
+
+        为什么在构造时算而不是"用的时候再算"：``tools/shell.py`` 在工作线程里读它，
+        懒算会把"第一次调用"变成一次隐式写入（并发下还得加锁）。构造点在循环之前，
+        配置与探测都已完成，代价是一次缓存过的探测 + 两个小文件。
+        """
+        if self.security is None:
+            self.security = build_run_security(
+                mode=validate_mode(self.permission_mode),
+                root=self.workspace_root,
+                run_tag=self.run_tag,
+                full_ack=self.full_ack,
+                source=self.grant_source,
+            )
+        # 模式与规格必须一致：``security`` 是权威，``permission_mode`` 是它的名字。
+        self.permission_mode = self.security.mode
+
     @classmethod
     def for_run(
         cls,
@@ -168,13 +198,36 @@ class RunState:
         workspace_root: str | None = None,
         hooks: "hooks_module.HookRegistry | None" = None,
         context_window: int | None = None,
+        security: RunSecurity | None = None,
+        full_ack: bool = False,
+        grant_source: str = "cli",
+        home: str | None = None,
+        audit_dir: str | None = None,
+        audit_enabled: bool = True,
     ) -> "RunState":
-        """建一份运行状态，并**重新扫描一次技能目录**——磁盘变了，下次运行就生效。"""
+        """建一份运行状态，并**重新扫描一次技能目录**——磁盘变了，下次运行就生效。
+
+        ``security`` 给了就沿用（子 agent 用父运行那一份：同一个沙箱、同一本审计、
+        同一份阶梯）；没给就按模式现算。``full_ack`` 只有 CLI/Web 的接线点能填。
+        """
+        name = validate_mode(permission_mode or DEFAULT_MODE)
+        built = security or build_run_security(
+            mode=name,
+            root=workspace_root,
+            home=home,
+            full_ack=full_ack,
+            source=grant_source,
+            audit_dir=audit_dir,
+            audit_enabled=audit_enabled,
+        )
         return cls(
             auto_approve=auto_approve,
             ask=ask,
             observer=observer,
-            permission_mode=validate_mode(permission_mode or DEFAULT_MODE),
+            permission_mode=built.mode,
+            security=built,
+            full_ack=full_ack,
+            grant_source=grant_source,
             ledger=ledger if ledger is not None else ApprovalLedger(),
             workspace_root=workspace_root,
             context_window=context_window,
@@ -189,11 +242,21 @@ class RunState:
         """文件工具据此判断越界目标是否已获授权。
 
         只读结果、不做决定：决定由 ``policy.permission.gate`` 做出并写进账本，
-        所以"没有授权"必然失败关闭。``system`` 模式下整圈预授权。
+        所以"没有授权"必然失败关闭。``full``（approval=none）下整圈预授权。
         """
-        if self.permission_mode == MODE_SYSTEM:
+        if self.security is not None and self.security.approval == APPROVAL_NONE:
             return True
         return self.ledger.outside_allowed(path)
+
+    def sandbox_grants(self) -> tuple[tuple[str, str], ...]:
+        """本次运行已获准的区外路径（路径, ro/rw）。沙箱组装 argv 时读它。"""
+        return self.ledger.path_grants()
+
+    def security_summary(self) -> dict[str, Any]:
+        """进事件与 REST 的三轴快照。"""
+        if self.security is None:  # pragma: no cover - __post_init__ 保证非空
+            return {}
+        return self.security.summary()
 
     # ---------------- 事件与取消 ----------------
 

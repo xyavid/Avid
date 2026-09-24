@@ -1,8 +1,14 @@
 """bash：在工作区根目录执行一条 shell 命令。
 
-**这不是沙箱。** 命令以当前进程的权限运行，workspace.resolve() 那套路径校验
-对它完全无效。这里只有三条最低护栏：工作目录、超时（连子孙一起清理）、输出上限。
-真正的执行边界属于审批 / 权限模型。
+**命令本身是沙箱里的**：argv 由 ``state.security.sandbox`` 组装（只读系统 + 可写工作区
++ 掩蔽的宿主凭据 + 无出网的 network namespace + 裁过的环境），能力授予按已批准的路径
+以额外 ``--ro-bind``/``--bind`` 挂进来。workspace.resolve() 那套路径校验对 bash 无效
+（它是启发式），真正拦住命令的是挂载与 netns。
+
+沙箱不可用或本次运行显式关掉沙箱（full）时套不上，这时兜底的是审批/分类器——
+``SandboxSpec.degraded`` 会让决策层把边界挪回人身上，工具层不做决定、也不假装。
+
+本文件另有三条护栏：工作目录、超时（连子孙一起清理）、输出上限。
 
 为什么是 `bash -c` 而不是 `bash -lc`：登录 shell 每次都要 source /etc/profile 与
 ~/.bash_profile，**实测 0.41s/次**（20 条命令就是 8 秒纯启动开销），而且 profile 里
@@ -138,10 +144,22 @@ def bash(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     raw_root = getattr(state, "workspace_root", None)
     cwd: Path = Path(raw_root) if raw_root else workspace.WORKSPACE_ROOT
     timeout = _timeout(args.get("timeout_seconds"))
+
+    # 沙箱是**策略层算好的事实**：工具只负责套上去（"没有授权就回绝"同理）。
+    # 没有运行级规格（直调工具、单元测试）时不套——那时调用方就是宿主自己。
+    security = getattr(state, "security", None)
+    spec = getattr(security, "sandbox", None)
+    argv = ["bash", "-c", command]
+    env = None
+    if spec is not None:
+        grants = state.sandbox_grants() if state is not None else ()
+        argv = spec.argv_prefix(argv, grants=grants, root=str(cwd))
+        env = spec.child_env()
     try:
         process = subprocess.Popen(
-            ["bash", "-c", command],
+            argv,
             cwd=cwd,
+            env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,

@@ -6,6 +6,10 @@
 ``state`` 是**可选**的运行级上下文：有它就用运行级工作区根，并据此判断越界目标是否
 已获授权；没有它（直接调用工具、单元测试）回落到进程默认根且越界一律回绝。授权由
 ``policy.permission.gate`` 决定并写进账本，这里只读结果——工具不做权限决定。
+
+**受保护目标还有一道工具级兜底**：命中 deny 阶梯（凭据、``.git/hooks``…）的路径在这里
+再拒一次。它不是重复劳动——它是"权限层从未批准"时的失败关闭（直接调用工具、答复超时
+收敛为拒绝），与 ``拒绝访问工作区外的路径`` 同一性质。
 """
 
 from __future__ import annotations
@@ -13,6 +17,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ..policy.permission import APPROVAL_NONE
 from .workspace import relative, resolve
 
 if TYPE_CHECKING:  # 只用于标注：tools 不在运行时依赖 runtime 的实例类型
@@ -32,6 +37,29 @@ def _root(state: "RunState | None") -> Path | None:
 def _grant(state: "RunState | None"):
     """越界授权查询器；None 表示"没有授权"，于是越界一律回绝（失败关闭）。"""
     return None if state is None else state.outside_allowed
+
+
+def _protected(state: "RunState | None", path: Path, operation: str) -> str | None:
+    """命中 deny/ask 阶梯且本次运行没有授权时，返回回绝文本。
+
+    与 ``_grant`` 同一个道理：决定由 ``gate`` 做，这里只是**兜底**——没有授权就不放行，
+    所以"gate 没跑过"或"答复超时"都不会变成一次静默放行。
+    """
+    security = getattr(state, "security", None)
+    if security is None:
+        return None
+    rule = security.ladder.verdict_for(str(path), (operation,))
+    if rule is None:
+        return None
+    if rule.verdict == "deny":
+        # deny 档：任何模式、任何批准都不放行（包括 full）。
+        return f"错误：{rule.reason}（{rule.tier} 策略禁止访问，任何批准都不能放行）"
+    # ask 档：full 整圈预授权，或账本里已经记着这一次批准。
+    if security.approval == APPROVAL_NONE:
+        return None
+    if state is not None and state.ledger.has_capability("path", str(path)):
+        return None
+    return f"错误：{rule.reason}（{rule.tier} 策略，需逐次批准）"
 
 
 def _int(value: Any, *, default: int, minimum: int) -> int:
@@ -82,6 +110,9 @@ def read_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     if error:
         return f"错误：{error}"
     assert path is not None  # resolve 成功时必有路径（error 与 path 二选一）
+    blocked = _protected(state, path, "read")
+    if blocked:
+        return blocked
     if not path.exists():
         return f"错误：文件不存在：{raw}"
     if path.is_dir():
@@ -119,6 +150,9 @@ def write_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     if error:
         return f"错误：{error}"
     assert path is not None  # resolve 成功时必有路径
+    blocked = _protected(state, path, "write")
+    if blocked:
+        return blocked
 
     content = args.get("content")
     if not isinstance(content, str):
@@ -143,6 +177,9 @@ def edit_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     if error:
         return f"错误：{error}"
     assert path is not None  # resolve 成功时必有路径
+    blocked = _protected(state, path, "write")
+    if blocked:
+        return blocked
 
     old = args.get("old_string")
     new = args.get("new_string")
@@ -186,6 +223,9 @@ def glob_files(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     if error:
         return f"错误：{error}"
     assert root is not None  # resolve 成功时必有路径
+    blocked = _protected(state, root, "read")
+    if blocked:
+        return blocked
     if not root.is_dir():
         return f"错误：{raw} 不是目录"
 

@@ -43,7 +43,7 @@ from .hooks import BLOCK, HookRegistry
 from .state import TODO_REMINDER_AFTER_ROUNDS, RunState
 
 if TYPE_CHECKING:  # 只有类型标注用它：注解是惰性的，运行时不必跨层 import 策略层
-    from ..policy.permission import ApprovalLedger, AskUser
+    from ..policy.permission import ApprovalLedger, AskUser, RunSecurity
 
 logger = logging.getLogger("avid.runtime.loop")
 
@@ -125,6 +125,7 @@ def agent_loop(
     # 于是同一项操作的同意覆盖整个运行。
     permission_mode: str | None = None,
     ledger: "ApprovalLedger | None" = None,
+    security: "RunSecurity | None" = None,
     workspace_root: str | None = None,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     max_stop_blocks: int = MAX_STOP_BLOCKS,
@@ -201,6 +202,7 @@ def agent_loop(
         observer=on_event,
         permission_mode=permission_mode,
         ledger=ledger,
+        security=security,
         workspace_root=workspace_root,
         hooks=hooks,
         # 窗口是模型配置的一部分，占用率的分母因此跟着 config 走（不再多一个参数）。

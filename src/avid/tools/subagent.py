@@ -57,6 +57,7 @@ def run_subagent(
     ask: Any = None,
     permission_mode: str = DEFAULT_MODE,
     ledger: Any = None,
+    security: Any = None,
     workspace_root: str | None = None,
     hooks: "HookRegistry | None" = None,
 ) -> str:
@@ -66,9 +67,11 @@ def run_subagent(
     uvicorn 进程里那是 EOF 或永久阻塞。这是**既有缺陷的修复**，只是 CLI 下被
     终端与 ``_ASK_LOCK`` 掩盖了（设计文档 §7.2）。
 
-    ``permission_mode`` / ``ledger`` / ``workspace_root`` 同理必须逐字段前传：
-    子 agent 在别的线程跑，``RunState`` 不跨线程继承。漏传 mode 的后果是**最严一档
-    被静默绕过**（父运行 strict、子 agent 却按默认值放行），因此有一条专门的用例盯着。
+    ``permission_mode`` / ``ledger`` / ``security`` / ``workspace_root`` 同理必须逐字段
+    前传：子 agent 在别的线程跑，``RunState`` 不跨线程继承。漏传就出两种事故——漏 mode
+    会让**最严一档被静默绕过**（父运行 manual、子 agent 却按默认值放行），漏 ``security``
+    会让子 agent 自己重算一份规格（沙箱可能不是同一个、审计会分成两条）。因此有一条
+    专门的用例逐个字段盯着。
     """
     # 延迟导入：runtime/state.py 要 import 本包来拿工具表，顶部导入会成环。
     from ..runtime.loop import agent_loop
@@ -86,6 +89,7 @@ def run_subagent(
         ask=ask,
         permission_mode=permission_mode,
         ledger=ledger,
+        security=security,
         workspace_root=workspace_root,
         hooks=hooks,
     )
@@ -165,6 +169,8 @@ def subagent(
     ask = state.ask
     permission_mode = state.permission_mode
     ledger = state.ledger
+    # 规格整份复用：同一个沙箱、同一本阶梯、同一条审计流（子 agent 的裁决也进同一份记录）。
+    security = state.security
     workspace_root = state.workspace_root
     # 子运行用父注册表的一份副本：用户注册的 hook 对子 agent 同样生效，而子运行
     # 自己追加的回调不会漏回父运行。
@@ -181,6 +187,7 @@ def subagent(
                 ask=ask,
                 permission_mode=permission_mode,
                 ledger=ledger,
+                security=security,
                 workspace_root=workspace_root,
                 hooks=hooks,
             )

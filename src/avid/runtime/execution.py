@@ -48,8 +48,9 @@ POST_BLOCKED_CONTENT = "错误：工具结果被 PostToolUse hook 拦截，内�
 # `validate_structure` 会直接判非法）。所以这几行写的是事实，不是伪造的工具结果。
 CANCELLED_CONTENT = "错误：运行已取消，本次调用未执行。"
 
-# 需要读 RunState 的工具。文件类工具进去是因为它们要读运行级工作区根与越界授权账本
-# （``state.workspace_root`` / ``state.outside_allowed``），而这两个决定都由权限层做。
+# 需要读 RunState 的工具。文件类工具进去是因为它们要读运行级工作区根与能力账本
+# （``state.workspace_root`` / ``state.outside_allowed`` / ``state.security`` 的 deny 规则），
+# 而这些决定都由权限层做。
 # 契约测试校验这张表里的名字都在注册表里、且这些 handler 确实接受 state 关键字。
 STATEFUL_TOOLS: frozenset[str] = frozenset(
     {
@@ -135,6 +136,9 @@ def execute_one(
         # 权限层的运行级上下文：模式决定"哪些动作打问号"，账本让"同意一次"生效，
         # 工作区根是越界判定的基准。根在**调用时**解析，测试的 monkeypatch 才有效。
         "permission_mode": state.permission_mode,
+        # 运行级安全规格（三轴 + 阶梯 + 沙箱 + 审计）：裁决与审计都由策略层读它，
+        # 执行层只负责把事实传下去——所以这里没有一条对 policy 的 import。
+        "security": state.security,
         "approval_ledger": state.ledger,
         "workspace_root": state.workspace_root or str(workspace.WORKSPACE_ROOT),
         # 策略注入点：hook 回调据此发起审批，而不必自己去读 stdin（§7.2）。

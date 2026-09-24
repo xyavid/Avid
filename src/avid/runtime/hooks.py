@@ -37,8 +37,8 @@ from ..policy.compaction import spill
 from ..policy.permission import (
     DEFAULT_MODE,
     always_allow,
-    danger_reason,
-    gate,
+    brokerize,
+    decide,
 )
 
 logger = logging.getLogger("avid.runtime.hooks")
@@ -195,71 +195,75 @@ def context_inject_hook(context: dict[str, Any]) -> str | None:
     return None
 
 
-# 需要按"目标是否在工作区之外"判断的工具：它们的 path 参数就是待判定的目标。
-PATH_TOOLS = frozenset({"read_file", "write_file", "edit_file", "glob"})
-
-
 def permission_facts(
     name: str, arguments: dict[str, Any], root: str | None = None
 ) -> tuple[str | None, str | None]:
-    """算出危险类别与越界目标两个**事实**，交给 ``permission.gate`` 裁决。
+    """算出危险类别与越界目标两个**事实**（``brokerize`` 的薄视图，供诊断与测试）。
 
-    路径数学只有一份（``tools/workspace.py``），策略层不复制它；这里也不做决定。
+    完整的动作事实是 :class:`avid.policy.action.Action`；这个函数只保留"第一个危险类别
+    与第一个区外目标"这两个标量，让既有调用方与测试不必认识新类型。
     """
-    from pathlib import Path
-
-    from ..tools import workspace
-
-    base = Path(root) if root else None
-    danger = danger_reason(name, arguments)
-
-    if name == "bash":
-        command = arguments.get("command")
-        target = (
-            workspace.outside_command_target(command, root=base)
-            if isinstance(command, str)
-            else None
-        )
-    elif name in PATH_TOOLS:
-        raw = arguments.get("path")
-        target = (
-            workspace.outside_target(raw, root=base) if isinstance(raw, str) else None
-        )
-    else:
-        target = None
-
-    return danger, target
+    action = brokerize(name, arguments, root=root)
+    return action.danger, (action.outside[0] if action.outside else None)
 
 
 def permission_hook(context: dict[str, Any]) -> str | None:
-    """PreToolUse：走四层权限裁决；拒绝时按档写明原因，并给出可执行的下一步。
+    """PreToolUse：Tool Broker → Policy Engine → 审计；拒绝时按档写明原因。
 
-    硬拒绝、危险命令、越界、常规规则对模型意味着完全不同的事——"永远不许，换做法"、
-    "这条命令危险，换非破坏性做法"、"这个路径在区外，别重复试"、"这次不行，别重复提交"。
-    只回一句 "Permission denied." 会让模型分不清，于是反复重试同一条命令直到烧穿轮数上限。
+    流水线只有三步，谁都不越界：
 
-    运行级上下文由 ``execution.execute_one`` 注入：``permission_mode``、``approval_ledger``、
-    ``workspace_root``、``ask``、``auto_approve``。审批回调优先取 ``context["ask"]``；
-    没有注入时逐字回落到 stdin（CLI 路径），行为与改动前一致（设计文档 §7.2）。
+    1. ``brokerize`` 把参数变成动作事实（归一化 / 目标 / 风险 / 读还是写）；
+    2. ``decide`` 拿三轴 + deny 阶梯 + 沙箱规格裁决（REVIEW 问人 / 交给分类器 / 直接放行）；
+    3. 裁决进审计——**放行也记**，否则"这次运行到底放行了什么"无从回溯。
+
+    硬拒绝、受保护资源、命中策略、危险命令、越界、降级对模型意味着完全不同的事
+    （"永远不许，换做法" / "这条命令危险，换非破坏性做法" / "这个路径在区外，别重复试"
+    / "这次不行，别重复提交"）。只回一句 "Permission denied." 会让模型分不清，
+    于是反复重试同一条命令。
+
+    运行级上下文由 ``execution.execute_one`` 注入：``security``（三轴 + 阶梯 + 沙箱 +
+    审计）、``approval_ledger``、``workspace_root``、``ask``、``auto_approve``。
+    没有 ``security``（直调 hook、老调用方）时按"没有沙箱"裁决——失败关闭，
+    决策层会把它当成降级，而不是当成"没有边界"。
     """
     name = context.get("tool", "")
     arguments = context.get("arguments") or {}
-    mode = context.get("permission_mode") or DEFAULT_MODE
+    security = context.get("security")
+    mode = security.mode if security is not None else (context.get("permission_mode") or DEFAULT_MODE)
+    ladder = security.ladder if security is not None else None
+    sandbox = security.sandbox if security is not None else None
     ledger = context.get("approval_ledger")
-    danger, outside = permission_facts(name, arguments, context.get("workspace_root"))
 
-    # ``--yes`` 只换回答者，不改变"哪些动作会打问号"。
+    action = brokerize(name, arguments, root=context.get("workspace_root"))
+    # ``--yes`` 只换回答者，不改变"哪些动作会打问号"，也不关沙箱。
     answerer = always_allow if context.get("auto_approve") else context.get("ask")
 
-    decision = gate(
-        name,
-        arguments,
+    decision = decide(
+        action,
         mode=mode,
-        ask=answerer,
+        ladder=ladder,
+        sandbox=sandbox,
         ledger=ledger,
-        danger=danger,
-        outside=outside,
+        ask=answerer,
     )
+
+    if security is not None:
+        security.audit_write(
+            "decision",
+            tool=name,
+            command=action.normalized or None,
+            targets=list(action.targets),
+            outside=list(action.outside),
+            risks=list(action.risks),
+            network=action.network or None,
+            verdict=decision.verdict,
+            decision_kind=decision.kind or None,
+            tier=decision.tier or None,
+            answered_by=decision.answered_by or None,
+            key=list(decision.key) if decision.key else None,
+            reason=decision.reason or None,
+        )
+
     if decision.allowed:
         return None
 
