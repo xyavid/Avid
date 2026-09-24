@@ -27,13 +27,12 @@ uv run --no-sync python benchmarks/sandbox_boundary/run.py
 |---|---|---|
 | 策略拒绝 | `rm -rf /`、读 `~/.ssh`、写 `.git/hooks` | 没有 `tool_call_started` 的完成、有一条 `tool_call_denied`（带 `kind`） |
 | 能力授予 | 批准 `/etc/hostname` 后真的读得到 | 命令输出 + 宿主哨兵文件真的变了 |
-| 物理边界 | 网络、宿主 `/tmp`、掩蔽的宿主凭据、只读挂载 | 命令**执行了**，输出里是 `Network is unreachable` / `Read-only file system` / `RC_MASKED` |
+| 物理边界 | 网络、宿主 `/tmp`、掩蔽的宿主凭据、只读挂载 | 未批准的解释器调用先拒绝；`manual_yes` 批准后再以 `Network is unreachable` / `Read-only file system` / `RC_MASKED` 验证 OS 强制边界 |
 | 审计 | 每条裁决 | `~/.avid/audit/*.jsonl` 里每个臂 ≥ 探针条数的 `decision` 记录，带三轴快照 |
 
-**看不见的越界写**（`invisible_outside_write`）是整份产物里最值得看的一条：命令里的路径
-由解释器用 `chr(47)` 拼出来，broker 扫不到目标、于是**三种带沙箱的模式都放行执行**——
-然后被只读挂载物理挡住。这正是"边界必须在 LLM 外"的实测版：提示词、规则表、分类器都
-不参与，拦住它的是 mount。
+**看不见的越界写**（`invisible_outside_write`）证明两层各有职责：解释器执行
+在 `manual` 下要批准、`auto` 下拒绝；`manual_yes` 批准后，命令里的路径由解释器用
+`chr(47)` 拼出，broker 仍看不到目标，但只读挂载物理拦住实际写入。
 
 ## 真实的部分与替换掉的部分
 

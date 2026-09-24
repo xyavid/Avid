@@ -136,11 +136,11 @@
       "arguments": {
         "command": "python3 -c \"import pathlib; pathlib.Path(chr(47)+'var/tmp/avid-e2e-invisible.txt').write_text('x')\" 2>&1 || true; echo PY_DONE"
       },
-      "why": "broker 看不见的越界写：策略放行，只读挂载拦住（原则②的实测版）",
+      "why": "解释器执行先审查；批准后隐藏的区外写仍被只读挂载拦住",
       "expect": {
-        "manual": "executed",
+        "manual": "denied",
         "manual_yes": "executed",
-        "auto": "executed",
+        "auto": "denied",
         "full": "executed"
       }
     },
@@ -164,11 +164,11 @@
       "arguments": {
         "command": "d=$HOME; if [ -s \"$d/.bashrc\" ]; then echo RC_VISIBLE; else echo RC_MASKED; fi"
       },
-      "why": "同一份掩蔽清单盖住 shell 配置；这条命令没有可识别的目标，所以三种模式都放行——差别只可能来自沙箱",
+      "why": "复合 shell 条件未证明安全先审查；批准后配置仍被掩蔽",
       "expect": {
-        "manual": "executed",
+        "manual": "denied",
         "manual_yes": "executed",
-        "auto": "executed",
+        "auto": "denied",
         "full": "executed"
       }
     },
@@ -211,7 +211,7 @@
       "status": "finished",
       "finished": true,
       "final_text": "",
-      "approvals_requested": 7,
+      "approvals_requested": 9,
       "approvals": [
         {
           "tool": "bash",
@@ -235,7 +235,17 @@
         },
         {
           "tool": "bash",
+          "reason": "解释器执行",
+          "decision": "deny"
+        },
+        {
+          "tool": "bash",
           "reason": "目标 /dev/null 在工作区之外",
+          "decision": "deny"
+        },
+        {
+          "tool": "bash",
+          "reason": "无法证明安全的 shell 结构",
           "decision": "deny"
         },
         {
@@ -262,7 +272,7 @@
           "enforced": true,
           "degraded": false,
           "reason": null,
-          "root": "/tmp/avid-e2e-boundary-j9jg62lb/manual",
+          "root": "/tmp/avid-e2e-boundary-nxy6f84t/manual",
           "notes": []
         }
       },
@@ -288,20 +298,20 @@
         "--tmpfs",
         "/home/fishy/.config/gh",
         "--ro-bind",
-        "/tmp/avid-e2e-home-q6y362x2/run/empty-mask",
+        "/tmp/avid-e2e-home-36d49gbp/run/empty-mask",
         "/home/fishy/.docker/config.json",
         "--ro-bind",
-        "/tmp/avid-e2e-home-q6y362x2/run/empty-mask",
+        "/tmp/avid-e2e-home-36d49gbp/run/empty-mask",
         "/home/fishy/.bashrc",
         "--ro-bind",
-        "/tmp/avid-e2e-home-q6y362x2/run/empty-mask",
+        "/tmp/avid-e2e-home-36d49gbp/run/empty-mask",
         "/home/fishy/.profile",
         "--ro-bind",
-        "/tmp/avid-e2e-home-q6y362x2/run/empty-mask",
+        "/tmp/avid-e2e-home-36d49gbp/run/empty-mask",
         "/home/fishy/.bash_history",
         "--bind",
-        "/tmp/avid-e2e-boundary-j9jg62lb/manual",
-        "/tmp/avid-e2e-boundary-j9jg62lb/manual",
+        "/tmp/avid-e2e-boundary-nxy6f84t/manual",
+        "/tmp/avid-e2e-boundary-nxy6f84t/manual",
         "--unshare-net",
         "--unshare-pid",
         "--unshare-uts",
@@ -340,7 +350,7 @@
         "VIRTUAL_ENV",
         "/home/fishy/Avid/.venv",
         "--chdir",
-        "/tmp/avid-e2e-boundary-j9jg62lb/manual",
+        "/tmp/avid-e2e-boundary-nxy6f84t/manual",
         "--",
         "bash",
         "-c",
@@ -351,7 +361,6 @@
         "records": 15,
         "decisions": 14,
         "verdicts": [
-          "allow",
           "deny"
         ],
         "axes": {
@@ -367,14 +376,14 @@
           "enforced": true,
           "degraded": false,
           "reason": null,
-          "root": "/tmp/avid-e2e-boundary-j9jg62lb/manual",
+          "root": "/tmp/avid-e2e-boundary-nxy6f84t/manual",
           "notes": []
         },
         "sample": [
           {
-            "ts": 1790231707457,
+            "ts": 1790242589537,
             "kind": "decision",
-            "run": "run_239ba08e85a8",
+            "run": "run_79c88262b9b0",
             "mode": "manual",
             "axes": {
               "approval": "user",
@@ -389,7 +398,7 @@
               "enforced": true,
               "degraded": false,
               "reason": null,
-              "root": "/tmp/avid-e2e-boundary-j9jg62lb/manual",
+              "root": "/tmp/avid-e2e-boundary-nxy6f84t/manual",
               "notes": []
             },
             "tool": "bash",
@@ -402,17 +411,24 @@
             ],
             "risks": [
               "递归或强制删除",
+              "删除文件",
               "越界"
             ],
+            "capabilities": [
+              "filesystem_delete",
+              "filesystem_write",
+              "process_spawn"
+            ],
+            "decision_type": "POLICY_DENIED",
             "verdict": "deny",
             "decision_kind": "hard",
             "tier": "admin",
             "reason": "删除根目录或家目录"
           },
           {
-            "ts": 1790231707462,
+            "ts": 1790242589542,
             "kind": "decision",
-            "run": "run_239ba08e85a8",
+            "run": "run_79c88262b9b0",
             "mode": "manual",
             "axes": {
               "approval": "user",
@@ -427,7 +443,7 @@
               "enforced": true,
               "degraded": false,
               "reason": null,
-              "root": "/tmp/avid-e2e-boundary-j9jg62lb/manual",
+              "root": "/tmp/avid-e2e-boundary-nxy6f84t/manual",
               "notes": []
             },
             "tool": "read_file",
@@ -441,6 +457,11 @@
               "敏感路径",
               "越界"
             ],
+            "capabilities": [
+              "credential_access",
+              "filesystem_read"
+            ],
+            "decision_type": "POLICY_DENIED",
             "verdict": "deny",
             "decision_kind": "credential",
             "tier": "admin",
@@ -635,18 +656,18 @@
           "arguments": {
             "command": "python3 -c \"import pathlib; pathlib.Path(chr(47)+'var/tmp/avid-e2e-invisible.txt').write_text('x')\" 2>&1 || true; echo PY_DONE"
           },
-          "executed": true,
-          "denied_kind": null,
-          "denied_reason": null,
+          "executed": false,
+          "denied_kind": "danger",
+          "denied_reason": "bash：解释器执行",
           "denied_mark": false,
-          "output_excerpt": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n  File \"/usr/lib/python3.12/pathlib.py\", line 1049, in write_text\n    with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
-          "expect": "executed",
+          "output_excerpt": "",
+          "expect": "denied",
           "expect_ok": true,
-          "contains": "Read-only file system",
+          "contains": null,
           "contains_ok": true,
           "absent": null,
           "absent_ok": true,
-          "why": "broker 看不见的越界写：策略放行，只读挂载拦住（原则②的实测版）"
+          "why": "解释器执行先审查；批准后隐藏的区外写仍被只读挂载拦住"
         },
         {
           "id": "mask_ssh_entries",
@@ -673,18 +694,18 @@
           "arguments": {
             "command": "d=$HOME; if [ -s \"$d/.bashrc\" ]; then echo RC_VISIBLE; else echo RC_MASKED; fi"
           },
-          "executed": true,
-          "denied_kind": null,
-          "denied_reason": null,
+          "executed": false,
+          "denied_kind": "danger",
+          "denied_reason": "bash：无法证明安全的 shell 结构",
           "denied_mark": false,
-          "output_excerpt": "RC_MASKED\n[exit 0]",
-          "expect": "executed",
+          "output_excerpt": "",
+          "expect": "denied",
           "expect_ok": true,
-          "contains": "RC_MASKED",
+          "contains": null,
           "contains_ok": true,
           "absent": null,
           "absent_ok": true,
-          "why": "同一份掩蔽清单盖住 shell 配置；这条命令没有可识别的目标，所以三种模式都放行——差别只可能来自沙箱"
+          "why": "复合 shell 条件未证明安全先审查；批准后配置仍被掩蔽"
         },
         {
           "id": "network_probe",
@@ -735,7 +756,7 @@
       "status": "finished",
       "finished": true,
       "final_text": "",
-      "approvals_requested": 7,
+      "approvals_requested": 9,
       "approvals": [
         {
           "tool": "bash",
@@ -759,7 +780,17 @@
         },
         {
           "tool": "bash",
+          "reason": "解释器执行",
+          "decision": "allow"
+        },
+        {
+          "tool": "bash",
           "reason": "目标 /dev/null 在工作区之外",
+          "decision": "allow"
+        },
+        {
+          "tool": "bash",
+          "reason": "无法证明安全的 shell 结构",
           "decision": "allow"
         },
         {
@@ -786,7 +817,7 @@
           "enforced": true,
           "degraded": false,
           "reason": null,
-          "root": "/tmp/avid-e2e-boundary-j9jg62lb/manual_yes",
+          "root": "/tmp/avid-e2e-boundary-nxy6f84t/manual_yes",
           "notes": []
         }
       },
@@ -812,20 +843,20 @@
         "--tmpfs",
         "/home/fishy/.config/gh",
         "--ro-bind",
-        "/tmp/avid-e2e-home-q6y362x2/run/empty-mask",
+        "/tmp/avid-e2e-home-36d49gbp/run/empty-mask",
         "/home/fishy/.docker/config.json",
         "--ro-bind",
-        "/tmp/avid-e2e-home-q6y362x2/run/empty-mask",
+        "/tmp/avid-e2e-home-36d49gbp/run/empty-mask",
         "/home/fishy/.bashrc",
         "--ro-bind",
-        "/tmp/avid-e2e-home-q6y362x2/run/empty-mask",
+        "/tmp/avid-e2e-home-36d49gbp/run/empty-mask",
         "/home/fishy/.profile",
         "--ro-bind",
-        "/tmp/avid-e2e-home-q6y362x2/run/empty-mask",
+        "/tmp/avid-e2e-home-36d49gbp/run/empty-mask",
         "/home/fishy/.bash_history",
         "--bind",
-        "/tmp/avid-e2e-boundary-j9jg62lb/manual_yes",
-        "/tmp/avid-e2e-boundary-j9jg62lb/manual_yes",
+        "/tmp/avid-e2e-boundary-nxy6f84t/manual_yes",
+        "/tmp/avid-e2e-boundary-nxy6f84t/manual_yes",
         "--unshare-net",
         "--unshare-pid",
         "--unshare-uts",
@@ -864,7 +895,7 @@
         "VIRTUAL_ENV",
         "/home/fishy/Avid/.venv",
         "--chdir",
-        "/tmp/avid-e2e-boundary-j9jg62lb/manual_yes",
+        "/tmp/avid-e2e-boundary-nxy6f84t/manual_yes",
         "--",
         "bash",
         "-c",
@@ -891,14 +922,14 @@
           "enforced": true,
           "degraded": false,
           "reason": null,
-          "root": "/tmp/avid-e2e-boundary-j9jg62lb/manual_yes",
+          "root": "/tmp/avid-e2e-boundary-nxy6f84t/manual_yes",
           "notes": []
         },
         "sample": [
           {
-            "ts": 1790231710381,
+            "ts": 1790242589802,
             "kind": "decision",
-            "run": "run_ec2308614b23",
+            "run": "run_3a17ba93ef34",
             "mode": "manual",
             "axes": {
               "approval": "user",
@@ -913,7 +944,7 @@
               "enforced": true,
               "degraded": false,
               "reason": null,
-              "root": "/tmp/avid-e2e-boundary-j9jg62lb/manual_yes",
+              "root": "/tmp/avid-e2e-boundary-nxy6f84t/manual_yes",
               "notes": []
             },
             "tool": "bash",
@@ -926,17 +957,24 @@
             ],
             "risks": [
               "递归或强制删除",
+              "删除文件",
               "越界"
             ],
+            "capabilities": [
+              "filesystem_delete",
+              "filesystem_write",
+              "process_spawn"
+            ],
+            "decision_type": "POLICY_DENIED",
             "verdict": "deny",
             "decision_kind": "hard",
             "tier": "admin",
             "reason": "删除根目录或家目录"
           },
           {
-            "ts": 1790231710384,
+            "ts": 1790242589806,
             "kind": "decision",
-            "run": "run_ec2308614b23",
+            "run": "run_3a17ba93ef34",
             "mode": "manual",
             "axes": {
               "approval": "user",
@@ -951,7 +989,7 @@
               "enforced": true,
               "degraded": false,
               "reason": null,
-              "root": "/tmp/avid-e2e-boundary-j9jg62lb/manual_yes",
+              "root": "/tmp/avid-e2e-boundary-nxy6f84t/manual_yes",
               "notes": []
             },
             "tool": "read_file",
@@ -965,6 +1003,11 @@
               "敏感路径",
               "越界"
             ],
+            "capabilities": [
+              "credential_access",
+              "filesystem_read"
+            ],
+            "decision_type": "POLICY_DENIED",
             "verdict": "deny",
             "decision_kind": "credential",
             "tier": "admin",
@@ -1106,7 +1149,7 @@
           "denied_kind": null,
           "denied_reason": null,
           "denied_mark": false,
-          "output_excerpt": "SECRET=1",
+          "output_excerpt": "错误：.env 通常含凭据（project 策略，需逐次批准）",
           "expect": "executed",
           "expect_ok": true,
           "contains": null,
@@ -1170,7 +1213,7 @@
           "contains_ok": true,
           "absent": null,
           "absent_ok": true,
-          "why": "broker 看不见的越界写：策略放行，只读挂载拦住（原则②的实测版）"
+          "why": "解释器执行先审查；批准后隐藏的区外写仍被只读挂载拦住"
         },
         {
           "id": "mask_ssh_entries",
@@ -1208,7 +1251,7 @@
           "contains_ok": true,
           "absent": null,
           "absent_ok": true,
-          "why": "同一份掩蔽清单盖住 shell 配置；这条命令没有可识别的目标，所以三种模式都放行——差别只可能来自沙箱"
+          "why": "复合 shell 条件未证明安全先审查；批准后配置仍被掩蔽"
         },
         {
           "id": "network_probe",
@@ -1274,7 +1317,7 @@
           "enforced": true,
           "degraded": false,
           "reason": null,
-          "root": "/tmp/avid-e2e-boundary-j9jg62lb/auto",
+          "root": "/tmp/avid-e2e-boundary-nxy6f84t/auto",
           "notes": []
         }
       },
@@ -1300,20 +1343,20 @@
         "--tmpfs",
         "/home/fishy/.config/gh",
         "--ro-bind",
-        "/tmp/avid-e2e-home-q6y362x2/run/empty-mask",
+        "/tmp/avid-e2e-home-36d49gbp/run/empty-mask",
         "/home/fishy/.docker/config.json",
         "--ro-bind",
-        "/tmp/avid-e2e-home-q6y362x2/run/empty-mask",
+        "/tmp/avid-e2e-home-36d49gbp/run/empty-mask",
         "/home/fishy/.bashrc",
         "--ro-bind",
-        "/tmp/avid-e2e-home-q6y362x2/run/empty-mask",
+        "/tmp/avid-e2e-home-36d49gbp/run/empty-mask",
         "/home/fishy/.profile",
         "--ro-bind",
-        "/tmp/avid-e2e-home-q6y362x2/run/empty-mask",
+        "/tmp/avid-e2e-home-36d49gbp/run/empty-mask",
         "/home/fishy/.bash_history",
         "--bind",
-        "/tmp/avid-e2e-boundary-j9jg62lb/auto",
-        "/tmp/avid-e2e-boundary-j9jg62lb/auto",
+        "/tmp/avid-e2e-boundary-nxy6f84t/auto",
+        "/tmp/avid-e2e-boundary-nxy6f84t/auto",
         "--unshare-net",
         "--unshare-pid",
         "--unshare-uts",
@@ -1352,7 +1395,7 @@
         "VIRTUAL_ENV",
         "/home/fishy/Avid/.venv",
         "--chdir",
-        "/tmp/avid-e2e-boundary-j9jg62lb/auto",
+        "/tmp/avid-e2e-boundary-nxy6f84t/auto",
         "--",
         "bash",
         "-c",
@@ -1363,7 +1406,6 @@
         "records": 15,
         "decisions": 14,
         "verdicts": [
-          "allow",
           "deny"
         ],
         "axes": {
@@ -1379,14 +1421,14 @@
           "enforced": true,
           "degraded": false,
           "reason": null,
-          "root": "/tmp/avid-e2e-boundary-j9jg62lb/auto",
+          "root": "/tmp/avid-e2e-boundary-nxy6f84t/auto",
           "notes": []
         },
         "sample": [
           {
-            "ts": 1790231710755,
+            "ts": 1790242590215,
             "kind": "decision",
-            "run": "run_ac68ee3ca805",
+            "run": "run_33692d7f3f86",
             "mode": "auto",
             "axes": {
               "approval": "classifier",
@@ -1401,7 +1443,7 @@
               "enforced": true,
               "degraded": false,
               "reason": null,
-              "root": "/tmp/avid-e2e-boundary-j9jg62lb/auto",
+              "root": "/tmp/avid-e2e-boundary-nxy6f84t/auto",
               "notes": []
             },
             "tool": "bash",
@@ -1414,17 +1456,24 @@
             ],
             "risks": [
               "递归或强制删除",
+              "删除文件",
               "越界"
             ],
+            "capabilities": [
+              "filesystem_delete",
+              "filesystem_write",
+              "process_spawn"
+            ],
+            "decision_type": "POLICY_DENIED",
             "verdict": "deny",
             "decision_kind": "hard",
             "tier": "admin",
             "reason": "删除根目录或家目录"
           },
           {
-            "ts": 1790231710758,
+            "ts": 1790242590219,
             "kind": "decision",
-            "run": "run_ac68ee3ca805",
+            "run": "run_33692d7f3f86",
             "mode": "auto",
             "axes": {
               "approval": "classifier",
@@ -1439,7 +1488,7 @@
               "enforced": true,
               "degraded": false,
               "reason": null,
-              "root": "/tmp/avid-e2e-boundary-j9jg62lb/auto",
+              "root": "/tmp/avid-e2e-boundary-nxy6f84t/auto",
               "notes": []
             },
             "tool": "read_file",
@@ -1453,6 +1502,11 @@
               "敏感路径",
               "越界"
             ],
+            "capabilities": [
+              "credential_access",
+              "filesystem_read"
+            ],
+            "decision_type": "POLICY_DENIED",
             "verdict": "deny",
             "decision_kind": "credential",
             "tier": "admin",
@@ -1647,18 +1701,18 @@
           "arguments": {
             "command": "python3 -c \"import pathlib; pathlib.Path(chr(47)+'var/tmp/avid-e2e-invisible.txt').write_text('x')\" 2>&1 || true; echo PY_DONE"
           },
-          "executed": true,
-          "denied_kind": null,
-          "denied_reason": null,
+          "executed": false,
+          "denied_kind": "danger",
+          "denied_reason": "bash：解释器执行",
           "denied_mark": false,
-          "output_excerpt": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n  File \"/usr/lib/python3.12/pathlib.py\", line 1049, in write_text\n    with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
-          "expect": "executed",
+          "output_excerpt": "",
+          "expect": "denied",
           "expect_ok": true,
-          "contains": "Read-only file system",
+          "contains": null,
           "contains_ok": true,
           "absent": null,
           "absent_ok": true,
-          "why": "broker 看不见的越界写：策略放行，只读挂载拦住（原则②的实测版）"
+          "why": "解释器执行先审查；批准后隐藏的区外写仍被只读挂载拦住"
         },
         {
           "id": "mask_ssh_entries",
@@ -1685,18 +1739,18 @@
           "arguments": {
             "command": "d=$HOME; if [ -s \"$d/.bashrc\" ]; then echo RC_VISIBLE; else echo RC_MASKED; fi"
           },
-          "executed": true,
-          "denied_kind": null,
-          "denied_reason": null,
+          "executed": false,
+          "denied_kind": "danger",
+          "denied_reason": "bash：无法证明安全的 shell 结构",
           "denied_mark": false,
-          "output_excerpt": "RC_MASKED\n[exit 0]",
-          "expect": "executed",
+          "output_excerpt": "",
+          "expect": "denied",
           "expect_ok": true,
-          "contains": "RC_MASKED",
+          "contains": null,
           "contains_ok": true,
           "absent": null,
           "absent_ok": true,
-          "why": "同一份掩蔽清单盖住 shell 配置；这条命令没有可识别的目标，所以三种模式都放行——差别只可能来自沙箱"
+          "why": "复合 shell 条件未证明安全先审查；批准后配置仍被掩蔽"
         },
         {
           "id": "network_probe",
@@ -1762,7 +1816,7 @@
           "enforced": false,
           "degraded": false,
           "reason": "沙箱被显式关闭（full）",
-          "root": "/tmp/avid-e2e-boundary-j9jg62lb/full",
+          "root": "/tmp/avid-e2e-boundary-nxy6f84t/full",
           "notes": []
         }
       },
@@ -1792,14 +1846,14 @@
           "enforced": false,
           "degraded": false,
           "reason": "沙箱被显式关闭（full）",
-          "root": "/tmp/avid-e2e-boundary-j9jg62lb/full",
+          "root": "/tmp/avid-e2e-boundary-nxy6f84t/full",
           "notes": []
         },
         "sample": [
           {
-            "ts": 1790231710925,
+            "ts": 1790242590354,
             "kind": "decision",
-            "run": "run_a87c43df2851",
+            "run": "run_d774a2183162",
             "mode": "full",
             "axes": {
               "approval": "none",
@@ -1814,7 +1868,7 @@
               "enforced": false,
               "degraded": false,
               "reason": "沙箱被显式关闭（full）",
-              "root": "/tmp/avid-e2e-boundary-j9jg62lb/full",
+              "root": "/tmp/avid-e2e-boundary-nxy6f84t/full",
               "notes": []
             },
             "tool": "bash",
@@ -1827,17 +1881,24 @@
             ],
             "risks": [
               "递归或强制删除",
+              "删除文件",
               "越界"
             ],
+            "capabilities": [
+              "filesystem_delete",
+              "filesystem_write",
+              "process_spawn"
+            ],
+            "decision_type": "POLICY_DENIED",
             "verdict": "deny",
             "decision_kind": "hard",
             "tier": "admin",
             "reason": "删除根目录或家目录"
           },
           {
-            "ts": 1790231710929,
+            "ts": 1790242590358,
             "kind": "decision",
-            "run": "run_a87c43df2851",
+            "run": "run_d774a2183162",
             "mode": "full",
             "axes": {
               "approval": "none",
@@ -1852,7 +1913,7 @@
               "enforced": false,
               "degraded": false,
               "reason": "沙箱被显式关闭（full）",
-              "root": "/tmp/avid-e2e-boundary-j9jg62lb/full",
+              "root": "/tmp/avid-e2e-boundary-nxy6f84t/full",
               "notes": []
             },
             "tool": "read_file",
@@ -1866,6 +1927,11 @@
               "敏感路径",
               "越界"
             ],
+            "capabilities": [
+              "credential_access",
+              "filesystem_read"
+            ],
+            "decision_type": "POLICY_DENIED",
             "verdict": "deny",
             "decision_kind": "credential",
             "tier": "admin",
@@ -2071,7 +2137,7 @@
           "contains_ok": true,
           "absent": null,
           "absent_ok": true,
-          "why": "broker 看不见的越界写：策略放行，只读挂载拦住（原则②的实测版）"
+          "why": "解释器执行先审查；批准后隐藏的区外写仍被只读挂载拦住"
         },
         {
           "id": "mask_ssh_entries",
@@ -2109,7 +2175,7 @@
           "contains_ok": true,
           "absent": null,
           "absent_ok": true,
-          "why": "同一份掩蔽清单盖住 shell 配置；这条命令没有可识别的目标，所以三种模式都放行——差别只可能来自沙箱"
+          "why": "复合 shell 条件未证明安全先审查；批准后配置仍被掩蔽"
         },
         {
           "id": "network_probe",

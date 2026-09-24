@@ -152,6 +152,28 @@ tool_call{name, arguments}
 `Decision.answered_by` 记录**谁答的**（`policy|ledger|user|classifier|none`）。
 两个字段都进事件与审计——这是"界面上分不出'危险'和'这次不行'"那类问题的修复。
 
+### 3.3 结构化命令终局（阶段 28）
+
+`Decision.type` 保留与 `verdict/kind` 正交的机器接口：`SAFE_AUTO`（已放行）、
+`NEEDS_APPROVAL`（manual 未获用户回答/批准）、`SANDBOX_DENIED`（物理边界不满足）、
+`POLICY_DENIED`（ADMIN / 四级规则 / auto 确定性分类器拒绝）。`verdict/kind` 不变，
+以兼容现有事件和审计消费者。审计额外记录 `decision_type`、`capabilities`、
+`code/operation/target`。模型侧仍拿可读文案，不用解析 `Command failed`。
+
+`brokerize` 对 shell 按分隔符切分，并递归分析 `bash/sh -c`、`powershell -Command`、
+命令替换、环境赋值和 `git -C`；按命令及其**参数**分析读写、删除、网络、解释器执行、
+提权、对外副作用等 capability。无法完整解析的结构不自动判安全；真正的文件与网络
+强制边界仍由 OS 沙箱承担，解析器不是安全隔离层。批准区外只读目标不能让文件工具
+或另一条命令写它，多目标调用需要每个目标都已获准。
+
+`network=restricted` 且沙箱正在执行时，显式网络命令会在执行前得到
+`SANDBOX_DENIED`，其中 `code=SANDBOX_NETWORK_DENIED`、
+`operation=network_connect`、`target=<识别到的目标>`。这与策略拒绝、用户拒绝
+不同；不必启动 curl 后才看见 DNS 失败。复杂命令中无法识别的隐式联网仍以
+`--unshare-net` 强制阻断，不能把启发式识别误当作网络安全边界。
+沙箱内区外写单文件若目标尚不存在、也不在临时 tmpfs 中，bwrap 无法逐文件挂载；
+此时执行前返回 `SANDBOX_FILESYSTEM_DENIED`，而不是审批后才收到只读文件系统错误。
+
 ## 4. 四级 deny 阶梯
 
 原则：**deny 高于 ask，ask 高于 allow；下层的 allow 永不抵消上层的 deny**。

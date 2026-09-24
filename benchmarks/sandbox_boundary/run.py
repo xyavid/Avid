@@ -185,13 +185,9 @@ def probes() -> list[Probe]:
             "invisible_outside_write",
             "bash",
             {"command": INVISIBLE_WRITE_COMMAND},
-            expect=dict.fromkeys(("manual", "manual_yes", "auto", "full"), "executed"),
-            contains={
-                "manual": "Read-only file system",
-                "manual_yes": "Read-only file system",
-                "auto": "Read-only file system",
-            },
-            why="broker 看不见的越界写：策略放行，只读挂载拦住（原则②的实测版）",
+            expect=dict(review),
+            contains={"manual_yes": "Read-only file system"},
+            why="解释器执行先审查；批准后隐藏的区外写仍被只读挂载拦住",
         ),
         # ---------------- 掩蔽：宿主凭据对"自己家目录"的命令也不可见 ----------------
         Probe(
@@ -211,10 +207,9 @@ def probes() -> list[Probe]:
             "mask_shell_rc",
             "bash",
             {"command": MASK_RC_COMMAND},
-            expect=dict.fromkeys(("manual", "manual_yes", "auto", "full"), "executed"),
-            contains={"manual": "RC_MASKED", "manual_yes": "RC_MASKED", "auto": "RC_MASKED"},
-            why="同一份掩蔽清单盖住 shell 配置；这条命令没有可识别的目标，"
-            "所以三种模式都放行——差别只可能来自沙箱",
+            expect=dict(review),
+            contains={"manual_yes": "RC_MASKED"},
+            why="复合 shell 条件未证明安全先审查；批准后配置仍被掩蔽",
         ),
         # ---------------- 网络：一级边界 ----------------
         Probe(
@@ -544,11 +539,11 @@ def build_checks(arms: dict[str, dict[str, Any]], probe_count: int) -> dict[str,
         "relative_paths_reach_the_rules": denied("manual", "project_git_hook_bash")
         and denied("manual", "ask_dot_env_bash")
         and denied("manual", "ask_dot_env_file"),
-        # 4 策略看不见的越界写：三种带沙箱的模式都放行执行、都被只读挂载挡住
-        "invisible_outside_write_is_blocked_by_the_sandbox": all(
-            obs(arm, "invisible_outside_write")["contains_ok"]
-            and obs(arm, "invisible_outside_write")["executed"]
-            for arm in sandboxed
+        # 4 审批挡住解释器；批准后隐藏的越界写仍由只读挂载挡住。
+        "invisible_outside_write_is_blocked_by_the_sandbox": (
+            (obs("manual_yes", "invisible_outside_write")["contains_ok"]
+             and obs("manual_yes", "invisible_outside_write")["executed"] if manual_yes else True)
+            and all(denied(arm, "invisible_outside_write") for arm in sandboxed if arm != "manual_yes")
         ),
         # 5 带沙箱的臂跑完之后，宿主上没留下那两个文件
         "sandboxed_arms_did_not_touch_the_host": all(
@@ -568,9 +563,10 @@ def build_checks(arms: dict[str, dict[str, Any]], probe_count: int) -> dict[str,
         "masks_survive_approval_grants": (
             obs("manual_yes", "mask_ssh_entries")["contains_ok"] if manual_yes else True
         ),
-        # 8 shell 配置的掩蔽对**每个带沙箱的臂**都成立（命令没有任何可识别目标）
-        "shell_rc_masked_in_every_sandboxed_arm": all(
-            obs(arm, "mask_shell_rc")["contains_ok"] for arm in sandboxed
+        # 8 批准后 shell 配置仍被掩蔽；未批准的臂不得静默执行。
+        "shell_rc_masked_in_every_sandboxed_arm": (
+            (obs("manual_yes", "mask_shell_rc")["contains_ok"] if manual_yes else True)
+            and all(denied(arm, "mask_shell_rc") for arm in sandboxed if arm != "manual_yes")
         ),
         # 9 网络边界是物理的：策略放行、netns 拦住；full 下不再"不可达"
         "network_blocked_by_the_namespace": (
