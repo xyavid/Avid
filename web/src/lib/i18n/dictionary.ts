@@ -44,7 +44,6 @@ export const DICTIONARY: Record<Locale, Entry> = {
     'common.notFound': '没有找到',
     'common.networkError': '网络不可用，请检查内核是否在运行',
     'common.skipToContent': '跳到主内容',
-    'common.nav.tasks': '任务板',
     'common.nav.skills': '技能目录',
     'common.nav.settings': '设置',
     'common.nav.toggleNav': '导航',
@@ -168,9 +167,6 @@ export const DICTIONARY: Record<Locale, Entry> = {
     'tools.empty': '（没有输出）',
     'tools.deniedReason': '被拒绝：{reason}',
     'tools.skill.summary': '技能 {name}（{chars} 字符）',
-    'tools.task.id': '任务 ID',
-    'tools.task.subject': '标题',
-    'tools.task.status': '状态',
     'tools.attachment': '（{type} 附件）',
     'tools.inspector.content': '全文',
     'tools.inspector.diff': 'diff',
@@ -191,25 +187,16 @@ export const DICTIONARY: Record<Locale, Entry> = {
     'approvals.defaultDeny': '未答复一律收敛为拒绝',
     'approvals.answerFailed': '答复失败：{message}',
 
-    // ---------------- tasks ----------------
-    'tasks.title': '任务板',
-    'tasks.readonly': '只读：任务的写入者是 agent 的任务工具',
-    'tasks.empty': '还没有任务',
-    'tasks.status.pending': '待办',
-    'tasks.status.in_progress': '进行中',
-    'tasks.status.completed': '已完成',
-    'tasks.owner': '负责人',
-    'tasks.blockedBy': '依赖',
-    'tasks.canStart': '可以开工',
-    'tasks.blocked': '被阻塞',
-    'tasks.detail': '任务详情',
-    'tasks.filter.all': '全部',
-    'tasks.filter.pending': '待办',
-    'tasks.filter.in_progress': '进行中',
-    'tasks.filter.completed': '已完成',
-    'tasks.filter.blocked': '被阻塞',
-    'tasks.count': '共 {count} 条',
-    'tasks.dependencyMissing': '{id}（缺失）',
+    // ---------------- todos（输入条上方的待办清单） ----------------
+    //
+    // 只有四条：清单来自 transcript 里 `todo_write` 的调用参数（见
+    // `features/conversation/lib/todos.ts`），所以这里没有"负责人 / 依赖 / 被阻塞"那一套
+    // ——那是已下线的任务图才有的字段。
+    'todos.title': '待办清单',
+    'todos.progress': '已完成 {done}/{total}',
+    'todos.status.pending': '待办',
+    'todos.status.in_progress': '进行中',
+    'todos.status.completed': '已完成',
 
     // ---------------- sessions ----------------
     'sessions.title': '会话',

@@ -373,11 +373,11 @@ test('一级切换只有导航列：⌘K 不再打开命令面板', async ({ pag
 
   // 没有任何对话框弹出（面板已按「与导航列完全重合」删除）
   await expect(page.getByRole('dialog')).toHaveCount(0)
-  // 导航入口是三个工作面；「会话」不在其中——会话列表本身就长在它下面，
+  // 导航入口是两个工作面（任务图已下线）；「会话」不在其中——会话列表本身就长在它下面，
   // 点「会话」只是跳到一个空占位页。
   // exact：导航列里还挂着会话列表，而「未命名会话 …」这类按钮名里也含「会话」
   const nav = page.locator('nav')
-  for (const label of ['任务板', '技能目录', '设置']) {
+  for (const label of ['技能目录', '设置']) {
     await expect(nav.getByRole('button', { name: label, exact: true })).toBeVisible()
   }
   await expect(
@@ -388,7 +388,7 @@ test('一级切换只有导航列：⌘K 不再打开命令面板', async ({ pag
 
 test('其他工作面在视口内滚动，不产生页面溢出', async ({ page }) => {
   // 高度链改成视口高度后，非会话页必须有**自己的**滚动容器，否则内容会被裁掉。
-  for (const path of ['/tasks', '/skills', '/settings']) {
+  for (const path of ['/skills', '/settings']) {
     await page.setViewportSize({ width: 1280, height: 720 })
     await page.goto(`${BASE}${path}`)
     await expect(page.getByRole('main')).toBeVisible()

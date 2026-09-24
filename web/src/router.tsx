@@ -4,7 +4,6 @@ import { ConversationRoute } from './routes/ConversationRoute'
 import { RootLayout } from './routes/RootLayout'
 import { SettingsRoute } from './routes/SettingsRoute'
 import { SkillsRoute } from './routes/SkillsRoute'
-import { TaskBoardRoute } from './routes/TaskBoardRoute'
 
 /**
  * URL ↔ feature 组合。导航有两种（§8.4）：**换工作面的走路由**（任务板 / 技能 / 设置；
@@ -19,7 +18,6 @@ export const router = createBrowserRouter([
       { index: true, element: <Navigate to="/sessions" replace /> },
       { path: 'sessions', element: <ConversationRoute /> },
       { path: 'sessions/:sessionId', element: <ConversationRoute /> },
-      { path: 'tasks', element: <TaskBoardRoute /> },
       { path: 'skills', element: <SkillsRoute /> },
       { path: 'settings', element: <SettingsRoute /> },
       { path: '*', element: <Navigate to="/sessions" replace /> },

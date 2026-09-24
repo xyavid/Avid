@@ -11,7 +11,6 @@ const BASE = process.env.AVID_BASE_URL ?? 'http://127.0.0.1:8765'
 
 const PAGES = [
   { path: '/sessions', marker: '会话' },
-  { path: '/tasks', marker: '任务板' },
   { path: '/skills', marker: '技能目录' },
   { path: '/settings', marker: '设置' },
 ]

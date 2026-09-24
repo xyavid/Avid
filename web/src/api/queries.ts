@@ -30,7 +30,6 @@ import type {
   SessionSummary,
   Skill,
   StartRunInput,
-  Task,
   WorkspaceSummary,
 } from './types'
 
@@ -46,8 +45,6 @@ export const queryKeys = {
   branches: (id: string) => ['branches', id] as const,
   run: (id: string) => ['run', id] as const,
   approvals: (id: string) => ['approvals', id] as const,
-  tasks: ['tasks'] as const,
-  task: (id: string) => ['task', id] as const,
 }
 
 export function useMeta() {
@@ -166,22 +163,6 @@ export function usePendingApprovals(runId: string | null) {
         (page) => page.approvals,
       ),
     enabled: Boolean(runId),
-  })
-}
-
-export function useTaskList() {
-  return useQuery({
-    queryKey: queryKeys.tasks,
-    queryFn: () => request<{ tasks: Task[] }>('/tasks').then((page) => page.tasks),
-    staleTime: 5_000,
-  })
-}
-
-export function useTask(taskId: string | null) {
-  return useQuery({
-    queryKey: queryKeys.task(taskId ?? ''),
-    queryFn: () => request<Task>(`/tasks/${taskId}`),
-    enabled: Boolean(taskId),
   })
 }
 

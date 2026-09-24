@@ -48,15 +48,6 @@ const DIFF_TONE: Record<DiffLineKind, Tone | undefined> = {
   add: 'ok', del: 'danger', ctx: undefined, meta: 'dim',
 }
 const TODO_MARK: Record<string, string> = { completed: '[x]', in_progress: '[~]' }
-const TASK_TOOLS = ['create_task', 'update_task', 'claim_task', 'complete_task', 'get_task', 'can_start']
-const TASK_FIELDS: Array<[string, string]> = [
-  ['id', 'tools.task.id'], ['subject', 'tools.task.subject'], ['status', 'tools.task.status'],
-  ['owner', 'tasks.owner'], ['blocked_by', 'tasks.blockedBy'],
-]
-const TASK_STATUS_KEY: Record<string, string> = {
-  pending: 'tasks.status.pending', in_progress: 'tasks.status.in_progress',
-  completed: 'tasks.status.completed',
-}
 const PART = /^===\s*(.+?)\s*===$/
 
 type Tone = 'ok' | 'danger' | 'dim' | 'head'
@@ -116,19 +107,6 @@ function splitParts(text: string): Line[] {
   })
 }
 
-function taskLines(args: Record<string, unknown>): Line[] {
-  const out: Line[] = []
-  for (const [field, key] of TASK_FIELDS) {
-    const value = args[field]
-    const shown = typeof value === 'string' ? value
-      : typeof value === 'number' || typeof value === 'boolean' ? String(value)
-      : Array.isArray(value) ? value.join(', ') : ''
-    if (!shown) continue
-    const textKey = key === 'tools.task.status' ? TASK_STATUS_KEY[shown] : undefined
-    out.push({ text: shown, labelKey: key, textKey })
-  }
-  return out
-}
 
 /** 工具 → 行。纯函数，不认识 JSX，于是每种工具的特殊读法都能单独想清楚。 */
 function toolLines(run: ToolRun, text: string): Line[] {
@@ -145,7 +123,6 @@ function toolLines(run: ToolRun, text: string): Line[] {
     })
   }
   if (run.tool === 'subagent') return splitParts(text)
-  if (TASK_TOOLS.includes(run.tool)) return taskLines(run.arguments)
   return rows.map((line) => ({ text: line }))
 }
 function diffRows(lines: DiffLine[]): Line[] {

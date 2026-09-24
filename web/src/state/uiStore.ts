@@ -22,7 +22,14 @@ export interface UiState {
   thinkingExpanded: boolean
   approvalsExpanded: boolean
   autoApprove: boolean
-  taskFilter: 'all' | 'pending' | 'in_progress' | 'completed' | 'blocked'
+  /**
+   * 输入条上方那块待办清单展开着没有（默认展开）。
+   *
+   * 为什么进界面域：它是**用户自己的偏好**——收起过一次就该记住，与 `thinkingExpanded` /
+   * `approvalsExpanded` 同一类；会话切换会重挂载组件，放组件内的 `useState` 会让"收起"
+   * 在每次切会话时被忘掉。
+   */
+  todoExpanded: boolean
   /** 未发送的草稿：刷新后能恢复（只是 UI 便利，不进会话）。 */
   draft: string
   draftSavedAt: number | null
@@ -45,7 +52,7 @@ export interface UiState {
   toggleThinking: (expanded?: boolean) => void
   toggleApprovals: (expanded?: boolean) => void
   setAutoApprove: (value: boolean) => void
-  setTaskFilter: (value: UiState['taskFilter']) => void
+  toggleTodo: (expanded?: boolean) => void
   setDraft: (value: string) => void
   clearDraft: () => void
   setBackdropArt: (value: string | null) => void
@@ -62,7 +69,7 @@ export const useUiStore = create<UiState>()(
       thinkingExpanded: false,
       approvalsExpanded: true,
       autoApprove: false,
-      taskFilter: 'all',
+      todoExpanded: true,
       draft: '',
       draftSavedAt: null,
       backdropArt: null,
@@ -76,7 +83,7 @@ export const useUiStore = create<UiState>()(
       toggleApprovals: (expanded) =>
         set((state) => ({ approvalsExpanded: expanded ?? !state.approvalsExpanded })),
       setAutoApprove: (value) => set({ autoApprove: value }),
-      setTaskFilter: (value) => set({ taskFilter: value }),
+      toggleTodo: (expanded) => set((state) => ({ todoExpanded: expanded ?? !state.todoExpanded })),
       setDraft: (value) => set({ draft: value, draftSavedAt: Date.now() }),
       clearDraft: () => set({ draft: '', draftSavedAt: null }),
       setBackdropArt: (value) => set({ backdropArt: value }),

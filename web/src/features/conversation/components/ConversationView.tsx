@@ -10,6 +10,7 @@ import { ConversationHeader } from './ConversationHeader'
 import { ProcessingCard } from './ProcessingCard'
 import { StatusBanner } from './StatusBanner'
 import { Timeline } from './Timeline'
+import { TodoPanel } from './TodoPanel'
 
 export interface ConversationViewProps {
   sessionId: string | null
@@ -36,7 +37,7 @@ function copyText(text: string): void {
   void navigator.clipboard?.writeText(text)
 }
 
-/** 主表面：对话卡。头部 + 提示条 + 审批队列 + 时间线 + 处理中卡片 + 输入条。 */
+/** 主表面：对话卡。头部 + 提示条 + 审批队列 + 时间线 + 处理中卡片 + 待办清单 + 输入条。 */
 export function ConversationView(props: ConversationViewProps) {
   const { t } = useTranslation()
   const { view } = props
@@ -95,7 +96,12 @@ export function ConversationView(props: ConversationViewProps) {
         </div>
       ) : null}
 
-      <div className="border-t-bold border-ink p-3">{props.composerSlot}</div>
+      {/* 底栏：待办清单在上、输入条在下。清单不放进时间线的滚动区——它是"现在的计划"，
+          该一直看得见；没有清单时 `TodoPanel` 自己返回 null（连间距也不留）。 */}
+      <div className="border-t-bold border-ink p-3">
+        <TodoPanel tools={view.tools} />
+        {props.composerSlot}
+      </div>
     </section>
   )
 }

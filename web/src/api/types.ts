@@ -196,19 +196,6 @@ export interface ApprovalAnswer {
   approval_id: string
 }
 
-export interface Task {
-  id: string
-  subject: string
-  description: string
-  status: 'pending' | 'in_progress' | 'completed'
-  owner: string | null
-  blockedBy: string[]
-  can_start: boolean
-  blocked: boolean
-  incomplete_dependencies: string[]
-  dependency_titles: Record<string, string>
-}
-
 /**
  * 统一 usage 快照（阶段 22）——与 `RunState.usage_report()`、服务端 `UsageOut` 同形。
  *

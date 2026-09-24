@@ -168,14 +168,6 @@ test('视觉基线：审批待决', async ({ page }) => {
   await shoot(page, page.locator('section.surface-main'), 'approval.png')
 })
 
-test('视觉基线：任务板面板', async ({ page }) => {
-  await freeze(page)
-  await page.goto(`${BASE}/tasks`)
-  const panel = page.locator('section.surface-panel')
-  await expect(panel).toBeVisible()
-  await shoot(page, panel, 'tasks-panel.png')
-})
-
 test('视觉基线：技能目录面板', async ({ page }) => {
   await freeze(page)
   await page.goto(`${BASE}/skills`)

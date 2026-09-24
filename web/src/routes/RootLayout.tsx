@@ -1,6 +1,6 @@
 import { useCallback } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { ListChecks, Settings, Sparkles } from 'lucide-react'
+import { Settings, Sparkles } from 'lucide-react'
 
 import { AppShell } from '../layouts/AppShell'
 import type { NavItem } from '../layouts/AppShell'
@@ -16,7 +16,6 @@ export function RootLayout() {
   // 没有「会话」这一项：会话列表本身就长在它下面（按工作区分组），点它只是跳到一个
   // 空占位页，等于把同一件事说两遍。`/sessions` 仍是根路径与未知路径的落点（router.tsx）。
   const navItems: NavItem[] = [
-    { key: 'tasks', label: t('common.nav.tasks'), to: '/tasks', icon: <ListChecks size={16} /> },
     { key: 'skills', label: t('common.nav.skills'), to: '/skills', icon: <Sparkles size={16} /> },
     { key: 'settings', label: t('common.nav.settings'), to: '/settings', icon: <Settings size={16} /> },
   ]
