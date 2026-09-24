@@ -15,10 +15,13 @@
  * `aria-live` 只加在 durable（非乐观）的 assistant 条目上：乐观 delta 每帧都在变，读屏器
  * 会把它念成一串噪音，而 durable 消息才是完整的一句话。
  *
- * 动作行**常驻可见**，但只剩两枚图标（复制 / 从此处分支）：以前是 `opacity-0` + 悬停显形，
- * 代价是「有这功能」本身要先被猜到；后来是一排文字按钮，代价是每个条目下都多占一行字宽
- * （窄卡片里还会换行）。现在常驻的是图标方框，**说明文字改由悬停/聚焦的气泡给出**——
- * 「有这功能」看得见，但不再常驻占位。图标是装饰，按钮名在 `aria-label` 上（见 `Actions`）。
+ * 动作行**常驻可见**，但只剩图标（复制，模型与工具侧还有「从此处分支」）：以前是
+ * `opacity-0` + 悬停显形，代价是「有这功能」本身要先被猜到；后来是一排文字按钮，代价是
+ * 每个条目下都多占一行字宽（窄卡片里还会换行）。现在常驻的是图标方框，**说明文字改由
+ * 悬停/聚焦的气泡给出**——「有这功能」看得见，但不再常驻占位。图标是装饰，按钮名在
+ * `aria-label` 上（见 `Actions`）。
+ *
+ * **用户消息只有复制**（见 `Actions` 的注释）：分叉的链尾该是模型的产出，不是提问。
  * 条目级的「查看原始 JSON」按钮已删除——检查器改由工具卡的「查看」打开（那条路径仍在，
  * 工具输出才是真正需要看全文/diff 的东西）。
  */
@@ -59,7 +62,7 @@ function Role({ label, mark = 'avid' }: { label: string; mark?: 'avid' | 'user' 
 }
 
 /**
- * 条目动作行：两枚**图标按钮**，说明只在悬停或聚焦时以气泡浮现在按钮**外面**。
+ * 条目动作行：图标按钮，说明只在悬停或聚焦时以气泡浮现在按钮**外面**。
  *
  * 三条取舍：
  *   · 图标按钮没有内部文字，所以可访问名只能来自 `aria-label`——这也让
@@ -67,6 +70,11 @@ function Role({ label, mark = 'avid' }: { label: string; mark?: 'avid' | 'user' 
  *   · 图标本身 `aria-hidden`（装饰）：名字已经由按钮给出，读屏器不该把它念两遍；
  *   · 气泡用 `Tooltip` 原语（Radix），它默认在 hover **与** focus 时都出现，且内容只在
  *     打开时挂载——「未悬停不展示文字」因此是行为而不是 opacity 技巧，也不占额外空间。
+ *
+ * **谁配得上分叉**：只有模型侧（assistant / tool）的条目。用户消息上的分叉既不是
+ * "编辑重发"（那要改内容），也不是"从这轮继续"（链尾在模型的回答上），点下去只会得到
+ * 一条与主线共享全部历史的空分支——多一个看不出差别的选择。判据在调用点（`EntryRow`
+ * 只给非用户条目传 `onFork`），这里不再重复判一次 kind。
  */
 function Actions({
   entry,
@@ -115,7 +123,10 @@ export const EntryRow = memo(function EntryRow({
 }: EntryRowProps) {
   const { t } = useTranslation()
   const pad = density === 'compact' ? 'p-2' : 'p-3'
-  const actions = <Actions entry={entry} onCopy={onCopy} onFork={onFork} />
+  // 用户消息不给分叉：动作行只剩复制（理由见 `Actions`）。
+  const actions = (
+    <Actions entry={entry} onCopy={onCopy} onFork={entry.kind === 'user' ? undefined : onFork} />
+  )
 
   if (entry.kind === 'user') {
     return (
