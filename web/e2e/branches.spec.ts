@@ -71,7 +71,10 @@ test('从某一轮分叉、在分支上继续、再切回主线', async ({ page,
   await expect(selector, '新建会话的隐式默认分支是 main').toBeVisible()
   await expect(page.getByRole('button', { name: '从链尾分叉' })).toBeVisible()
 
-  // 在**第一条**用户消息处「从此处分支」：新链只剩这一条
+  // 在**第一条模型侧条目**处「从此处分支」：新链只剩它之前的那段历史。
+  //
+  // 为什么不是"第一条用户消息"：用户消息侧不再提供分叉（链尾该是模型的产出），所以
+  // 时间线上第一枚「从此处分支」属于模型侧——这里是那一轮工具结果的条目。
   await log.getByRole('button', { name: '从此处分支' }).first().click()
   await expect(
     page.getByRole('button', { name: 'b2', exact: true }),
@@ -82,14 +85,23 @@ test('从某一轮分叉、在分支上继续、再切回主线', async ({ page,
   expect(await branchNames(request, sessionId)).toEqual(['main', 'b2'])
   const mainBefore = await entriesOf('main')
 
-  // 在新链上继续：走界面提交，branch 必须跟着请求走
+  // 在新链上继续：走界面提交，branch 必须跟着请求走。
+  //
+  // 断言落在**请求体**上而不是"等一次审批"：分叉点只能在模型侧条目上，新链必然已经带着
+  // 那一轮的 tool 消息，而脚本模型看到历史里有 tool 消息就直接收尾——不再要工具，也就不
+  // 再有 REVIEW。审批路径由 `conversation.spec.ts` 与视觉基线的「待审批」守着；这条用例
+  // 守的是 branch 有没有跟着 composer 出去。
   const onBranch = `分支上的回复-${stamp}`
   const composer = page.getByLabel(COMPOSER_LABEL)
   await composer.fill(onBranch)
+  const runRequest = page.waitForRequest(
+    (req) => req.method() === 'POST' && req.url().includes(`/api/sessions/${sessionId}/runs`),
+  )
   await composer.press('Enter')
-  const allow = page.getByRole('button', { name: '允许一次' })
-  await expect(allow).toBeVisible({ timeout: 15_000 })
-  await allow.click()
+  expect((await runRequest).postDataJSON(), 'branch 跟着请求走').toMatchObject({
+    branch: 'b2',
+    prompt: onBranch,
+  })
   await expect(log.getByText(onBranch)).toBeVisible({ timeout: 15_000 })
 
   // 切回主线：主线没有那句新话
@@ -105,6 +117,15 @@ test('从某一轮分叉、在分支上继续、再切回主线', async ({ page,
   expect(mainAfter, '分支上的运行不该动主线').toEqual(mainBefore)
   const side = await entriesOf('b2')
   expect(side[0], '分叉点之前共享同一条链').toBe(mainBefore[0])
-  expect(side.slice(1), '分叉点之后各自私有').not.toContain(mainBefore[1])
+  // 共享的是**一段前缀**（分叉点及其之前的所有条目），分叉点之后各自私有。
+  // 共享段有多长取决于分叉点落在哪条条目上（现在是模型侧那条），所以不写死索引。
+  const shared = side.filter((id) => mainBefore.includes(id))
+  expect(shared, '共享段必须是一段前缀，不是零散交集').toEqual(side.slice(0, shared.length))
+  expect(shared.length, '分叉真的发生了（不是整条主线）').toBeLessThan(mainBefore.length)
+  const own = side.slice(shared.length)
+  expect(own.length, '新链上至少有自己的那一轮').toBeGreaterThan(0)
+  for (const id of own) {
+    expect(mainBefore, '新链私有的条目不该出现在主线').not.toContain(id)
+  }
   expect(new Set(side).size, '分支链上没有重复条目').toBe(side.length)
 })

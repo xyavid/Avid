@@ -313,4 +313,13 @@ test('条目动作：图标按钮 + 悬停气泡说明（未悬停不占位）',
   const fork = log.getByRole('button', { name: '从此处分支' }).first()
   await expect(fork.locator('svg')).toHaveCount(1)
   expect((await fork.innerText()).trim()).toBe('')
+
+  // 但**用户消息侧没有分叉**：分叉的链尾该是模型的产出，不是提问。用户气泡里只该有复制。
+  // 用户气泡是时间线上唯一靠 `ml-auto` 贴右的那种 article（见 `EntryRow`）。
+  const userBubble = log.locator('article.ml-auto').first()
+  await expect(userBubble.getByRole('button', { name: '复制文本' })).toBeVisible()
+  await expect(
+    userBubble.getByRole('button', { name: '从此处分支' }),
+    '用户消息不给分叉',
+  ).toHaveCount(0)
 })

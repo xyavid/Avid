@@ -237,3 +237,90 @@ test('按会话搜索：过滤、无匹配提示、清除后恢复', async ({ pa
   await expect(hitRow).toBeVisible()
   await expect(missRow).toBeVisible()
 })
+
+/**
+ * 沙箱状态：常驻的只有一枚图标，那句"这次运行的物理边界"在悬停气泡里。
+ *
+ * 为什么要 e2e 而不是只留组件单测：这条规则的价值全在"输入条不再为它留一行"——图标
+ * 的几何、气泡是否真的浮出来，只有真浏览器说了算（jsdom 里浮层是纯 DOM 行为）。
+ */
+test('沙箱状态只留图标，说明在悬停气泡里', async ({ page, request }) => {
+  const created = await createSession(request, { name: `沙箱-${Date.now()}` })
+  expect(created.status(), `造会话失败：${await created.text()}`).toBe(201)
+  const sessionId = ((await created.json()) as { id: string }).id
+
+  await page.goto(`${BASE}/sessions/${sessionId}`)
+
+  const chip = page.getByLabel('沙箱')
+  await expect(chip).toBeVisible({ timeout: 10_000 })
+  await expect(chip, '常驻的只有图标，文字不再常驻').toHaveText('')
+
+  await chip.hover()
+  // 后端可用说"物理边界：工作区（无出网）"，不可用说"沙箱不可用（原因）"——两种都算对，
+  // 这里断言的是"悬停时那句话真的出来了"。
+  await expect(
+    page.getByText(/(这次运行的物理边界：|沙箱不可用（)/).first(),
+    '悬停后气泡里给出物理边界',
+  ).toBeVisible({ timeout: 3_000 })
+})
+
+/**
+ * 移除工作区：只从导航列里摘掉，会话归到「未归属的会话」，照旧打得开。
+ *
+ * 这一条是"删工作区"整套语义的端到端证据：请求发的是 DELETE、文件夹消失、会话没少、
+ * 归进了未归属组、并且点进去还能读——四件事缺一不可。
+ */
+test('移除工作区：文件夹消失，会话归到未归属的会话且仍能打开', async ({ page, request }) => {
+  const stamp = Date.now()
+  const extraRoot = mkdtempSync(join(tmpdir(), 'avid-e2e-rm-'))
+  const extraName = `e2e待移除-${stamp}`
+  const sessionName = `留下的会话-${stamp}`
+  const registered = await request.post(`${BASE}/api/workspaces`, {
+    data: { path: extraRoot, name: extraName },
+  })
+  expect(registered.status(), `登记工作区失败：${await registered.text()}`).toBe(201)
+  const extraId = ((await registered.json()) as { id: string }).id
+
+  const created = await createSession(request, { workspace: extraId, name: sessionName })
+  expect(created.status(), `造会话失败：${await created.text()}`).toBe(201)
+  const sessionId = ((await created.json()) as { id: string }).id
+
+  try {
+    await page.goto(`${BASE}/sessions`)
+
+    const folder = workspaceFolder(page, extraName)
+    await expect(folder, '新登记的工作区要出现在导航树里').toBeVisible({ timeout: 10_000 })
+
+    // ---- 1. 文件夹标题行上的移除按钮：点开确认框，文案必须说清"会话不删" ----
+    await page.getByRole('button', { name: `移除工作区「${extraName}」` }).click()
+    await expect(page.getByText('把这个工作区从列表里移除？')).toBeVisible()
+    await expect(page.getByText(/会话文件一行不动/)).toBeVisible()
+
+    const removed = page.waitForResponse(
+      (res) => res.request().method() === 'DELETE' && res.url().includes(`/api/workspaces/`),
+    )
+    await page.getByRole('button', { name: '确认' }).click()
+    expect((await removed).status()).toBe(204)
+
+    // ---- 2. 文件夹从导航列消失 ----
+    await expect(folder, '被移除的工作区不再出现在导航列').toHaveCount(0)
+
+    // ---- 3. 会话没被删：服务端仍然列得到它，界面上归到「未归属的会话」 ----
+    const listed = await request.get(`${BASE}/api/sessions`)
+    const sessions = ((await listed.json()) as { sessions: { id: string }[] }).sessions
+    expect(sessions.map((item) => item.id)).toContain(sessionId)
+
+    const orphanRow = page
+      .getByRole('listitem')
+      .filter({ hasText: '未归属的会话' })
+    const orphanSession = orphanRow.getByRole('button', { name: new RegExp(`^${sessionName}`) })
+    await expect(orphanSession, '会话归到未归属的会话组').toBeVisible({ timeout: 10_000 })
+
+    // ---- 4. 点进去照旧打得开（会话库仍按墓碑条目定位得到） ----
+    await orphanSession.click()
+    await page.waitForURL(new RegExp(`/sessions/${sessionId}$`), { timeout: 10_000 })
+    await expect(page.getByRole('log')).toBeVisible({ timeout: 10_000 })
+  } finally {
+    rmSync(extraRoot, { recursive: true, force: true })
+  }
+})
