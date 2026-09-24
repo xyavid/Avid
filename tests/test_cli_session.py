@@ -236,9 +236,9 @@ def test_session_list_shows_the_workspace_column(sandbox, model, capsys):
 
 
 def test_permission_default_comes_from_the_workspace(sandbox, model, monkeypatch, capsys):
-    """运行级旗标 > 工作区默认权限 > strict：这里验中间那一档。"""
+    """运行级旗标 > 工作区默认权限 > manual：这里验中间那一档。"""
     registry = cli.WorkspaceRegistry()
-    ws = registry.add(sandbox, permission="workspace")
+    ws = registry.add(sandbox, permission="manual")
     seen = {}
 
     def fake_loop(messages, **kwargs):
@@ -249,13 +249,16 @@ def test_permission_default_comes_from_the_workspace(sandbox, model, monkeypatch
 
     assert cli.main(["--agent", "--new-session", "问"]) == 0
 
-    assert seen["permission_mode"] == "workspace"
-    assert seen["workspace_root"] == ws.root
+    # 模式与工作区根现在都装在那份运行级规格里（state.security）：少一处转发就是
+    # "界面说 manual、实际按别的模式跑"，所以断言读的是**真正传给循环的那份 state**。
+    assert seen["state"].permission_mode == "manual"
+    assert seen["state"].workspace_root == ws.root
+    assert seen["state"].security.sandbox.enforced is True
     capsys.readouterr()
 
 
 def test_run_flag_overrides_the_workspace_default(sandbox, model, monkeypatch, capsys):
-    cli.WorkspaceRegistry().add(sandbox, permission="workspace")
+    cli.WorkspaceRegistry().add(sandbox, permission="manual")
     seen = {}
 
     def fake_loop(messages, **kwargs):
@@ -264,9 +267,10 @@ def test_run_flag_overrides_the_workspace_default(sandbox, model, monkeypatch, c
 
     monkeypatch.setattr(cli, "agent_loop", fake_loop)
 
-    assert cli.main(["--agent", "--new-session", "--permission", "system", "问"]) == 0
+    assert cli.main(["--agent", "--new-session", "--permission", "auto", "问"]) == 0
 
-    assert seen["permission_mode"] == "system"
+    assert seen["state"].permission_mode == "auto"
+    assert seen["state"].security.approval == "classifier"
     capsys.readouterr()
 
 
@@ -282,8 +286,12 @@ def test_workspace_subcommand_add_list_permission_remove(sandbox, capsys, tmp_pa
     assert cli.main(["workspace", "list"]) == 0
     assert "另一个" in capsys.readouterr().out
 
-    assert cli.main(["workspace", "permission", added[0], "system"]) == 0
-    assert capsys.readouterr().out.strip().split("\t")[1] == "system"
+    assert cli.main(["workspace", "permission", added[0], "auto"]) == 0
+    assert capsys.readouterr().out.strip().split("\t")[1] == "auto"
+
+    # full 不能作默认值：CLI 在 argparse 就拒（choices 里没有它），注册表那层还有第二道。
+    with pytest.raises(SystemExit):
+        cli.main(["workspace", "permission", added[0], "full"])
 
     assert cli.main(["workspace", "remove", added[0]]) == 0
     assert "磁盘上的会话数据未动" in capsys.readouterr().out

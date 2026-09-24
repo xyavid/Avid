@@ -136,18 +136,78 @@ def test_context_inject_hook_reports_environment(clean):
 
 
 def test_permission_hook_blocks_and_records_reason(clean):
-    """严格模式下的常规拒绝：分类是 user，理由里带工具名与规则原文。"""
+    """manual 下的危险命令：分类是 danger，理由里带工具名与类别。"""
     context = {
         "tool": "bash",
-        "arguments": {"command": "ls"},
-        "permission_mode": "strict",
+        "arguments": {"command": "sudo ls"},
         "ask": lambda name, arguments, reason: False,
     }
 
     assert hooks.permission_hook(context) == BLOCK
-    assert context["denied_kind"] == "user"
-    assert context["denied_reason"] == "bash：执行 shell 命令"
-    assert "本次未获用户批准" in context["denied_content"]
+    assert context["denied_kind"] == "danger"
+    assert context["denied_reason"] == "bash：提权"
+    assert "危险命令未获批准" in context["denied_content"]
+
+
+def test_permission_hook_lets_the_sandbox_cover_ordinary_commands(sandbox, clean):
+    """沙箱能保证的区内常规命令**不进审批**——否则 sandbox 与 approval 就退化成一件事。"""
+    from avid.runtime.state import RunState
+
+    state = RunState.for_run(
+        permission_mode="manual", workspace_root=str(sandbox), audit_enabled=False
+    )
+
+    def ask(*args):
+        raise AssertionError("沙箱能保证的动作不该问人")
+
+    context = {
+        "tool": "bash",
+        "arguments": {"command": "ls"},
+        "security": state.security,
+        "approval_ledger": state.ledger,
+        "workspace_root": str(sandbox),
+        "ask": ask,
+    }
+
+    assert hooks.permission_hook(context) is None
+    assert "denied_reason" not in context
+
+
+def test_permission_hook_writes_the_audit_record(sandbox, clean, tmp_path, monkeypatch):
+    """放行也要留痕：审计记录里有三轴、目标、裁决与来源。"""
+    import json
+
+    from avid.runtime.state import RunState
+
+    monkeypatch.setenv("AVID_AUDIT_DIR", str(tmp_path / "audit"))
+    state = RunState.for_run(permission_mode="auto", workspace_root=str(sandbox))
+    context = {
+        "tool": "bash",
+        "arguments": {"command": "cat /etc/hostname"},
+        "security": state.security,
+        "approval_ledger": state.ledger,
+        "workspace_root": str(sandbox),
+    }
+
+    assert hooks.permission_hook(context) == BLOCK
+
+    records = [
+        json.loads(line)
+        for line in (tmp_path / "audit").glob("audit-*.jsonl").__iter__().__next__().read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    record = records[-1]
+    assert record["kind"] == "decision"
+    assert record["tool"] == "bash"
+    assert record["verdict"] == "deny" and record["decision_kind"] == "outside"
+    assert record["answered_by"] == "classifier"
+    assert record["axes"] == {
+        "approval": "classifier",
+        "sandbox": "workspace",
+        "network": "restricted",
+    }
+    assert "/etc/hostname" in record["outside"]
 
 
 def test_permission_hook_allows_and_stays_quiet(clean):
@@ -172,7 +232,7 @@ def test_hard_deny_and_user_refusal_give_different_guidance(clean):
     hard = {"tool": "bash", "arguments": {"command": "rm -rf /"}}
     user = {
         "tool": "bash",
-        "arguments": {"command": "ls"},
+        "arguments": {"command": "sudo ls"},
         "ask": lambda name, arguments, reason: False,
     }
 
@@ -180,8 +240,10 @@ def test_hard_deny_and_user_refusal_give_different_guidance(clean):
     hooks.permission_hook(user)
 
     assert hard["denied_kind"] == "hard"
-    assert user["denied_kind"] == "user"
+    assert user["denied_kind"] == "danger"
     assert hard["denied_content"] != user["denied_content"]
+    assert "永久禁止" in hard["denied_content"]
+    assert "不要重复提交同一条命令" in user["denied_content"]
 
 
 def test_brief_redacts_credentials_and_truncates():
@@ -225,10 +287,10 @@ def test_permission_hook_uses_the_injected_ask_without_the_run_flag(clean):
     seen = []
     ask = lambda name, arguments, reason: seen.append((name, reason)) or True  # noqa: E731
 
-    context = {"tool": "bash", "arguments": {"command": "ls"}, "ask": ask}
+    context = {"tool": "bash", "arguments": {"command": "sudo ls"}, "ask": ask}
 
     assert hooks.permission_hook(context) is None
-    assert seen == [("bash", "执行 shell 命令")]
+    assert seen == [("bash", "提权")]
 
 
 def test_log_hook_never_blocks(clean):

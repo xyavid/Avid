@@ -2,6 +2,12 @@
 
 审批是**请求/响应**语义，所以这里走真的 HTTP 往返（``TestClient``），工具换成
 记录器——「工具到底执行了几次」必须与事件计数双断言。
+
+**命令为什么是 ``sudo ls``**（阶段 26）：缺省模式 ``manual`` 下，沙箱能保证的区内
+常规命令**不进审批**（那正是三轴正交的意义：approval 不必为 sandbox 能保证的事重复
+打搅人）。要测审批机制本身，就得给一条**确实会 REVIEW** 的命令——``sudo`` 命中危险
+类别，在任何模式下都要经过 REVIEW（manual 问人 / auto 由分类器判 / full 直接放行）。
+用 ``ls`` 之类的普通命令会变成"压根没有审批可测"。
 """
 
 from __future__ import annotations
@@ -86,7 +92,7 @@ def wait_run(client: TestClient, run_id: str, status: str, timeout: float = 5.0)
 
 def test_approval_suspends_then_resumes(make_client):
     chat = ScriptedChat(
-        make_turn("", [tool_call("bash", '{"command": "echo hi"}')]), make_turn("做完了")
+        make_turn("", [tool_call("bash", '{"command": "sudo ls"}')]), make_turn("做完了")
     )
     tools = RecordingTools()
     client, services = make_client(chat, tools.registry("bash"))
@@ -97,7 +103,7 @@ def test_approval_suspends_then_resumes(make_client):
     pending = client.get(f"/api/runs/{run_id}/approvals").json()["approvals"]
     assert len(pending) == 1
     assert pending[0]["tool"] == "bash"
-    assert pending[0]["arguments"] == {"command": "echo hi"}
+    assert pending[0]["arguments"] == {"command": "sudo ls"}
     assert pending[0]["expires_at"] > pending[0]["created_at"]
     assert tools.calls == [], "待决审批期间工具不该执行"
 
@@ -108,7 +114,7 @@ def test_approval_suspends_then_resumes(make_client):
     assert answer.status_code == 200 and answer.json()["accepted"] is True
 
     assert wait_for(lambda: run_status(client, run_id) == "finished"), run_status(client, run_id)
-    assert tools.calls == [("bash", {"command": "echo hi"})]
+    assert tools.calls == [("bash", {"command": "sudo ls"})]
 
     # seq 连续无洞
     got = collect(services, run_id)
@@ -124,7 +130,7 @@ def test_approval_suspends_then_resumes(make_client):
 
 def test_deny_stops_the_tool_message(make_client):
     chat = ScriptedChat(
-        make_turn("", [tool_call("bash", '{"command": "echo hi"}')]), make_turn("好，我换个办法")
+        make_turn("", [tool_call("bash", '{"command": "sudo ls"}')]), make_turn("好，我换个办法")
     )
     tools = RecordingTools()
     client, services = make_client(chat, tools.registry("bash"))
@@ -142,7 +148,9 @@ def test_deny_stops_the_tool_message(make_client):
     got = collect(services, run_id)
     assert events.TOOL_CALL_DENIED in [event.type for event in got]
     denied = [event for event in got if event.type == events.TOOL_CALL_DENIED][0]
-    assert denied.data["kind"] == "user"
+    # 分档是"为什么被拒"，不是"谁拒的"：`sudo` 走的是危险类别，所以这里是 danger
+    # （旧版本里所有用户拒绝都记 user，于是界面分不出"危险"和"这次不行"）。
+    assert denied.data["kind"] == "danger"
     assert any(event.type == events.TOOL_RESULT_MESSAGE for event in got)
 
 
@@ -151,7 +159,7 @@ def test_deny_stops_the_tool_message(make_client):
 
 def test_repeated_answer_does_not_approve_twice(make_client):
     chat = ScriptedChat(
-        make_turn("", [tool_call("bash", '{"command": "echo hi"}')]), make_turn("完成")
+        make_turn("", [tool_call("bash", '{"command": "sudo ls"}')]), make_turn("完成")
     )
     tools = RecordingTools()
     client, services = make_client(chat, tools.registry("bash"))
@@ -181,7 +189,7 @@ def test_repeated_answer_does_not_approve_twice(make_client):
 
 def test_conflicting_answer_is_409_and_unknown_is_404(make_client):
     chat = ScriptedChat(
-        make_turn("", [tool_call("bash", '{"command": "echo hi"}')]), make_turn("完成")
+        make_turn("", [tool_call("bash", '{"command": "sudo ls"}')]), make_turn("完成")
     )
     tools = RecordingTools()
     client, _ = make_client(chat, tools.registry("bash"))
@@ -212,7 +220,7 @@ def test_conflicting_answer_is_409_and_unknown_is_404(make_client):
 
 def test_timeout_fails_closed(make_client):
     chat = ScriptedChat(
-        make_turn("", [tool_call("bash", '{"command": "echo hi"}')]), make_turn("结束了")
+        make_turn("", [tool_call("bash", '{"command": "sudo ls"}')]), make_turn("结束了")
     )
     tools = RecordingTools()
     client, services = make_client(chat, tools.registry("bash"), approval_timeout=0.1)

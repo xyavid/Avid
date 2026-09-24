@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from avid.policy.permission import MODE_WORKSPACE
+from avid.policy.permission import MODE_MANUAL
 from avid.workspaces import (
     AVID_HOME_ENV,
     WorkspaceError,
@@ -58,10 +58,10 @@ def test_add_is_idempotent(registry, workspace_dir):
 
 def test_add_updates_name_and_permission(registry, workspace_dir):
     registry.add(workspace_dir)
-    renamed = registry.add(workspace_dir, name="重构", permission=MODE_WORKSPACE)
+    renamed = registry.add(workspace_dir, name="重构", permission=MODE_MANUAL)
 
     assert renamed.name == "重构"
-    assert renamed.default_permission == MODE_WORKSPACE
+    assert renamed.default_permission == MODE_MANUAL
     assert len(registry.list()) == 1
 
 
@@ -116,10 +116,10 @@ def test_registry_only_changes_on_explicit_writes(registry, workspace_dir):
 def test_set_permission(registry, workspace_dir):
     registry.add(workspace_dir)
 
-    updated = registry.set_permission(str(workspace_dir), MODE_WORKSPACE)
+    updated = registry.set_permission(str(workspace_dir), MODE_MANUAL)
 
-    assert updated.default_permission == MODE_WORKSPACE
-    assert registry.get(str(workspace_dir)).default_permission == MODE_WORKSPACE
+    assert updated.default_permission == MODE_MANUAL
+    assert registry.get(str(workspace_dir)).default_permission == MODE_MANUAL
 
 
 def test_get_unknown_raises_with_a_usable_hint(registry):
@@ -153,13 +153,13 @@ def test_corrupt_registry_degrades_reads_but_refuses_writes(registry, workspace_
 
 
 def test_registry_file_shape(registry, workspace_dir):
-    registry.add(workspace_dir, name="项目", permission=MODE_WORKSPACE)
+    registry.add(workspace_dir, name="项目", permission=MODE_MANUAL)
 
     payload = json.loads(registry.path.read_text(encoding="utf-8"))
 
     assert payload["version"] == 1
     assert payload["workspaces"][0]["name"] == "项目"
-    assert payload["workspaces"][0]["default_permission"] == MODE_WORKSPACE
+    assert payload["workspaces"][0]["default_permission"] == MODE_MANUAL
     assert payload["workspaces"][0]["root"] == str(workspace_dir.resolve())
 
 

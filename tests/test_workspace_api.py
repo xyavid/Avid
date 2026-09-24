@@ -108,12 +108,12 @@ def test_register_then_create_a_session_in_that_workspace(client, sandbox, tmp_p
     project.mkdir()
 
     created = client.post(
-        "/api/workspaces", json={"path": str(project), "name": "项目", "permission": "workspace"}
+        "/api/workspaces", json={"path": str(project), "name": "项目", "permission": "manual"}
     )
     assert created.status_code == 201, created.text
     workspace = created.json()
     assert workspace["name"] == "项目"
-    assert workspace["default_permission"] == "workspace"
+    assert workspace["default_permission"] == "manual"
 
     listed = client.get("/api/workspaces").json()["workspaces"]
     # 进程自己绑定的工作地点也在候选里（is_default），所以断言"包含"而不是"只有它"。
@@ -164,13 +164,13 @@ def test_run_records_the_workspace_and_permission(client, tmp_path, sandbox):
     project = tmp_path.parent / f"run-{tmp_path.name}"
     project.mkdir()
     ws = client.post(
-        "/api/workspaces", json={"path": str(project), "permission": "strict"}
+        "/api/workspaces", json={"path": str(project), "permission": "manual"}
     ).json()
     session = client.post("/api/sessions", json={"workspace": ws["id"]}).json()
 
     started = client.post(
         f"/api/sessions/{session['id']}/runs",
-        json={"prompt": "问题", "permission": "system", "auto_approve": True},
+        json={"prompt": "问题", "permission": "auto", "auto_approve": True},
     )
     assert started.status_code == 201, started.text
     run_id = started.json()["run_id"]
@@ -179,14 +179,14 @@ def test_run_records_the_workspace_and_permission(client, tmp_path, sandbox):
     stream = client.get(f"/api/runs/{run_id}/events").text
     assert '"workspace"' in stream
     assert ws["id"] in stream
-    assert '"permission"' in stream and "system" in stream
+    assert '"permission"' in stream and "auto" in stream
 
 
 def test_run_permission_defaults_to_the_workspace_default(client, tmp_path, sandbox):
     project = tmp_path.parent / f"default-{tmp_path.name}"
     project.mkdir()
     ws = client.post(
-        "/api/workspaces", json={"path": str(project), "permission": "workspace"}
+        "/api/workspaces", json={"path": str(project), "permission": "manual"}
     ).json()
     session = client.post("/api/sessions", json={"workspace": ws["id"]}).json()
 
@@ -197,7 +197,7 @@ def test_run_permission_defaults_to_the_workspace_default(client, tmp_path, sand
     run_id = started.json()["run_id"]
 
     stream = client.get(f"/api/runs/{run_id}/events").text
-    assert '"permission": "workspace"' in stream
+    assert '"permission": "manual"' in stream
 
 
 def test_run_rejects_an_unknown_permission(client, tmp_path):
@@ -284,10 +284,16 @@ def test_an_invalid_permission_does_not_register_the_workspace(client, tmp_path)
     assert all(item["root"] != str(target) for item in listed), "被拒的请求不该留下登记"
 
     accepted = client.post(
-        "/api/workspaces", json={"path": str(target), "permission": "workspace"}
+        "/api/workspaces", json={"path": str(target), "permission": "manual"}
     )
     assert accepted.status_code == 201, accepted.text
-    assert accepted.json()["default_permission"] == "workspace"
+    assert accepted.json()["default_permission"] == "manual"
+
+    # full 在**类型层**就不存在（`Literal["manual","auto"]`）：它不能成为持久默认值。
+    full = client.post(
+        "/api/workspaces", json={"path": str(target), "permission": "full"}
+    )
+    assert full.status_code == 422, full.text
 
 
 # ---------------- 任务板跟着工作区走 ----------------
