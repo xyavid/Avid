@@ -23,7 +23,8 @@ router = APIRouter()
 def start_run(request: Request, session_id: str, body: StartRunIn) -> dict:
     """``branch`` 决定这次运行接在哪条链尾上（缺省 main）。
 
-    ``permission`` 决定这次运行的三态权限；缺省按会话所属工作区的默认权限。
+    ``permission`` 决定这次运行的三轴预设；缺省按会话所属工作区的默认权限。
+    ``full_access_ack`` 是 full 的显式授权凭据，由 DTO 校验（缺则 422，到不了这里）。
     """
     record = current_services(request).runs.start(
         session_id,
@@ -31,6 +32,7 @@ def start_run(request: Request, session_id: str, body: StartRunIn) -> dict:
         auto_approve=body.auto_approve,
         branch=body.branch,
         permission=body.permission,
+        full_ack=body.full_access_ack,
     )
     return {
         "run_id": record.run_id,

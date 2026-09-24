@@ -25,6 +25,7 @@ from typing import Any
 
 from ..ai.client import LLMError, chat_completion, stream_completion
 from ..ai.config import ConfigError, load_config
+from ..policy.permission import build_run_security, full_grant_error
 from ..runtime import events
 from ..runtime.events import STREAM_HEARTBEAT_SECONDS, RunEvent
 from ..runtime.loop import RunCancelled, agent_loop
@@ -39,6 +40,7 @@ from ..session import (
 from ..workspaces import SESSION_DIR
 from .approvals import APPROVAL_TIMEOUT_SECONDS, ApprovalTable
 from .errors import (
+    InvalidRequest,
     RunBusy,
     RunFinished,
     RunNotFound,
@@ -219,17 +221,22 @@ class RunRegistry:
         chat: Callable[..., Any] | None = None,
         branch: str = DEFAULT_BRANCH,
         permission: str | None = None,
+        full_ack: bool = False,
     ) -> RunRecord:
         """登记并起线程。已占用 → ``RunBusy``；会话不存在 → ``SessionNotFound``。
 
         ``branch`` 决定这次运行追加到哪条链上：历史取该分支的链，新消息接在它的链尾。
-        ``permission`` 是这次运行的权限模式；缺省按**会话所属工作区的默认权限**。
+        ``permission`` 是这次运行的模式预设；缺省按**会话所属工作区的默认权限**。
+        ``full_ack`` 是 full 的显式授权；没给就起不来（DTO 已 422，这里是第二道）。
         """
         found = self.workspaces.find_session(session_id)
         if found is None:
             raise SessionNotFound(f"没有这个会话：{session_id}")
         workspace, metadata = found
         mode = permission or workspace.default_permission
+        problem = full_grant_error(mode, acknowledged=full_ack, source="web")
+        if problem is not None:
+            raise InvalidRequest(problem)
 
         with self.session_lock(session_id):
             with self._lock:
@@ -274,6 +281,7 @@ class RunRegistry:
                 chat or self.chat,
                 branch,
                 mode,
+                full_ack,
             ),
             name=f"avid-run-{run_id}",
             daemon=True,
@@ -543,9 +551,20 @@ class RunRegistry:
         chat: Callable[..., Any] | None,
         branch: str = DEFAULT_BRANCH,
         permission: str | None = None,
+        full_ack: bool = False,
     ) -> None:
         """运行线程。会话句柄由 ``start`` 在句柄锁内开好并传入，这里不再 open。"""
-        # run_started 带上归属与模式：刷新页面后重建界面靠它，而不是靠内存里的 RunRecord。
+        # 三轴（approval/sandbox/network）与沙箱状态进 run_started：刷新页面后重建界面
+        # 靠它，而不是靠内存里的 RunRecord——"这次运行关没关沙箱"是必须可见的事实。
+        safety = build_run_security(
+            mode=permission or workspace.default_permission,
+            root=workspace.root,
+            run_tag=record.run_id,
+            run_id=record.run_id,
+            full_ack=full_ack,
+            source="web",
+        )
+        state_spec = safety.summary()
         self.emit(
             record,
             events.RUN_STARTED,
@@ -554,7 +573,18 @@ class RunRegistry:
             auto_approve=auto_approve,
             workspace=workspace.id,
             workspace_root=workspace.root,
-            permission=permission or workspace.default_permission,
+            permission=safety.mode,
+            approval=safety.approval,
+            sandbox=safety.sandbox_policy,
+            network=safety.network,
+            sandbox_state=safety.sandbox.summary(),
+            sandbox_notes=state_spec["notes"],
+        )
+        safety.audit_write(
+            "run_start",
+            session=record.session_id,
+            workspace=workspace.id,
+            prompt_chars=len(prompt),
         )
         # 记录器在 try 里建：`load_config` 失败时它不存在，`_finish` 也就没有可落的
         # 用量（record.recorder 保持 None，落盘那一步自动跳过）。
@@ -573,6 +603,8 @@ class RunRegistry:
                 observer=lambda event: self._observe(record, event),
                 permission_mode=permission or workspace.default_permission,
                 workspace_root=workspace.root,
+                # 与 run_started 里那份**同一个规格**：事件说的和实际执行用的是同一组值。
+                security=safety,
                 # 占用率的分母跟着这次运行实际的模型配置走。
                 context_window=config.context_window,
             )

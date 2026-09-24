@@ -23,12 +23,21 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from .policy.permission import DEFAULT_MODE, validate_mode
+from .policy import userdirs
+from .policy.permission import (
+    DEFAULT_MODE,
+    FullAccessError,
+    full_grant_error,
+    migrate_mode,
+    validate_mode,
+)
 from .runtime.events import now_ms
 
 logger = logging.getLogger("avid.workspaces")
 
-AVID_HOME_ENV = "AVID_HOME"
+# 用户级目录的定义在 `policy/userdirs.py`（叶子模块：注册表、审计、掩蔽源文件三处共用，
+# 而它们互相不能 import）。名字在这里保留，既有调用方与测试不必改。
+AVID_HOME_ENV = userdirs.AVID_HOME_ENV
 REGISTRY_FILE = "workspaces.json"
 REGISTRY_VERSION = 1
 SESSION_DIR = ".avid/sessions"
@@ -50,9 +59,8 @@ class WorkspaceRegistryCorrupt(WorkspaceError):
 
 
 def home_dir() -> Path:
-    """用户级 Avid 目录：``AVID_HOME`` 优先，否则 ``~/.avid``。"""
-    override = os.environ.get(AVID_HOME_ENV)
-    return Path(override).expanduser() if override else Path.home() / ".avid"
+    """用户级 Avid 目录（委托 ``policy/userdirs.py``，那里是唯一定义）。"""
+    return userdirs.avid_home()
 
 
 def registry_path() -> Path:
@@ -86,6 +94,18 @@ class Workspace:
         }
 
 
+def _default_mode(permission: str) -> str:
+    """工作区默认权限的白名单：**不接受 full**（full ≠ default）。
+
+    持久化一个"以后每次运行都关沙箱"的默认值，等于把显式授权变成静默授权——
+    产品规则里最硬的一条，所以它在这里、在服务层、在 CLI/前端的选择器里各挡一次。
+    """
+    problem = full_grant_error(permission, source="workspace_default")
+    if problem is not None:
+        raise WorkspaceError(problem)
+    return validate_mode(permission)
+
+
 def _parse(raw: Any) -> Workspace | None:
     if not isinstance(raw, dict):
         return None
@@ -96,8 +116,11 @@ def _parse(raw: Any) -> Workspace | None:
     used = raw.get("last_used_at")
     mode = raw.get("default_permission", DEFAULT_MODE)
     try:
-        permission = validate_mode(mode)
-    except ValueError:
+        permission, note = migrate_mode(mode)
+        if note:
+            # **打出来**，不静默改：安全设置变了，用户有权知道变了什么、变成了什么。
+            logger.warning("工作区 %s：%s", root, note)
+    except (ValueError, FullAccessError):
         logger.warning("工作区 %s 的默认权限 %r 不认识，按默认处理", root, mode)
         permission = DEFAULT_MODE
     return Workspace(
@@ -209,7 +232,7 @@ class WorkspaceRegistry:
         if not path.is_dir():
             raise WorkspaceError(f"不是目录：{path}")
         resolved = path.resolve()
-        mode = validate_mode(permission or DEFAULT_MODE)
+        mode = _default_mode(permission or DEFAULT_MODE)
 
         items = self._read()  # 损坏时抛错：不覆盖可能是好的数据
         stamp = self._now()
@@ -219,7 +242,9 @@ class WorkspaceRegistry:
                     ws,
                     name=name or ws.name,
                     last_used_at=stamp,
-                    default_permission=permission or ws.default_permission,
+                    default_permission=(
+                        _default_mode(permission) if permission else ws.default_permission
+                    ),
                 )
                 items[index] = updated
                 self._write(items)
@@ -237,7 +262,7 @@ class WorkspaceRegistry:
         return created
 
     def set_permission(self, selection: str, permission: str) -> Workspace:
-        mode = validate_mode(permission)
+        mode = _default_mode(permission)
         found = self.get(selection)
         updated = self._update(found.id, default_permission=mode)
         assert updated is not None

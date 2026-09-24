@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from ..ai.config import ConfigError, load_config
+from ..policy.sandbox import default_backend_summary
 from ..policy.skills import SkillLoader, default_skills_dir
 from ..runtime.events import (
     EVENT_TYPES,
@@ -54,7 +55,9 @@ FEATURES: dict[str, int] = {
     "deltas": 1,  # F3：内核按 SSE 流式解析，delta 经事件流投递（需 ?deltas=1 订阅）
     "branches": 1,  # F4：分支列表 / 分叉 / 在指定分支上运行
     "workspaces": 1,  # 阶段 18：工作区注册表 + 按工作区建会话
-    "permission_modes": 1,  # 阶段 18：POST /runs 接受 permission（strict/workspace/system）
+    "permission_modes": 1,  # 阶段 18：POST /runs 接受 permission（现为 manual/auto/full）
+    "security_layers": 1,  # 阶段 26：三轴正交 + 四级 deny + 沙箱；run_started 带三轴快照
+    "full_access": 1,  # 阶段 26：full 需要 full_access_ack（显式授权），且不能作默认
     "workspace_picker": 1,  # 新增工作区：POST /workspaces/pick 弹宿主机文件夹选择器
     "usage": 1,  # 阶段 22：分支带用量快照；run_status / run_finished 带统一 usage schema
 }
@@ -211,6 +214,10 @@ class Services:
                 # 这台机器上会用到哪个选择器后端（null = 没有可用的）。诊断用：
                 # 点了"新增工作区"没弹窗时，先看这里。
                 "workspace_picker": available_backend(),
+                # 沙箱后端探测结果（backend/available/network/reason/landlock_abi）。
+                # 点开界面就能看出"这台机器上 manual 与 auto 的边界是什么"，
+                # 而不是让用户从"命令为什么被拒"去反推。
+                "sandbox": default_backend_summary(),
             },
             "stream": {
                 "heartbeat_seconds": STREAM_HEARTBEAT_SECONDS,

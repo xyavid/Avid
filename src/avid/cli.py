@@ -27,8 +27,18 @@ from pathlib import Path
 from .ai.client import LLMError, ask
 from .ai.config import Config, ConfigError, load_config
 from .ai.usage import Usage, hit_ratio
-from .policy.permission import DEFAULT_MODE, MODE_LABELS, MODES
+from .policy.permission import (
+    DEFAULT_MODE,
+    FULL_MODE,
+    MODE_LABELS,
+    MODES,
+    FullAccessError,
+    PolicyConfigError,
+    RunSecurity,
+    full_grant_error,
+)
 from .runtime.loop import agent_loop
+from .runtime.state import RunState
 from .session import (
     JsonlSessionMetadata,
     JsonlSessionRepo,
@@ -87,6 +97,34 @@ def _resolve_workspace(selection: str | None) -> Workspace:
     return found if found is not None else bound_workspace(root)
 
 
+def _default_mode_choices() -> tuple[str, ...]:
+    """能**持久化**成工作区默认值的模式。full 不在里面：full ≠ default。"""
+    return tuple(mode for mode in MODES if mode != FULL_MODE)
+
+
+def _announce_security(security: RunSecurity | None) -> None:
+    """把这次运行的安全三轴说出来（stderr）。
+
+    产品规则里「full 必须可见」落在这里：关掉沙箱这件事不能只存在于某个开关里，
+    用户每次运行都该在终端看到「这次是什么模式、沙箱在不在」。
+    """
+    if security is None:  # pragma: no cover - 调用点保证非空
+        return
+    print(
+        f"[安全] {security.mode}（approval={security.approval}，"
+        f"network={security.network}）｜{security.sandbox.one_line()}",
+        file=sys.stderr,
+    )
+    for note in security.summary()["notes"]:
+        print(f"[安全] {note}", file=sys.stderr)
+    if security.sandbox.degraded:
+        print(
+            "⚠ 沙箱不可用：manual 下受管动作将逐个问人，auto 下直接拒绝。"
+            "装好 bubblewrap（bwrap）后重试，或改用 manual。",
+            file=sys.stderr,
+        )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="avid",
@@ -101,18 +139,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--yes",
         action="store_true",
-        help="跳过审批闸门（硬拒绝仍然生效），非交互场景需显式指定",
+        help="替所有审批请求答「是」（硬拒绝与安全策略仍然生效，沙箱也仍然生效），"
+        "非交互场景需显式指定",
     )
     parser.add_argument(
         "--permission",
         choices=MODES,
         default=None,
-        metavar="{strict,workspace,system}",
+        metavar="{manual,auto,full}",
         help="权限模式："
         + "；".join(f"{mode}={MODE_LABELS[mode]}" for mode in MODES)
         + "。缺省按「工作区默认权限」，工作区没设过就是 "
         + DEFAULT_MODE
-        + "。模式决定哪些动作要问，--yes 只决定谁来回答",
+        + "。模式固定三轴（approval/sandbox/network），--yes 只决定谁来回答",
+    )
+    parser.add_argument(
+        "--allow-full-access",
+        action="store_true",
+        dest="allow_full_access",
+        help="full 模式的**显式授权**开关：必须与 --permission full 同时给出，"
+        "否则拒绝启动（full 会关掉沙箱与网络边界，不能靠一个词就生效）",
     )
     parser.add_argument(
         "--workspace",
@@ -164,6 +210,11 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--session-name 需要与 --session 或 --new-session 一起用")
     if not args.prompt:
         parser.error("缺少要发送的内容")
+    problem = full_grant_error(
+        args.permission, acknowledged=args.allow_full_access, source="cli"
+    )
+    if problem is not None:
+        parser.error(problem)
 
     try:
         config = load_config()
@@ -177,15 +228,30 @@ def main(argv: list[str] | None = None) -> int:
     if args.agent:
         logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(message)s")
         logging.getLogger("httpx").setLevel(logging.WARNING)  # 只留自己的 trace 行
+        try:
+            target = _resolve_workspace(args.workspace)
+            state = RunState.for_run(
+                auto_approve=args.yes,
+                permission_mode=args.permission or target.default_permission,
+                workspace_root=target.root,
+                full_ack=args.allow_full_access,
+                grant_source="cli",
+            )
+        except (WorkspaceNotFound, WorkspaceInvalid) as exc:
+            print(f"工作区错误：{exc}", file=sys.stderr)
+            return 2
+        except (FullAccessError, PolicyConfigError) as exc:
+            print(f"安全配置错误：{exc}", file=sys.stderr)
+            return 2
+        _announce_security(state.security)
         if args.session or args.new_session:
-            return _run_session(args, config)
+            return _run_session(args, config, state)
         try:
             print(
                 agent_loop(
                     [{"role": "user", "content": args.prompt}],
                     config=config,
-                    auto_approve=args.yes,
-                    permission_mode=args.permission,
+                    state=state,
                 )
             )
         except LLMError as exc:
@@ -233,7 +299,7 @@ def usage_suffix(usage: Usage, config: Config) -> str:
     return " " + " ".join(parts)
 
 
-def _run_session(args: argparse.Namespace, config) -> int:
+def _run_session(args: argparse.Namespace, config, state: RunState | None = None) -> int:
     """续接或新建会话跑一次循环：历史来自会话，本轮消息逐条写回会话。"""
     try:
         target = _resolve_workspace(args.workspace)
@@ -269,9 +335,14 @@ def _run_session(args: argparse.Namespace, config) -> int:
             reply = agent_loop(
                 messages,
                 config=config,
-                auto_approve=args.yes,
-                permission_mode=args.permission or target.default_permission,
-                workspace_root=target.root,
+                state=state
+                or RunState.for_run(
+                    auto_approve=args.yes,
+                    permission_mode=args.permission or target.default_permission,
+                    workspace_root=target.root,
+                    full_ack=args.allow_full_access,
+                    grant_source="cli",
+                ),
                 on_message=recorder.on_message,
             )
         except LLMError as exc:
@@ -350,7 +421,9 @@ def build_workspace_parser() -> argparse.ArgumentParser:
     add.add_argument("path", help="工作区目录")
     add.add_argument("--name", help="显示名（缺省用目录名）")
     add.add_argument(
-        "--permission", choices=MODES, help="这个工作区的默认权限模式"
+        "--permission",
+        choices=_default_mode_choices(),
+        help="这个工作区的默认权限模式（full 不能作默认，见 --allow-full-access）",
     )
 
     actions.add_parser("list", help="按最近使用列出已登记的工作区")
@@ -360,7 +433,7 @@ def build_workspace_parser() -> argparse.ArgumentParser:
 
     permission = actions.add_parser("permission", help="设置工作区的默认权限")
     permission.add_argument("workspace", help="工作区 id 或路径")
-    permission.add_argument("mode", choices=MODES)
+    permission.add_argument("mode", choices=_default_mode_choices())
     return parser
 
 

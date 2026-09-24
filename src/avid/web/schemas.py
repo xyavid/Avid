@@ -16,7 +16,9 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from ..policy.permission import full_grant_error
 
 from ..runtime import events
 from ..runtime.events import RunEvent
@@ -71,6 +73,8 @@ class Capabilities(BaseModel):
     # 这台机器上会用到哪个文件夹选择器后端（None = 没有可用的）。
     # **必须声明**：pydantic 的响应模型会静默丢掉未声明的键，于是"后端其实有"会显示成没有。
     workspace_picker: str | None = None
+    # 沙箱后端探测结果。同样必须声明，理由同上：漏声明就等于"这台机器没有沙箱"。
+    sandbox: dict[str, Any] = Field(default_factory=dict)
 
 
 class StreamInfo(BaseModel):
@@ -131,7 +135,8 @@ class CreateWorkspaceIn(BaseModel):
     path: str = Field(max_length=MAX_PATH_CHARS)
     name: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
     # 枚举而不是自由字符串：非法模式在 schema 层就是 422，不会走到"先落盘再 500"。
-    permission: Literal["strict", "workspace", "system"] | None = None
+    # **没有 full**：工作区默认权限不接受它（full ≠ default），所以它在类型上就不存在。
+    permission: Literal["manual", "auto"] | None = None
 
 
 class SessionSummary(BaseModel):
@@ -272,14 +277,28 @@ class CreateBranchIn(BaseModel):
 
 
 class StartRunIn(BaseModel):
-    """``permission`` 缺省按会话所属工作区的默认权限（再缺省才是 strict）。"""
+    """``permission`` 缺省按会话所属工作区的默认权限（再缺省才是 manual）。
+
+    ``permission="full"`` 必须同时给 ``full_access_ack=true``：显式授权是请求体的一部分，
+    不是客户端界面的一部分。少了它就 422 —— 服务端不会替用户"理解"这个意图。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     prompt: str = Field(max_length=MAX_PROMPT_CHARS)
     auto_approve: bool = False
     branch: str = Field(default="main", max_length=MAX_NAME_CHARS)
-    permission: Literal["strict", "workspace", "system"] | None = None
+    permission: Literal["manual", "auto", "full"] | None = None
+    full_access_ack: bool = False
+
+    @model_validator(mode="after")
+    def _full_needs_ack(self) -> "StartRunIn":
+        problem = full_grant_error(
+            self.permission, acknowledged=self.full_access_ack, source="web"
+        )
+        if problem is not None:
+            raise ValueError(problem)
+        return self
 
 
 class RunCreatedOut(BaseModel):
