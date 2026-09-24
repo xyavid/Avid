@@ -37,12 +37,16 @@ def bare_loop(
     chat: Callable[..., Any],
     state: RunState,
     max_tokens: int = DEFAULT_MAX_TOKENS,
+    max_parallel: int = 1,
     on_message: Callable[[dict[str, Any]], Any] | None = None,
 ) -> str:
     """跑到模型不再要工具为止。`messages` 原地更新，与 avid loop 的约定一致。
 
     与 avid loop 一样**没有轮数上限**——对消融实验也要公平：一边有的限制另一边不能有。
     停下来靠取消检查点，runner 的墙钟 watchdog 正是走它。
+
+    ``max_parallel`` 缺省 1（逐个执行）：评测基线是在串行下量的，消融实验要改的也是
+    "有没有那些机制"，不该顺带改掉工具派发方式。
     """
 
     def emit(message: dict[str, Any]) -> None:
@@ -88,6 +92,7 @@ def bare_loop(
             registry=registry,
             round_index=round_index,
             schemas=schemas,
+            max_parallel=max_parallel,
         )
         for outcome in outcomes:
             message = {

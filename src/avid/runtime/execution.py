@@ -8,6 +8,14 @@
 工具执行的三个事实（开始 / 结束 / 被拒）在这里变成事件：hook 的 context 里本来
 就有它们，只是此前没有任何消费者（设计文档 §1.2、§5.3）。``tool_call_id`` 是
 新加进 context 的，前端据此把「调用声明 / 开始 / 结束」缝在同一条卡片上。
+
+**批内并发（阶段 25）**：一次批按源顺序切成若干执行段——段内的**并发安全**工具一起
+跑，遇到**独占**工具就落一道屏障（它自己单独跑）。分类见 ``tools/safety.py``，
+切分见 ``plan_segments``，调度见 ``execute_batch``。三条不变量：
+
+* 结果条数与顺序 = assistant 源顺序，与**完成顺序**无关（循环据此写 transcript）；
+* 独占调用与前后段在时间上不重叠；
+* 单个调用失败/被拒不影响同批其余（与"工具失败不中断循环"同一条约定）。
 """
 
 from __future__ import annotations
@@ -15,10 +23,13 @@ from __future__ import annotations
 import json
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
 from ..tools import ToolImpl, workspace
+from ..tools.safety import is_concurrency_safe
 from ..tools.validate import bad_arguments, validate_arguments
 from . import events
 from .hooks import BLOCK, brief
@@ -31,6 +42,11 @@ logger = logging.getLogger("avid.runtime.execution")
 DENIED_CONTENT = "Permission denied."
 # PostToolUse 拦截后回给模型的文本：说清"结果被拦了"，否则模型会以为自己拿到了空输出。
 POST_BLOCKED_CONTENT = "错误：工具结果被 PostToolUse hook 拦截，内容未进入上下文。"
+# 取消后没派发出去的调用：回一条**真实**的"未执行"，而不是假装跑过。
+# 为什么必须有它：循环会把每条 outcome 变成一条 tool 消息；少一条，assistant 消息里
+# 就会留下没有回应的 ``tool_calls``，transcript 结构不合法（压缩管线的
+# `validate_structure` 会直接判非法）。所以这几行写的是事实，不是伪造的工具结果。
+CANCELLED_CONTENT = "错误：运行已取消，本次调用未执行。"
 
 # 需要读 RunState 的工具。文件类工具进去是因为它们要读运行级工作区根与越界授权账本
 # （``state.workspace_root`` / ``state.outside_allowed``），而这两个决定都由权限层做。
@@ -76,6 +92,7 @@ def execute_one(
     round_index: int,
     tool_call_id: str = "",
     parameters: dict[str, Any] | None = None,
+    parallel: int = 1,
 ) -> str:
     """执行一次工具调用，返回要回传给模型的内容。
 
@@ -85,6 +102,9 @@ def execute_one(
     ``parameters`` 是这次调用所用工具的 schema 节点（``tool()`` 产出的 ``parameters``），
     由循环按它发给模型的那份 ``tools`` 传下来；结构校验因此与模型看到的定义同源。
     直调路径（单测、复用某个工具）不传就不校验，行为与改动前一致。
+
+    ``parallel`` 是这段里**同时**在跑的调用数（1 = 独占/串行）。它只进事件与日志，
+    不改变任何执行语义——前端据此把"这一步在并发"画出来。
     """
     try:
         arguments = json.loads(raw_arguments)
@@ -103,7 +123,7 @@ def execute_one(
         if problem is not None:
             return problem
 
-    state.tool_calls += 1
+    state.note_tool_call()
     started_at = time.monotonic()
 
     before: dict[str, Any] = {
@@ -126,9 +146,10 @@ def execute_one(
         arguments=arguments,
         round=round_index,
         tool_call_id=tool_call_id,
+        parallel=parallel,
     )
     if state.hooks.trigger("PreToolUse", before) == BLOCK:
-        state.denials += 1
+        state.note_denial()
         logger.info("  ✗ 已拦截 %s", name)
         state.emit(
             events.TOOL_CALL_DENIED,
@@ -138,6 +159,7 @@ def execute_one(
             tool_call_id=tool_call_id,
             kind=before.get("denied_kind") or "user",
             reason=before.get("denied_reason") or "",
+            parallel=parallel,
         )
         # 文案由拦截它的回调决定；回调没说就用兜底值。
         return str(before.get("denied_content") or DENIED_CONTENT)
@@ -166,6 +188,8 @@ def execute_one(
         "run_tag": state.run_tag,
         # 重复调用计数归运行所有：回调原地读写这个 dict，下一轮就能看出"同名同参又来了"。
         "repeat_calls": state.repeat_calls,
+        # 并发时同批多个调用会同时进 PostToolUse：计数走原子自增，不在这里读改写。
+        "bump_repeat": state.note_repeat,
     }
     if state.hooks.trigger("PostToolUse", after) == BLOCK:
         # PostToolUse 的 BLOCK 语义：工具**已经跑过**了，拦的是"结果进上下文"
@@ -184,8 +208,41 @@ def execute_one(
         content=final,
         truncated=bool(after.get("truncated")),
         duration_ms=int((time.monotonic() - started_at) * 1000),
+        parallel=parallel,
     )
     return final
+
+
+def _call_name(call: dict[str, Any]) -> str:
+    return str((call.get("function") or {}).get("name", ""))
+
+
+def plan_segments(
+    tool_calls: list[dict[str, Any]], max_parallel: int
+) -> list[list[int]]:
+    """把一次批切成执行段（下标分组），**保序**且每个调用恰好出现一次。
+
+    切法：连续的并发安全调用归一段；独占调用各自单独成段（屏障）。``max_parallel``
+    为 1 时每段只有一个调用——那就是改动前的逐个串行。
+
+    为什么不做同资源推断（"先写 a 再读 a 所以串行"）：模型生成一次批时还看不到自己
+    产生的 id/产物，跨调用的数据依赖本来就没法在批内表达；真正的依赖要靠模型分轮次
+    （或把顺序写进提示词）。这里只保证**类别顺序**：写类把批拦腰切开，于是"写在前、
+    读在后"的相对顺序天然成立，而不是靠猜。
+    """
+    segments: list[list[int]] = []
+    current: list[int] = []
+    for index, call in enumerate(tool_calls):
+        if max_parallel > 1 and is_concurrency_safe(_call_name(call)):
+            current.append(index)
+            continue
+        if current:
+            segments.append(current)
+            current = []
+        segments.append([index])
+    if current:
+        segments.append(current)
+    return segments
 
 
 def execute_batch(
@@ -195,33 +252,73 @@ def execute_batch(
     registry: dict[str, ToolImpl],
     round_index: int = 0,
     schemas: dict[str, dict[str, Any]] | None = None,
+    max_parallel: int = 1,
 ) -> list[ToolOutcome]:
-    """逐个执行，按 assistant 源顺序返回结果。
+    """执行一批工具调用，返回**按 assistant 源顺序**排列的结果。
 
     ``schemas`` 是本次运行发给模型的工具定义（名字 → ``parameters`` 节点），
     只用于调用前的参数校验；缺哪个名字就不校哪个。
+
+    ``max_parallel`` 默认 1 = 改动前的逐个串行（benchmarks、bare 循环因此不受影响）。
+    大于 1 时按 ``plan_segments`` 分段：段内用线程池并发，段间严格串行。取消在两个
+    粒度上检查——**每段派发前**（整段跳过）与**每个调用开工前**（段已派出、调用还在
+    排队时取消）。没开工的调用回一条真实的"未执行"文本；已经开工的不打断——Python
+    线程杀不掉，假装打断只会让结果与事实不符。
     """
-    outcomes: list[ToolOutcome] = []
+    limit = max(1, int(max_parallel))
+    outcomes: list[ToolOutcome | None] = [None] * len(tool_calls)
+    schemas = schemas or {}
 
-    for call in tool_calls:
-        function = call.get("function") or {}
-        name = str(function.get("name", ""))
-        raw_arguments = function.get("arguments") or "{}"
+    def run(index: int, *, width: int) -> str:
+        # 段是整批发出去的，取消可能发生在某个调用**排队期间**：那就不再开工。
+        # 先查再干活——没跑过的调用不发事件、也不计入 tool_calls。
+        if state.cancelled:
+            return CANCELLED_CONTENT
+        call = tool_calls[index]
+        name = _call_name(call)
+        raw_arguments = (call.get("function") or {}).get("arguments") or "{}"
         logger.info("  → %s %s", name, brief(raw_arguments))
-
-        content = execute_one(
-            name,
-            raw_arguments,
-            registry,
-            state=state,
-            round_index=round_index,
-            tool_call_id=str(call.get("id", "")),
-            parameters=(schemas or {}).get(name),
-        )
-
+        try:
+            content = execute_one(
+                name,
+                raw_arguments,
+                registry,
+                state=state,
+                round_index=round_index,
+                tool_call_id=str(call.get("id", "")),
+                parameters=schemas.get(name),
+                parallel=width,
+            )
+        except Exception as exc:  # 兜底：执行环节自己也不许把异常漏给同批的兄弟
+            logger.exception("工具调用 %s 抛出未预期异常，按失败回传", name)
+            content = f"工具执行失败：{name}（{exc}）；不要用同样的参数重复调用。"
         logger.info("  ← %s 字符", len(content))
-        outcomes.append(
-            ToolOutcome(tool_call_id=str(call.get("id", "")), content=content)
+        return content
+
+    def store(index: int, content: str) -> None:
+        outcomes[index] = ToolOutcome(
+            tool_call_id=str(tool_calls[index].get("id", "")), content=content
         )
 
-    return outcomes
+    for segment in plan_segments(tool_calls, limit):
+        if state.cancelled:
+            # 不再派发新的调用；剩下的回一条"未执行"。条数必须补齐（见 CANCELLED_CONTENT）。
+            for index in segment:
+                store(index, CANCELLED_CONTENT)
+            continue
+        if len(segment) == 1:
+            store(segment[0], run(segment[0], width=1))
+            continue
+        width = min(len(segment), limit)
+        logger.info("并行执行 %d 个调用（并发上限 %d）", len(segment), width)
+        with ThreadPoolExecutor(max_workers=width) as pool:
+            # partial 而不是闭包 lambda：并发段在循环里，闭包会捕获循环变量（B023）。
+            results = list(pool.map(partial(run, width=width), segment))
+        for index, content in zip(segment, results, strict=True):
+            store(index, content)
+
+    # 段是覆盖全批的一个划分，所以走完之后每个下标都该有结果。
+    missing = [index for index, item in enumerate(outcomes) if item is None]
+    if missing:  # pragma: no cover - 划分正确就不可能到；真到了说明切分坏了
+        raise AssertionError(f"批内调用 {missing} 没有结果，段划分不完整")
+    return [item for item in outcomes if item is not None]

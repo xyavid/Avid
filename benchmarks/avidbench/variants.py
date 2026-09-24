@@ -150,6 +150,7 @@ def run_agent(
     config: Config,
     chat: Callable[..., Any],
     state: RunState,
+    max_parallel: int = 1,
     on_message: Callable[[dict[str, Any]], Any] | None = None,
     budget: ContextBudget | None = None,
 ) -> str:
@@ -160,6 +161,10 @@ def run_agent(
 
     没有轮数上限：两条循环都不设，预算由 ``case.limits.timeout_seconds`` 的墙钟
     watchdog 兜。
+
+    ``max_parallel`` 缺省 1：评测基线是串行量的，消融的变量是"机制有没有"，不该
+    顺带换掉工具派发方式。要做「串行 vs 并行」对照就显式传（见
+    `benchmarks/parallel_tools/`）。
     """
     system = state.system_prompt(SYSTEM_PROMPT)
     if variant.loop == "bare":
@@ -171,6 +176,7 @@ def run_agent(
             config=config,
             chat=chat,
             state=state,
+            max_parallel=max_parallel,
             on_message=on_message,
         )
     return agent_loop(
@@ -181,6 +187,7 @@ def run_agent(
         config=config,
         chat=chat,
         state=state,
+        max_parallel_tools=max_parallel,
         on_message=on_message,
         budget=budget,
     )

@@ -54,6 +54,48 @@ def test_approval_rules_only_name_registered_tools():
     assert set(APPROVAL_RULES) <= set(NAMES)
 
 
+def test_concurrency_tables_are_a_partition_of_the_registry():
+    """并发分类必须是注册表的一个**划分**：每个工具恰好表态一次。
+
+    这张表决定"批内谁和谁能同时跑"（阶段 25）。漏写一个名字的后果是它按独占处理
+    （慢，但安全）；但**两张表都写**或**表里出现不存在的名字**说明分类在漂移——
+    到时候没人知道某个工具到底安不安全，所以让它红在契约测试里。
+    """
+    from avid.tools.safety import CONCURRENCY_SAFE, EXCLUSIVE
+
+    assert not (CONCURRENCY_SAFE & EXCLUSIVE), "同一个工具不能既安全又独占"
+    assert set(TOOL_IMPLS) == CONCURRENCY_SAFE | EXCLUSIVE
+
+
+def test_concurrency_safe_tools_are_read_only_by_name():
+    """并发安全的一侧不许混进"写"类工具（名字级护栏，防手滑挪表）。
+
+    真正判"会不会写"要靠人，这里只把最容易搞错的那几个钉住：写文件、跑命令、
+    改任务/待办、派子 agent 全都在独占侧。
+    """
+    from avid.tools.safety import CONCURRENCY_SAFE, EXCLUSIVE
+
+    assert {
+        "write_file",
+        "edit_file",
+        "bash",
+        "todo_write",
+        "create_task",
+        "update_task",
+        "claim_task",
+        "complete_task",
+        "subagent",
+    } <= EXCLUSIVE
+    assert {
+        "read_file",
+        "glob",
+        "get_task",
+        "can_start",
+        "load_skill",
+        "web_search",
+    } <= CONCURRENCY_SAFE
+
+
 @pytest.mark.parametrize("item", TOOLS, ids=NAMES)
 def test_integer_parameters_declare_a_lower_bound(item):
     """整数参数必须有下界：无界 integer 让模型可以传 0 或负数，只能靠实现各自兜底。"""

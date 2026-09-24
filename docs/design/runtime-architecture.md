@@ -272,8 +272,8 @@ agent_loop(messages, ...)
      │    ├─ emit Stop(state 快照)
      │    ├─ block 且 state.stop_blocks < max_stop_blocks → 追加 nudge、continue
      │    └─ 否则 → return turn.text
-     └─ outcomes = execution.execute_batch(turn.tool_calls, state=state, ...)
-        transcript.append_many(outcomes → tool 消息)
+     └─ outcomes = execution.execute_batch(turn.tool_calls, state=state, …)   # 批内分段并发，§5.3
+        transcript.append_many(outcomes → tool 消息)                            # 顺序仍是源顺序
    # 出口只有 return / RunCancelled / 模型异常——没有"轮数耗尽"这一条
 ```
 
@@ -293,7 +293,36 @@ agent_loop(messages, ...)
 
 九处读写全部经过 5 个写入方法（`append` / `append_many` / `set_content` / `replace_all` / `splice`）。**没有任何一处再直接操作 list**。
 
-### 5.3 subagent 的位置
+### 5.3 批内并发（阶段 25）
+
+一次批（模型一次回复里的 N 个 `tool_calls`）在执行前切成若干**执行段**：
+
+```
+plan_segments(tool_calls, max_parallel)
+  └─ 连续的「并发安全」调用 → 一段（段内用线程池并发，宽度 = min(len, max_parallel)）
+     遇到「独占」调用       → 它自己单独成段（屏障），与前后段在时间上互不重叠
+```
+
+* **分类在工具层**（`tools/safety.py`）：安全性是工具自身的属性，执行层只拿到名字与
+  JSON 参数；放在注册表旁边，新增工具必须表态（契约测试断言两张表构成一个**划分**）。
+  不能放 `policy/`——`execution.py` 对策略层零运行时依赖（判据 9 / A13 门禁）。
+* **调度在 `execution.execute_batch`**：结果按 index 归位，因此**顺序永远等于源顺序**，
+  与完成顺序无关；循环照旧在批结束后按源顺序写 transcript（`Transcript` 仍是唯一写入者）。
+* **只有类别顺序，没有依赖推断**：模型生成一次批时还看不到自己将要产生的 id/产物，
+  跨调用的数据依赖本来就没法在批内表达；写类把批拦腰切开，于是"写在前、读在后"的
+  相对顺序天然成立，而不是靠猜。
+* **取消**在两个粒度上检查：**每段派发前**（整段跳过）与**每个调用开工前**（段已派出、
+  调用还在排队时取消）。在飞的调用不打断（Python 线程杀不掉，假装打断只会让结果与事实
+  不符）。没开工的调用回一条真实的「未执行」文本——少一条会让 assistant 消息留下没有
+  回应的 `tool_calls`（I1 不变量）。
+* **共享状态的并发写**：`RunState.note_tool_call / note_denial / note_repeat` 用一把
+  小锁把读改写变成原子（`tool_calls += 1` 在并发下会丢更新）；重复提醒因此不会丢号。
+  事件不需要额外保护：svc 的 `emit` 本就在 `record.condition` 临界区里发 seq，
+  前端按 `tool_call_id` 做 upsert，交错事件天然支持。
+* **可观测性**：不新增事件类型；`tool_call_started/finished/denied` 多一个 `parallel`
+  字段（这一段同时在跑的调用数，1 = 独占），加上每个并发段一条日志。
+
+### 5.4 subagent 的位置
 
 `tools/subagent.py` 的 `run_subagent` 自己构造 `RunState` 并调用 `agent_loop`——与现在自建 TodoList/loader 的做法同构，只是从"绑定 contextvar"变成"构造对象"。子线程不继承 `RunState` 这一点从"隐式失效"变成"签名上看得见"（它必须显式接收 `auto_approve`）。
 

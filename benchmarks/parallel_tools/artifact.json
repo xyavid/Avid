@@ -1,0 +1,529 @@
+{
+  "what": "并行工具调用 E2E：同一条命令重跑得到同样的结论",
+  "note": "模型是脚本（固定一轮 5 个调用），工具 handler 是真实现 + 注入固定延迟；svc 注册表、会话落盘、事件流、权限与截断都走真实路径。checks 是布尔结论，不随机器快慢变化；wall_clock_ms 只是参考。",
+  "injected_latency_ms": 150,
+  "batch": [
+    {
+      "tool_call_id": "c1",
+      "tool": "read_file",
+      "arguments": "{\"path\": \"a.txt\"}"
+    },
+    {
+      "tool_call_id": "c2",
+      "tool": "read_file",
+      "arguments": "{\"path\": \"b.txt\"}"
+    },
+    {
+      "tool_call_id": "c3",
+      "tool": "glob",
+      "arguments": "{\"pattern\": \"*.txt\"}"
+    },
+    {
+      "tool_call_id": "c4",
+      "tool": "read_file",
+      "arguments": "{\"path\": \"c.txt\"}"
+    },
+    {
+      "tool_call_id": "c5",
+      "tool": "write_file",
+      "arguments": "{\"path\": \"out.txt\", \"content\": \"done\"}"
+    }
+  ],
+  "arms": {
+    "parallel_10": {
+      "max_parallel": 10,
+      "status": "finished",
+      "final_text": "三个文件都读完了，out.txt 也写好了。",
+      "wall_clock_ms": 323,
+      "tool_events": [
+        {
+          "type": "tool_call_started",
+          "tool": "read_file",
+          "tool_call_id": "c1",
+          "ts": 1790225714820,
+          "parallel": 4,
+          "duration_ms": null
+        },
+        {
+          "type": "tool_call_started",
+          "tool": "read_file",
+          "tool_call_id": "c2",
+          "ts": 1790225714821,
+          "parallel": 4,
+          "duration_ms": null
+        },
+        {
+          "type": "tool_call_started",
+          "tool": "glob",
+          "tool_call_id": "c3",
+          "ts": 1790225714821,
+          "parallel": 4,
+          "duration_ms": null
+        },
+        {
+          "type": "tool_call_started",
+          "tool": "read_file",
+          "tool_call_id": "c4",
+          "ts": 1790225714822,
+          "parallel": 4,
+          "duration_ms": null
+        },
+        {
+          "type": "tool_call_finished",
+          "tool": "read_file",
+          "tool_call_id": "c1",
+          "ts": 1790225714971,
+          "parallel": 4,
+          "duration_ms": 151
+        },
+        {
+          "type": "tool_call_finished",
+          "tool": "glob",
+          "tool_call_id": "c3",
+          "ts": 1790225714972,
+          "parallel": 4,
+          "duration_ms": 150
+        },
+        {
+          "type": "tool_call_finished",
+          "tool": "read_file",
+          "tool_call_id": "c2",
+          "ts": 1790225714973,
+          "parallel": 4,
+          "duration_ms": 151
+        },
+        {
+          "type": "tool_call_finished",
+          "tool": "read_file",
+          "tool_call_id": "c4",
+          "ts": 1790225714973,
+          "parallel": 4,
+          "duration_ms": 151
+        },
+        {
+          "type": "tool_call_started",
+          "tool": "write_file",
+          "tool_call_id": "c5",
+          "ts": 1790225714973,
+          "parallel": 1,
+          "duration_ms": null
+        },
+        {
+          "type": "tool_call_finished",
+          "tool": "write_file",
+          "tool_call_id": "c5",
+          "ts": 1790225715124,
+          "parallel": 1,
+          "duration_ms": 150
+        }
+      ],
+      "tool_messages": [
+        {
+          "order": 2,
+          "tool_call_id": "c1",
+          "content": "alpha"
+        },
+        {
+          "order": 3,
+          "tool_call_id": "c2",
+          "content": "beta"
+        },
+        {
+          "order": 4,
+          "tool_call_id": "c3",
+          "content": "a.txt\nb.txt\nc.txt"
+        },
+        {
+          "order": 5,
+          "tool_call_id": "c4",
+          "content": "gamma"
+        },
+        {
+          "order": 6,
+          "tool_call_id": "c5",
+          "content": "已新建 out.txt（1 行，4 字符）"
+        }
+      ],
+      "spans": [
+        {
+          "tool": "read_file",
+          "start": 3471.4161,
+          "end": 3471.5664
+        },
+        {
+          "tool": "glob",
+          "start": 3471.4167,
+          "end": 3471.5673
+        },
+        {
+          "tool": "read_file",
+          "start": 3471.4175,
+          "end": 3471.5679
+        },
+        {
+          "tool": "read_file",
+          "start": 3471.4177,
+          "end": 3471.5682
+        },
+        {
+          "tool": "write_file",
+          "start": 3471.5689,
+          "end": 3471.7194
+        }
+      ]
+    },
+    "parallel_2": {
+      "max_parallel": 2,
+      "status": "finished",
+      "final_text": "三个文件都读完了，out.txt 也写好了。",
+      "wall_clock_ms": 475,
+      "tool_events": [
+        {
+          "type": "tool_call_started",
+          "tool": "read_file",
+          "tool_call_id": "c1",
+          "ts": 1790225715152,
+          "parallel": 2,
+          "duration_ms": null
+        },
+        {
+          "type": "tool_call_started",
+          "tool": "read_file",
+          "tool_call_id": "c2",
+          "ts": 1790225715152,
+          "parallel": 2,
+          "duration_ms": null
+        },
+        {
+          "type": "tool_call_finished",
+          "tool": "read_file",
+          "tool_call_id": "c1",
+          "ts": 1790225715303,
+          "parallel": 2,
+          "duration_ms": 151
+        },
+        {
+          "type": "tool_call_started",
+          "tool": "glob",
+          "tool_call_id": "c3",
+          "ts": 1790225715303,
+          "parallel": 2,
+          "duration_ms": null
+        },
+        {
+          "type": "tool_call_finished",
+          "tool": "read_file",
+          "tool_call_id": "c2",
+          "ts": 1790225715304,
+          "parallel": 2,
+          "duration_ms": 151
+        },
+        {
+          "type": "tool_call_started",
+          "tool": "read_file",
+          "tool_call_id": "c4",
+          "ts": 1790225715304,
+          "parallel": 2,
+          "duration_ms": null
+        },
+        {
+          "type": "tool_call_finished",
+          "tool": "glob",
+          "tool_call_id": "c3",
+          "ts": 1790225715454,
+          "parallel": 2,
+          "duration_ms": 150
+        },
+        {
+          "type": "tool_call_finished",
+          "tool": "read_file",
+          "tool_call_id": "c4",
+          "ts": 1790225715454,
+          "parallel": 2,
+          "duration_ms": 150
+        },
+        {
+          "type": "tool_call_started",
+          "tool": "write_file",
+          "tool_call_id": "c5",
+          "ts": 1790225715455,
+          "parallel": 1,
+          "duration_ms": null
+        },
+        {
+          "type": "tool_call_finished",
+          "tool": "write_file",
+          "tool_call_id": "c5",
+          "ts": 1790225715605,
+          "parallel": 1,
+          "duration_ms": 150
+        }
+      ],
+      "tool_messages": [
+        {
+          "order": 2,
+          "tool_call_id": "c1",
+          "content": "alpha"
+        },
+        {
+          "order": 3,
+          "tool_call_id": "c2",
+          "content": "beta"
+        },
+        {
+          "order": 4,
+          "tool_call_id": "c3",
+          "content": "a.txt\nb.txt\nc.txt"
+        },
+        {
+          "order": 5,
+          "tool_call_id": "c4",
+          "content": "gamma"
+        },
+        {
+          "order": 6,
+          "tool_call_id": "c5",
+          "content": "已新建 out.txt（1 行，4 字符）"
+        }
+      ],
+      "spans": [
+        {
+          "tool": "read_file",
+          "start": 3471.7482,
+          "end": 3471.8986
+        },
+        {
+          "tool": "read_file",
+          "start": 3471.7484,
+          "end": 3471.8991
+        },
+        {
+          "tool": "glob",
+          "start": 3471.8988,
+          "end": 3472.0492
+        },
+        {
+          "tool": "read_file",
+          "start": 3471.8995,
+          "end": 3472.0497
+        },
+        {
+          "tool": "write_file",
+          "start": 3472.0503,
+          "end": 3472.2007
+        }
+      ]
+    },
+    "parallel_1": {
+      "max_parallel": 1,
+      "status": "finished",
+      "final_text": "三个文件都读完了，out.txt 也写好了。",
+      "wall_clock_ms": 778,
+      "tool_events": [
+        {
+          "type": "tool_call_started",
+          "tool": "read_file",
+          "tool_call_id": "c1",
+          "ts": 1790225715633,
+          "parallel": 1,
+          "duration_ms": null
+        },
+        {
+          "type": "tool_call_finished",
+          "tool": "read_file",
+          "tool_call_id": "c1",
+          "ts": 1790225715784,
+          "parallel": 1,
+          "duration_ms": 150
+        },
+        {
+          "type": "tool_call_started",
+          "tool": "read_file",
+          "tool_call_id": "c2",
+          "ts": 1790225715784,
+          "parallel": 1,
+          "duration_ms": null
+        },
+        {
+          "type": "tool_call_finished",
+          "tool": "read_file",
+          "tool_call_id": "c2",
+          "ts": 1790225715935,
+          "parallel": 1,
+          "duration_ms": 150
+        },
+        {
+          "type": "tool_call_started",
+          "tool": "glob",
+          "tool_call_id": "c3",
+          "ts": 1790225715935,
+          "parallel": 1,
+          "duration_ms": null
+        },
+        {
+          "type": "tool_call_finished",
+          "tool": "glob",
+          "tool_call_id": "c3",
+          "ts": 1790225716085,
+          "parallel": 1,
+          "duration_ms": 150
+        },
+        {
+          "type": "tool_call_started",
+          "tool": "read_file",
+          "tool_call_id": "c4",
+          "ts": 1790225716085,
+          "parallel": 1,
+          "duration_ms": null
+        },
+        {
+          "type": "tool_call_finished",
+          "tool": "read_file",
+          "tool_call_id": "c4",
+          "ts": 1790225716236,
+          "parallel": 1,
+          "duration_ms": 150
+        },
+        {
+          "type": "tool_call_started",
+          "tool": "write_file",
+          "tool_call_id": "c5",
+          "ts": 1790225716236,
+          "parallel": 1,
+          "duration_ms": null
+        },
+        {
+          "type": "tool_call_finished",
+          "tool": "write_file",
+          "tool_call_id": "c5",
+          "ts": 1790225716387,
+          "parallel": 1,
+          "duration_ms": 150
+        }
+      ],
+      "tool_messages": [
+        {
+          "order": 2,
+          "tool_call_id": "c1",
+          "content": "alpha"
+        },
+        {
+          "order": 3,
+          "tool_call_id": "c2",
+          "content": "beta"
+        },
+        {
+          "order": 4,
+          "tool_call_id": "c3",
+          "content": "a.txt\nb.txt\nc.txt"
+        },
+        {
+          "order": 5,
+          "tool_call_id": "c4",
+          "content": "gamma"
+        },
+        {
+          "order": 6,
+          "tool_call_id": "c5",
+          "content": "已新建 out.txt（1 行，4 字符）"
+        }
+      ],
+      "spans": [
+        {
+          "tool": "read_file",
+          "start": 3472.229,
+          "end": 3472.3793
+        },
+        {
+          "tool": "read_file",
+          "start": 3472.3797,
+          "end": 3472.53
+        },
+        {
+          "tool": "glob",
+          "start": 3472.5301,
+          "end": 3472.6806
+        },
+        {
+          "tool": "read_file",
+          "start": 3472.6809,
+          "end": 3472.8312
+        },
+        {
+          "tool": "write_file",
+          "start": 3472.8317,
+          "end": 3472.9821
+        }
+      ]
+    }
+  },
+  "observed": {
+    "max_in_flight": {
+      "parallel_10": 4,
+      "parallel_2": 2,
+      "parallel_1": 1
+    },
+    "overlapping_pairs": {
+      "parallel_10": [
+        [
+          "c1",
+          "c2"
+        ],
+        [
+          "c1",
+          "c3"
+        ],
+        [
+          "c1",
+          "c4"
+        ],
+        [
+          "c2",
+          "c3"
+        ],
+        [
+          "c2",
+          "c4"
+        ],
+        [
+          "c3",
+          "c4"
+        ]
+      ],
+      "parallel_2": [
+        [
+          "c1",
+          "c2"
+        ],
+        [
+          "c2",
+          "c3"
+        ],
+        [
+          "c3",
+          "c4"
+        ]
+      ],
+      "parallel_1": []
+    },
+    "wall_clock_ms": {
+      "parallel_10": 323,
+      "parallel_2": 475,
+      "parallel_1": 778
+    }
+  },
+  "checks": {
+    "同一个批在串行与并行下 transcript 逐条相同（含顺序）": true,
+    "最终回答相同": true,
+    "两条路径都跑成了 finished": true,
+    "并行档确实发生了重叠": true,
+    "串行档一次都没有重叠": true,
+    "写调用（屏障）不与任何读重叠": true,
+    "并发峰值不超过上限（10）": true,
+    "并发峰值用满了并发段（4 个读）": true,
+    "串行档峰值恒为 1": true,
+    "started 事件带 parallel=并发段宽度": true,
+    "上限=2 时峰值被压到 2": true
+  },
+  "all_passed": true
+}

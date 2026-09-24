@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import threading
 import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -136,6 +137,13 @@ class RunState:
     # 会写同一个 `tool-result-0001.txt`，把上一次的上下文记录静默覆盖掉。
     run_tag: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
 
+    # 并发写保护：一批工具调用可能同时在多个工作线程里跑（阶段 25），而下面几个
+    # 计数是**读改写**——`+= 1` 与 `counts[key] = counts.get(key, 0) + 1` 在多线程下
+    # 会丢更新。锁只保护这几个计数，其它字段仍是"循环线程写、工作线程读"。
+    _counters_lock: threading.Lock = field(
+        default_factory=threading.Lock, repr=False, compare=False
+    )
+
     # 运行期实例
     todo: TodoList = field(default_factory=TodoList)
     skills: SkillLoader = field(default_factory=SkillLoader)
@@ -209,6 +217,29 @@ class RunState:
             from .loop import RunCancelled
 
             raise RunCancelled(self.cancel_reason or "cancelled")
+
+    # ---------------- 并发安全的计数（阶段 25）----------------
+
+    def note_tool_call(self) -> None:
+        """记一次工具调用。批内并发时由多个工作线程调用，因此必须原子。"""
+        with self._counters_lock:
+            self.tool_calls += 1
+
+    def note_denial(self) -> None:
+        """记一次被拦截的调用。理由同上。"""
+        with self._counters_lock:
+            self.denials += 1
+
+    def note_repeat(self, key: str) -> int:
+        """同一个键的出现次数（从 1 开始）。读改写在一把锁里完成。
+
+        返回自己这一次的序号：并发下若丢号，重复提醒（第 3、5 次）就永远到不了阈值——
+        这是"看起来只是少一句话"、实际会让提醒彻底失效的那类丢更新。
+        """
+        with self._counters_lock:
+            times = self.repeat_calls.get(key, 0) + 1
+            self.repeat_calls[key] = times
+            return times
 
     def system_prompt(self, instructions: str | None = None) -> str:
         """固定指令 + 环境信息 + 技能目录。

@@ -37,3 +37,49 @@ def test_config_carries_no_round_limit():
     config = load_config({"AVID_API_KEY": "k", "AVID_MODEL": "m"})
 
     assert not hasattr(config, "max_rounds")
+
+
+# ---------- AVID_MAX_PARALLEL_TOOL_CALLS ----------
+
+
+def test_parallel_tool_calls_default_to_ten():
+    config = load_config({"AVID_API_KEY": "k", "AVID_MODEL": "m"})
+
+    assert config.max_parallel_tool_calls == 10
+
+
+def test_parallel_tool_calls_can_be_set_to_one():
+    """1 是合法值：完全串行，改动前的行为。"""
+    config = load_config(
+        {"AVID_API_KEY": "k", "AVID_MODEL": "m", "AVID_MAX_PARALLEL_TOOL_CALLS": "1"}
+    )
+
+    assert config.max_parallel_tool_calls == 1
+
+
+@pytest.mark.parametrize("raw", ["0", "-3", "很多", "3.5"])
+def test_parallel_tool_calls_rejects_non_positive_or_non_integer(raw):
+    with pytest.raises(ConfigError) as exc:
+        load_config(
+            {
+                "AVID_API_KEY": "k",
+                "AVID_MODEL": "m",
+                "AVID_MAX_PARALLEL_TOOL_CALLS": raw,
+            }
+        )
+
+    assert "AVID_MAX_PARALLEL_TOOL_CALLS" in str(exc.value)
+
+
+def test_parallel_tool_calls_refuses_to_silently_clamp():
+    """超过硬上限报错而不是夹取：设了 1000 却按 32 跑，比报错更难查。"""
+    with pytest.raises(ConfigError) as exc:
+        load_config(
+            {
+                "AVID_API_KEY": "k",
+                "AVID_MODEL": "m",
+                "AVID_MAX_PARALLEL_TOOL_CALLS": "1000",
+            }
+        )
+
+    assert "32" in str(exc.value)

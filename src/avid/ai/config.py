@@ -15,8 +15,16 @@ ENV_CONTEXT_WINDOW = "AVID_CONTEXT_WINDOW"
 # 关掉"向 provider 问模型窗口"的探测（实现见 `ai/client.py::fetch_context_length`）。
 # 取值 off / 0 / false / no 都算关；缺省 = 开。单测把它关掉，免得去打真实端点。
 ENV_MODEL_INFO = "AVID_MODEL_INFO"
+# 一步（模型一次回复）里最多同时跑几个工具调用。1 = 完全串行（改动前的行为）。
+# 只有**并发安全**的工具会被并进同一段，写类/bash/任务类/子 agent 仍是串行屏障
+# （分类见 `tools/safety.py`）。上限给死一个硬顶，防手误写个 1000 把磁盘打满。
+ENV_MAX_PARALLEL_TOOL_CALLS = "AVID_MAX_PARALLEL_TOOL_CALLS"
 
 REQUIRED = (ENV_API_KEY, ENV_MODEL)
+
+#: 并发的默认值与硬上限。
+DEFAULT_MAX_PARALLEL_TOOL_CALLS = 10
+MAX_PARALLEL_TOOL_CALLS_CEILING = 32
 
 #: `ENV_MODEL_INFO` 的关闭取值（大小写无关）。
 _MODEL_INFO_OFF = ("off", "0", "false", "no")
@@ -75,6 +83,9 @@ class Config:
     # 模型上下文窗口（tokens）。None = 不认识这个模型，占用率因此不可计算——
     # 调用方显示 tokens 数与「—」，不做任何换算猜测。
     context_window: int | None = None
+    # 一步内并行工具调用的上限。1 = 完全串行。只会影响**并发安全**的工具；
+    # 写类调用是屏障，永远单独跑（`tools/safety.py`）。
+    max_parallel_tool_calls: int = DEFAULT_MAX_PARALLEL_TOOL_CALLS
 
     @property
     def chat_completions_url(self) -> str:
@@ -98,7 +109,37 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         base_url=source.get(ENV_BASE_URL, "").strip() or DEFAULT_BASE_URL,
         model=model,
         context_window=_context_window(source, model),
+        max_parallel_tool_calls=_max_parallel_tool_calls(source),
     )
+
+
+def _max_parallel_tool_calls(source: Mapping[str, str]) -> int:
+    """一步内的并发上限。缺省 10。
+
+    与 `_context_window` 同一个失败模型：写了非法值就报错，不静默回落——用户设了 4
+    却按 10 跑，比报错更难查。1 是合法值（完全串行），大于硬上限同样报错而不是夹取，
+    否则"我设了 1000"与"实际跑 32"之间的差会一直藏着。
+    """
+    raw = source.get(ENV_MAX_PARALLEL_TOOL_CALLS, "").strip()
+    if not raw:
+        return DEFAULT_MAX_PARALLEL_TOOL_CALLS
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ConfigError(
+            f"{ENV_MAX_PARALLEL_TOOL_CALLS} 必须是正整数：{raw!r}\n"
+            f"例如 {ENV_MAX_PARALLEL_TOOL_CALLS}=4；1 = 完全串行"
+        ) from exc
+    if value < 1:
+        raise ConfigError(
+            f"{ENV_MAX_PARALLEL_TOOL_CALLS} 必须 ≥ 1：{value}（1 = 完全不并发）"
+        )
+    if value > MAX_PARALLEL_TOOL_CALLS_CEILING:
+        raise ConfigError(
+            f"{ENV_MAX_PARALLEL_TOOL_CALLS} 不能超过硬上限 "
+            f"{MAX_PARALLEL_TOOL_CALLS_CEILING}：{value}"
+        )
+    return value
 
 
 def _context_window(source: Mapping[str, str], model: str) -> int | None:

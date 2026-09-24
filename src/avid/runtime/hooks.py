@@ -353,8 +353,15 @@ def repeat_call_hook(context: dict[str, Any]) -> str | None:
         f"{tool}:"
         f"{json.dumps(arguments, ensure_ascii=False, sort_keys=True, default=str)}"
     )
-    counts[key] = counts.get(key, 0) + 1
-    times = counts[key]
+    # 并发执行时同批里可能有多个调用同时到这里：优先用执行层给的**原子自增**
+    # （`RunState.note_repeat`）。直接构造 context 调本回调的场合只给 dict，回退到
+    # 就地累加——那条路径是单线程的（测试与复用方直调）。
+    bump = context.get("bump_repeat")
+    if callable(bump):
+        times = bump(key)
+    else:
+        counts[key] = counts.get(key, 0) + 1
+        times = counts[key]
     if times not in REPEAT_REMIND_AT or not isinstance(content, str):
         return None
 

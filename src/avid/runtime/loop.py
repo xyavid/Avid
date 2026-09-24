@@ -128,6 +128,11 @@ def agent_loop(
     workspace_root: str | None = None,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     max_stop_blocks: int = MAX_STOP_BLOCKS,
+    # 一步内并行工具调用的上限。None = 用 `config.max_parallel_tool_calls`
+    # （环境变量 `AVID_MAX_PARALLEL_TOOL_CALLS`，缺省 10）；1 = 完全串行。
+    # 只有**并发安全**的工具会被并进同一段，写类/bash/任务类/子 agent 是串行屏障
+    # （分类见 `tools/safety.py`，调度见 `execution.execute_batch`）。
+    max_parallel_tools: int | None = None,
     todo_reminder_after: int = TODO_REMINDER_AFTER_ROUNDS,
     on_message: Callable[[dict[str, Any]], Any] | None = None,
     ask: AskUser | None = None,
@@ -177,6 +182,12 @@ def agent_loop(
     summarize = summarize or chat
     tools = TOOLS if tools is None else tools
     registry = TOOL_IMPLS if registry is None else registry
+    # 并发上限的唯一取值点：显式参数 > 环境变量（已由 load_config 归一进 config）。
+    parallel_limit = (
+        config.max_parallel_tool_calls
+        if max_parallel_tools is None
+        else max_parallel_tools
+    )
 
     def emit(message: dict[str, Any]) -> None:
         if on_message is not None:
@@ -336,6 +347,8 @@ def agent_loop(
                 str(item["function"]["name"]): item["function"]["parameters"]
                 for item in tools
             },
+            # 批内并发：段内并发安全工具一起跑，独占调用是屏障（execution.plan_segments）。
+            max_parallel=parallel_limit,
         )
         for outcome in outcomes:
             message = {

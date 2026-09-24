@@ -1,3 +1,6 @@
+import threading
+import time
+
 import pytest
 
 from avid.ai.client import Turn, Usage
@@ -216,6 +219,136 @@ def test_a_plain_task_finishes_no_matter_how_many_rounds_it_takes():
     )
     # 12 轮都真的跑过：模型每轮都被再叫一次，工具结果逐条进上下文。
     assert len(chat.requests) == 13
+
+
+def test_one_turn_with_several_safe_calls_runs_them_concurrently():
+    """一次回复里 3 个读文件的调用在**同一轮**里并发跑（阶段 25 的默认档）。
+
+    判定用 `threading.Barrier(3)`：三个 handler 不重叠就会等超时，而这 3 个都是
+    并发安全工具（read_file），所以它们必须落在同一段里。
+    """
+    barrier = threading.Barrier(3)
+    seen: list[str] = []
+
+    def reader(arguments, **kwargs):
+        seen.append(str(arguments.get("path")))
+        barrier.wait(timeout=3)
+        return f"内容:{arguments['path']}"
+
+    chat = FakeChat(
+        make_turn(
+            "",
+            [
+                tool_call("read_file", '{"path": "a.txt"}', "c1"),
+                tool_call("read_file", '{"path": "b.txt"}', "c2"),
+                tool_call("read_file", '{"path": "c.txt"}', "c3"),
+            ],
+        ),
+        make_turn("读完"),
+    )
+    messages = [{"role": "user", "content": "读三个文件"}]
+
+    assert (
+        agent_loop(
+            messages,
+            config=CONFIG,
+            chat=chat,
+            registry={"read_file": reader},
+        )
+        == "读完"
+    )
+    assert sorted(seen) == ["a.txt", "b.txt", "c.txt"]
+    # 结果消息仍按源顺序落进 transcript（并发不改变 transcript 顺序）
+    tool_messages = [m for m in messages if m.get("role") == "tool"]
+    assert [m["tool_call_id"] for m in tool_messages] == ["c1", "c2", "c3"]
+    assert [m["content"] for m in tool_messages] == [
+        "内容:a.txt",
+        "内容:b.txt",
+        "内容:c.txt",
+    ]
+
+
+def test_max_parallel_tools_one_restores_strictly_serial_dispatch():
+    """`max_parallel_tools=1` 时同轮多个调用逐个跑（旧行为，也用于评测对照）。"""
+    order: list[str] = []
+
+    def reader(arguments, **kwargs):
+        order.append(str(arguments.get("path")))
+        return "ok"
+
+    chat = FakeChat(
+        make_turn(
+            "",
+            [
+                tool_call("read_file", '{"path": "a.txt"}', "c1"),
+                tool_call("read_file", '{"path": "b.txt"}', "c2"),
+            ],
+        ),
+        make_turn("好"),
+    )
+
+    agent_loop(
+        [{"role": "user", "content": "读"}],
+        config=CONFIG,
+        chat=chat,
+        registry={"read_file": reader},
+        max_parallel_tools=1,
+    )
+
+    assert order == ["a.txt", "b.txt"]
+
+
+def test_exclusive_writes_in_one_turn_never_overlap_reads(hook_registry):
+    """同一轮里"写"是屏障：它与两侧的读在时间上不重叠（写坏了文件比慢更糟）。
+
+    用空注册表：默认的权限 hook 会让 `write_file` 在终端等人审批，那是别的用例的题目。
+    """
+    spans: list[tuple[str, float, float]] = []
+    lock = threading.Lock()
+
+    def span(label, delay=0.05):
+        def run(arguments, **kwargs):
+            start = time.monotonic()
+            time.sleep(delay)
+            with lock:
+                spans.append((label, start, time.monotonic()))
+            return "ok"
+
+        return run
+
+    registry = {
+        "read_file": span("read"),
+        "glob": span("glob"),
+        "write_file": span("write"),
+    }
+    chat = FakeChat(
+        make_turn(
+            "",
+            [
+                tool_call("read_file", '{"path": "a.txt"}', "c1"),
+                tool_call("glob", call_id="c2"),
+                tool_call("write_file", '{"path": "a.txt", "content": "x"}', "c3"),
+                tool_call("read_file", '{"path": "a.txt"}', "c4"),
+            ],
+        ),
+        make_turn("好"),
+    )
+
+    agent_loop(
+        [{"role": "user", "content": "改 a.txt"}],
+        config=CONFIG,
+        chat=chat,
+        registry=registry,
+    )
+
+    def window(label):
+        start, end = next((s, e) for name, s, e in spans if name == label)
+        return start, end
+
+    write_start, write_end = window("write")
+    for label in ("read", "glob"):
+        start, end = window(label)
+        assert not (start < write_end and write_start < end), f"{label} 与写重叠了"
 
 
 # ---------- ② PreToolUse ----------
