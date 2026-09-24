@@ -71,10 +71,17 @@ export const FileInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLIn
   },
 )
 
-export function Select({ className, children, ...rest }: SelectHTMLAttributes<HTMLSelectElement>) {
-  return (
-    <select {...rest} className={clsx(CONTROL, '', className)}>
-      {children}
-    </select>
-  )
-}
+/**
+ * 选择框同样要转发 ref：Radix 的 `asChild`（`Tooltip` 就是这么包它的）靠 ref 拿到锚点
+ * 元素，函数组件不转发就只剩一条 "Function components cannot be given refs" 警告 +
+ * 一个算不出位置的浮层。
+ */
+export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSelectElement>>(
+  function Select({ className, children, ...rest }, ref) {
+    return (
+      <select ref={ref} {...rest} className={clsx(CONTROL, '', className)}>
+        {children}
+      </select>
+    )
+  },
+)

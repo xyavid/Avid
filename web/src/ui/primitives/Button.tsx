@@ -1,4 +1,5 @@
 import { clsx } from 'clsx'
+import { forwardRef } from 'react'
 import type { ButtonHTMLAttributes } from 'react'
 
 export type ButtonVariant = 'primary' | 'secondary' | 'danger'
@@ -31,19 +32,27 @@ const SIZES: Record<ButtonSize, string> = {
   icon: 'h-control w-control p-0',
 }
 
-export function Button({
-  variant = 'secondary',
-  size = 'md',
-  loading = false,
-  className,
-  disabled,
-  children,
-  type = 'button',
-  ...rest
-}: ButtonProps) {
+/**
+ * 按钮转发 ref：`Tooltip`（Radix）用 `asChild` 把触发元素的 ref 交给子组件当浮层锚点，
+ * 不转发的话气泡拿不到锚点、位置算不出来（`Input` 早就因为同类原因转发过，见 `Field.tsx`）。
+ */
+export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
+  {
+    variant = 'secondary',
+    size = 'md',
+    loading = false,
+    className,
+    disabled,
+    children,
+    type = 'button',
+    ...rest
+  },
+  ref,
+) {
   return (
     <button
       {...rest}
+      ref={ref}
       type={type}
       disabled={disabled || loading}
       aria-busy={loading || undefined}
@@ -59,4 +68,4 @@ export function Button({
       {children}
     </button>
   )
-}
+})
