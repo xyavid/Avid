@@ -55,8 +55,8 @@
 
 **执行协议**（`src/avid/runtime/execution.py`）：参数不是合法 JSON / 不是对象 / 工具未知 /
 不符合 schema → **回文本、不抛异常、不触发事件、不计入 `tool_calls`**；实现抛异常 → 回
-`工具执行失败：…`；业务拒绝原样透传。需要运行状态的 14 个工具以 `state=` 调用（`STATEFUL_TOOLS`，
-`:38-55`，由契约测试与真实签名比对）；`web_search` 是**无状态**工具，HTTP client 由调用点
+`工具执行失败：…`；业务拒绝原样透传。需要运行状态的 8 个工具以 `state=` 调用（`STATEFUL_TOOLS`，
+`:55-66`，由契约测试与真实签名比对）；`web_search` 是**无状态**工具，HTTP client 由调用点
 显式传入（正常运行不传、测试注入 `httpx.MockTransport`）。
 
 ---
@@ -285,8 +285,6 @@ key 查而不当作文件路径，未命中返回可用清单（`skills.py:108-1
 | `GET /api/runs/{id}/approvals` | 当前待决审批 |
 | `POST /api/runs/{id}/approvals/{aid}` | 答复审批（幂等；换结论 409、过期 410、未知 404） |
 | `GET /api/runs/{id}/events` | SSE 事件流（`?after=` > `Last-Event-ID` > 0；`?deltas=1` 订阅增量） |
-| `GET /api/tasks` | 任务列表（只读） |
-| `GET /api/tasks/{id}` | 单任务（只读） |
 
 **事件分三档**（`src/avid/runtime/events.py:52-73`，共 18 类）：
 
@@ -296,7 +294,7 @@ key 查而不当作文件路径，未命中返回可用清单（`skills.py:108-1
 | transient | 1 | `run_status` | 不带 `id`，断了就断了 |
 | delta | 1 | `assistant_delta` | 不带 `id`，可任意丢；默认不投递，需 `?deltas=1`；不落盘、不重放、不占 durable 重放预算 |
 
-**features 开关**（`src/avid/svc/__init__.py`，全为 `1`）：`approvals`、`cancel`、`tasks`、
+**features 开关**（`src/avid/svc/__init__.py`，全为 `1`）：`approvals`、`cancel`、
 `sessions`、`entries`、`deltas`、`branches`、`workspaces`、`permission_modes`、`security_layers`、
 `full_access`、`workspace_picker`、`usage`。
 客户端读 features 决定启用哪些能力，只在加特性时升 `api_version`。

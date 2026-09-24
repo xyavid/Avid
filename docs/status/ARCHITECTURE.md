@@ -29,7 +29,7 @@
 | 层 | 单元 | 一句话职责 | 它拥有什么数据 | 允许依赖 |
 |---|---|---|---|---|
 | 应用 | `cli.py` | 终端接线：参数、stdin 审批、stdout 输出、退出码 | 无（只有接线） | runtime、session、ai、policy、tools、workspaces、web.app |
-| 应用服务 | `svc/` | 内核的**第二个调用方**：运行注册表与生命周期、事件缓冲与重放、审批待决表、会话读视图、任务只读视图 | 进程内的 run 记录与事件缓冲、待决审批、SSE 额度 | runtime、session、tools、policy、ai、workspaces |
+| 应用服务 | `svc/` | 内核的**第二个调用方**：运行注册表与生命周期、事件缓冲与重放、审批待决表、会话读视图 | 进程内的 run 记录与事件缓冲、待决审批、SSE 额度 | runtime、session、tools、policy、ai、workspaces |
 | 传输适配 | `web/` | HTTP 路由、pydantic DTO、SSE 编帧、静态资源与 SPA fallback | 线格式（DTO/错误信封/编帧） | svc、runtime.events、session 类型 |
 | 运行时 | `runtime/loop.py` | **只表达调度顺序**：什么时候调模型、什么时候跑工具、什么时候停 | 无 | runtime 其它、ai、tools |
 | 运行时 | `runtime/context.py` | 上下文管线的**编排**（五步什么时候跑、什么顺序） | 无 | policy.compaction |

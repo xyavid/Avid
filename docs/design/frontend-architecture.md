@@ -705,7 +705,7 @@ danger 的浅底因此从 `#bf616a` 提到 `#ce858c`（3.37 → 4.83）。
 
 **Markdown 与工具输出的净化**（两条现成的坑，purrcat 都踩过并修好）：① 工具结果可能是 `{content, metadata}`、多模态 parts 或 `{error}`，必须先过一个**净化容器**再进 `whitespace-pre-wrap`（`ChatShared.tsx:144-168`）；② 本地路径与 `file://`/`term://` 链接需要 `urlTransform` 白名单，并且要取 `getAttribute('href')` 的原始串——否则浏览器会把 `D:/x.png` 规范化成站内 URL（`ChatPage.tsx:9-28,355-367`）。Avid 只放行 `http(s)://` 与工作区相对路径，且默认不自动打开外部链接。
 
-- **按工具分发渲染**：`bash` → 等宽 + 退出码 + 截断标记 + **ANSI 转义渲染层**（purrcat 靠 xterm 承担，我们不引 xterm，用一个只做 SGR 颜色/粗体的渲染器）；`read_file`/`write_file`/`edit_file` → 红绿笔 diff；`glob` → 路径列表；`todo_write` → 工具卡（历史记录）+ 输入条上方的待办清单（当前计划，阶段 27）；`subagent` → 子任务分块（`=== i/n · description ===` 就是卡边界）；`load_skill` → 技能名 + 取回字符数。原稿在这里还列过 `create_task` 系列 → 任务卡，那六个工具随任务图在阶段 27 一起删除，分发里不再有这一支。
+- **按工具分发渲染**：`bash` → 等宽 + 退出码 + 截断标记 + **ANSI 转义渲染层**（purrcat 靠 xterm 承担；不引 xterm，用一个只做 SGR 颜色/粗体的渲染器）；`read_file`/`write_file`/`edit_file` → 红绿笔 diff；`glob` → 路径列表；`todo_write` → 工具卡（历史记录）+ 输入条上方的待办清单（当前计划，阶段 27）；`subagent` → 子任务分块（`=== i/n · description ===` 就是卡边界）；`load_skill` → 技能名 + 取回字符数。原稿在这里还列过 `create_task` 系列 → 任务卡，那六个工具随任务图在阶段 27 一起删除，分发里不再有这一支。
 - **连续工具调用自动成组**：阈值 `EVENT_GROUP_MIN_SIZE = 2`，失败或拒绝的调用不进组。
 - **文件规模**：单文件 ≤200 行、单组件 ≤50 行（`catch` 必须处理或注明）。这是对 purrcat `ChatPage.tsx` 1799 行 / 104 个 `useState` 的直接纠正。
 

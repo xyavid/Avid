@@ -68,7 +68,7 @@
 ## 3. Avid 当前可以做什么？
 
 一句话：**能在选定工作区里跑一个多步 Agent 会话，自主调用 9 个工具，带审批、TODO、
-跨会话任务图、并行子 agent、技能与上下文压缩，从 CLI 或本地 Web 操作，全过程可回放；
+并行子 agent、技能与上下文压缩，从 CLI 或本地 Web 操作，全过程可回放；
 并且能用一条命令把「能不能把任务做成」量成通过率、成本与轨迹（`benchmarks/`）。**
 
 | 能力 | 关键事实 | 证据 |
@@ -165,11 +165,10 @@
 | 空洞 | 证据 |
 |---|---|
 | hook 回调**没有超时机制**，挂住的 hook 会永久挂住整个运行 | `grep -n timeout src/avid/runtime/hooks.py` → 零命中；而 hook 是外部可注入的扩展点（`HookRegistry` 可由调用方替换），失败关闭只覆盖「抛异常」，不覆盖「不返回」 |
-| svc 任务只读视图的部分派生字段与错误分支零断言 | `grep -rn dependency_titles tests/` → 零命中；`task_not_found` / `task_corrupt` 两个错误码在 `tests/` 里也零命中（`src/avid/svc/tasks.py` 有这两条分支） |
-| wire 层错误码有一部分从没被触发过 | `src/avid/svc/errors.py` 共 20 个 code，其中 `invalid_request`、`picker_failed`、`run_already_finished`、`task_not_found`、`task_corrupt`、`too_many_streams` 在 `tests/` 里零断言 |
+| wire 层错误码有一部分从没被触发过 | `src/avid/svc/errors.py` 共 18 个 code，其中 `invalid_request`、`picker_failed`、`run_already_finished` 在 `tests/` 里零命中 |
 | 子 agent 的可观察性 | 子运行不向父事件流转发事件（`frontend-architecture.md:12-30` 的 D10 把「subagent 子事件转发」列入不做），父运行里它只表现为一段文本结果，失败与耗时无法从事件流区分 |
 
-这四条都不影响「主链路能用」，但都在**错误路径**上——而错误路径的可靠性正是「最可靠能力」
+这三条都不影响「主链路能用」，但都在**错误路径**上——而错误路径的可靠性正是「最可靠能力」
 （§5）之外没有同等保障的地方。
 
 ## 7. 当前最大的技术瓶颈是什么？
