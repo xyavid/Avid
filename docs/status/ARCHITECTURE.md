@@ -10,7 +10,7 @@
 |---|---|---|
 | `docs/design/runtime-architecture.md` | 内核四层怎么推出来的、每处边界的代价、判据 9 的措辞修正、阶段 A/B/12/13/18 落地记录 | 引用其 §3 分层表与 §6 不变量 I1–I6，不重写 |
 | `docs/design/frontend-architecture.md` | Web 层与前端怎么选型、事件三档为什么这么分、L0–L4、性能预算、17 条未验证假设 | 引用其 §0 决策速览、§3.1 分层表、§11 不变量 I1–I15 |
-| `docs/design/workspace-permission.md` | 权限四层三态的决策表与文案 | 只写它在整体里占哪一层 |
+| `docs/design/workspace-permission.md` | 工作区、三轴预设、四级 deny 阶梯、沙箱与审计的决策表与文案 | 只写它在整体里占哪一层 |
 | `docs/design/architecture-criteria.md` | 12 组检查点（分析时用的尺子） | 只标注哪些检查点被覆盖 |
 | `docs/guide/web-ui.md` | 页面 ↔ 接口对应、SSE 消费规则、验证命令 | 引用，不复制端点表 |
 
@@ -34,7 +34,7 @@
 | 运行时 | `runtime/loop.py` | **只表达调度顺序**：什么时候调模型、什么时候跑工具、什么时候停 | 无 | runtime 其它、ai、tools |
 | 运行时 | `runtime/context.py` | 上下文管线的**编排**（五步什么时候跑、什么顺序） | 无 | policy.compaction |
 | 运行时 | `runtime/execution.py` | 工具调用协议：解析 → 拦截 → 执行 → 回填 | 无 | events、tools（**无 policy**） |
-| 运行时 | `runtime/state.py` | `RunState`：一次运行的可变状态与生命周期 | 轮次计数、一次性标志、统计、账本、工作区根、运行期实例（todo/skills/hooks） | policy.permission / policy.skills / policy.todo |
+| 运行时 | `runtime/state.py` | `RunState`：一次运行的可变状态与生命周期 | 轮次计数、一次性标志、统计、账本、工作区根、**运行级安全规格 `RunSecurity`**、运行期实例（todo/skills/hooks） | policy.permission / policy.skills / policy.todo |
 | 运行时 | `runtime/hooks.py` | 扩展点的注册与触发（四事件） | 默认回调注册表 | policy.permission、policy.compaction |
 | 运行时 | `runtime/events.py` | 事件名的**唯一单点** + 客户端可见时间常量 | 无 | 无 |
 | 策略 | `policy/*` | 阈值、规则与文案（高频变化集中地） | 无（纯函数 + 常量） | ai、tools（延迟） |
@@ -85,7 +85,7 @@ Web:  POST /api/sessions/{id}/runs                │
         │      无 tool_calls → Stop hook → return text                         │
         │      有 tool_calls → check_cancelled() ← 检查点 2（每批工具前）        │
         │           execute_batch(tool_calls, schemas=发给模型的同一份定义)      │
-        │             ├ PreToolUse  → permission.gate（四层裁决）→ TOOL_CALL_*  │
+        │             ├ PreToolUse  → brokerize → engine.decide → TOOL_CALL_*  │
         │             ├ handler(args, state=…)                                 │
         │             └ PostToolUse → 截断落盘 / 重复提醒 / 日志                 │
         │           ──► tool 消息回填 transcript                                │
@@ -117,7 +117,7 @@ Web:  POST /api/sessions/{id}/runs                │
 | messages（内存） | `ai/transcript.py`（唯一所有者） | 只有 `append` / `append_many` / `set_content` / `replace_all` / `splice`；结构变更前先校验候选 | 一次 `agent_loop` 调用 |
 | 运行期可变状态 | `RunState`（每次运行一份） | 循环写轮次与统计；`context.prepare` 写 `compacted`；循环写 `retried`；hook 写 `repeat_calls` | 一次运行 |
 | 审批账本 | `RunState.ledger`（内存） | `policy.permission.gate`；子 agent 与父运行**共用一本** | 一次运行 |
-| 工具同意/拒绝的最终决定 | `policy.permission.gate` | 只有它写账本——`RunState.outside_allowed` 只读结果、不做决定（失败关闭） | — |
+| 工具同意/拒绝的最终决定 | `policy.engine.decide`（门面 `policy.permission.gate`） | 只有它写账本——`RunState.outside_allowed` 只读结果、不做决定（失败关闭）；沙箱 argv 由 `policy.sandbox` 按账本里的能力授予组装 | — |
 | 会话条目 | `session/` 的存储层 | `SessionRecorder` 是唯一写入者（A11 门禁）；条目提交后不可变 | 磁盘，跨进程 |
 | 分支 | 一个值（`avid.branch.tip`），不是一张表 | `create_branch` / `append_message` 的提交 | 磁盘 |
 | 任务 | `<工作区根>/.tasks/{id}.json` | `TaskStore`（六工具的唯一入口）；Web 只读 | 磁盘，跨会话 |
@@ -126,8 +126,9 @@ Web:  POST /api/sessions/{id}/runs                │
 | 待决审批 | `svc/approvals.py`（内存） | 审批队列；超时/取消/结束/重启四条路径全收敛 `deny` | 一次运行，超时 120s |
 | 界面域状态 | 浏览器 localStorage | 前端 | 用户清除 |
 
-`RunState` 的字段即「一次运行的全部可变量」（`src/avid/runtime/state.py:37-98`）：`auto_approve`、
-`permission_mode`、`ledger`、`workspace_root`、`ask`、`observer`、`cancelled`/`cancel_reason`、
+`RunState` 的字段即「一次运行的全部可变量」（`src/avid/runtime/state.py`）：`auto_approve`、
+`permission_mode`（三轴预设名）、**`security`（`RunSecurity`：三轴 + 阶梯 + 沙箱 + 审计）**、
+`ledger`、`workspace_root`、`ask`、`observer`、`cancelled`/`cancel_reason`、
 `round`/`rounds_since_todo`/`stop_blocks`、`compacted`/`retried`、`tool_calls`/`denials`/`compactions`/`tokens`、
 `repeat_calls`、`run_tag`、`todo`、`skills`、`hooks`。两个**一次性标志**各只有一个写入点
 （`compacted` 在 `context.prepare`、`retried` 在循环），这是「自动压缩 ≤1 次、兜底 ≤1 次」的守护者。
@@ -226,7 +227,7 @@ durable）、I13 权威终止以注册表 + 已提交条目为准、I14 列表�
 | 模型 | 配置错误 | `run_failed{code:"config_error"}` |
 | 会话 | `SessionError` | `run_failed{code:"session_error"}` |
 | 程序 | 任何其它异常 | `run_failed{code:"internal"}`，绝不静默死线程 |
-| 权限 | 四层裁决拒绝 | 回文本按类分档（硬拒绝 / 危险 / 越界 / 用户拒绝）给不同下一步 |
+| 权限 | 策略拒绝（`decision.kind` 七档） | 回文本按类分档（硬拒绝 / 凭据 / 策略 / 危险 / 越界 / 降级 / 成本）给不同下一步 |
 | 权限 | 审批超时/取消/结束/重启 | 一律 `deny`（失败关闭） |
 | 压缩 | 落盘失败 | 记日志、跳过本次压缩，不抛；工具输出截断退回「只留头部」 |
 | 压缩 | 摘要调用失败 | 记日志、保留原历史；**程序错误不吞**（只捕 `LLMError`/`OSError`/`ValueError`） |
@@ -301,7 +302,7 @@ durable）、I13 权威终止以注册表 + 已提交条目为准、I14 列表�
 | 内核四层怎么推出来的、每处代价、阶段 A/B 落地记录 | `docs/design/runtime-architecture.md` §1–§15 |
 | 会话持久化的取舍与偏差 | 同上 §16 |
 | 任务图的数据结构与状态机设计 | 同上 §17–§18 |
-| 工作区与权限三态 | `docs/design/workspace-permission.md`；落地记录见 `runtime-architecture.md` §19 |
+| 工作区与安全分层（三轴 / 阶梯 / 沙箱 / 审计） | `docs/design/workspace-permission.md`；阶段 18 的落地记录见 `runtime-architecture.md` §19，阶段 26 见 `docs/status/CAPABILITIES.md` §3.1 与 `benchmarks/sandbox_boundary/README.md` |
 | Web 层选型、事件三档、L0–L4、性能预算、未验证假设 | `docs/design/frontend-architecture.md` |
 | 页面 ↔ 接口对应、SSE 消费规则、验证命令 | `docs/guide/web-ui.md` |
 | 能力清单与参数细节 | `docs/status/CAPABILITIES.md` |

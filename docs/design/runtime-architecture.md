@@ -1247,6 +1247,14 @@ round=5  （收尾）                 → 模型自己说明"tests 仍被 endpoi
 
 ## 19. 落地记录（阶段 18，工作区与权限三态）
 
+> 阶段 26 把这一节里的「四层裁决 × 三档模式」换成了「三轴预设 + 四级 deny 阶梯 + bwrap 沙箱 +
+> 审计」：`policy/` 拆成 `modes / action / rules / engine / classifier / sandbox / audit`，
+> `permission.py` 收成门面（`build_run_security` 是唯一装配点），`runtime/hooks.py` 的
+> `permission_hook` 改成 `brokerize → decide → 审计` 三步。**本节的模块边界结论仍然成立**
+> （路径数学只有一份、文件工具只读账本、`AskUser` 三参数签名、`runtime` 对策略层的边不改），
+> 只是入口换成了 `policy.engine.decide`。规格见 `docs/design/workspace-permission.md`，
+> 落地细节见 `docs/status/CAPABILITIES.md` §3.1。
+
 规格与决策表另有单篇：`docs/design/workspace-permission.md`（命名、默认值、切换方式、危险命令
 范围、文案、不变量）。本节只记**模块边界与所有权**这一层的变化，即"为什么改动落在这几个地方"。
 
@@ -1288,9 +1296,11 @@ round=5  （收尾）                 → 模型自己说明"tests 仍被 endpoi
 
 ### 19.3 权限层的边界
 
-四层裁决（硬拒绝 → 危险命令 → 越界 → 常规规则）收敛在 `policy.permission.gate` 一个入口，
-`runtime/hooks.py` 只负责**算事实**（危险类别来自 `danger_reason`，越界目标来自
-`tools/workspace.outside_target` / `outside_command_target`）并把运行级上下文注进去。
+裁决收敛在 `policy.engine.decide` 一个入口（门面 `policy.permission.gate` 是同一条路），
+`runtime/hooks.py` 的 `permission_hook` 只做三步：`brokerize` 算事实（归一化命令、目标、风险
+类别）、`decide` 拿三轴 + 阶梯 + 沙箱规格裁决、把裁决写进审计。（阶段 26 之前这里是
+"hook 自己算 `danger_reason` / `outside_target` 再调 gate"；现在算事实的那部分进了 Tool Broker，
+因为"什么算危险/越界"与"越界了怎么办"必须分开。）
 
 - **路径数学只有一份**（`tools/workspace.py`）：策略层不复制边界判断，所以"判定在区外"与
   "执行时拒绝"不可能给出不同答案（判据 6：同一不变量的守护者只有一个）。

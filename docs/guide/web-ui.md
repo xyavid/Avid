@@ -48,7 +48,7 @@ uv run avid web --port 8765      # 静态资源与 API 同源
 | 工作区文件夹（导航列的一项） | `GET /api/workspaces` + `GET /api/sessions` | 点标题折叠/展开；点 ＋ 在该工作区建会话（id 随 `POST /api/sessions` 发出，**必填**，缺了是 400 `workspace_required`） |
 | 🔍（导航列右上角） | 不新增接口 | 纯客户端按**会话名**过滤：只留命中的会话、没有命中的工作区整组隐藏、命中项不受 5 条上限约束；Esc 或 × 清除 |
 | 「新增工作区…」（导航列右上角 ＋） | `POST /api/workspaces/pick`（弹宿主机文件夹选择器）→ `POST /api/workspaces`（登记） | 命令流；成功后刷新候选并**展开新工作区**。取消 → 什么都不做；已在列表里 → 409 `workspace_exists` + 展开已有的那个，不重复添加 |
-| 权限模式选择器（输入条旁） | 不新增接口 | 随 `POST /api/sessions/{id}/runs` 的 `permission` 发出；缺省取会话所属工作区的 `default_permission` |
+| 权限模式选择器 + 沙箱标记（输入条旁） | 不新增接口；读 `GET /api/meta` 的 `capabilities.sandbox` | 随 `POST /api/sessions/{id}/runs` 的 `permission`（+ `full_access_ack`）发出；缺省取会话所属工作区的 `default_permission` |
 | 会话时间线（`/sessions/{id}`） | `GET /api/sessions/{id}/entries`（分页，带 `branch`）、`GET /api/runs/{id}/events`（SSE） | 历史来自条目（权威），实时来自事件 |
 | 提交一次运行（输入条） | `POST /api/sessions/{id}/runs`（`branch` 决定接哪条链尾） | 命令流 → 201 `{run_id}` |
 | 分支选择器（会话头部下方） | `GET /api/sessions/{id}/branches`、`POST /api/sessions/{id}/branches` | 查询流 + 命令流；「切换」只是本地选择——服务端没有「当前分支」，它只有一组链尾值 |
@@ -151,21 +151,26 @@ zenity/kdialog → Windows（WSL 互操作）→ osascript 依次探测，`GET /
 会话卡与详情显示归属名字。归属是**创建时的静态事实**，写在会话 header 里，
 所以注册表被删掉也不影响已有会话的归属查询。
 
-**权限模式**决定"哪些动作会打问号"，三档是信任边界：
+**权限模式**决定"谁来回答 REVIEW"，三档是**三轴预设**（阶段 26）：
 
-| 档 | 值 | 行为 |
-|---|---|---|
-| 严格 | `strict` | 每个受管动作都要问（默认） |
-| 工作区 | `workspace` | 区内常规操作免问；危险命令仍问；越界需同意一次 |
-| 系统级 | `system` | 默认免问；仅危险命令仍问 |
+| 档 | 值 | approval | sandbox | network |
+|---|---|---|---|---|
+| 手动 | `manual` | 问人 | 工作区 | 无出网 |
+| 自动 | `auto` | 确定性分类器（判不准即拒） | 工作区 | 无出网 |
+| 完全访问 | `full` | 不问 | **已禁用** | 不限 |
 
-- 优先级：本次请求的 `permission` > 工作区默认权限（`avid workspace permission <id> <mode>`）> `strict`。
-- 越界（工作区之外的目标）在严格与工作区档都会问一次，同意后**本次运行内**不再问同一目标；
-  系统级档直接放行。
-- 危险命令（提权、递归删除、系统包管理、`curl | sh` 等）在三档里都要问，理由会写明类别；
-  硬拒绝清单（`rm -rf /` 这类不可恢复的破坏）任何档、任何回答都不放行。
+- 优先级：本次请求的 `permission` > 工作区默认权限（`avid workspace permission <id> <mode>`）> `manual`。
+  工作区默认权限**不接受 `full`**（它在 DTO 类型、CLI choices、注册表三处都不存在）。
+- `manual` 与 `auto` 的沙箱逐字相同：**沙箱能保证的区内常规动作不问**（否则
+  approval 与 sandbox 就退化成一件事）。越界、危险命令、`.env` 这类 ask 档、`subagent`
+  才会进入 REVIEW。
+- **选 `full` 要先过二次确认**：弹出对话框、确认按钮写「我明白，关闭沙箱」，取消则什么都不
+  发生。确认后 `buildStartRunInput` 统一补 `full_access_ack: true`（服务端缺它就 422）。
+- 输入条常驻一个**沙箱标记**：`沙箱：工作区（无出网）` / `沙箱：已禁用` / `沙箱：不可用（原因）`。
+  数据来自 `GET /api/meta` 的 `capabilities.sandbox`（服务端实测的后端可用性）与当前模式，
+  所以"这台机器上沙箱到底在不在"是一个看得见的事实——`full` 永远看得见。
 - 界面上的选择**不持久化**：它是这次会话视图的瞬时状态，缺省值来自服务端。理由是
-  "上次选了系统级，下次打开浏览器继续全放行"属于安全默认值问题。
+  "上次选了 full，下次打开浏览器继续关沙箱"属于安全默认值问题。
 
 呈现上输入条旁的选择器**只有控件本身**：没有上方标签、控件方框里也没有说明行——控件里写着的
 就是当前档的名字。把鼠标停在它上面（或键盘聚焦它），**当前档**那一句说明会以气泡浮现在控件

@@ -91,6 +91,12 @@ stress job 跑 `pytest -q -m stress`（`.github/workflows/ci.yml:25-37`）。
 
 逐块 gzip：`index` 57,580 / `query` 15,170 / `vendor` 63,912 / `markdown` 47,498。
 
+**阶段 26 重测**（commit `fb1870e` 之后、本机 WSL2 / node v24.15.0）：首屏 JS gzip
+**188,165 B**（raw 591,992 B）/ 460,800 B，单块最大仍是 `vendor` 63,912 B，样式表
+**5,553 B** / 16,384 B。涨的 4,005 B 来自安全分层的界面（三预设选择器 + `full` 二次确认
+对话框 + 常驻沙箱标记 + 两处新 i18n 文案 + 一个 `SandboxState` 类型）。**上限才是我要守的
+东西**——这段只标明这一版的实测值，不重冻阈值（阈值没动，见 `web/budget.json` 的 `note`）。
+
 **为什么现在可以冻结**：实测 184,160 B 与本地过程文档里最后一次记录的 184,311 B 相差 0.08%
 （§5）——两套独立来源互相印证，不再有「五个版本、阈值还变过一次」的歧义（§4）。改上限必须
 同时改 `frozen_at` 的说明并写「为什么改」（§8）。
@@ -100,7 +106,7 @@ stress job 跑 `pytest -q -m stress`（`.github/workflows/ci.yml:25-37`）。
 | 指标 | 值 | 怎么数的 |
 |---|---|---|
 | 内核测试函数 | **725** 个，分布在 **44** 个 `tests/test_*.py`（另有 3 个支撑文件，`tests/` 共 47 个 `.py`） | `grep -h '^def test_' tests/*.py \| wc -l` |
-| 内核测试收集数（**本轮实测**） | **1015 收集**，其中 **1010 passed / 5 deselected**（commit `7c70cc4`，本机 WSL2 / Python 3.12.3；5 = 3 条 stress + 2 条 eval 薄壳） | `uv run pytest -q` |
+| 内核测试收集数（**阶段 26 重测**） | **1098 收集**，其中 **1093 passed / 5 deselected**（本机 WSL2 / Python 3.12.3；5 = 3 条 stress + 2 条 eval 薄壳） | `uv run pytest -q` |
 | `parametrize` | **32** 处 | `grep -c parametrize` 逐个文件求和 |
 | 内核测试代码量 | 13,560 行（`tests/*.py`） | `wc -l tests/*.py` |
 | 评测仪器规模 | 16 个 Python 文件 / 1,738 行，外带 **21 条 case**（v0 12 + v1 9）与 **225 个 fixture 文件**（`benchmarks/`，**不进 wheel**） | `find benchmarks -name '*.py' \| wc -l`、`wc -l` |

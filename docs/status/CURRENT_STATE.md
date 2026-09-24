@@ -57,7 +57,7 @@
 1. **在选定的工作区里干活**：会话归属某个工作区，文件类工具的相对路径基准、`bash` 的
    工作目录、`.avid/` 与 `.tasks/` 的落点都由该工作区决定（`src/avid/runtime/state.py:49-51`、
    `docs/design/workspace-permission.md:12`）。
-2. **危险动作有裁决、有账本**：四层裁决 × 三档模式，同一次运行内同类操作只问一次，拒绝文案
+2. **危险动作有裁决、有账本、有物理边界**：四级 deny 阶梯 × 三轴预设，同一次运行内同类操作只问一次，
    区分「永远不许」与「这次不行」（`src/avid/policy/permission.py:351-410`）。
 3. **每一步都留痕可回放**：每条消息一次提交落进 JSONL，运行事件分三档，Web 端能重连补齐
    （`src/avid/session/__init__.py:1-21`、`src/avid/runtime/events.py:1-16`）。
@@ -75,7 +75,7 @@
 |---|---|---|
 | Agent 循环 | **没有轮数上限**（也没有这个开关）：跑到模型不再请求工具为止；Stop 被拦最多补 1 轮；两个取消检查点（每轮开始前、每批工具执行前）；取消走 `RunCancelled`，不返回半成品 | `src/avid/runtime/loop.py`（`itertools.count(1)`） |
 | 工具调用协议 | 15 个工具；参数在 `execute_one` 里按**发给模型的那份 schema** 统一校验（required/type/enum/数值边界）；失败按参数错误 / 执行失败 / 业务拒绝三类给不同的下一步；工具失败不中断循环 | `src/avid/tools/__init__.py:47-82`、`src/avid/tools/validate.py`、`src/avid/runtime/loop.py:275-285` |
-| 权限与审批 | 四层裁决（硬拒绝 → 危险命令 → 越界 → 常规规则）× 三档模式（`strict`/`workspace`/`system`）；硬拒绝不可覆盖；危险命令三档一律问一次（按规范化命令原文记账）、越界在严格/工作区档问一次（按绝对路径记账）；审批回调可注入（CLI 读 stdin、Web 走审批队列），subagent 与父运行**共用一本账本** | `src/avid/policy/permission.py:40-160,351-410`、`src/avid/runtime/state.py:46-55` |
+| 安全分层（阶段 26） | 三轴（`approval`/`sandbox`/`network`）正交 × 三个预设（`manual`/`auto`/`full`）；deny > ask > allow 的四级阶梯（ADMIN → SYSTEM`~/.avid/policy.toml` → PROJECT `<ws>/.avid/policy.toml` → USER 账本，仓库文件只能加严）；bwrap 沙箱（只读系统 + 可写工作区 + 掩蔽宿主凭据 + 无出网 + 环境白名单 + 按能力授予挂载）；`full` 三重锁；审计落 `~/.avid/audit/`（放行也记）；沙箱不可用不静默降级 | `src/avid/policy/{modes,action,rules,engine,sandbox,classifier,audit,permission}.py`、`src/avid/tools/shell.py` |
 | 工作区 | 用户级注册表 `~/.avid/workspaces.json`；id 由根目录派生（重复登记幂等、索引丢失不丢数据）；运行级工作区根取代模块全局；CLI/Web/前端都能选与新增 | `src/avid/workspaces.py:31-70,113-264`、`src/avid/svc/picker.py` |
 | 会话持久化 | 新建 / 续接 / 列举 / 删除；条目树 + 值 + 分支 + 变更线；内存与 JSONL 两个后端共用一套一致性用例；每条消息一次提交；跨进程 flock + 短写回滚 + 末行残片自愈 | `src/avid/session/__init__.py:1-21,75-125`、`src/avid/session/jsonl.py` |
 | 分支 | 分支只是「链尾是谁」的一个值；可从任一历史条目分叉；条目树只增不改 | `src/avid/session/values.py`、`docs/guide/web-ui.md:110-121` |
@@ -101,7 +101,7 @@
 |---|---|---|
 | 证明「这次改动变好了」 | 做到一半 | 仪器与两套基线都有（`BENCHMARK.md` §9 / §10），单变量对照也真跑过一次（同 commit 只改压缩阈值，§10.3）——但**对照量到的是抖动，不是机制**（45 次运行最大 transcript 4,657 字符 vs 阈值 400,000）；加难度分层（tier 3–5）同样没有区分度（三臂 9/9），因为 94 次工具调用里 72 次是 `bash`。下一步的证据指向可写任务 |
 | 跨会话记忆（提炼 / 召回 / 遗忘） | 声称有、实际无 | `AGENTS.md:7` 把「记忆」列为自有层；`src/` 下只有会话条目树与任务图，没有任何提炼或召回模块 |
-| 沙箱执行 | 设计上不做 | `bash` 以本进程权限执行，安全来自四层裁决 + 审批（`src/avid/tools/shell.py`、`src/avid/policy/permission.py`）；`docs/design/workspace-permission.md:298` 自认这条是「覆盖够用」而非隔离 |
+| 沙箱执行 | **已落地**（阶段 26）：`bash` 在 bwrap 里跑（只读系统、可写工作区、掩蔽凭据、`--unshare-net`、环境白名单），文件类工具仍由阶梯 + 路径校验守住 | `src/avid/policy/sandbox.py`、`src/avid/tools/shell.py`；E2E `benchmarks/sandbox_boundary/` |
 | 多用户、鉴权、远程安全暴露 | 设计上不做 | `docs/guide/web-ui.md:69-92`：只有回环监听 + Host/Origin 白名单，**明文写着没有认证**，能连上端口的人就能建会话、跑命令 |
 | 多 provider | 设计上不做 | 只有一条 OpenAI 兼容路径（`pyproject.toml:6` 唯一运行期依赖是 httpx）；需求里 D-03 明确「早期不做多 provider 抽象」 |
 | 中断后恢复运行 | 设计上不做 | `docs/design/runtime-architecture.md:308-324` 的「不做」清单含崩溃恢复 / checkpoint / 重放；取消只保证不丢已产生的消息、不产生伪造工具结果 |
@@ -193,11 +193,11 @@ core ±3.7% / full ±8.5%；只读任务族的天花板是「一条 shell 折叠
 200 会话 / 5000 条钉在 1.5s / 3s，这是**不许退化**的下限，不是扩容设计；一旦会话数或单会话
 长度上到另一个量级，需要的是索引或换后端（SQLite 后端在未做清单里）。
 
-**还有一条被刻意留着的边界**（不是缺陷，是取舍，写在这里避免被当成瓶颈误判）：权限判定
-是命令行**文本正则**（15 条危险正则 / 14 类原因 + 敏感路径分量判定），因此可以被间接调用
-绕过（变量拼接、脚本内再调用、写进文件后执行）。做成机制级隔离要引入沙箱，与「本地单人、
-可调试、规则可读」是对立的取舍（`src/avid/policy/permission.py:45-112`、
-`docs/design/workspace-permission.md:292-302`）。
+**还有一条被刻意留着的边界**（不是缺陷，是取舍，写在这里避免被当成瓶颈误判）：Tool Broker
+对 `bash` 的**目标识别**是启发式（扫字面量记号），所以变量拼接、脚本内再调用、解释器内构造
+的路径都能让它看不见——但**看不见只影响「要不要问人」，不影响「能不能做到」**：真正拦住命令
+的是沙箱的挂载与 network namespace（`docs/design/workspace-permission.md` §5；E2E 的
+`invisible_outside_write` 就是这条的实测版：策略放行、只读挂载拦住）。
 
 ## 8. 当前最大的产品未知是什么？
 
@@ -219,8 +219,9 @@ tier 3–5 的 9 条难度 case 上三臂仍然全过（`BENCHMARK.md` §10.2）
   报的都是测试项数，**测试项数增长不能被当作能力增长**（本地记录，逐条编号见
   `dev/plan/roadmap.md:19-175`）。
 
-**次之（有具体证据的产品风险）**：`strict` 档下每个受管动作都要问（`permission.py:128-134`
-的 `MODE_LABELS`）。审批疲劳的真实后果是用户长期加 `--yes`，四层裁决就退化成「硬拒绝一层 +
+**次之（有具体证据的产品风险）**：`auto` 档把 REVIEW 交给确定性分类器，而分类器只认规则
+能表达的风险（`src/avid/policy/classifier.py`）：它判不准时会拒（失败关闭），但「拒得对不对」
+只能靠 E2E 的探针表盯着。审批疲劳的真实后果是用户长期加 `--yes`，阶梯就退化成「deny 一层 +
 其余全放行」——这三个指标（被拒比例 / `--yes` 使用率 / 一次运行问了几次）**现在有采集通道**：
 AvidBench 的 `denials` 与 `approvals_requested` 从事件流派生（`benchmarks/avidbench/telemetry.py`），
 但首轮基线用 `auto_approve=True` 跑，所以一个都没采到。阈值该定在哪、默认档该不该改，仍然
@@ -236,7 +237,8 @@ AvidBench 的 `denials` 与 `approvals_requested` 从事件流派生（`benchmar
 （`benchmarks/README.md` 的边界）是对的，但现在它们是唯一还有信息量的方向。
 
 **同版不做**：压缩阈值的再校准（当前任务族不可评估，等可写或大上下文 case 进来再谈）、
-长期记忆、沙箱、多 provider、SQLite 后端、压缩条目、任务图下一段、前端 a11y（axe）。
+长期记忆、多 provider、SQLite 后端、压缩条目、任务图下一段、前端 a11y（axe）、
+域名级网络授予（本机代理 + 白名单）。
 
 **已定且不再讨论的取舍**：真模型 + 固定模型版本（`AVID_MODEL` 写进 `result.json`）；评测不进
 CI 全量；**不设通过率门禁**（`BENCHMARK.md` §10.4）；case 集版本一旦有基线落盘就不再改。

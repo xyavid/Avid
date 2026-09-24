@@ -18,7 +18,7 @@
 | 多步 Agent 循环 | 已落地 | `agent_loop`、`avid --agent`、`POST /api/sessions/{id}/runs` | `src/avid/runtime/loop.py:102-295` |
 | 工具调用协议（15 个工具） | 已落地 | 模型自主调用 | `src/avid/tools/__init__.py:45-92` |
 | 工具参数校验与失败分类 | 已落地 | 循环内自动 | `src/avid/tools/validate.py`、`src/avid/runtime/execution.py:70-188` |
-| 权限四层三态 + 审批账本 | 已落地 | `--permission`、Web 选择器、`POST /runs {permission}` | `src/avid/policy/permission.py:351-417` |
+| 安全分层：三轴预设 + 四级 deny 阶梯 + bwrap 沙箱 + 审计 | 已落地 | `--permission {manual,auto,full}`、`--allow-full-access`、Web 选择器（full 二次确认）、`POST /runs {permission,full_access_ack}`、`~/.avid/policy.toml`、`~/.avid/audit/*.jsonl` | `src/avid/policy/{modes,action,rules,engine,sandbox,audit,permission}.py`、`src/avid/tools/shell.py` |
 | 工作区（干活地点 / 权限边界 / 会话归属） | 已落地 | `--workspace`、`avid workspace`、导航列 ＋、`POST /api/workspaces` | `src/avid/workspaces.py`、`src/avid/svc/picker.py` |
 | 会话持久化与分支 | 已落地 | `--session`/`--new-session`/`--list-sessions`/`--delete-session`、Web 分支选择器 | `src/avid/session/` |
 | 上下文压缩（五步阶梯） | 已落地 | 自动（每轮 `context.prepare`） | `src/avid/policy/compaction.py`、`src/avid/runtime/context.py` |
@@ -31,7 +31,7 @@
 | CLI | 已落地 | `avid`、`avid web`、`avid workspace` | `src/avid/cli.py` |
 | 可观测（trace / 事件流 / 运行时状态） | 已落地 | stderr trace、`GET /api/runs/{id}/events`、`GET /api/runs/{id}` | `src/avid/runtime/events.py` |
 | 评测与基准（AvidBench v0.1） | 已落地（第一层） | `python -m benchmarks.run`、`pytest -m eval` / `-m eval_smoke` | `benchmarks/README.md`、`benchmarks/avidbench/`、`BENCHMARK.md` §9 |
-| 长期记忆、沙箱、多 provider、多用户鉴权 | **不存在** | — | 见 `CURRENT_STATE.md` §4 |
+| 长期记忆、多 provider、多用户鉴权 | **不存在** | — | 见 `CURRENT_STATE.md` §4 |
 
 ---
 
@@ -69,32 +69,39 @@
 
 ## 3. 权限与工作区
 
-### 3.1 四层裁决 × 三档模式
+### 3.1 三轴预设 + 四级 deny 阶梯（阶段 26）
 
-判定顺序固定**先严后宽**（`src/avid/policy/permission.py:351-417`）：
+判定顺序固定**先严后宽**，但「谁回答 REVIEW」与「沙箱在不在」是**两个正交的问题**
+（`src/avid/policy/engine.py:decide`）：
 
-| 层 | 触发 | strict | workspace | system |
+| 步 | 判什么 | manual | auto | full |
 |---|---|---|---|---|
-| ① 硬拒绝 | 7 条 `DENY_PATTERNS`（删根/家目录、`mkfs`、写块设备、fork 炸弹、关机重启、递归改根权限） | 拒绝 | 拒绝 | 拒绝 |
-| ② 危险命令 | 15 条 `DANGER_PATTERNS`（14 类原因）+ 敏感路径（`.ssh`/`.aws`/`.gnupg`/`.docker` 分量、`/etc/shadow` 等、`*.pem`） | 问一次 | 问一次 | 问一次 |
-| ③ 越界 | 目标在工作区之外 | 问一次 | 问一次 | 放行 |
-| ④ 常规规则 | `APPROVAL_RULES`：`bash` / `write_file` / `edit_file` / `subagent` | 每次都问 | 放行 | 放行 |
+| ① 硬拒绝 | 7 条 `DENY_PATTERNS` | ⛔ | ⛔ | ⛔ |
+| ② 阶梯 deny | ADMIN / SYSTEM / PROJECT（凭据、`.git/hooks`、`.github/workflows`…） | ⛔ | ⛔ | ⛔ |
+| ② 阶梯 ask | `.env` 一类「合法但敏感」 | 问人 | 分类器拒 | 放行 |
+| ③ 越界 | 目标在工作区之外 | 问人 | 分类器拒 | 放行 |
+| ④ 危险类别 | 15 类（提权、磁盘、服务、远程、容器…） | 问人 | 分类器拒 | 放行 |
+| ⑤ 降级 | 要沙箱而后端不可用时的受管工具 | 问人 | 拒 | 不适用 |
+| ⑥ 成本 | `subagent` | 问一次 | 放行 | 放行 |
+| ⑦ 其余 | 区内只读 / 沙箱能保证的区内命令 | 放行 | 放行 | 放行 |
 
-- **硬拒绝不可覆盖**：`--yes` / `auto_approve` / 审批回调只替换「谁来回答」，硬拒绝在它们
-  之前返回（`:217-229, 368-372, 443-472`）。
-- **记账键**：危险按规范化命令原文（`" ".join(command.split())`），越界按绝对路径；同一
-  运行内命中即复用同意、不再重复问（`:259-272, 275-299, 397-399`）。第 ④ 层在 `strict` 下
-  **不记账**——每次都要问。
-- **审批回调可注入**：`RunState.ask`（`src/avid/runtime/state.py:55`）。缺省回落读 stdin 的
-  `ask_user`（读不到一律拒绝）；Web 路径注入审批队列。`subagent` 把父运行的
-  `auto_approve / ask / permission_mode / ledger / workspace_root / hooks.copy()` 显式传给子运行，
-  **账本共用一本**（`src/avid/tools/subagent.py:63-91, 168-192`）。
-- **拒绝文案按类分档**（`HARD_MESSAGE` / `DANGER_MESSAGE` / `OUTSIDE_MESSAGE` / `USER_MESSAGE`）：
-  告诉模型「永远不许」还是「这次不行」，避免它换着花样重试（`:136-151`）。
+- **deny 高于 ask，ask 高于 allow**：下层 allow 永不抵消上层 deny，`full` 也不例外
+  （`Ladder.check` 让 deny 全局优先；唯一放松点是 SYSTEM `[allow]`，且只对可放松的内置默认）。
+- **沙箱是物理边界**（`src/avid/policy/sandbox.py`）：bwrap 只读挂载系统、可写挂载工作区、
+  `--tmpfs` 掩蔽宿主凭据、`--unshare-net` 断网、`--clearenv` + 白名单环境；批准过的区外路径
+  作为能力授予挂进来（且**掩蔽晚于授予**：批准父目录掀不开 `.ssh`）。
+- **沙箱不可用不静默降级**：manual 逐个问人、auto 失败关闭，CLI/事件/界面三处可见
+  （`SandboxSpec.degraded`）。
+- **能力账本**：`("command", 原文)` / `("path", 绝对路径, ro|rw)` / `("tool", 名字)`，同一运行内
+  命中即复用；subagent 与父运行共用一本（`src/avid/tools/subagent.py`）。
+- **审计**：每条裁决（**含放行**）落 `~/.avid/audit/audit-YYYY-MM-DD.jsonl`，带三轴快照；
+  写失败只计数不改裁决。
+- **拒绝文案按 `kind` 分档**（`hard|credential|rule|danger|outside|degraded|cost`）：告诉模型
+  「永远不许」还是「这次不行」，避免它换着花样重试。
 
-三档的名字与语义：`strict`=严格（每个受管动作都要问，默认值）、`workspace`=工作区（区内常规
-免问、越界需同意）、`system`=系统级（默认免问，仅危险命令问）（`:123-134`）。决策表与逐条
-理由见 `docs/design/workspace-permission.md` §3。
+三个预设：`manual`（默认，沙箱内免问、危险与越界问人）、`auto`（同样沙箱，分类器裁决、判不准
+即拒）、`full`（不问、不套沙箱，**必须显式授权且不能作默认**）。决策表、阶梯清单、沙箱 argv
+顺序与降级语义见 `docs/design/workspace-permission.md` §2–§6。
 
 ### 3.2 工作区
 
@@ -302,9 +309,9 @@ key 查而不当作文件路径，未命中返回可用清单（`skills.py:108-1
 | transient | 1 | `run_status` | 不带 `id`，断了就断了 |
 | delta | 1 | `assistant_delta` | 不带 `id`，可任意丢；默认不投递，需 `?deltas=1`；不落盘、不重放、不占 durable 重放预算 |
 
-**features 开关**（`src/avid/svc/__init__.py:48-60`，全为 `1`）：`approvals`、`cancel`、`tasks`、
-`sessions`、`entries`、`deltas`、`branches`、`workspaces`、`permission_modes`、`workspace_picker`、
-`usage`。
+**features 开关**（`src/avid/svc/__init__.py`，全为 `1`）：`approvals`、`cancel`、`tasks`、
+`sessions`、`entries`、`deltas`、`branches`、`workspaces`、`permission_modes`、`security_layers`、
+`full_access`、`workspace_picker`、`usage`。
 客户端读 features 决定启用哪些能力，只在加特性时升 `api_version`。
 
 **并发与保留**：同时最多 24 条 SSE 流（超出 503 `too_many_streams`）；每 run 重放缓冲 512 条
@@ -361,8 +368,8 @@ durable、事件总数上限 4096、终态记录保留 600s 或最多 200 个 ru
 |---|---|---|
 | 提问 | `avid "问题"` | 单轮问答；stdout 只放回复，stderr 放 trace 与 token 用量 |
 | Agent | `avid --agent "…"` | 走循环，模型可调用 15 个工具；help 里的工具清单从 `TOOLS` 派生 |
-| 审批 | `--yes` | 跳过审批（**硬拒绝仍然生效**）；非交互场景需显式指定 |
-| 权限 | `--permission {strict,workspace,system}` | 缺省按「工作区默认权限」，没设过就是 `strict` |
+| 审批 | `--yes` | 替所有审批答「是」（**硬拒绝与阶梯 deny 仍然生效，沙箱也不关**） |
+| 权限 | `--permission {manual,auto,full}` + `--allow-full-access` | 缺省按工作区默认权限，没设过就是 `manual`；`full` 必须同时给第二个开关，否则拒绝启动 |
 | 工作区 | `--workspace PATH\|ID` | 缺省当前目录（会打印解析结果） |
 | 会话 | `--session ID` / `--new-session` / `--session-name NAME` / `--list-sessions` / `--delete-session ID` | 前两个隐含 `--agent`、互斥；`--session-name` 需配二者之一 |
 | Web | `avid web [--host] [--port] [--workspace] [--reload]` | 默认 `127.0.0.1:8765`；非回环监听打印警告 |
