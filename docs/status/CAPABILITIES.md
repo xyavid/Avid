@@ -19,7 +19,7 @@
 | 工具调用协议（9 个工具） | 已落地 | 模型自主调用 | `src/avid/tools/__init__.py:45-92` |
 | 工具参数校验与失败分类 | 已落地 | 循环内自动 | `src/avid/tools/validate.py`、`src/avid/runtime/execution.py:70-188` |
 | 安全分层：三轴预设 + 四级 deny 阶梯 + bwrap 沙箱 + 审计 | 已落地 | `--permission {manual,auto,full}`、`--allow-full-access`、Web 选择器（full 二次确认）、`POST /runs {permission,full_access_ack}`、`~/.avid/policy.toml`、`~/.avid/audit/*.jsonl` | `src/avid/policy/{modes,action,rules,engine,sandbox,audit,permission}.py`、`src/avid/tools/shell.py` |
-| 工作区（干活地点 / 权限边界 / 会话归属） | 已落地 | `--workspace`、`avid workspace`、导航列 ＋、`POST /api/workspaces` | `src/avid/workspaces.py`、`src/avid/svc/picker.py` |
+| 工作区（干活地点 / 权限边界 / 会话归属） | 已落地 | `--workspace`、`avid workspace`、导航列 ＋ / 🗑、`POST /api/workspaces`、`DELETE /api/workspaces/{id}` | `src/avid/workspaces.py`、`src/avid/svc/picker.py` |
 | 会话持久化与分支 | 已落地 | `--session`/`--new-session`/`--list-sessions`/`--delete-session`、Web 分支选择器 | `src/avid/session/` |
 | 上下文压缩（五步阶梯） | 已落地 | 自动（每轮 `context.prepare`） | `src/avid/policy/compaction.py`、`src/avid/runtime/context.py` |
 | TODO 清单与提醒 | 已落地 | 模型调 `todo_write` | `src/avid/policy/todo.py`、`src/avid/runtime/state.py:179-187` |
@@ -270,6 +270,7 @@ key 查而不当作文件路径，未命中返回可用清单（`skills.py:108-1
 | `GET /api/skills` | 技能目录（与 system prompt 同源） |
 | `GET /api/workspaces` | 候选工作区 |
 | `POST /api/workspaces` | 登记工作区（已存在 → 409 `workspace_exists`） |
+| `DELETE /api/workspaces/{id}` | 从候选里移除工作区（只摘索引；会话归「未归属」，绑定值 → 409 `workspace_bound`） |
 | `POST /api/workspaces/pick` | 弹宿主机文件夹选择器（取消返回 null，无后端 503） |
 | `GET /api/sessions` | 会话列表 |
 | `POST /api/sessions` | 建会话（`workspace` 必填，缺了 400） |
@@ -296,7 +297,7 @@ key 查而不当作文件路径，未命中返回可用清单（`skills.py:108-1
 
 **features 开关**（`src/avid/svc/__init__.py`，全为 `1`）：`approvals`、`cancel`、
 `sessions`、`entries`、`deltas`、`branches`、`workspaces`、`permission_modes`、`security_layers`、
-`full_access`、`workspace_picker`、`usage`。
+`full_access`、`workspace_picker`、`workspace_delete`、`usage`。
 客户端读 features 决定启用哪些能力，只在加特性时升 `api_version`。
 
 **并发与保留**：同时最多 24 条 SSE 流（超出 503 `too_many_streams`）；每 run 重放缓冲 512 条

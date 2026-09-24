@@ -45,10 +45,10 @@ uv run avid web --port 8765      # 静态资源与 API 同源
 | 页面 / 交互（URL） | 主要接口 | 数据流 |
 |---|---|---|
 | 导航列（`/sessions` 左侧） | `GET /api/workspaces`（文件夹）+ `GET /api/sessions`（里面的会话）、`POST /api/sessions`、`PATCH /api/sessions/{id}`、`DELETE /api/sessions/{id}` | 查询流（TanStack Query）；两份查询在客户端按 `workspace.id` 归拢成树，服务端接口不变 |
-| 工作区文件夹（导航列的一项） | `GET /api/workspaces` + `GET /api/sessions` | 点标题折叠/展开；点 ＋ 在该工作区建会话（id 随 `POST /api/sessions` 发出，**必填**，缺了是 400 `workspace_required`） |
+| 工作区文件夹（导航列的一项） | `GET /api/workspaces` + `GET /api/sessions` | 点标题折叠/展开；点 ＋ 在该工作区建会话（id 随 `POST /api/sessions` 发出，**必填**，缺了是 400 `workspace_required`）；点 🗑 移除该工作区（`DELETE /api/workspaces/{id}`，见 §3.2） |
 | 🔍（导航列右上角） | 不新增接口 | 纯客户端按**会话名**过滤：只留命中的会话、没有命中的工作区整组隐藏、命中项不受 5 条上限约束；Esc 或 × 清除 |
 | 「新增工作区…」（导航列右上角 ＋） | `POST /api/workspaces/pick`（弹宿主机文件夹选择器）→ `POST /api/workspaces`（登记） | 命令流；成功后刷新候选并**展开新工作区**。取消 → 什么都不做；已在列表里 → 409 `workspace_exists` + 展开已有的那个，不重复添加 |
-| 权限模式选择器 + 沙箱标记（输入条旁） | 不新增接口；读 `GET /api/meta` 的 `capabilities.sandbox` | 随 `POST /api/sessions/{id}/runs` 的 `permission`（+ `full_access_ack`）发出；缺省取会话所属工作区的 `default_permission` |
+| 权限模式选择器 + 沙箱标记（输入条旁） | 不新增接口；读 `GET /api/meta` 的 `capabilities.sandbox` | 随 `POST /api/sessions/{id}/runs` 的 `permission`（+ `full_access_ack`）发出；缺省取会话所属工作区的 `default_permission`。沙箱状态常驻的只有图标，文字在悬停气泡里 |
 | 会话时间线（`/sessions/{id}`） | `GET /api/sessions/{id}/entries`（分页，带 `branch`）、`GET /api/runs/{id}/events`（SSE） | 历史来自条目（权威），实时来自事件 |
 | 提交一次运行（输入条） | `POST /api/sessions/{id}/runs`（`branch` 决定接哪条链尾） | 命令流 → 201 `{run_id}` |
 | 分支选择器（会话头部下方） | `GET /api/sessions/{id}/branches`、`POST /api/sessions/{id}/branches` | 查询流 + 命令流；「切换」只是本地选择——服务端没有「当前分支」，它只有一组链尾值 |
@@ -148,6 +148,13 @@ zenity/kdialog → Windows（WSL 互操作）→ osascript 依次探测，`GET /
   （没名字的会话按「未命名会话」匹配），**不匹配工作区名**——搜 "Avid" 把整个文件夹的
   几百条会话全捞出来只会更难找。查询**不持久化**（刷新即清空），"刷新后还留着一个把
   列表藏掉一半的过滤条件"是坑不是贴心。没有匹配时给「没有名字含「X」的会话」。
+- **移除工作区 = 从导航列里摘掉这一项**（文件夹标题行最右的 🗑，`DELETE /api/workspaces/{id}`，
+  能力位 `features.workspace_delete`）。它**不动磁盘上的任何东西**：目录、`.avid/sessions`
+  与会话文件一行不改，所以它下面的会话仍然列举得到、打得开——界面上它们归到
+  **「未归属的会话」**组（分组规则见 `features/sessions/lib/navTree.ts`：归属在候选列表里
+  找不到就进这一组，不再让它凭空消失）。想加回来：用右上角的 ＋ 重新选同一个文件夹
+  （同一个目录永远同一个 id，条目是**墓碑**不是第二份）。进程绑定的工作地点没有这个按钮：
+  它永远在候选列表里（服务端会回 409 `workspace_bound`），画一个按下去没用的按钮只会骗人。
 会话卡与详情显示归属名字。归属是**创建时的静态事实**，写在会话 header 里，
 所以注册表被删掉也不影响已有会话的归属查询。
 
@@ -166,9 +173,12 @@ zenity/kdialog → Windows（WSL 互操作）→ osascript 依次探测，`GET /
   才会进入 REVIEW。
 - **选 `full` 要先过二次确认**：弹出对话框、确认按钮写「我明白，关闭沙箱」，取消则什么都不
   发生。确认后 `buildStartRunInput` 统一补 `full_access_ack: true`（服务端缺它就 422）。
-- 输入条常驻一个**沙箱标记**：`沙箱：工作区（无出网）` / `沙箱：已禁用` / `沙箱：不可用（原因）`。
-  数据来自 `GET /api/meta` 的 `capabilities.sandbox`（服务端实测的后端可用性）与当前模式，
-  所以"这台机器上沙箱到底在不在"是一个看得见的事实——`full` 永远看得见。
+- 输入条常驻一个**沙箱标记**，但常驻的只有一枚**图标**（四档四种形状：可用 / 未探测 /
+  已禁用 / 不可用，颜色另分）。`沙箱：工作区（无出网）` / `沙箱：已禁用` /
+  `沙箱：不可用（原因）` 这句事实改由**悬停或聚焦时的气泡**给出。数据来自 `GET /api/meta`
+  的 `capabilities.sandbox`（服务端实测的后端可用性）与当前模式，所以"这台机器上沙箱到底
+  在不在"仍然是一个看得见的事实，只是不再常驻占掉输入条一行（窄窗口里那格文字曾经被挤成
+  三行）。
 - 界面上的选择**不持久化**：它是这次会话视图的瞬时状态，缺省值来自服务端。理由是
   "上次选了 full，下次打开浏览器继续关沙箱"属于安全默认值问题。
 
