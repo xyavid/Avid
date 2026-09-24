@@ -82,6 +82,9 @@ class Workspace:
     created_at: int
     last_used_at: int
     default_permission: str = DEFAULT_MODE
+    # 已从候选列表里摘掉（墓碑）。条目不删，因为 id 是路径的派生值：删了条目就再没有
+    # "这个 id 对应哪个目录"的记录，它下面的会话会连列举和打开都做不到（见 `remove`）。
+    hidden: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -91,6 +94,7 @@ class Workspace:
             "created_at": self.created_at,
             "last_used_at": self.last_used_at,
             "default_permission": self.default_permission,
+            "hidden": self.hidden,
         }
 
 
@@ -130,6 +134,8 @@ def _parse(raw: Any) -> Workspace | None:
         created_at=int(created) if isinstance(created, int) else now_ms(),
         last_used_at=int(used) if isinstance(used, int) else now_ms(),
         default_permission=permission,
+        # 老文件里没有这个字段 = False（没删过）。写坏的（非布尔）当没删过处理。
+        hidden=raw.get("hidden") is True,
     )
 
 
@@ -173,19 +179,30 @@ class WorkspaceRegistry:
         )
         os.replace(temp, self.path)
 
-    def list(self) -> list[Workspace]:
-        """按最近使用倒序。文件损坏时**不阻断运行**：返回空表并留一条日志。"""
+    def list(self, *, include_hidden: bool = False) -> list[Workspace]:
+        """按最近使用倒序。文件损坏时**不阻断运行**：返回空表并留一条日志。
+
+        ``include_hidden=True`` 才有墓碑（已删除的工作区）。服务层列举**会话**时必须带上
+        它们，否则删一个工作区就等于让里面的会话从界面上消失；而候选列表只给可见的。
+        """
         try:
             items = self._read()
         except WorkspaceRegistryCorrupt as exc:
             logger.warning("%s", exc)
             return []
+        if not include_hidden:
+            items = [ws for ws in items if not ws.hidden]
         return sorted(items, key=lambda ws: (-ws.last_used_at, ws.id))
 
     # ---------------- 查询 ----------------
 
-    def find(self, selection: str | None) -> Workspace | None:
-        """按 id 或路径查；``None``/空串返回 None。"""
+    def find(self, selection: str | None, *, include_hidden: bool = False) -> Workspace | None:
+        """按 id 或路径查；``None``/空串返回 None。
+
+        墓碑（已删除）默认**查不到**：所有"这算不算已登记"的判断（登记时的重复检查、
+        按工作区建会话）都该看候选列表，而不是看文件里还剩什么。需要按 id 操作墓碑本身
+        的路径（改默认权限、再次删除）走 `get`。
+        """
         if not selection:
             return None
         text = str(selection).strip()
@@ -196,6 +213,8 @@ class WorkspaceRegistry:
         except WorkspaceRegistryCorrupt as exc:
             logger.warning("%s", exc)
             items = []
+        if not include_hidden:
+            items = [ws for ws in items if not ws.hidden]
 
         for ws in items:
             if ws.id == text:
@@ -208,7 +227,8 @@ class WorkspaceRegistry:
         return None
 
     def get(self, selection: str) -> Workspace:
-        found = self.find(selection)
+        """按 id/路径取一条记录，**含墓碑**：写操作要能作用在已删除的那条上。"""
+        found = self.find(selection, include_hidden=True)
         if found is None:
             raise WorkspaceNotFound(
                 f"没有这个工作区：{selection}。用 `avid workspace list` 看已登记的工作区，"
@@ -245,6 +265,8 @@ class WorkspaceRegistry:
                     default_permission=(
                         _default_mode(permission) if permission else ws.default_permission
                     ),
+                    # 重新登记同一个目录 = 撤销删除：墓碑复用，不产生第二个条目。
+                    hidden=False,
                 )
                 items[index] = updated
                 self._write(items)
@@ -269,11 +291,20 @@ class WorkspaceRegistry:
         return updated
 
     def remove(self, selection: str) -> Workspace:
-        """只从索引里摘掉，**不动磁盘上的任何会话数据**。"""
+        """从候选列表里摘掉：立**墓碑**（``hidden=True``），条目与磁盘数据都留着。
+
+        为什么不是把条目从文件里删掉：会话库在 ``<root>/.avid/sessions``，而工作区 id 是
+        路径的派生值——条目一旦没了，"这个 id 对应哪个目录"就再没有记录，删掉一个工作区
+        就等于让里面的会话连列举、打开都做不到。界面要的是「归到未归属的会话」，不是消失。
+        重新登记同一个目录即可撤销（`add` 会把 ``hidden`` 清回 False）。
+        """
         found = self.get(selection)
-        items = [ws for ws in self._read() if ws.id != found.id]
+        items = self._read()
+        for index, ws in enumerate(items):
+            if ws.id == found.id:
+                items[index] = replace(ws, hidden=True)
         self._write(items)
-        return found
+        return replace(found, hidden=True)
 
     def _update(self, workspace_id: str, **changes: Any) -> Workspace | None:
         items = self._read()

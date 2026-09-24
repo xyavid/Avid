@@ -105,6 +105,22 @@ export function useWorkspaces() {
   })
 }
 
+/**
+ * 从候选列表里移除一个工作区（界面的删除按钮）。**只摘索引**：服务端不动任何会话文件，
+ * 所以它的会话仍在 `/api/sessions` 里（归到未归属组），两边的缓存都要失效。
+ */
+export function useDeleteWorkspace() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (workspaceId: string) =>
+      request<void>(`/workspaces/${encodeURIComponent(workspaceId)}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.workspaces })
+      void client.invalidateQueries({ queryKey: queryKeys.sessions })
+    },
+  })
+}
+
 export function useSessionList() {
   return useQuery({
     queryKey: queryKeys.sessions,

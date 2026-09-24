@@ -235,6 +235,12 @@ export const DICTIONARY: Record<Locale, Entry> = {
     'sessions.time.day': '{count}天',
     'sessions.workspace.add': '新增工作区…',
     'sessions.workspace.added': '已添加工作区：{name}，并切换到它',
+    'sessions.workspace.delete': '移除工作区「{name}」',
+    'sessions.workspace.deleted': '已从列表里移除「{name}」，它的会话归到「未归属的会话」',
+    'sessions.workspace.deleteTitle': '把这个工作区从列表里移除？',
+    'sessions.workspace.deleteBody':
+      '只是从导航列里拿走「{name}」这一项：磁盘上的目录与它的会话文件一行不动，' +
+      '它下面的会话会归到「未归属的会话」，照旧打得开。想加回来：重新用 ＋ 选同一个文件夹即可。',
     'sessions.workspace.none':
       '还没有工作区。点右上角的 ＋ 挑一个本地文件夹，或在终端里用 `avid workspace add <路径>` 登记一个。',
     'sessions.workspace.failed': '工作区列表没取回来',
@@ -289,6 +295,7 @@ export const DICTIONARY: Record<Locale, Entry> = {
     'errors.workspace_not_found': '找不到这个工作区',
     'errors.workspace_invalid': '工作区参数不合法（目录不存在或不是目录）',
     'errors.workspace_exists': '这个文件夹已经在工作区列表里',
+    'errors.workspace_bound': '进程绑定的工作地点永远在列表里，不能移除',
     'errors.picker_unavailable':
       '这台机器上没有可用的系统文件夹选择器；可以在终端里用 `avid workspace add <路径>`',
     'errors.picker_busy': '已经有一个文件夹选择器开着，先去那边选完或取消',

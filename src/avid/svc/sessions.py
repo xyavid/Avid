@@ -64,9 +64,12 @@ class SessionService:
 
         代价是 O(会话数 × 文件大小)：名字是会话文件里的一个值、条数要读全部条目。
         CLI 早已承认这个代价；Web 首屏同样付它（设计文档 §6.1）。
+
+        走 `known_workspaces()` 而不是候选列表：已删除（墓碑）的工作区里的会话仍然要列
+        出来——前端按"归属在候选里找不到"把它们归进未归属组，而不是让它们凭空消失。
         """
         found: list[dict[str, Any]] = []
-        for workspace in self.workspaces.workspaces():
+        for workspace in self.workspaces.known_workspaces():
             for meta in self.workspaces.repo_for(workspace).list():
                 summary = self._summary(meta, workspace)
                 if summary is not None:

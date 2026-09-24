@@ -57,6 +57,7 @@ FEATURES: dict[str, int] = {
     "security_layers": 1,  # 阶段 26：三轴正交 + 四级 deny + 沙箱；run_started 带三轴快照
     "full_access": 1,  # 阶段 26：full 需要 full_access_ack（显式授权），且不能作默认
     "workspace_picker": 1,  # 新增工作区：POST /workspaces/pick 弹宿主机文件夹选择器
+    "workspace_delete": 1,  # 删除工作区：DELETE /workspaces/{id} 只摘索引，会话归未归属组
     "usage": 1,  # 阶段 22：分支带用量快照；run_status / run_finished 带统一 usage schema
 }
 

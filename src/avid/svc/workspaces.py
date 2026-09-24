@@ -72,6 +72,14 @@ class WorkspaceInvalid(ServiceError):
     status = 400
 
 
+class WorkspaceBound(ServiceError):
+    """想删的是**进程绑定的那个工作地点**：它不出现在注册表里，永远在候选列表最前，
+    删了也还在（候选 = 绑定值 + 注册表），所以只能拒，而不是假装删成功。"""
+
+    code = "workspace_bound"
+    status = 409
+
+
 # 归属缓存的 TTL（秒）。取值小是刻意的：缓存只是省一次全库扫描，不是权威。
 SESSION_LOOKUP_TTL_SECONDS = 5.0
 
@@ -102,11 +110,27 @@ class WorkspaceService:
     # ---------------- 查询 ----------------
 
     def workspaces(self) -> list[Workspace]:
-        """默认工作区排在最前，其余按最近使用。"""
+        """**候选**工作区：默认工作区排在最前，其余按最近使用。已删除（墓碑）的不在内。"""
         items = self.registry.list()
         if self.default is None:
             return items
         return [self.default, *(ws for ws in items if ws.id != self.default.id)]
+
+    def known_workspaces(self) -> list[Workspace]:
+        """**所有还能找到数据的**工作区 = 候选 + 墓碑（已删除的）。
+
+        为什么列举/定位会话要用它而不是 `workspaces()`：会话库在各自工作区的
+        ``<root>/.avid/sessions``，删掉一个工作区（把它从候选里摘掉）之后，它下面的会话
+        仍然是真实存在的会话——用户要的是它们归到「未归属的会话」，不是从列表里消失、
+        更不是打不开。所以"哪些工作区有数据要读"与"哪些工作区摆在界面上可选"是两个问题，
+        这里就是前者的答案。
+        """
+        visible = self.workspaces()
+        seen = {ws.id for ws in visible}
+        hidden = [
+            ws for ws in self.registry.list(include_hidden=True) if ws.id not in seen
+        ]
+        return [*visible, *hidden]
 
     def list(self) -> list[dict[str, Any]]:
         return [self.describe(ws) for ws in self.workspaces()]
@@ -198,6 +222,39 @@ class WorkspaceService:
 
     # ---------------- 系统文件夹选择器 ----------------
 
+    def unregister(self, selection: str) -> Workspace:
+        """从候选列表里摘掉一个工作区（界面的删除按钮 / ``avid workspace remove``）。
+
+        **只摘索引，不动会话数据**：磁盘上的 ``<root>/.avid/sessions`` 一行不改，因此它
+        下面的会话仍然列举得到、打得开（`known_workspaces()` 仍包含这条墓碑），只是不再
+        出现在候选里——界面上它们归到「未归属的会话」。重新登记同一个目录即撤销。
+
+        绑定工作地点（``default``）一律拒：它不进注册表，候选列表是"绑定值 + 注册表"，
+        删掉注册表里的同 id 条目之后它照样排在第一个——假装删成功比拒绝更糟。
+        """
+        workspace = self.find_known(selection)
+        if workspace is None:
+            # 候选里没有：可能是**已删除过**的那条墓碑（`registry.get` 含 hidden），
+            # 用它可以给出准确的错误，并且让"重复删"保持幂等。
+            try:
+                workspace = self.registry.get(selection)
+            except WorkspaceError as exc:
+                raise WorkspaceMissing(
+                    f"没有这个工作区：{selection}（用 GET /api/workspaces 看可选值）"
+                ) from exc
+        if self.default is not None and workspace.id == self.default.id:
+            raise WorkspaceBound(
+                f"「{workspace.name}」是进程绑定的工作地点（{workspace.root}），"
+                "它永远在候选列表里，不能从列表里删掉"
+            )
+        if workspace.hidden:
+            # 已经是墓碑：重复删是幂等的（界面连点两下不该报错，也不该再写一次盘）。
+            return workspace
+        try:
+            return self.registry.remove(workspace.id)
+        except WorkspaceError as exc:
+            raise WorkspaceInvalid(str(exc)) from exc
+
     def pick(self) -> str | None:
         """弹一次系统文件夹选择器，返回绝对路径；用户取消返回 ``None``。
 
@@ -225,6 +282,8 @@ class WorkspaceService:
 
     def describe(self, workspace: Workspace) -> dict[str, Any]:
         record = workspace.to_dict()
+        # `hidden` 是注册表内部的状态（墓碑），不属于线路格式：候选列表里根本没有墓碑。
+        record.pop("hidden", None)
         record["is_default"] = self.default is not None and workspace.id == self.default.id
         return record
 
@@ -252,13 +311,14 @@ class WorkspaceService:
         """会话属于哪个工作区。会话 id 不携带工作区信息，所以只能逐个库找。
 
         扫一次就把**所有**会话都记进缓存（反正已经列过了），命中缓存则完全不扫。
+        与列举同一口径：**含墓碑**——删掉的工作区里的会话必须还打得开。
         """
         cached = self._lookup.get(session_id)
         if cached is not None and cached[0] > time.monotonic():
             return cached[1], cached[2]
 
         expires = time.monotonic() + SESSION_LOOKUP_TTL_SECONDS
-        for workspace in self.workspaces():
+        for workspace in self.known_workspaces():
             for meta in self.repo_for(workspace).list():
                 self._lookup[meta.id] = (expires, workspace, meta)
 

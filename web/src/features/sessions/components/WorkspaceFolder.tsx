@@ -19,6 +19,9 @@ export interface WorkspaceFolderProps {
   editing: string | null
   name: string
   renamePending: boolean
+  /** 能不能移除这个工作区（能力表 + 不是进程绑定的那个；未归属组永远不能）。 */
+  canDelete: boolean
+  onRequestDeleteWorkspace: () => void
   onSelectSession: (sessionId: string) => void
   onStartRename: (session: SessionSummary) => void
   onNameChange: (value: string) => void
@@ -33,8 +36,9 @@ export interface WorkspaceFolderProps {
  * 「展开其余 N 个会话」——这是每个文件夹自己的状态（`useState`），因为它是纯界面
  * 展开态，不是服务端事实。
  *
- * 可访问名：折叠按钮的名字 = 工作区名（+条数），"新建"按钮 = 在「<名字>」新建会话。
- * 两者必须能分辨——它们在同一行，功能完全不同。
+ * 可访问名：折叠按钮的名字 = 工作区名（+条数），"新建"按钮 = 在「<名字>」新建会话，
+ * "移除"按钮 = 移除工作区「<名字>」。三者在同一行、功能完全不同，必须能分辨；
+ * 移除按钮**带名字**尤其重要——同一列里会有好几个同样的垃圾桶。
  */
 export function WorkspaceFolder({
   group,
@@ -47,6 +51,8 @@ export function WorkspaceFolder({
   editing,
   name,
   renamePending,
+  canDelete,
+  onRequestDeleteWorkspace,
   onSelectSession,
   onStartRename,
   onNameChange,
@@ -88,6 +94,19 @@ export function WorkspaceFolder({
         >
           <span aria-hidden="true">＋</span>
         </Button>
+        {/* 移除只对**注册表里的**工作区开放：进程绑定的那个（is_default）永远在候选列表
+            里，删了也还在（服务端会回 409 workspace_bound），所以这里干脆不画那个按钮。 */}
+        {canDelete ? (
+          <Button
+            size="icon"
+            variant="secondary"
+            aria-label={t('sessions.workspace.delete', { name: label })}
+            title={t('sessions.workspace.delete', { name: label })}
+            onClick={onRequestDeleteWorkspace}
+          >
+            <span aria-hidden="true">🗑</span>
+          </Button>
+        ) : null}
       </div>
 
       {expanded ? (

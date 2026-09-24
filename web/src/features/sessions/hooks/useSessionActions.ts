@@ -16,11 +16,12 @@ import {
   useAddWorkspace,
   useCreateSession,
   useDeleteSession,
+  useDeleteWorkspace,
   useMeta,
   usePickFolder,
   useRenameSession,
 } from '../../../api/queries'
-import type { SessionSummary } from '../../../api/types'
+import type { SessionSummary, WorkspaceSummary } from '../../../api/types'
 import { useErrorText } from '../../../lib/errors'
 import { useTranslation } from '../../../lib/i18n'
 
@@ -40,6 +41,7 @@ export function useSessionActions({ onSelectSession, onExpandWorkspace }: Sessio
   const remove = useDeleteSession()
   const pick = usePickFolder()
   const addWorkspace = useAddWorkspace()
+  const removeWorkspace = useDeleteWorkspace()
 
   // 成功/提示类消息（错误走 alert）：用一句人话说明"刚刚发生了什么"。
   const [notice, setNotice] = useState<string | null>(null)
@@ -48,6 +50,11 @@ export function useSessionActions({ onSelectSession, onExpandWorkspace }: Sessio
   const [editing, setEditing] = useState<string | null>(null)
   const [name, setName] = useState('')
   const [pendingDelete, setPendingDelete] = useState<string | null>(null)
+  // 待移除的工作区（null = 确认框没开着）：存整个记录而不是 id，因为确认文案要说名字，
+  // 而"开着但不知道删谁"这个状态不存在。
+  const [pendingWorkspaceDelete, setPendingWorkspaceDelete] = useState<WorkspaceSummary | null>(
+    null,
+  )
 
   const failure = (error: unknown) =>
     setAlert(
@@ -123,6 +130,26 @@ export function useSessionActions({ onSelectSession, onExpandWorkspace }: Sessio
     setName(session.name ?? '')
   }
 
+  /**
+   * 移除工作区：**只摘索引**。服务端不删任何会话文件，所以成功后要重取会话列表——
+   * 原来装在那个文件夹里的会话还在，只是归到了「未归属的会话」组（提示里说清这一点，
+   * 否则用户会以为会话跟着没了）。
+   */
+  const confirmWorkspaceDelete = () => {
+    if (!pendingWorkspaceDelete) return
+    const target = pendingWorkspaceDelete
+    removeWorkspace.mutate(target.id, {
+      onSuccess: () => {
+        setPendingWorkspaceDelete(null)
+        setNotice(t('sessions.workspace.deleted', { name: target.name ?? target.root }))
+      },
+      onError: (error) => {
+        failure(error)
+        setPendingWorkspaceDelete(null)
+      },
+    })
+  }
+
   const submitRename = (sessionId: string) =>
     rename.mutate({ id: sessionId, name }, { onSuccess: () => setEditing(null), onError: failure })
 
@@ -142,6 +169,7 @@ export function useSessionActions({ onSelectSession, onExpandWorkspace }: Sessio
 
   // 老内核没有这个端点：能力表里没声明就不显示按钮，而不是点出一个 404。
   const canAddWorkspace = meta.data?.features.workspace_picker === 1
+  const canDeleteWorkspace = meta.data?.features.workspace_delete === 1
   const cancelDelete = () => setPendingDelete(null)
 
   return {
@@ -150,18 +178,24 @@ export function useSessionActions({ onSelectSession, onExpandWorkspace }: Sessio
     editing,
     name,
     pendingDelete,
+    pendingWorkspaceDelete,
     setName,
     startRename,
     submitRename,
     requestDelete: setPendingDelete,
     cancelDelete,
     confirmDelete,
+    requestWorkspaceDelete: setPendingWorkspaceDelete,
+    cancelWorkspaceDelete: () => setPendingWorkspaceDelete(null),
+    confirmWorkspaceDelete,
     newSession,
     addWorkspaceByPicker,
     canAddWorkspace,
+    canDeleteWorkspace,
     creating: create.isPending,
     renaming: rename.isPending,
     removing: remove.isPending,
+    deletingWorkspace: removeWorkspace.isPending,
     adding: pick.isPending || addWorkspace.isPending,
   }
 }

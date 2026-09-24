@@ -12,6 +12,7 @@ import {
 import { useSessionActions } from '../hooks/useSessionActions'
 import { useSessionSearch } from '../hooks/useSessionSearch'
 import { DeleteSessionDialog } from './DeleteSessionDialog'
+import { DeleteWorkspaceDialog } from './DeleteWorkspaceDialog'
 import { RetryNote } from './RetryNote'
 import { SessionListHeader } from './SessionListHeader'
 import { WorkspaceFolder } from './WorkspaceFolder'
@@ -142,6 +143,14 @@ export function SessionList({ activeId, onSelect }: SessionListProps) {
                 editing={actions.editing}
                 name={actions.name}
                 renamePending={actions.renaming}
+                canDelete={
+                  actions.canDeleteWorkspace &&
+                  id !== undefined &&
+                  group.workspace?.is_default !== true
+                }
+                onRequestDeleteWorkspace={() => {
+                  if (group.workspace) actions.requestWorkspaceDelete(group.workspace)
+                }}
                 onSelectSession={onSelect}
                 onStartRename={actions.startRename}
                 onNameChange={actions.setName}
@@ -159,6 +168,13 @@ export function SessionList({ activeId, onSelect }: SessionListProps) {
         removing={actions.removing}
         onCancel={actions.cancelDelete}
         onConfirm={actions.confirmDelete}
+      />
+
+      <DeleteWorkspaceDialog
+        pending={actions.pendingWorkspaceDelete}
+        removing={actions.deletingWorkspace}
+        onCancel={actions.cancelWorkspaceDelete}
+        onConfirm={actions.confirmWorkspaceDelete}
       />
     </section>
   )

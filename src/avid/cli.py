@@ -428,7 +428,9 @@ def build_workspace_parser() -> argparse.ArgumentParser:
 
     actions.add_parser("list", help="按最近使用列出已登记的工作区")
 
-    remove = actions.add_parser("remove", help="从索引里摘掉（不动磁盘上的会话数据）")
+    remove = actions.add_parser(
+        "remove", help="从候选列表里摘掉（立墓碑：会话数据与条目都留着）"
+    )
     remove.add_argument("workspace", help="工作区 id 或路径")
 
     permission = actions.add_parser("permission", help="设置工作区的默认权限")
@@ -465,7 +467,11 @@ def _run_workspace(argv: list[str]) -> int:
 
         if args.action == "remove":
             ws = registry.remove(args.workspace)
-            print(f"已从索引里摘掉 {ws.id}（{ws.root}）；磁盘上的会话数据未动")
+            print(
+                f"已从候选列表里摘掉 {ws.id}（{ws.root}）；"
+                "会话与磁盘数据都留着（它的会话在界面上归「未归属的会话」），"
+                "`avid workspace add` 同一个路径即可撤销"
+            )
             return 0
 
         ws = registry.set_permission(args.workspace, args.mode)

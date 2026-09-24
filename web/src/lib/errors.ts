@@ -24,6 +24,7 @@ const KNOWN = new Set([
   'workspace_not_found',
   'workspace_invalid',
   'workspace_exists',
+  'workspace_bound',
   'picker_unavailable',
   'picker_busy',
   'picker_failed',

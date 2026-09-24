@@ -129,7 +129,13 @@ def test_get_unknown_raises_with_a_usable_hint(registry):
     assert "avid workspace add" in str(exc.value)
 
 
-def test_remove_only_drops_the_index(registry, workspace_dir):
+def test_remove_only_hides_the_index(registry, workspace_dir):
+    """删除是**墓碑**：不在候选里了，路径与数据都还在。
+
+    为什么不是把条目从文件里删掉：会话库在 ``<root>/.avid/sessions``，而工作区 id 是
+    路径的派生值——条目一旦没了，"这个 id 对应哪个目录"就再没有记录，界面删掉工作区后
+    它下面的会话连列举与打开都做不到。用户要的是"归到未归属的会话"，不是消失。
+    """
     marker = workspace_dir / "keep.txt"
     marker.write_text("会话数据", encoding="utf-8")
     registry.add(workspace_dir)
@@ -137,8 +143,24 @@ def test_remove_only_drops_the_index(registry, workspace_dir):
     removed = registry.remove(derive_id(workspace_dir))
 
     assert removed.id == derive_id(workspace_dir)
-    assert registry.list() == []
+    assert removed.hidden is True
+    assert registry.list() == []  # 候选里没有了
+    assert [ws.id for ws in registry.list(include_hidden=True)] == [removed.id]
+    assert registry.find(str(workspace_dir)) is None  # 默认查不到（不会被当成"已登记"）
+    assert registry.get(derive_id(workspace_dir)).root == str(workspace_dir.resolve())
     assert marker.read_text(encoding="utf-8") == "会话数据"
+
+
+def test_adding_a_hidden_workspace_again_brings_it_back(registry, workspace_dir):
+    """重新登记同一个目录 = 撤销删除（同一个 id、同一个条目，不是第二份真相）。"""
+    registry.add(workspace_dir, name="项目")
+    registry.remove(derive_id(workspace_dir))
+
+    again = registry.add(workspace_dir)
+
+    assert again.id == derive_id(workspace_dir)
+    assert again.hidden is False
+    assert [ws.id for ws in registry.list()] == [again.id]
 
 
 def test_corrupt_registry_degrades_reads_but_refuses_writes(registry, workspace_dir):

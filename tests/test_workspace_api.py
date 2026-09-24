@@ -136,6 +136,65 @@ def test_register_then_create_a_session_in_that_workspace(client, sandbox, tmp_p
     assert client.get(f"/api/sessions/{detail['id']}").json()["workspace"]["id"] == workspace["id"]
 
 
+def test_delete_a_workspace_keeps_its_sessions_listed(client, tmp_path):
+    """删工作区 = 从候选里摘掉。它的会话仍在列表里（界面据此归到「未归属的会话」），
+    也照旧打得开——否则"删一个工作区"就等于悄悄销毁了里面的全部会话。"""
+    project = tmp_path.parent / f"del-{tmp_path.name}"
+    project.mkdir()
+    ws = client.post("/api/workspaces", json={"path": str(project)}).json()
+    session = client.post("/api/sessions", json={"workspace": ws["id"]}).json()
+
+    removed = client.delete(f"/api/workspaces/{ws['id']}")
+
+    assert removed.status_code == 204, removed.text
+    listed_workspaces = client.get("/api/workspaces").json()["workspaces"]
+    assert ws["id"] not in {item["id"] for item in listed_workspaces}
+
+    listed = client.get("/api/sessions").json()["sessions"]
+    assert [item["id"] for item in listed] == [session["id"]]
+    # 归属仍是那个 id：前端按"候选里找不到它"把这条会话归进未归属组。
+    assert listed[0]["workspace"]["id"] == ws["id"]
+    assert client.get(f"/api/sessions/{session['id']}").status_code == 200
+    assert (project / ".avid" / "sessions").exists()
+
+
+def test_delete_the_bound_workspace_is_refused(client):
+    """进程绑定的工作地点永远在候选里（它不进注册表），删它只会"删不掉"——直接拒。"""
+    bound = next(
+        item for item in client.get("/api/workspaces").json()["workspaces"] if item["is_default"]
+    )
+
+    response = client.delete(f"/api/workspaces/{bound['id']}")
+
+    assert response.status_code == 409, response.text
+    assert response.json()["error"]["code"] == "workspace_bound"
+
+
+def test_delete_an_unknown_workspace_is_404(client):
+    response = client.delete("/api/workspaces/w-nope")
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "workspace_not_found"
+
+
+def test_a_deleted_workspace_can_be_registered_again(client, tmp_path):
+    """删了还能加回来：同一个目录 = 同一个 id，墓碑被复用而不是长成第二个条目。"""
+    project = tmp_path.parent / f"readd-{tmp_path.name}"
+    project.mkdir()
+    ws = client.post("/api/workspaces", json={"path": str(project)}).json()
+    client.delete(f"/api/workspaces/{ws['id']}")
+
+    again = client.post("/api/workspaces", json={"path": str(project)})
+
+    assert again.status_code == 201, again.text
+    assert again.json()["id"] == ws["id"]
+
+
+def test_meta_declares_workspace_delete(client):
+    """能力表是界面显示删除按钮的依据：老内核没有它，按钮就不该画出来。"""
+    assert client.get("/api/meta").json()["features"]["workspace_delete"] == 1
+
+
 def test_register_rejects_a_missing_directory(client):
     response = client.post("/api/workspaces", json={"path": "/tmp/avid-nope-nope"})
 
