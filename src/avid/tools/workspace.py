@@ -70,6 +70,18 @@ def relative(path: Path, *, root: Path | None = None) -> str:
         return str(path)
 
 
+def target_path(raw: str, *, root: Path | None = None) -> Path:
+    """把一个路径字面量解析成绝对路径（**不做**任何越界判断）。
+
+    与 :func:`resolve` 共用同一份路径数学——识别目标与执行不可能给出不同答案。
+    """
+    base = _base(root)
+    path = Path(raw.strip())
+    if not path.is_absolute():
+        path = base / path
+    return path.resolve()
+
+
 def outside_target(raw: str, *, root: Path | None = None) -> str | None:
     """文件类工具的目标是否在工作区之外：是则返回绝对路径字符串。
 
@@ -79,15 +91,19 @@ def outside_target(raw: str, *, root: Path | None = None) -> str | None:
     if not text:
         return None
     base = _base(root)
-    path = Path(text)
-    if not path.is_absolute():
-        path = base / path
-    path = path.resolve()
+    path = target_path(text, root=base)
     return None if is_within(path, base) else str(path)
 
 
 def _candidate(token: str, base: Path) -> Path | None:
-    """把一个命令记号解读成路径；不象路径的返回 None。"""
+    """把一个命令记号解读成路径；不象路径的返回 None。
+
+    **相对路径也算路径**（`or "/" in token`）：`.git/hooks/pre-commit`、`src/avid/cli.py`
+    这类写法在策略层必须能与 deny/ask 规则对上——否则"写 `.git/hooks`"会因为没有前导
+    `/` 而整条规则失效（E2E 实测过：`echo x > .git/hooks/pre-commit` 在三种模式下都被
+    放行）。它们解析到工作区内，因此不改变"是否越界"的判定；改变的只是"这条规则管不管
+    得到它"。
+    """
     token = token.strip().rstrip(",;)")
     if not token:
         return None
@@ -97,7 +113,13 @@ def _candidate(token: str, base: Path) -> Path | None:
         return Path.home() / token[6:] if token.startswith("$HOME/") else Path.home()
     if token.startswith("/"):
         return Path(token)
-    if token == ".." or token.startswith("../") or _PATHLIKE.search(token):
+    if (
+        token == ".."
+        or token.startswith("../")
+        or _PATHLIKE.search(token)
+        or "/" in token  # `src/avid/cli.py`、`.git/hooks/pre-commit`
+        or token.startswith(".")  # `.env`、`.bashrc`：点开头的裸文件名也是路径
+    ):
         return base / token
     return None
 
@@ -111,15 +133,32 @@ def outside_command_target(command: str, *, root: Path | None = None) -> str | N
     if not isinstance(command, str) or not command.strip():
         return None
     base = _base(root)
+    for resolved in command_targets(command, root=base):
+        if not is_within(resolved, base):
+            return str(resolved)
+    return None
 
+
+def command_targets(command: str, *, root: Path | None = None) -> tuple[Path, ...]:
+    """扫出命令里**所有**像路径的记号（解析成绝对路径，保序去重）。
+
+    这是越界判定与"目标识别"共用的唯一一份扫描器：``outside_command_target``
+    只要第一个区外目标，Tool Broker（``policy/action.py``）要全部目标 + 敏感命中。
+    两份实现会漂移，所以只有一份。
+    """
+    if not isinstance(command, str) or not command.strip():
+        return ()
+    base = _base(root)
+
+    found: list[Path] = []
     for token in _TOKEN_SPLIT.split(command):
         candidate = _candidate(token, base)
         if candidate is None:
             continue
         try:
             resolved = candidate.resolve()
-        except (OSError, RuntimeError):
+        except (OSError, RuntimeError):  # pragma: no cover - 取决于文件系统
             continue
-        if not is_within(resolved, base):
-            return str(resolved)
-    return None
+        if resolved not in found:
+            found.append(resolved)
+    return tuple(found)

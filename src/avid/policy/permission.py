@@ -1,172 +1,148 @@
-"""执行前的权限裁决：四层按模式判断。
+"""策略包的门面：运行级安全规格 + 单一裁决入口 + 审批回答者。
 
-单一入口是 :func:`gate`，顺序固定，先严后宽：
+``runtime/`` 与 ``workspaces.py`` 只认这一个模块，策略内部怎么分层是这里的事：
 
-1. **硬拒绝** —— 命中黑名单即拒绝，用户无法覆盖（``--yes`` 也不行）
-2. **危险命令** —— 与模式无关，一律问，并在理由里写明类别
-3. **越界** —— 目标在工作区之外：``system`` 放行，``strict``/``workspace`` 问一次
-4. **常规规则** —— ``strict`` 问，``workspace``/``system`` 放行
+::
 
-模式名就是信任边界（``strict`` / ``workspace`` / ``system``），"哪些动作打问号"满足
-``strict ⊇ workspace ⊇ system``。完整规格见 ``docs/design/workspace-permission.md``。
+    action.py     Tool Broker   ── 归一化参数、识别目标、分类风险
+    rules.py      四级 deny 阶梯 ─ ADMIN / SYSTEM / PROJECT / USER
+    sandbox.py    Sandbox Manager ─ bwrap argv、掩蔽、env 白名单、网络命名空间
+    classifier.py auto 的确定性审查
+    audit.py      审计落盘
+    engine.py     Policy Engine ── Action × 阶梯 × 三轴 → Decision
+    permission.py 门面（本文件） ── build_run_security / gate / 账本 / 回答者
 
-**同意一次即生效**由 :class:`ApprovalLedger` 记账：危险命令按规范化后的命令原文记，
-越界按绝对路径记，同一次运行内不再重复问。账本只在内存里、只活一次运行；子 agent 与父
-agent 共用一本（带锁，因为 subagent 在别的线程并行跑）。
+门面存在的理由不是"好看"，而是三条会失败的约束：
 
-**这不是沙箱，也不替代沙箱。** 黑名单挡的是"手滑一次就不可恢复"的命令；危险清单挡的是
-"会在工作区之外产生副作用"的命令；变量展开、base64、引号拼接、脚本文件都能绕过它们。
-这里的目标只是把危险与越界变成一次确认，不是声称安全。
+1. ``runtime/`` 对策略层的运行时依赖必须**逐文件可枚举**（``tests/test_web_boundaries.py``
+   的 A13 门禁）：门面让"runtime 用到的策略能力"是一个集合，而不是散开的十来个模块；
+2. ``loop.py`` 与 ``execution.py`` 必须零策略依赖：门面把所有策略能力聚在一处，越界
+   一眼可见；
+3. 三轴的解析（模式 → approval/sandbox/network）只能有一个点：:func:`build_run_security`。
+
+**四层裁决**（细节见 :mod:`avid.policy.engine`）：硬拒绝 → 四级 deny 阶梯 → 越界 →
+危险 → 降级 → 成本 → 放行；REVIEW 由 ``approval`` 回答（人 / 分类器 / 无人）。
+
+**能力账本**（:class:`ApprovalLedger`）是"同意一次即生效"的落点，键的类型就是能力的
+类型：``("command", 原文)`` / ``("path", 绝对路径, ro|rw)`` / ``("tool", 名字)``。
+它只活一次运行、只在内存里；想持久化授权就是另一个决策（见 ``docs/design/``）。
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
-import re
 import sys
 import threading
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .action import (
+    APPROVAL_RULES,
+    COST_RULES,
+    DANGER_PATTERNS,
+    DENY_PATTERNS,
+    OPERATION_READ,
+    OPERATION_WRITE,
+    Action,
+    brokerize,
+    command_key,
+    danger_categories,
+    danger_reason,
+    hard_deny,
+    normalize_command,
+    sensitive_reason,
+)
+from .audit import AuditLog, default_audit_dir
+from .classifier import Review, classify
+from .engine import (
+    CLASSIFIER_MESSAGE,
+    CREDENTIAL_MESSAGE,
+    DANGER_MESSAGE,
+    DEGRADED_MESSAGE,
+    HARD_MESSAGE,
+    KIND_COST,
+    KIND_CREDENTIAL,
+    KIND_DANGER,
+    KIND_DEGRADED,
+    KIND_HARD,
+    KIND_OUTSIDE,
+    KIND_RULE,
+    MESSAGE_FOR,
+    OUTSIDE_MESSAGE,
+    RULE_MESSAGE,
+    USER_MESSAGE,
+    VERDICT_ALLOW,
+    VERDICT_ASK,
+    VERDICT_DENY,
+    AskUser,
+    Decision,
+    decide,
+    gate,
+)
+from .modes import (
+    ADMIN_WRITABLE_SOURCES,
+    APPROVAL_CLASSIFIER,
+    APPROVAL_NONE,
+    APPROVAL_USER,
+    APPROVALS,
+    DEFAULT_MODE,
+    FULL_ACK_HINT,
+    FULL_MODE,
+    LEGACY_MODES,
+    MODE_AUTO,
+    MODE_FULL,
+    MODE_LABELS,
+    MODE_MANUAL,
+    MODE_TABLE,
+    MODES,
+    NETWORK_OPEN,
+    NETWORK_RESTRICTED,
+    NETWORKS,
+    SANDBOX_DISABLED,
+    SANDBOX_WORKSPACE,
+    SANDBOXES,
+    FullAccessError,
+    Mode,
+    PermissionModeError,
+    full_grant_error,
+    migrate_mode,
+    mode_spec,
+    resolve_axes,
+    validate_mode,
+)
+from .rules import (
+    TIER_ADMIN,
+    TIER_PROJECT,
+    TIER_SYSTEM,
+    TIER_USER,
+    TIERS,
+    Ladder,
+    PolicyConfigError,
+    Rule,
+)
+from .rules import (
+    VERDICT_ASK as RULE_VERDICT_ASK,
+)
+from .rules import (
+    VERDICT_DENY as RULE_VERDICT_DENY,
+)
+from .sandbox import (
+    BACKEND_BWRAP,
+    BACKEND_NONE,
+    BackendProbe,
+    SandboxSpec,
+    build_spec,
+    default_backend_summary,
+    landlock_abi,
+    probe_backend,
+)
+
 logger = logging.getLogger("avid.policy.permission")
-
-# 命令起始位置：行首，或 ; & | 之后；跳过程序路径前缀与常见包装命令。
-# 用它锚定，避免 `grep halt file` 这类把关键字当参数的误伤。
-# 注意：env FOO=1 dd ... 这种插了变量赋值的写法仍能绕过——黑名单只是护栏。
-_CMD_START = (
-    r"(?:^|[;&|]\s*)(?:(?:sudo|command|env|nohup|xargs|time|nice)\s+)*(?:\S*/)?"
-)
-
-# (正则, 拒绝原因)。只收"不可恢复的系统级破坏"——可恢复的操作交给审批闸门。
-DENY_PATTERNS: tuple[tuple[str, str], ...] = (
-    (
-        _CMD_START + r"rm\b[^|;&]*\s(?:/\*?|~/?\*?|\$HOME/?\*?)(?:\s|;|&|$)",
-        "删除根目录或家目录",
-    ),
-    (_CMD_START + r"mkfs(?:\.\w+)?\b", "格式化文件系统"),
-    (_CMD_START + r"dd\b[^|;&]*\bof=/dev/", "直接写入块设备"),
-    (r">\s*/dev/(?:sd|hd|vd|nvme|mmcblk)\w*", "覆盖块设备"),
-    (r":\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:", "fork 炸弹"),
-    (_CMD_START + r"(?:shutdown|reboot|halt|poweroff)\b", "关机或重启系统"),
-    (_CMD_START + r"ch(?:mod|own)\s+-R\s+\S+\s+/(?:\s|$)", "递归修改根目录的权限或属主"),
-)
-
-# 危险命令：会在工作区之外产生副作用、不可逆地丢数据、或取得更高权限。
-# 与模式无关——三种模式下都要问一次；同意后按命令原文记账。只对 bash 判定。
-DANGER_PATTERNS: tuple[tuple[str, str], ...] = (
-    (_CMD_START + r"(?:sudo|su|doas|pkexec)\b", "提权"),
-    (
-        # 短选项组合（-r / -f / -rf / -Rf）与**长选项**（--recursive / --force / --dir）
-        # 都要认：只匹配 `-[a-zA-Z]*[rRf]` 时 `rm --recursive x` 会整个漏过危险层，
-        # 在 workspace/system 模式下**完全不问**就放行。
-        _CMD_START + r"rm\b[^|;&]*\s(?:--(?:recursive|force|dir)\b|-[a-zA-Z]*[rRf])",
-        "递归或强制删除",
-    ),
-    (_CMD_START + r"ch(?:mod|own|grp)\b", "权限或属主变更"),
-    (_CMD_START + r"(?:dd|fdisk|parted|mount|umount|losetup|swapon|swapoff|truncate)\b", "磁盘或文件系统操作"),
-    (_CMD_START + r"(?:systemctl|service|kill|pkill|killall|systemd-run)\b", "系统服务或进程操作"),
-    (_CMD_START + r"(?:crontab|at)\b", "计划任务"),
-    (_CMD_START + r"(?:apt|apt-get|dpkg|dnf|yum|pacman|snap|brew|zypper|apk)\b", "系统级包管理"),
-    (
-        r"(?:curl|wget)\b[^|;&]*\|\s*(?:sudo\s+)?(?:sh|bash|zsh|python\d?)\b",
-        "把网络内容直接交给解释器执行",
-    ),
-    (
-        r"\b(?:sh|bash|zsh|python\d?|source)\b[^|;&]*<\s*\(\s*(?:curl|wget)\b",
-        "把网络内容直接交给解释器执行",
-    ),
-    (_CMD_START + r"git\b[^|;&]*\bpush\b[^|;&]*(?:--force|-f)\b", "强制推送"),
-    (_CMD_START + r"git\b[^|;&]*\breset\b[^|;&]*--hard\b", "丢弃工作区改动"),
-    (
-        _CMD_START + r"git\b[^|;&]*\bclean\b[^|;&]*(?:\s-[a-zA-Z]*f|--force)",
-        "删除未跟踪文件",
-    ),
-    (_CMD_START + r"find\b[^|;&]*\s-delete\b", "批量删除文件"),
-    (_CMD_START + r"(?:ssh|scp|rsync)\b", "远程访问或传输"),
-    (_CMD_START + r"(?:docker|podman|kubectl|helm)\b", "容器或编排操作"),
-)
-
-# 敏感路径（提权凭据、云密钥、私钥、影子口令）：读取或写入都算危险。
-#
-# 判定用"展开 + 路径分量"而不是正则字面量：`~/.ssh/config`、`$HOME/.ssh/config`、
-# `/home/u/.ssh/config` 是同一个目标，只看字面量会漏掉后两种——而 system 模式对
-# 区外是直接放行的，漏网就是静默放行。
-#
-# 分量判定（而不是"解析后与 $HOME 比前缀"）是刻意的：$HOME 下的点目录常是符号链接
-# （WSL 里 `~/.aws -> /mnt/c/Users/...`），resolve() 之后就不再以 $HOME 为前缀，
-# 前缀比较会漏掉它。只要路径分量里出现这些点目录就判敏感——宁可多问一次。
-SENSITIVE_COMPONENTS: tuple[str, ...] = (".ssh", ".aws", ".gnupg", ".docker")
-SENSITIVE_ABSOLUTE: tuple[str, ...] = (
-    "/etc/shadow",
-    "/etc/gshadow",
-    "/etc/sudoers",
-    "/root",
-)
-SENSITIVE_SUFFIX = ".pem"
-
-# 命令里按空白与 shell 元字符切开后再逐个判路径（与 tools/workspace.py 同一套切法）。
-_SENSITIVE_SPLIT = re.compile(r"[\s;|&()<>'\"]+")
-
-# 工具名 → 需要审批的原因。不在这里的工具一律直接放行（区内只读工具）。
-APPROVAL_RULES: dict[str, str] = {
-    "bash": "执行 shell 命令",
-    "write_file": "写入文件（已有内容会被覆盖）",
-    "edit_file": "修改文件内容",
-    "subagent": "并行派发 subagent（会额外消耗多次模型调用）",
-}
-
-# 权限模式：名字即信任边界。
-MODE_STRICT = "strict"
-MODE_WORKSPACE = "workspace"
-MODE_SYSTEM = "system"
-MODES: tuple[str, ...] = (MODE_STRICT, MODE_WORKSPACE, MODE_SYSTEM)
-DEFAULT_MODE = MODE_STRICT
-MODE_LABELS: dict[str, str] = {
-    MODE_STRICT: "严格（每个受管动作都要问）",
-    MODE_WORKSPACE: "工作区（区内常规操作免问，越界需同意）",
-    MODE_SYSTEM: "系统级（默认免问，仅危险命令问）",
-}
-
-# 回传给模型的文案。三类拒绝给三条不同的下一步指引（"永远不许"与"这次不行"
-# 对模型意味着完全不同的事，混为一谈会让它反复重试）。
-HARD_MESSAGE = (
-    "Permission denied. 原因：硬拒绝（{reason}）。"
-    "这条命令被永久禁止，不要重试、也不要改写绕过，请改用别的方式完成任务。"
-)
-DANGER_MESSAGE = (
-    "Permission denied. 原因：危险命令未获批准（{reason}）。"
-    "不要重复提交同一条命令；请改用非破坏性做法，或说明你需要它做什么。"
-)
-OUTSIDE_MESSAGE = (
-    "Permission denied. 原因：目标在工作区之外且未获批准（{reason}）。"
-    "不要重复尝试同一路径；请在工作区内完成，或说明为什么需要它。"
-)
-USER_MESSAGE = (
-    "Permission denied. 原因：本次未获用户批准。"
-    "不要重复提交同一条调用；请说明你需要它做什么，或改用其它工具。"
-)
 
 # 工具层没有授权时的兜底文本（gate 没批准、或工具被直接调用时生效）。
 OUTSIDE_TOOLS_ERROR = "拒绝访问工作区外的路径："
-
-AskUser = Callable[[str, dict[str, Any], str], bool]
-
-
-class PermissionModeError(ValueError):
-    """未知模式名。显式报错，不静默回落到默认值。"""
-
-
-def validate_mode(value: object) -> str:
-    if value not in MODES:
-        raise PermissionModeError(
-            f"未知权限模式 {value!r}；可用：{'、'.join(MODES)}"
-        )
-    return str(value)
-
 
 # 多个 subagent 并行时可能同时来要审批，而终端只有一个。
 #
@@ -175,124 +151,51 @@ def validate_mode(value: object) -> str:
 _ASK_LOCK = threading.Lock()
 
 
-def _under(path: Path, base: Path) -> bool:
-    """path 是否在 base 之内（含 base 本身）。策略层不 import tools，自己写一份。"""
-    return path == base or base in path.parents
-
-
-def sensitive_reason(raw: str) -> str | None:
-    """一个路径字面量是不是敏感目标；是则返回类别名。
-
-    先展开 ``~`` 与 ``$HOME``；路径分量里出现敏感点目录（``.ssh`` / ``.aws`` /
-    ``.gnupg`` / ``.docker``）即命中，另外覆盖 ``/etc/shadow`` 一类绝对目标与
-    ``.pem`` 后缀。
-    """
-    text = os.path.expanduser(os.path.expandvars(raw.strip()))
-    if not text:
-        return None
-    if text.endswith(SENSITIVE_SUFFIX):
-        return "敏感路径"
-
-    candidate = Path(text)
-    if any(part in SENSITIVE_COMPONENTS for part in candidate.parts):
-        return "敏感路径"
-
-    try:
-        resolved = candidate.resolve()
-    except (OSError, RuntimeError):
-        resolved = candidate
-    for entry in SENSITIVE_ABSOLUTE:
-        if _under(resolved, Path(entry)) or _under(candidate, Path(entry)):
-            return "敏感路径"
-    return None
-
-
-def _sensitive_in_command(command: str) -> str | None:
-    for token in _SENSITIVE_SPLIT.split(command):
-        if sensitive_reason(token):
-            return "敏感路径"
-    return None
-
-
-def hard_deny(name: str, arguments: Any) -> str | None:
-    """第 1 层：只对 bash 的 command 做黑名单匹配，命中返回拒绝原因。"""
-    if name != "bash" or not isinstance(arguments, dict):
-        return None
-
-    command = arguments.get("command")
-    if not isinstance(command, str):
-        return None
-
-    for pattern, reason in DENY_PATTERNS:
-        if re.search(pattern, command, re.MULTILINE):
-            return reason
-    return None
-
-
-def danger_reason(name: str, arguments: Any) -> str | None:
-    """第 2 层：命中危险清单返回类别名；``None`` 表示不是危险命令。
-
-    只对 bash 判定。敏感路径额外覆盖文件类工具的 path 参数（按解析后的绝对路径判，
-    见 :func:`sensitive_reason`）。
-    """
-    if not isinstance(arguments, dict):
-        return None
-
-    if name != "bash":
-        path = arguments.get("path")
-        if isinstance(path, str) and sensitive_reason(path):
-            return "敏感路径"
-        return None
-
-    command = arguments.get("command")
-    if not isinstance(command, str):
-        return None
-
-    if _sensitive_in_command(command):
-        return "敏感路径"
-    for pattern, category in DANGER_PATTERNS:
-        if re.search(pattern, command, re.MULTILINE):
-            return category
-    return None
-
-
-def command_key(command: str) -> str:
-    """危险命令与越界命令的记账键：规范化空白后逐字比较。"""
-    return " ".join(command.split())
-
-
-def _operation_key(arguments: dict[str, Any]) -> str:
-    """危险操作的记账键：bash 按命令原文，其它工具按目标路径（没有则整份参数）。"""
-    command = arguments.get("command")
-    if isinstance(command, str) and command.strip():
-        return command_key(command)
-    path = arguments.get("path")
-    if isinstance(path, str) and path.strip():
-        return path.strip()
-    return json.dumps(arguments, ensure_ascii=False, sort_keys=True, default=str)
-
-
 class ApprovalLedger:
-    """一次运行内的"已同意"账本。
+    """一次运行内的"已同意"能力账本。
 
     带锁是因为 subagent 在并行线程里跑，且与父 agent 共用同一本账。
+
+    键的**类型**就是能力的类型（原则⑦：升级是授予能力，不是关沙箱）：
+
+    * ``("command", 归一化命令原文)`` —— allow this command
+    * ``("path", 绝对路径, "ro"|"rw")``   —— allow this path
+    * ``("tool", 工具名)``                —— allow this session（按工具记）
     """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._keys: set[tuple[str, str]] = set()
+        self._keys: set[tuple[str, ...]] = set()
 
-    def remember(self, key: tuple[str, str]) -> None:
+    def remember(self, key: tuple[str, ...]) -> None:
         with self._lock:
-            self._keys.add(key)
+            self._keys.add(tuple(key))
 
-    def knows(self, key: tuple[str, str]) -> bool:
+    def knows(self, key: tuple[str, ...]) -> bool:
         with self._lock:
-            return key in self._keys
+            return tuple(key) in self._keys
+
+    def has_capability(self, kind: str, value: str) -> bool:
+        """有没有某类能力（忽略最后一段的口径，如 ro/rw）。"""
+        with self._lock:
+            return any(
+                len(key) >= 2 and key[0] == kind and key[1] == value for key in self._keys
+            )
+
+    def path_grants(self) -> tuple[tuple[str, str], ...]:
+        """本次运行获准的区外路径（路径, ro/rw）——沙箱组装 argv 时用。"""
+        with self._lock:
+            found: dict[str, str] = {}
+            for key in self._keys:
+                if len(key) >= 2 and key[0] == "path":
+                    access = key[2] if len(key) >= 3 else "rw"
+                    if found.get(key[1]) != "rw":
+                        found[key[1]] = access
+            return tuple(sorted(found.items()))
 
     def outside_allowed(self, path: object) -> bool:
         """文件工具据此放行越界路径。只读账本，不做任何决定。"""
-        return self.knows(("outside", str(path)))
+        return self.has_capability("path", str(path))
 
     def __len__(self) -> int:  # 便于测试与诊断
         with self._lock:
@@ -300,33 +203,129 @@ class ApprovalLedger:
 
 
 @dataclass(frozen=True)
-class Decision:
-    """一次裁决的完整结果：给人看的理由、给模型看的文案、以及记账键。"""
+class RunSecurity:
+    """一次运行的完整安全规格：三轴 + 阶梯 + 沙箱 + 审计。
 
-    allowed: bool
-    kind: str = ""
-    reason: str = ""
-    message: str = ""
-    key: tuple[str, str] | None = None
-
-    def __bool__(self) -> bool:
-        return self.allowed
-
-
-def match_rule(name: str, arguments: dict[str, Any]) -> str | None:
-    """第 4 层：命中则返回需要审批的原因；返回 None 表示直接放行。
-
-    arguments 目前不参与判断——内容级规则在 gate 里按模式与越界事实判断。
+    它是"运行级安全事实"的**唯一**载体：``RunState`` 持有一份，事件与审计各取一份
+    快照，于是界面看到的、审计记下的、工具执行时用的是同一组值。
     """
-    return APPROVAL_RULES.get(name)
+
+    mode: str
+    approval: str
+    sandbox_policy: str
+    network: str
+    sandbox: SandboxSpec
+    ladder: Ladder
+    audit: AuditLog
+    full_granted: bool = False
+    notes: tuple[str, ...] = ()
+
+    @property
+    def axes(self) -> dict[str, str]:
+        return {
+            "mode": self.mode,
+            "approval": self.approval,
+            "sandbox": self.sandbox_policy,
+            "network": self.network,
+        }
+
+    def summary(self) -> dict[str, Any]:
+        """进 ``run_started`` 事件的形状（三轴 + 沙箱 + 阶梯条数 + 审计状态）。"""
+        return {
+            "mode": self.mode,
+            "approval": self.approval,
+            "sandbox": self.sandbox_policy,
+            "network": self.network,
+            "full_granted": self.full_granted,
+            "sandbox_state": self.sandbox.summary(),
+            "rules": len(self.ladder.rules),
+            "notes": [*self.notes, *self.ladder.notes],
+        }
+
+    def audit_write(self, kind: str, **fields: Any) -> dict[str, Any] | None:
+        return self.audit.write(kind, **fields)
+
+
+def _default_root() -> str:
+    """没有显式工作区根时用进程的工作区根。
+
+    必须是**唯一**一处解析：``Ladder`` 的相对模式（``.env`` / ``.git/hooks``）与沙箱的
+    ``--bind`` 都以"这次运行的工作区根"为基准，两处各算一次就会出现"策略按 A 判、
+    沙箱按 B 挂"。惰性 import 是为了不与 ``tools`` 构成包级环（``tools/files.py`` 也
+    import 本模块）。
+    """
+    from ..tools import workspace
+
+    return str(workspace.WORKSPACE_ROOT)
+
+
+def build_run_security(
+    *,
+    mode: str = DEFAULT_MODE,
+    root: str | None = None,
+    home: str | Path | None = None,
+    run_tag: str = "",
+    run_id: str = "",
+    full_ack: bool = False,
+    source: str = "cli",
+    system_policy: str | Path | None = None,
+    project_policy: str | Path | None = None,
+    probe: BackendProbe | None = None,
+    audit_dir: str | Path | None = None,
+    audit_enabled: bool = True,
+) -> RunSecurity:
+    """三轴解析 + 阶梯装配 + 沙箱规格 + 审计落点。**唯一的装配点**。
+
+    ``full`` 必须带 ``full_ack=True``（且 ``source`` 不能是 ``workspace_default``），
+    否则抛 :class:`FullAccessError`——拒绝启动，而不是回落到别的模式。
+    """
+    problem = full_grant_error(mode, acknowledged=full_ack, source=source)
+    if problem is not None:
+        raise FullAccessError(problem)
+    name = validate_mode(mode)
+    spec = mode_spec(name)
+    resolved = root if root is not None else _default_root()
+    ladder = Ladder.load(
+        root=resolved, home=home, system_path=system_policy, project_path=project_policy
+    )
+    sandbox = build_spec(
+        policy=spec.sandbox, network=spec.network, root=resolved, home=home, probe=probe
+    )
+    directory = None
+    if audit_enabled:
+        directory = (
+            Path(audit_dir) if audit_dir is not None else default_audit_dir(home)
+        )
+    audit = AuditLog(
+        directory=directory,
+        run_tag=run_tag,
+        run_id=run_id,
+        mode=name,
+        axes={
+            "approval": spec.approval,
+            "sandbox": spec.sandbox,
+            "network": spec.network,
+        },
+        sandbox=sandbox.summary(),
+    )
+    return RunSecurity(
+        mode=name,
+        approval=spec.approval,
+        sandbox_policy=spec.sandbox,
+        network=spec.network,
+        sandbox=sandbox,
+        ladder=ladder,
+        audit=audit,
+        full_granted=name == FULL_MODE,
+        notes=tuple(ladder.notes),
+    )
 
 
 def ask_user(name: str, arguments: dict[str, Any], reason: str) -> bool:
     """交互式确认。读不到输入一律拒绝。
 
-    提示写 stderr，避免污染 stdout 上给用户看的最终答复。理由由 gate 组装，
-    分类前缀（"危险命令…" / "越界操作…"）与目标路径都在里面，所以这里不再
-    需要额外参数——审批回调的签名因此保持三参数不变（Web 的审批表同形）。
+    提示写 stderr，避免污染 stdout 上给用户看的最终答复。理由由引擎组装，分类前缀
+    （"危险命令…" / "越界操作…" / "目标 … 在工作区之外"）与目标路径都在里面。
     """
     detail = json.dumps(arguments, ensure_ascii=False, default=str)
     # 并行 subagent 会同时来问，终端只有一个——串行化，否则提示会互相穿插。
@@ -348,73 +347,12 @@ def ask_user(name: str, arguments: dict[str, Any], reason: str) -> bool:
     return answer.strip().lower() in {"y", "yes"}
 
 
-def gate(
-    name: str,
-    arguments: dict[str, Any],
-    *,
-    mode: str = DEFAULT_MODE,
-    ask: AskUser | None = None,
-    ledger: ApprovalLedger | None = None,
-    danger: str | None = None,
-    outside: str | None = None,
-) -> Decision:
-    """四层依次判断，返回 :class:`Decision`。允许时 ``bool(decision)`` 为真。
+def _always_allow(name: str, arguments: dict[str, Any], reason: str) -> bool:
+    return True
 
-    ``danger`` 与 ``outside`` 是**调用方算好的事实**（危险类别名 / 越界的绝对目标）：
-    路径数学只有一份（``tools/workspace.py``），策略层不复制它。
-    """
-    mode = validate_mode(mode)
 
-    reason = hard_deny(name, arguments)
-    if reason:
-        logger.warning("硬拒绝 %s：%s", name, reason)
-        print(f"\n⛔ 已拒绝：{reason}", file=sys.stderr)
-        return Decision(False, "hard", reason, HARD_MESSAGE.format(reason=reason))
-
-    key: tuple[str, str] | None = None
-
-    if danger:
-        key = ("danger", _operation_key(arguments))
-        reason = f"危险命令（{danger}）"
-        kind = "danger"
-    elif outside:
-        key = ("outside", outside)
-        reason = f"越界操作：目标 {outside} 在工作区之外"
-        kind = "outside"
-    else:
-        rule = match_rule(name, arguments)
-        if rule is None:
-            return Decision(True)
-        # workspace / system 预授权了工作区内的常规操作；区外已在上一层处理。
-        if mode != MODE_STRICT:
-            return Decision(True)
-        reason = rule
-        kind = "user"
-
-    if kind == "outside" and mode == MODE_SYSTEM:
-        return Decision(True, kind, reason)
-
-    if key is not None and ledger is not None and ledger.knows(key):
-        logger.info("%s 复用已同意（%s）", name, reason)
-        return Decision(True, kind, reason, key=key)
-
-    answerer = ask_user if ask is None else ask
-    if answerer(name, arguments, reason):
-        if key is not None and ledger is not None:
-            ledger.remember(key)
-        logger.info("审批通过 %s：%s", name, reason)
-        return Decision(True, kind, reason, key=key)
-
-    logger.warning("审批拒绝 %s：%s", name, reason)
-    if kind == "danger":
-        # 用类别名而不是 `reason`：否则回给模型的文案会变成
-        # "危险命令未获批准（危险命令（提权））"。
-        message = DANGER_MESSAGE.format(reason=danger or reason)
-    elif kind == "outside":
-        message = OUTSIDE_MESSAGE.format(reason=outside or reason)
-    else:
-        message = USER_MESSAGE
-    return Decision(False, kind, reason, message, key=key)
+# ``--yes`` 用的公开回答者：对每次询问都答"是"（硬拒绝与阶梯 deny 仍由引擎拦住）。
+always_allow = _always_allow
 
 
 def check_permission(
@@ -424,28 +362,25 @@ def check_permission(
     ask: AskUser | None = None,
     mode: str = DEFAULT_MODE,
     ledger: ApprovalLedger | None = None,
+    ladder: Ladder | None = None,
+    sandbox: SandboxSpec | None = None,
+    root: str | None = None,
     danger: str | None = None,
     outside: str | None = None,
 ) -> bool:
-    """四层依次判断，返回 **bool**（``gate`` 的薄封装，便于既有调用方与测试）。"""
-    decision = gate(
+    """裁决一次调用，返回 **bool**（``gate`` 的薄封装，便于既有调用方与测试）。"""
+    return gate(
         name,
         arguments,
         mode=mode,
         ask=ask,
         ledger=ledger,
+        ladder=ladder,
+        sandbox=sandbox,
+        root=root,
         danger=danger,
         outside=outside,
-    )
-    return decision.allowed
-
-
-def _always_allow(name: str, arguments: dict[str, Any], reason: str) -> bool:
-    return True
-
-
-# ``--yes`` 用的公开回答者：对每次询问都答"是"（硬拒绝仍由 gate 拦住）。
-always_allow = _always_allow
+    ).allowed
 
 
 def auto_approve(
@@ -454,12 +389,15 @@ def auto_approve(
     *,
     mode: str = DEFAULT_MODE,
     ledger: ApprovalLedger | None = None,
+    ladder: Ladder | None = None,
+    sandbox: SandboxSpec | None = None,
+    root: str | None = None,
     danger: str | None = None,
     outside: str | None = None,
 ) -> bool:
-    """``--yes`` 用：对本次运行的所有审批请求代答"是"，硬拒绝仍然生效。
+    """``--yes`` 用：对本次运行的所有审批请求代答"是"，硬拒绝与阶梯 deny 仍然生效。
 
-    它只改变"谁来回答"，不改变"哪些动作会打问号"（那由模式决定）。
+    它只改变"谁来回答"，不改变"哪些动作会打问号"（那由三轴决定），也**不关沙箱**。
     """
     return check_permission(
         name,
@@ -467,6 +405,107 @@ def auto_approve(
         ask=_always_allow,
         mode=mode,
         ledger=ledger,
+        ladder=ladder,
+        sandbox=sandbox,
+        root=root,
         danger=danger,
         outside=outside,
     )
+
+
+__all__ = [
+    "ADMIN_WRITABLE_SOURCES",
+    "APPROVAL_CLASSIFIER",
+    "APPROVAL_NONE",
+    "APPROVAL_RULES",
+    "APPROVAL_USER",
+    "APPROVALS",
+    "Action",
+    "ApprovalLedger",
+    "AuditLog",
+    "BACKEND_BWRAP",
+    "BACKEND_NONE",
+    "BackendProbe",
+    "CLASSIFIER_MESSAGE",
+    "COST_RULES",
+    "CREDENTIAL_MESSAGE",
+    "DANGER_MESSAGE",
+    "DANGER_PATTERNS",
+    "DEFAULT_MODE",
+    "DEGRADED_MESSAGE",
+    "DENY_PATTERNS",
+    "Decision",
+    "FULL_ACK_HINT",
+    "FULL_MODE",
+    "FullAccessError",
+    "HARD_MESSAGE",
+    "KIND_COST",
+    "KIND_CREDENTIAL",
+    "KIND_DANGER",
+    "KIND_DEGRADED",
+    "KIND_HARD",
+    "KIND_OUTSIDE",
+    "KIND_RULE",
+    "LEGACY_MODES",
+    "Ladder",
+    "MESSAGE_FOR",
+    "MODE_AUTO",
+    "MODE_FULL",
+    "MODE_LABELS",
+    "MODE_MANUAL",
+    "MODE_TABLE",
+    "MODES",
+    "Mode",
+    "NETWORKS",
+    "NETWORK_OPEN",
+    "NETWORK_RESTRICTED",
+    "OPERATION_READ",
+    "OPERATION_WRITE",
+    "OUTSIDE_MESSAGE",
+    "OUTSIDE_TOOLS_ERROR",
+    "PermissionModeError",
+    "PolicyConfigError",
+    "RULE_MESSAGE",
+    "RULE_VERDICT_ASK",
+    "RULE_VERDICT_DENY",
+    "Review",
+    "Rule",
+    "RunSecurity",
+    "SANDBOXES",
+    "SANDBOX_DISABLED",
+    "SANDBOX_WORKSPACE",
+    "SandboxSpec",
+    "TIERS",
+    "TIER_ADMIN",
+    "TIER_PROJECT",
+    "TIER_SYSTEM",
+    "TIER_USER",
+    "USER_MESSAGE",
+    "VERDICT_ALLOW",
+    "VERDICT_ASK",
+    "VERDICT_DENY",
+    "always_allow",
+    "auto_approve",
+    "brokerize",
+    "build_run_security",
+    "build_spec",
+    "check_permission",
+    "classify",
+    "command_key",
+    "danger_categories",
+    "danger_reason",
+    "decide",
+    "default_audit_dir",
+    "default_backend_summary",
+    "full_grant_error",
+    "gate",
+    "hard_deny",
+    "landlock_abi",
+    "migrate_mode",
+    "mode_spec",
+    "normalize_command",
+    "probe_backend",
+    "resolve_axes",
+    "sensitive_reason",
+    "validate_mode",
+]
