@@ -1,3 +1,27 @@
+/**
+ * 沙箱状态标记：**只做气泡**——常驻的是一枚图标，话说在悬停/聚焦时才出现的气泡里。
+ *
+ * 它要说的事实没变：**这次运行的物理边界是什么**（`沙箱：工作区（无出网）` /
+ * `沙箱：已禁用` / `沙箱：不可用（原因）`）。变的是呈现方式：以前那格常驻文字
+ * （`沙箱：工作区（无出网）`）在窄输入条里会被挤成三行，占掉输入条一整行的高度；
+ * 现在常驻的只有一枚图标，形态与时间线上的复制、分叉按钮一致——**图标看得见，
+ * 文字悬停才出现**。
+ *
+ * 为什么图标仍然常驻（而不是整格都收进权限选择器的气泡）：颜色是这台机器上
+ * "边界还在不在"的第一眼信号，`full` 与"沙箱后端探测失败"两种状态不该只在
+ * 用户主动去问的时候才知道。四档用**四种不同形状的图标**区分，不靠颜色单独承担
+ * 语义（色觉障碍下也分得开）。
+ *
+ * 数据来源刻意分成两半：
+ *
+ * * `mode` 来自**这次运行的选择**（策略）；
+ * * `sandbox` 来自服务端的**实测探测**（事实）。
+ *
+ * `mode=manual/auto` 而探测说后端不可用时，如实显示"不可用"并说明后果（受管命令
+ * 逐个问人、auto 直接拒）——这正是"不静默降级"在界面上的落点：降级可以被看见。
+ */
+import { Shield, ShieldAlert, ShieldCheck, ShieldOff } from 'lucide-react'
+
 import { Badge, Tooltip } from '../../../ui/primitives'
 import type { BadgeTone } from '../../../ui/primitives'
 import { useTranslation } from '../../../lib/i18n'
@@ -11,25 +35,18 @@ export interface SandboxStatusProps {
   sandbox: SandboxState | null
 }
 
-/**
- * 常驻的沙箱状态标记：**这次运行的物理边界是什么**。
- *
- * 为什么必须常驻可见（产品规则"full ≠ default，full 必须是明确、可见、可审计的显式授权"）：
- * 关掉沙箱这件事如果只体现在选择器的一个选项名上，用户很容易以为"那只是个更宽松的权限档"。
- * 一个独立的格子把它说出来——「沙箱：工作区」/「沙箱：已禁用」/「沙箱：不可用」。
- *
- * 数据来源刻意分成两半：
- *
- * * `mode` 来自**这次运行的选择**（策略）；
- * * `sandbox` 来自服务端的**实测探测**（事实）。
- *
- * `mode=manual/auto` 而探测说后端不可用时，如实显示"不可用"并说明后果（受管命令
- * 逐个问人、auto 直接拒）——这正是"不静默降级"在界面上的落点：降级可以被看见。
- */
+/** 一档沙箱状态怎么画：事实文本、色调、图标、气泡里的那句话。 */
+export interface SandboxStatusView {
+  text: string
+  tone: BadgeTone
+  hint: string
+  icon: typeof Shield
+}
+
 export function SandboxStatus({ mode, sandbox }: SandboxStatusProps) {
   const { t } = useTranslation()
 
-  const { text, tone, hint } = resolveSandboxLabel(mode, sandbox, t)
+  const { tone, hint, icon: Icon } = resolveSandboxLabel(mode, sandbox, t)
 
   return (
     // Tooltip 用 `asChild` 把 ref 交给子元素：`Badge` 是普通函数组件、不转 ref，
@@ -38,35 +55,57 @@ export function SandboxStatus({ mode, sandbox }: SandboxStatusProps) {
     <Tooltip side="top" label={hint}>
       <span className="inline-flex">
         <Badge tone={tone} aria-label={t('permission.sandbox.label')}>
-          {t('permission.sandbox.label')}：{text}
+          <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
         </Badge>
       </span>
     </Tooltip>
   )
 }
 
-function resolveSandboxLabel(
+/**
+ * 把「这次选的模式」与「服务端实测的后端」合成一格状态。
+ *
+ * 抽成导出函数是为了让**映射规则**能脱离浮层单独验（jsdom 里 Radix 的浮层要真事件
+ * 才开，规则与渲染分开测更直接）。
+ */
+export function resolveSandboxLabel(
   mode: PermissionMode,
   sandbox: SandboxState | null,
   t: (key: string, vars?: TranslateVars) => string,
-): { text: string; tone: BadgeTone; hint: string } {
+): SandboxStatusView {
   if (mode === 'full') {
     // full 的沙箱状态由模式本身决定，不必等 meta：它就是要关掉。
     const text = t('permission.sandbox.disabled')
-    return { text, tone: 'danger', hint: t('permission.sandbox.hint', { state: text }) }
+    return {
+      text,
+      tone: 'danger',
+      icon: ShieldOff,
+      hint: t('permission.sandbox.hint', { state: text }),
+    }
   }
   if (sandbox === null) {
     const text = t('permission.sandbox.workspace')
-    return { text, tone: 'neutral', hint: t('permission.sandbox.hint', { state: text }) }
+    return {
+      text,
+      tone: 'neutral',
+      icon: Shield,
+      hint: t('permission.sandbox.hint', { state: text }),
+    }
   }
   if (sandbox.available) {
     const text = t('permission.sandbox.workspace')
-    return { text, tone: 'ok', hint: t('permission.sandbox.hint', { state: text }) }
+    return {
+      text,
+      tone: 'ok',
+      icon: ShieldCheck,
+      hint: t('permission.sandbox.hint', { state: text }),
+    }
   }
   const text = t('permission.sandbox.unavailable')
   return {
     text,
     tone: 'warn',
+    icon: ShieldAlert,
     hint: t('permission.sandbox.degraded', { reason: sandbox.reason ?? text }),
   }
 }
