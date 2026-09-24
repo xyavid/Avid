@@ -15,8 +15,10 @@
  * `aria-live` 只加在 durable（非乐观）的 assistant 条目上：乐观 delta 每帧都在变，读屏器
  * 会把它念成一串噪音，而 durable 消息才是完整的一句话。
  *
- * 动作行**常驻可见**（复制文本 / 从此处分支）：以前是 `opacity-0` + 悬停显形，代价是
- * 「有这功能」本身要先被猜到；方框与高度档本来就一直在，显隐只是额外的一层谜。
+ * 动作行**常驻可见**，但只剩两枚图标（复制 / 从此处分支）：以前是 `opacity-0` + 悬停显形，
+ * 代价是「有这功能」本身要先被猜到；后来是一排文字按钮，代价是每个条目下都多占一行字宽
+ * （窄卡片里还会换行）。现在常驻的是图标方框，**说明文字改由悬停/聚焦的气泡给出**——
+ * 「有这功能」看得见，但不再常驻占位。图标是装饰，按钮名在 `aria-label` 上（见 `Actions`）。
  * 条目级的「查看原始 JSON」按钮已删除——检查器改由工具卡的「查看」打开（那条路径仍在，
  * 工具输出才是真正需要看全文/diff 的东西）。
  */
@@ -28,9 +30,9 @@ import { useTranslation } from '../../lib/i18n'
 import { Markdown } from '../../lib/markdown'
 import type { Density } from '../../lib/density'
 import type { TimelineEntry } from '../../lib/timeline'
-import { Bot, User } from 'lucide-react'
+import { Bot, Copy, GitBranch, User } from 'lucide-react'
 
-import { Badge, Button } from '../../ui/primitives'
+import { Badge, Button, Tooltip } from '../../ui/primitives'
 
 export interface EntryRowProps {
   entry: TimelineEntry
@@ -56,6 +58,16 @@ function Role({ label, mark = 'avid' }: { label: string; mark?: 'avid' | 'user' 
   )
 }
 
+/**
+ * 条目动作行：两枚**图标按钮**，说明只在悬停或聚焦时以气泡浮现在按钮**外面**。
+ *
+ * 三条取舍：
+ *   · 图标按钮没有内部文字，所以可访问名只能来自 `aria-label`——这也让
+ *     `getByRole('button', { name: '复制文本' })` 这类定位方式在改动后原样有效；
+ *   · 图标本身 `aria-hidden`（装饰）：名字已经由按钮给出，读屏器不该把它念两遍；
+ *   · 气泡用 `Tooltip` 原语（Radix），它默认在 hover **与** focus 时都出现，且内容只在
+ *     打开时挂载——「未悬停不展示文字」因此是行为而不是 opacity 技巧，也不占额外空间。
+ */
 function Actions({
   entry,
   onCopy,
@@ -68,14 +80,28 @@ function Actions({
   return (
     <div className="mt-1 flex gap-1">
       {onCopy ? (
-        <Button size="sm" variant="secondary" onClick={() => onCopy(entry.text)}>
-          {t('chat.message.copy')}
-        </Button>
+        <Tooltip label={t('chat.message.copy.hint')}>
+          <Button
+            size="icon"
+            variant="secondary"
+            aria-label={t('chat.message.copy')}
+            onClick={() => onCopy(entry.text)}
+          >
+            <Copy size={16} strokeWidth={1.75} aria-hidden="true" />
+          </Button>
+        </Tooltip>
       ) : null}
       {forkable ? (
-        <Button size="sm" variant="secondary" onClick={() => onFork?.(entry)}>
-          {t('chat.message.fork')}
-        </Button>
+        <Tooltip label={t('chat.message.fork.hint')}>
+          <Button
+            size="icon"
+            variant="secondary"
+            aria-label={t('chat.message.fork')}
+            onClick={() => onFork?.(entry)}
+          >
+            <GitBranch size={16} strokeWidth={1.75} aria-hidden="true" />
+          </Button>
+        </Tooltip>
       ) : null}
     </div>
   )

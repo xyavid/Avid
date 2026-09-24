@@ -111,8 +111,13 @@ export const DICTIONARY: Record<Locale, Entry> = {
     'chat.workspace': '工作区：{name}',
     'chat.runLabel': '运行',
     'chat.noRun': '没有活动运行',
+    // 条目动作行：按钮上只有图标，所以这四条分成两对——`.label` 是**可访问名**（图标按钮
+    // 没有内部文字，名字只能从这里来），`.hint` 是悬停/聚焦时那枚气泡里的话（说清它到底
+    // 作用于什么：哪一条消息、分出去的是什么）。
     'chat.message.copy': '复制文本',
+    'chat.message.copy.hint': '复制这条消息的正文',
     'chat.message.fork': '从此处分支',
+    'chat.message.fork.hint': '以这条消息为链尾另开一条分支',
     'chat.message.role.user': '用户',
     'chat.message.role.assistant': 'Avid',
     'chat.message.role.tool': '工具结果',
