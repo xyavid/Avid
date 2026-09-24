@@ -40,7 +40,7 @@
 | 策略 | `policy/*` | 阈值、规则与文案（高频变化集中地） | 无（纯函数 + 常量） | ai、tools（延迟） |
 | 协议 | `ai/*` | OpenAI 兼容协议、`Config`、`Transcript` | messages 的内存权威 | 无 |
 | 会话 | `session/` | 条目树 / 值 / 分支 / 变更线 / 两后端 / 投影 | **磁盘上的会话真相**（JSONL） | 无（零 avid 内部依赖） |
-| 能力 | `tools/*` | 15 个工具的 schema 与实现 | 无（写文件系统、进程与外部检索 API） | policy.todo、ai（`subagent`） |
+| 能力 | `tools/*` | 9 个工具的 schema 与实现 | 无（写文件系统、进程与外部检索 API） | policy.todo、ai（`subagent`） |
 | 顶层 | `workspaces.py` | 用户级工作区注册表（**索引，非权威**） | `~/.avid/workspaces.json` | 无 |
 | 前端 | `web/`（仓库根，源码在 `web/src/`） | 全部浏览器代码 | 界面域状态（localStorage） | `web/src/api/`（唯一网络出口） |
 | 评测仪器 | `benchmarks/`（仓库根，**不进 wheel**） | AvidBench：case 加载、工作区物化、变体装配、判定器、报表与轨迹落盘 | 只读 case / fixture 与 `runs/` 结果（本地，不入库） | `avid` 的**任意层**——它是叶子消费者，只经既有注入点驱动内核（A14）；产品代码反向不许依赖它 |
@@ -120,7 +120,6 @@ Web:  POST /api/sessions/{id}/runs                │
 | 工具同意/拒绝的最终决定 | `policy.engine.decide`（门面 `policy.permission.gate`） | 只有它写账本——`RunState.outside_allowed` 只读结果、不做决定（失败关闭）；沙箱 argv 由 `policy.sandbox` 按账本里的能力授予组装 | — |
 | 会话条目 | `session/` 的存储层 | `SessionRecorder` 是唯一写入者（A11 门禁）；条目提交后不可变 | 磁盘，跨进程 |
 | 分支 | 一个值（`avid.branch.tip`），不是一张表 | `create_branch` / `append_message` 的提交 | 磁盘 |
-| 任务 | `<工作区根>/.tasks/{id}.json` | `TaskStore`（六工具的唯一入口）；Web 只读 | 磁盘，跨会话 |
 | 工作区注册表 | `~/.avid/workspaces.json`（**索引**，非权威） | 只由用户显式动作写 | 用户级 |
 | 运行记录与事件缓冲 | `svc/runs.py` 的 `RunRegistry`（内存） | 唯一发射线程分配 `seq` | 进程内；终态保留 600s / 最多 200 个 run |
 | 待决审批 | `svc/approvals.py`（内存） | 审批队列；超时/取消/结束/重启四条路径全收敛 `deny` | 一次运行，超时 120s |
@@ -301,7 +300,7 @@ durable）、I13 权威终止以注册表 + 已提交条目为准、I14 列表�
 |---|---|
 | 内核四层怎么推出来的、每处代价、阶段 A/B 落地记录 | `docs/design/runtime-architecture.md` §1–§15 |
 | 会话持久化的取舍与偏差 | 同上 §16 |
-| 任务图的数据结构与状态机设计 | 同上 §17–§18 |
+| 任务图（**已下线，阶段 27**）的数据结构与状态机设计 | 同上 §17（开头有下线横幅） |
 | 工作区与安全分层（三轴 / 阶梯 / 沙箱 / 审计） | `docs/design/workspace-permission.md`；阶段 18 的落地记录见 `runtime-architecture.md` §19，阶段 26 见 `docs/status/CAPABILITIES.md` §3.1 与 `benchmarks/sandbox_boundary/README.md` |
 | Web 层选型、事件三档、L0–L4、性能预算、未验证假设 | `docs/design/frontend-architecture.md` |
 | 页面 ↔ 接口对应、SSE 消费规则、验证命令 | `docs/guide/web-ui.md` |

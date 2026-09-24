@@ -8,7 +8,7 @@
 | core   | `agent_loop`        | 与 bare **完全相同**          | 开                   |
 | full   | `agent_loop`        | 全部（+ todo/task/subagent/skill） | 开              |
 
-于是 `core − bare` 度量"循环与上下文机制"的增益，`full − core` 度量"任务图 /
+于是 `core − bare` 度量"循环与上下文机制"的增益，`full − core` 度量"子 agent /
 子 agent / 技能"的增益。**三者共用同一份 `SYSTEM_PROMPT`**——prompt 不同源的话，
 量到的是 prompt 差异，不是机制的差异。
 
@@ -111,7 +111,7 @@ VARIANTS: dict[str, Variant] = {
         todo_reminder=True,
         stop_nudge=True,
         hooks=True,
-        description="全部工具与机制（含 todo / 任务图 / subagent / skill）",
+        description="全部工具与机制（含 todo / subagent / skill）",
     ),
 }
 

@@ -22,7 +22,7 @@
 | D7 | 前端 `web/` 与 Python 包**分离开发、单进程交付**：产物复制进 `src/avid/web/static/` 随 wheel 分发 | 安装者用 uv，不该需要 Node；Chainlit 式「装包时现跑 pnpm」的失败模式更差 | 产物可能与源码不一致，需要构建戳 + 一致性检查 |
 | D8 | 契约 = **Python 侧事件/条目类型为单点**，OpenAPI 生成 TS 类型，外加一条「两侧清单一致」的机械检查 | 生成器这条路要等「事件数量 × 变更频率」超过人工同步成本才划算 | 早期多一条测试，少一次代码生成 |
 | D9 | 视觉方向 = **涂鸦潦草风，照 purrcat 实现并 token 化**（**已被阶段 23b 替换为暖羊皮纸 + 液态玻璃，见 §8**）；落地靠 token 单点 + 会失败的样式禁令 + a11y 阻塞门禁 | 语言在 purrcat 里已经成形，但 738 处 hex / 498 处硬阴影 / 228 处内联手写字体全部未 token 化——这是「真实重复」的教科书案例 | 初期写组件的摩擦变大；偏离 token 的临时样式会被拦 |
-| D10 | v1 **不做**：首页、Web 终端、IDE 面板、桌面壳、多用户/鉴权、中文手写体、i18n 框架、前端侧任务写操作、subagent 子事件转发、虚拟列表 | 每一条都有明确的重新考虑信号（§5.5、§16） | 形态朴素 |
+| D10 | v1 **不做**：首页、Web 终端、IDE 面板、桌面壳、多用户/鉴权、中文手写体、i18n 框架、subagent 子事件转发、虚拟列表 | 每一条都有明确的重新考虑信号（§5.5、§16） | 形态朴素 |
 
 **当前基线（写作时实测）**：内核运行期依赖只有 `httpx>=0.27`（`pyproject.toml:7`）；参照实现 purrcat 的 UI 为 React 18 + Vite 5 + Tailwind 3，视觉语言已成形但未 token 化（738 hex / 498 硬阴影 / 295 墨边 / 228 内联手写字体，§8.0）；`agent_loop` 的对外观察点只有 `on_message`（`src/avid/runtime/loop.py:96,103`）；模型调用非流式（`src/avid/ai/client.py:166-178`）；本机 Node `v24.15.0`、pnpm `10.29.3`、uv `0.12.9`；**CI 已存在**（`.github/workflows/ci.yml`，三个 job：内核 ruff/mypy/pytest、stress 门禁、前端 install→build→`verify`）——本节其余数字仍是写作时的实测，CI 这一条已按现状更新。
 
@@ -78,7 +78,7 @@
 | 前端 `events/reducer.ts`（纯函数状态收敛） | **真实变化**：重放、重连、去重、取消都只改这一个纯函数 | 删掉则合并逻辑散进各组件，无法脱离 UI 单测（调研将「合并器是纯函数 + 调度器分离」列为 OpenHands 两处最值得抄的机制之一，`dev/research/agent-frontend-survey-final.md:486`） | **保留** |
 | 前端虚拟列表 | **无证据**：条目长度当前不可预测，但没有 1k 条真实会话可测 | 删掉更简单；先做折叠 + 分组 + 分页，虚拟化等实测数字 | **不做**（信号见 §16） |
 | 前端 i18n 框架 | **无证据**：单用户本地工具，无第二语言消费者 | 删掉更简单；文案集中到单文件即可 | **不做**（做法见 §8.6） |
-| 任务板的写操作 API | **无证据**：任务的写入者有且只有 agent（`tools/tasks.py` 的六个工具） | 删掉更简单；且加一条人类写路径就要重新论证它是否绕过 `TaskStore` 的校验 | **不做**，任务板只读（§6.1） |
+| 任务板的写操作 API | **无证据**：任务的写入者有且只有 agent（当时是 `tools/tasks.py` 的六个工具） | 删掉更简单；且加一条人类写路径就要重新论证它是否绕过 `TaskStore` 的校验 | **不做**；阶段 27 把任务板连同任务图整体下线，这一行只作历史记录（§7.7） |
 
 ---
 
@@ -91,7 +91,7 @@
 | 层 | 目录 | 职责 | 明确不做 | 依赖方向 |
 |---|---|---|---|---|
 | 传输适配 | `src/avid/web/` | HTTP 路由、DTO（pydantic）、SSE 编帧、静态资源与 SPA fallback、错误码映射 | 不知道 `agent_loop` 的调度细节；不直接写会话 | → `svc/` |
-| 应用服务 | `src/avid/svc/` | 运行注册表与生命周期、事件缓冲与重放、审批待决表、会话读、任务只读视图 | 不 import FastAPI；不做 `while`/按轮次循环 | → `runtime/`、`session/`、`tools/`、`policy/` |
+| 应用服务 | `src/avid/svc/` | 运行注册表与生命周期、事件缓冲与重放、审批待决表、会话读 | 不 import FastAPI；不做 `while`/按轮次循环 | → `runtime/`、`session/`、`tools/`、`policy/` |
 | 应用（既有） | `src/avid/cli.py` | 终端接线：参数、stdin 审批、stdout 输出 | — | → `runtime/`、`session/` |
 | 运行时（既有） | `src/avid/runtime/` | 调度、状态、压缩编排、工具执行、hook、**新增事件观察点** | 不认识 HTTP、不认识持久化 | → `ai/`、`tools/`（`policy/` 仅经 state 与 hook） |
 | 策略（既有） | `src/avid/policy/` | 阈值、文案、权限规则、技能、压缩步骤 | 不认识 HTTP | → `ai/` |
@@ -108,11 +108,11 @@
 ### 3.2 三条数据流
 
 1. **命令流**（前端 → 内核，低频、要成功或失败）：`POST /api/sessions/{id}/runs` → `svc.runs.start()` → 工作线程 `agent_loop`。
-2. **查询流**（前端 → 内核，幂等、可缓存）：会话列表 / 条目分页 / 任务 / 技能目录 / 运行状态。
+2. **查询流**（前端 → 内核，幂等、可缓存）：会话列表 / 条目分页 / 技能目录 / 运行状态。
 3. **事件流**（内核 → 前端，单向、可分档丢失）：hooks + 循环观察点 → 事件 → 运行缓冲 → SSE。
    反向的**人机交互**不走事件流：审批答复是命令流（`POST .../approvals/{id}`）。
 
-三条流的所有权：命令与查询的权威在 `session/`（条目）与 `tools/tasks.py`（任务）；活动运行的**权威也在 `session/`**，事件流只是它的实时视图（这条决定了断线、刷新、重连都不需要「补写」任何数据）。
+三条流的所有权：命令与查询的权威在 `session/`（条目）；活动运行的**权威也在 `session/`**，事件流只是它的实时视图（这条决定了断线、刷新、重连都不需要「补写」任何数据）。
 
 ### 3.3 目录结构
 
@@ -140,7 +140,6 @@ Avid/
 │   │   ├── runs.py                    # 运行注册表：每会话至多一个活动 run、线程、事件缓冲、重放游标
 │   │   ├── approvals.py               # 待决审批表 + 阻塞等待 + 超时失败关闭 + run 作用域白名单
 │   │   ├── sessions.py                # 会话读：列表/元信息/条目分页（不含写）
-│   │   ├── tasks.py                   # 任务图只读视图（含派生 can_start）
 │   │   └── errors.py                  # RunBusy / RunNotFound / ApprovalExpired 等
 │   ├── web/                           # ★新增：传输适配（唯一 import FastAPI 的地方）
 │   │   ├── __init__.py                # create_app()
@@ -149,7 +148,7 @@ Avid/
 │   │   ├── sse.py                     # 分档编帧：durable 带 id、transient/delta 不带
 │   │   ├── static/                    # 构建产物（gitignore；由 web/ 构建后复制）
 │   │   └── routes/
-│   │       ├── meta.py  sessions.py  runs.py  events.py  approvals.py  tasks.py
+│   │       ├── meta.py  sessions.py  runs.py  events.py  approvals.py
 │   └── cli.py                         # 加 `avid web` 子命令（起 uvicorn），其余不变
 ├── web/                               # ★新增：前端工程（pnpm，独立工具链）
 │   ├── package.json  pnpm-lock.yaml  vite.config.ts  tsconfig.json  index.html
@@ -181,7 +180,7 @@ Avid/
 │   │   │   └── patterns/              # ToolCallCard / ApprovalBar / StepGroup / TodoPanel…
 │   │   ├── assets/                    # 空：手写体已弃用，字体只剩系统栈（零自托管文件）
 │   │   ├── features/
-│   │   │   ├── conversation/  approvals/  tasks/  sessions/  inspector/  composer/
+│   │   │   ├── conversation/  approvals/  sessions/  inspector/  composer/
 │   │   ├── layouts/AppShell.tsx       # 三栏 + 响应式 + 键盘图
 │   │   ├── routes/                    # URL ↔ feature 组合；唯一接线查询与 store 的地方
 │   │   └── lib/
@@ -232,7 +231,7 @@ Avid/
 
 | 域 | 内容 | 机制 | 权威来源 | 失效方式 |
 |---|---|---|---|---|
-| 权威域 | 会话列表、条目历史、任务图、技能目录、运行状态 | TanStack Query（含 `useInfiniteQuery` 做条目分页） | `session/` 与 `tools/tasks.py` 的文件 | stale-while-revalidate + 显式 invalidate |
+| 权威域 | 会话列表、条目历史、技能目录、运行状态 | TanStack Query（含 `useInfiniteQuery` 做条目分页） | `session/` 的文件 | stale-while-revalidate + 显式 invalidate |
 | 活动域 | 当前 run 的实时视图：进行到第几轮、哪些步骤在跑、待决审批、delta 文本 | zustand 单 store + 纯 reducer + delta 合并器 | 事件流（durable 事件与权威域最终一致） | 断线重连 + 游标重放；无法补齐则 `resync` 重建 |
 | 界面域 | 主题、栏宽档、密度、折叠默认值、过滤器、命令面板开关 | zustand（持久化到 localStorage） | 用户 | 本地，随版本迁移 |
 
@@ -272,14 +271,14 @@ Avid/
 **代价与对冲**
 
 - 依赖簇变大（对照 `pyproject.toml:7` 当前的单一 httpx）。对冲：FastAPI 进 `[project.optional-dependencies].web`，CLI 使用路径不装；`web/` 是唯一 importer，由 §14 A1/A2 的 grep 门禁守着。换框架（例如退到 Starlette 单用）只需改 `web/`，`svc/` 与内核不动——这是 §2 里 `web/` 这个边界存在的理由。
-- pydantic 与「内核类型是普通 dataclass」的取向冲突。对冲：内核类型（`Entry`、`Task`、事件）保持 dataclass/`dict`，DTO 由 `web/schemas.py` 的显式 mapper 构造。**不允许让 `session/` 依赖 pydantic**——那会破坏 `session/__init__.py:10` 声明的「不 import 任何 avid 子包、只认识条目与 JSON」。
+- pydantic 与「内核类型是普通 dataclass」的取向冲突。对冲：内核类型（`Entry`、事件）保持 dataclass/`dict`，DTO 由 `web/schemas.py` 的显式 mapper 构造。**不允许让 `session/` 依赖 pydantic**——那会破坏 `session/__init__.py:10` 声明的「不 import 任何 avid 子包、只认识条目与 JSON」。
 
 **反事实测试**（判据 §10）
 
 | 条件 | FastAPI 方案是否成立 |
 |---|---|
 | 需求全变（改成纯 CLI 或 TUI） | 成立：内核不依赖它，删 `web/` 即可 |
-| 规模 ×100（100 个并发会话） | 不成立：当前模型是「每会话一个线程 + 进程内注册表」，会话是文件后端且无跨进程锁（`tools/tasks.py:123-127` 同类问题、`runtime-architecture.md:426`）。此时需要队列与真正的会话锁，属于另一轮设计 |
+| 规模 ×100（100 个并发会话） | 不成立：当前模型是「每会话一个线程 + 进程内注册表」，会话是文件后端且无跨进程锁（`runtime-architecture.md:426`）。此时需要队列与真正的会话锁，属于另一轮设计 |
 | 依赖长期不可靠（浏览器→服务断连） | 成立：durable 事件可重放，UI 的权威视图来自 REST |
 | 改成多用户/远程 | 不成立：需要鉴权、每用户工作区隔离、CSRF 面。当前 `.avid/` 目录就是权限边界 |
 | 团队从 1 变 10 | 部分成立：契约与层禁规则让并行改动有边界，但 `web/schemas.py` 会成为合并热点 |
@@ -310,7 +309,7 @@ Avid/
 
 **成立条件**：一个 run 至多一条事件流；浏览器（非原生客户端）；不需要服务端主动向非运行中的会话推数据。
 
-**重新考虑的信号**：① 出现桌面壳或 IDE 插件需要同一份事件（届时 WS/IPC 复用同一事件类型即可，编帧层换 `web/sse.py`）；② 需要服务端向客户端推「非本 run 的变更」（例如任务图被别的 run 改了）——那属于另一个通道，应单独设计而不是塞进 run 流；③ 实测连接数成为真实瓶颈（同一浏览器同时打开 >5 个运行中的会话）。
+**重新考虑的信号**：① 出现桌面壳或 IDE 插件需要同一份事件（届时 WS/IPC 复用同一事件类型即可，编帧层换 `web/sse.py`）；② 需要服务端向客户端推「非本 run 的变更」（例如另一个 run 改了同一个会话的条目）——那属于另一个通道，应单独设计而不是塞进 run 流；③ 实测连接数成为真实瓶颈（同一浏览器同时打开 >5 个运行中的会话）。
 
 **被否掉的方案**：一条 WebSocket 承载全部帧。OpenHands 的新协议正是这个形状——7 帧判别联合（Sync/Durable/Transient/ItemStarted/Delta/ItemAborted/Error），投递规则写死在文件头（durable 可补齐、delta 可任意丢、每个 ItemStarted 必由 Durable 或 ItemAborted 关闭），背压是「丢连接不丢帧」（`dev/research/agent-frontend-stack-survey.md:180-184`）。它在**语义**上与本设计完全同构，差别只是承载；用 SSE 是因为当前不需要双向，而 WS 的重连与游标要自己实现。**一旦需要双向（例如流内提交下一条消息），直接照 OpenHands 的七帧形状升格，事件类型不变。**
 
@@ -429,8 +428,6 @@ Avid/
 | POST | `/api/runs/{run_id}/cancel` | 请求取消 | 202 | 404 / 409 已结束 |
 | GET | `/api/runs/{run_id}/approvals` | 待决审批列表 | 200 | 404 |
 | POST | `/api/runs/{run_id}/approvals/{aid}` | 答复：`{decision}` | 200 `{accepted}` | 404 / 409 已决 / 410 已过期 |
-| GET | `/api/tasks` | 任务图只读视图（含派生 `can_start`、依赖标题） | 200 | — |
-| GET | `/api/tasks/{id}` | 单任务 | 200 | 404 |
 | GET | `/api/skills` | 技能目录（name + 一行描述，与 system prompt 同源） | 200 | — |
 | GET | `/api/health` | 就绪探针（供桌面壳/脚本） | 200 | — |
 
@@ -438,7 +435,7 @@ Avid/
 
 **一个被前端推到首屏的既有代价**：`GET /api/sessions` 要显示会话名与条数，而名字是会话文件里的一个值、条数要读全部条目，所以这个端点当前是 O(会话数 × 文件大小)——`cli.py:13-15` 已经承认了这个代价（`--list-sessions` 的 `_peek` 会打开每个会话，`cli.py:238-247`）。CLI 下它是「敲一次命令等一会」，Web 下它是**每次刷新首屏**。处置：v1 接受并把实测耗时记进性能基线；触发条件与既有结论一致——当会话数使首屏明显变慢时，把会话名冗余进 JSONL header（`cli.py:13-15` 已写明这条路径）。
 
-**写权限的归属**（判据 §4/§6）：会话条目的写入者有且只有 `SessionRecorder`；任务图的写入者有且只有 `TaskStore`。因此 API 里**没有**「追加条目」与「改任务状态」的端点——前端不是这些对象的作者。人类要改任务状态或写文件时，走 `/api/runs` 让 agent 去调用对应工具，权限闸门与审计因此不被绕过。同理，服务端**不把「是否执行」的判定委托给浏览器的可用性**：浏览器只是决策的输入端，未答复一律收敛为拒绝（I6）——这与 Open WebUI 的反向 RPC（后端 `sio.call` 阻塞等浏览器回包才决定是否执行，`dev/research/agent-frontend-survey-addendum-verified.md:196`）是相反取向，那样会把权限判定拆到两个信任域。
+**写权限的归属**（判据 §4/§6）：会话条目的写入者有且只有 `SessionRecorder`。因此 API 里**没有**「追加条目」端点——前端不是这些对象的作者。人类要写文件时，走 `/api/runs` 让 agent 去调用对应工具，权限闸门与审计因此不被绕过。同理，服务端**不把「是否执行」的判定委托给浏览器的可用性**：浏览器只是决策的输入端，未答复一律收敛为拒绝（I6）——这与 Open WebUI 的反向 RPC（后端 `sio.call` 阻塞等浏览器回包才决定是否执行，`dev/research/agent-frontend-survey-addendum-verified.md:196`）是相反取向，那样会把权限判定拆到两个信任域。
 
 ### 6.2 载荷与错误模型
 
@@ -466,7 +463,7 @@ data: {"run_id":"run_...","seq":null,"text":"…"}      ← 无 id 行，不参�
 ### 6.3 版本与漂移门禁
 
 - `GET /api/meta` 返回 `api_version`（整数，破坏性变更时 +1）、`event_types`（完整清单）与 **`features`（特性表）**。
-- **按特性分支，不按版本号分支**：客户端读 `features`（例如 `{"deltas":1,"approvals":1,"cancel":1,"tasks":1,"branches":0}`）决定启用哪些能力，只在客户端构建的 `api_version` 与内核声明**不兼容**时才失败收敛。形态取自 OpenHands 的两层防护——构建期钉死版本 + 运行期按特性协商（`AGENT_SERVER_VERSION_TOO_OLD` + feature→minVersion 表 + `/server_info` 缓存，`dev/research/agent-frontend-survey-verified-addendum.md:418-423`）。特性表比单一版本号更耐漂移：加一个可选事件不会让所有旧前端罢工。
+- **按特性分支，不按版本号分支**：客户端读 `features`（例如 `{"deltas":1,"approvals":1,"cancel":1,"branches":0}`）决定启用哪些能力，只在客户端构建的 `api_version` 与内核声明**不兼容**时才失败收敛。形态取自 OpenHands 的两层防护——构建期钉死版本 + 运行期按特性协商（`AGENT_SERVER_VERSION_TOO_OLD` + feature→minVersion 表 + `/server_info` 缓存，`dev/research/agent-frontend-survey-verified-addendum.md:418-423`）。特性表比单一版本号更耐漂移：加一个可选事件不会让所有旧前端罢工。
 - 失败收敛的具体表现：显示「界面与内核版本不兼容，请重新构建 `web/`」并禁用提交，而不是尽力渲染（LibreChat 的协议协商就是这个形状，`dev/research/agent-frontend-impl-survey.md:274`；**该文件已于 2026-09-22 清理中删除，锚点不可复核**）。
 - **机械检查（先做这个，不上生成器）**：`tests/test_event_contract.py` 解析 `web/src/events/types.ts` 的联合类型成员集合，与 `runtime/events.py` 的 `EVENT_TYPES` 比较集合相等。理由：生成式契约不是免费的——Dify 生成前要打 6 类规范化补丁、OpenHands 要维护公开面过滤 + 人工 `allowClientOnly` 清单并已出现生成源 1.47.0 与运行时 1.49.1 的静默漂移（`dev/research/agent-frontend-survey-final.md:41`）。在「事件数量 × 变更频率」超过人工同步成本之前，一条集合相等测试比一套生成器便宜（这条判据取自 `dev/research/agent-frontend-survey-final.md:478`）。
 - **升级到生成器的条件与路径**（写清以便将来照做）：事件类型 ≥ 25 个，或单次迭代要改 ≥ 3 个事件的载荷结构时，改用 FastAPI 的 OpenAPI 做**类型生成**（hey-api，只生成类型不生成方法体，OpenHands 的形态），门禁用 Dify 的「CI 先删再生成再 diff」（`dev/research/agent-frontend-survey-final.md:118`）。
@@ -532,9 +529,16 @@ class RunObserver(Protocol):
 
 服务重启会杀掉 run；客户端发现 `GET /runs/{id}` 404 且会话条目链尾是一批没有结果的 `tool_calls`。`session/projection.py:41-72` 的 `repair_incomplete_batches` 本来就会把这批丢掉以保证续接合法。UI 不需新字段：条目 API 可附带 `truncated_tail: true`（由同一次投影计算得出），前端在链尾显示一行「上次运行在此中断」。**不新增持久化字段**，因为这件事是**派生**的。
 
-### 7.7 不做：任务图的写路径
+### 7.7 不做：任务图的写路径（已随任务图下线，阶段 27）
 
 不加任何人类侧的任务写入端点（§6.1）。理由与反例见 §5.5。
+
+阶段 27 把任务图整体下线——六个任务工具、`tools/tasks.py`、`svc/tasks.py`、
+`web/routes/tasks.py`、`GET /api/tasks{,/{id}}` 与 `/tasks` 页面一并删除，本节记的这条非目标
+因此没有了对象。保留它只为留下两件事：当时为什么不给人类写路径（写入者是 agent，加一条写
+路径就要重新论证它是否绕过存储层校验），以及"这次对话的计划"现在由 `todo_write` 与输入条上方
+的待办清单承接（`runtime-architecture.md` §17 有下线说明）。旧的 `<工作区根>/.tasks/` 数据不
+迁移、不删除，只是不再被读。
 
 ---
 
@@ -648,9 +652,9 @@ danger 的浅底因此从 `#bf616a` 提到 `#ce858c`（3.37 → 4.83）。
 │ │ 导航列 320px │ │ 对话卡（flex-1，侧栏开时 420px）│ │ 检查器卡 420px     │ │
 │ │              │ │ ┌ 头部：标题 + 状态 + 轮次/token + 常驻 ID 标签  │ │ 默认收起        │ │
 │ │ 会话列表     │ │ ├ 时间线（唯一滚动容器）        │ │ resize-y 调高度   │ │
-│ │ 任务入口     │ │ │  用户便签 / 步骤组 / 工具卡   │ │ 全文 / diff /     │ │
-│ │ 技能目录     │ │ │  审批卡（徽标 + 展开原因）     │ │ 原始 JSON         │ │
-│ │ 设置        │ │ └ 输入条（玻璃面 + 占用指示器）   │ │                  │ │
+│ │ 技能目录     │ │ │  用户便签 / 步骤组 / 工具卡   │ │ 全文 / diff /     │ │
+│ │ 设置        │ │ │  审批卡（徽标 + 展开原因）     │ │ 原始 JSON         │ │
+│ │              │ │ └ 底栏：待办清单 + 输入条         │ │                  │ │
 │ └────────────┘ └──────────────────────────────┘ └──────────────────┘ │
 └──────────────────────────────────────────────────────────────────────┘
         侧栏打开时隐藏导航列（purrcat ChatPage.tsx:1234）
@@ -661,7 +665,7 @@ danger 的浅底因此从 `#bf616a` 提到 `#ce858c`（3.37 → 4.83）。
 - **检查器高度用原生 `resize-y`**（purrcat `ChatPanels.tsx:18` 的 `h-[55vh] min-h-[35vh] max-h-[85vh] resize-y`）。这比我原稿的「不做可拖拽分栏」更进一步：**不引 `react-resizable-panels`，但保留了人调高度的能力**，且宽度不调（避免与 §8.6 的断点争权）。
 - **时间线是唯一滚动容器**：导航与检查器各自滚动。吸底规则：用户上滚后不抢滚动，回到底部 40px 内才恢复。
 - **ID 可见性**：会话/运行 ID 以玻璃标签（`ui/glass/GlassTag`）常驻卡片头部；多标签页或长会话里「我在看哪个 run」是实际需求。**这是功能不是装饰**——它随旧语言换了形式，但没被删掉。
-- **导航有两种，不要都做成路由**：照 purrcat 的分工——**换工作面的走路由**（会话、任务板、技能目录），**同一个工作面里的子面板就地切换**（purrcat 点 MCP/Skill/Cron/Sensor 时不跳路由，只切 `sidebarMode` 并留一个「返回」按钮，`ChatPage.tsx:129` + `ChatSidebar.tsx:33/80/114/139/162`）。对 Avid：`inspector` 的三个视图（工具全文 / diff / 原始 JSON）属于就地切换，不进 URL 历史——否则浏览器后退键会被面板开关塞满。
+- **导航有两种，不要都做成路由**：照 purrcat 的分工——**换工作面的走路由**（会话、技能目录），**同一个工作面里的子面板就地切换**（purrcat 点 MCP/Skill/Cron/Sensor 时不跳路由，只切 `sidebarMode` 并留一个「返回」按钮，`ChatPage.tsx:129` + `ChatSidebar.tsx:33/80/114/139/162`）。对 Avid：`inspector` 的三个视图（工具全文 / diff / 原始 JSON）属于就地切换，不进 URL 历史——否则浏览器后退键会被面板开关塞满。
 - **每条消息带一行动作**：Avid 的条目动作是「复制」「从此处分支」，现在是两枚 44px 的**图标按钮**（`size="icon"`，`Copy` / `GitBranch`，图标 `aria-hidden`、名字在 `aria-label`）。动作行**常驻可见**（曾经的 `opacity-0` + 悬停显形已撤销：显隐只是额外一层谜，「有这功能」不该先被猜到）；文字说明改由悬停/聚焦时的 `Tooltip` 气泡承担，**浮在按钮外面**、未悬停时不挂载，于是"看得见的功能"不再以常驻一行文字为代价（窄卡片里那行还会换行）。条目级的「查看原始 JSON」已删，检查器改由工具卡的「查看」打开。
 - **非 main 分支只读**：purrcat 在子分支上把输入区换成只读提示（`ChatPage.tsx:1566-1568`），避免把消息写到错的分支。Avid v1 只在 `main` 上跑运行，这条在 F4 引入分支视图时照做。
 - **入口**：v1 **不做首页**。purrcat 的首页（大号手绘 blob 按钮 + 斜贴设置钮）好看，但对单用户本地工具是一次多余点击；一级切换由顶部工具按钮 + `⌘K` 命令面板承担。**重新考虑信号**：出现 3 个以上互相独立的工作面（例如未来的 fork 视图、评测看板），那时首页才是导航而不是仪式。
@@ -671,12 +675,12 @@ danger 的浅底因此从 `#bf616a` 提到 `#ce858c`（3.37 → 4.83）。
 | purrcat 的页面/组件 | Avid v1 | 说明 |
 |---|---|---|
 | `ChatPage`（左侧栏 + 对话卡 + 头部工具条 + 侧面板） | **做**：`features/conversation` + `layouts/AppShell` | 主表面 |
-| 头部 40×40 工具按钮 + `absolute -top-2 -right-2` 计数徽标 | 做：时间线/检查器/审批/任务四个切换 + 徽标 | 徽标 + `animate-pulse` 表示有未决项 |
+| 头部 40×40 工具按钮 + `absolute -top-2 -right-2` 计数徽标 | 做：时间线/检查器/审批三个切换 + 徽标 | 徽标 + `animate-pulse` 表示有未决项 |
 | `pendingReqs` 审批队列（徽标 + pulse + 展开 reason + 逐条裁决） | **做**：直接对应 §5.4 的审批队列 | purrcat 已给出可用交互形状；Avid 在此之上加「默认焦点在拒绝」与幂等（I6、B5） |
 | `FileChangesPanel`（列表 + diff + 逐项 ack/rollback + ack all + 空态） | 做「看」的部分：检查器里的变更/diff 视图 | ack/rollback 属策略，v1 不做（§5.5） |
 | 终端面板（多 tab、**折叠时保留 DOM 与连接**、重新展开要 re-fit） | **不做**（v1 不提供 Web 终端）；`bash` 输出按工具卡渲染 | 若要重做，`ChatPanels.tsx:146-425` 的「折叠不杀进程」是要点 |
 | `IDEPanel`（独立窗口 + Electron IPC 文件读写） | **不做** | 与 §5.5「不提供文件写 API」直接冲突 |
-| `TaskPage`/`MemoryPage`/`MarketPage`/`EvolvePage`/`EditorPage` | 只做任务板（只读）；其余不做 | Avid 没有长期记忆、市场、自我进化、DAG 编辑这些对象 |
+| `TaskPage`/`MemoryPage`/`MarketPage`/`EvolvePage`/`EditorPage` | 都不做 | Avid 没有长期记忆、市场、自我进化、DAG 编辑这些对象；`TaskPage` 在阶段 27 之前做过一版只读任务板，随任务图一起下线 |
 | `ConfigModal`（多标签配置） | 做 `features/settings`（读 `/api/meta`；改配置仍走 CLI/环境变量） | 前端不改 `.env` |
 | Electron 壳（preload + 窗口控制 + 32px 拖拽条） | 不做（§5.5） | 真要做时照 purrcat，但**必须补路径白名单**：它的 `fs:readFile/writeFile/readDir/stat` 无白名单。另：`-webkit-app-region` 与那条 32px `z-[2147483647]` 在浏览器里会挡住顶部点击，必须只在 `html[data-shell="desktop"]` 下生效 |
 | `MarkdownComponents`（标题带下划线、引用左边框、行内码带框、代码块带底、表格带框） | **做**：`lib/markdown/` 的直接蓝本 | 差异：代码块是深底等宽块（`.term`），标题用 1px 下划线与字重而非墨线，`pre` 必须 `overflow-x-auto`，长命令行不能被卡片撑破 |
@@ -701,7 +705,7 @@ danger 的浅底因此从 `#bf616a` 提到 `#ce858c`（3.37 → 4.83）。
 
 **Markdown 与工具输出的净化**（两条现成的坑，purrcat 都踩过并修好）：① 工具结果可能是 `{content, metadata}`、多模态 parts 或 `{error}`，必须先过一个**净化容器**再进 `whitespace-pre-wrap`（`ChatShared.tsx:144-168`）；② 本地路径与 `file://`/`term://` 链接需要 `urlTransform` 白名单，并且要取 `getAttribute('href')` 的原始串——否则浏览器会把 `D:/x.png` 规范化成站内 URL（`ChatPage.tsx:9-28,355-367`）。Avid 只放行 `http(s)://` 与工作区相对路径，且默认不自动打开外部链接。
 
-- **按工具分发渲染**：`bash` → 等宽 + 退出码 + 截断标记 + **ANSI 转义渲染层**（purrcat 靠 xterm 承担，我们不引 xterm，用一个只做 SGR 颜色/粗体的渲染器）；`read_file`/`write_file`/`edit_file` → 红绿笔 diff；`glob` → 路径列表；`todo_write` → 手绘清单（`[x]/[~]/[ ]` 对应 `TodoList.render()`）；`create_task` 系列 → 任务卡；`subagent` → 子任务分块（`=== i/n · description ===` 就是卡边界）；`load_skill` → 技能名 + 取回字符数。
+- **按工具分发渲染**：`bash` → 等宽 + 退出码 + 截断标记 + **ANSI 转义渲染层**（purrcat 靠 xterm 承担，我们不引 xterm，用一个只做 SGR 颜色/粗体的渲染器）；`read_file`/`write_file`/`edit_file` → 红绿笔 diff；`glob` → 路径列表；`todo_write` → 工具卡（历史记录）+ 输入条上方的待办清单（当前计划，阶段 27）；`subagent` → 子任务分块（`=== i/n · description ===` 就是卡边界）；`load_skill` → 技能名 + 取回字符数。原稿在这里还列过 `create_task` 系列 → 任务卡，那六个工具随任务图在阶段 27 一起删除，分发里不再有这一支。
 - **连续工具调用自动成组**：阈值 `EVENT_GROUP_MIN_SIZE = 2`，失败或拒绝的调用不进组。
 - **文件规模**：单文件 ≤200 行、单组件 ≤50 行（`catch` 必须处理或注明）。这是对 purrcat `ChatPage.tsx` 1799 行 / 104 个 `useState` 的直接纠正。
 
@@ -733,7 +737,7 @@ danger 的浅底因此从 `#bf616a` 提到 `#ce858c`（3.37 → 4.83）。
 
 ### 8.8 文案与 i18n：照 purrcat 的结构，只出中文一份
 
-照抄 purrcat 的**结构**（`src/i18n.tsx`）：单文件字典、`LocaleProvider` + `useTranslation()`、`t('chat.switchSession')` 点分 key、localStorage 持久化、`documentElement.lang` 同步、命名空间分组。Avid 的命名空间：`common / chat / tools / approvals / tasks / sessions / skills / errors`。
+照抄 purrcat 的**结构**（`src/i18n.tsx`）：单文件字典、`LocaleProvider` + `useTranslation()`、`t('chat.switchSession')` 点分 key、localStorage 持久化、`documentElement.lang` 同步、命名空间分组。Avid 的命名空间：`common / chat / tools / approvals / todos / sessions / skills / errors`（原稿里还有 `tasks`，随任务图在阶段 27 下线）。
 
 v1 只出一份 `zh-CN`，但**按双语字典的形状写**（顶层就是 `{'zh-CN': {...}}`），将来加语言是补一个对象而不是重构。两处 purrcat 的不一致要避开：① 它是中文项目却把默认语言定成 `en-US`，且 `index.html` 硬编码 `lang="zh-CN"` 之后又被运行时覆盖——Avid 默认 `zh-CN`，并让 `index.html` 的 `lang` 与默认值一致（否则首屏会闪一次语言切换，读屏器也会先按错的语言发音）；② 它的 `t()` 缺失时回落 `en-US`、再缺返回 key 本身，这个回落链保留，但**回落到 key 本身必须在开发模式报错**（否则漏翻只在用户眼前暴露），这也正好接上「lint 禁止 JSX 内联字面量」那条。lint 禁止 JSX 内联字面量（Onyx 的 `i18n/no-raw-jsx-text` 形态）。
 
@@ -789,7 +793,8 @@ v1 只出一份 `zh-CN`，但**按双语字典的形状写**（顶层就是 `{'z
 
 - **按表面截图，不截整页**。整页会把导航列带进来，而它的内容是"这套 e2e 跑到现在攒下的
   所有会话"——跑第二遍就不一样，基线会天天报红。表面截图只取决于该用例自己造的数据。
-  覆盖五种表面：会话落点页、对话卡（时间线 + 输入条）、审批待决、任务板面板、技能目录面板。
+  覆盖四种表面：会话落点页、对话卡（时间线 + 输入条）、审批待决、技能目录面板。
+  （原稿的第五张是任务板面板，随任务图在阶段 27 一起删除。）
 - **时钟必须在 `page.goto` 之前冻结**，且时刻要**相对数据**取。审批卡那句"还有 30 秒"是
   `expiresAt - Date.now()`：导航之后再冻只冻住一个已经算好的值（秒数继续跳）；冻在绝对
   常数上则差值随真实时钟漂移（差的是"几小时前"的那个小时数）。两条都是实测踩出来的。
@@ -911,7 +916,7 @@ v1 只出一份 `zh-CN`，但**按双语字典的形状写**（顶层就是 `{'z
 | 会话条目 | **强一致**（单写者 + 提交即落盘，`session/` 的 `MutationLine` 既有保证） | — | 无中间态：一条消息要么在文件里要么不在 |
 | 实时视图（活动域） | **最终一致**，窗口 = 事件延迟 + 重连补齐时间 | 前端（游标重放 / resync） | 可能出现「已知历史 + 正在到达的步骤」并存；`run_status` 用服务端时钟的 `elapsed_ms` 避免跨机漂移（LibreChat 的做法，`dev/research/agent-frontend-stack-survey.md:274`） |
 | 待决审批 | **强一致**（服务端唯一决策点） | 服务端（已决表 + 超时） | 第二个标签页可能晚一拍看到 `approval_resolved`；重复答复返回 `accepted:false` |
-| 任务图 | **强一致**（`TaskStore` 单入口 + `RLock`），**仅进程内** | — | 跨进程读可能读到上一版（无文件锁） |
+| 任务图 | ~~**强一致**（`TaskStore` 单入口 + `RLock`），**仅进程内**~~ — 阶段 27 已下线（对象与存储都不存在了） | — | 无 |
 
 **为什么不做跨进程会话锁**：当前部署形态是「一个 CLI 或一个 Web 服务」，两者同时写同一会话不是真实场景。触发条件写明：出现「CLI 与 Web 同时运行且用户对同一会话各提交一次」的真实案例，或实现桌面壳（它会 spawn 一个 sidecar 服务，于是必然是两进程）。
 
@@ -1016,8 +1021,8 @@ v1 只出一份 `zh-CN`，但**按双语字典的形状写**（顶层就是 `{'z
 | 阶段 | 内容 | 独立验收 | 依赖 |
 |---|---|---|---|
 | **F0 事件层（无 UI）** | `runtime/events.py`、`on_event` 观察点、压缩事件、hook 转发、前端 `events/*` 纯函数 + 单测、两侧清单测试 | A6、A7、A10；B1、B2、B8 | 无 |
-| **F1 服务骨架** | `svc/`（运行注册表、审批、会话读、任务读）、`web/`（路由、SSE 编帧、DTO、静态与 404 规则）、`avid web` 子命令、审批注入与取消 | A1–A5、A11、A12；B3–B7、B10–B16 | F0 |
-| **F2 前端骨架** | `web/` 工程、`AppShell`（纸张画布 + 弹性对话卡）、涂鸦 token 与 sketch 构件、时间线 + 工具卡 + 审批卡、任务板（只读）、自托管手写体子集、Storybook、lint 与层禁令 | A8、A9；C6–C9、C11、C14–C21 | F1（可用 curl 造的假事件先做 UI） |
+| **F1 服务骨架** | `svc/`（运行注册表、审批、会话读）、`web/`（路由、SSE 编帧、DTO、静态与 404 规则）、`avid web` 子命令、审批注入与取消 | A1–A5、A11、A12；B3–B7、B10–B16 | F0 |
+| **F2 前端骨架** | `web/` 工程、`AppShell`（纸张画布 + 弹性对话卡）、涂鸦 token 与 sketch 构件、时间线 + 工具卡 + 审批卡、自托管手写体子集、Storybook、lint 与层禁令 | A8、A9；C6–C9、C11、C14–C21 | F1（可用 curl 造的假事件先做 UI） |
 | **F3 流式与性能** | `ai/client.stream_completion`、delta 通道、合并器接入、性能门禁与基线 | B9；C1–C5、C10、C12、C13 | F2 |
 | **F4 可选扩展** | 会话分支视图、run 作用域工具白名单、i18n、检查器里的 diff/文件视图 | 各自新增条目 | 真实需求出现 |
 

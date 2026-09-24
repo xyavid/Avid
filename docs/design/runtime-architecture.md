@@ -677,9 +677,24 @@ seq 非单调；`SessionMutation.commit` 恰好一次、`end` 后失效；`close
 成本时）、fork（要从某条历史分叉继续时）、operation 状态机（要在途任务跨进程恢复时）、
 文件锁（两个进程可能同时写同一会话文件时）、SQLite 后端（会话数量让 JSONL 重放变慢时）。
 
-## 17. 下一阶段设计：任务图（Task DAG）——补 TodoWrite 的依赖与分工缺口
+## 17. 任务图（Task DAG）——已下线（阶段 27）
 
-本章是**下一阶段的设计稿**（尚未实现），用来补齐 `todo_write` 在两类事情上的空缺：**任务之间的依赖关系**与**谁在做哪一条**。文中的代码块分两种来源，逐块标注：
+> **这一章是当时的实现记录，代码已经删掉了（阶段 27）。** 保留它是为了留下决策与删除理由，
+> 下面所有代码块都**不在**当前代码里，读的时候不要当成现状。
+>
+> **为什么删**：任务图的**唯一消费者**是那个只读的 `/tasks` 页面；而"这次对话拆成了哪几步、
+> 走到第几步"这件事由 `todo_write` 承接——它每次全量提交、零落盘、就长在对话里，前端从会话
+> 条目推导成输入条上方的待办清单（`docs/guide/web-ui.md` §6）。跨会话的依赖与分工没有真实
+> 使用证据：删除测试反过来做了一遍——删掉 `TaskStore`，没有别处需要"跨会话的依赖判断"。
+> 一并删掉的是六个工具（`create_task` / `update_task` / `can_start` / `claim_task` /
+> `complete_task` / `get_task`）、`tools/tasks.py`、`svc/tasks.py`、`web/routes/tasks.py`、
+> `GET /api/tasks{,/{id}}`、前端 `features/tasks/**` 与 `/tasks` 页面（工具数 15 → 9）。
+> 旧的 `<工作区根>/.tasks/` **不迁移、不删除**，只是不再被读——留着比写一段迁移代码便宜。
+>
+> **重新考虑的信号**：出现"跨会话、有稳定 ID、带依赖与分工"的真实需求（例如多个 agent
+> 并行派发之后要跨进程对账）。那时应该回到本章的缺口分析，而不是直接把 `TaskStore` 捡回来。
+
+本章是当时的设计稿，用来补齐 `todo_write` 在两类事情上的空缺：**任务之间的依赖关系**与**谁在做哪一条**。文中的代码块分两种来源，逐块标注：
 
 * 【原文】——来自本阶段的原始设计稿，**逐字保留**（签名、消息模板、SVG 源码都不改）；
 * 【补出】——原文提到但未给出实现的接口，按原文语义补出，供实现与测试对齐。
@@ -710,6 +725,7 @@ seq 非单调；`SessionMutation.commit` 恰好一次、`end` 后失效；`close
 【原文】
 
 ```python
+# ⚠ 已删除（阶段 27）——这段代码不在仓库里，仅作历史记录
 @dataclass
 class Task:
     id: str
@@ -723,6 +739,7 @@ class Task:
 每个任务是一个 JSON 文件，存于 `.tasks/` 目录：
 
 ```
+⚠ 已删除（阶段 27）——以下内容不在仓库里，仅作历史记录
 .tasks/
 ├── task_9f3c1a7e.json    # {"id": "task_9f3c1a7e", "subject": "schema", ...}
 ├── task_1b2c3d4e.json
@@ -734,6 +751,7 @@ ID 使用 `task_` 加 8 位随机十六进制字符生成。创建文件时使�
 【补出】上面两句话的实现形状（原文只给了语义，没给代码）：
 
 ```python
+# ⚠ 已删除（阶段 27）——这段代码不在仓库里，仅作历史记录
 import json
 import re
 import secrets
@@ -770,6 +788,7 @@ TaskStore 负责校验任务 ID 和读写 JSON 文件，`TASKS = TaskStore(TASKS
 【补出】按原文语义补出的接口（`create` / `update_dependencies` / `save` 都由原文的调用点确定）：
 
 ```python
+# ⚠ 已删除（阶段 27）——这段代码不在仓库里，仅作历史记录
 class TaskStore:
     def __init__(self, directory: Path) -> None:
         self.directory = Path(directory)
@@ -826,6 +845,7 @@ def incomplete_dependencies(task: Task | None) -> list[str]:
 【原文】
 
 ```python
+# ⚠ 已删除（阶段 27）——这段代码不在仓库里，仅作历史记录
 def create_task(subject: str, description: str = "") -> Task:
     return TASKS.create(subject, description)
 ```
@@ -842,6 +862,7 @@ TaskStore.create 检查 subject，分配随机 ID，再把任务写入 `.tasks/{
 【原文】
 
 ```python
+# ⚠ 已删除（阶段 27）——这段代码不在仓库里，仅作历史记录
 def update_task(task_id: str, addBlockedBy: list[str]) -> Task:
     return TASKS.update_dependencies(task_id, addBlockedBy)
 ```
@@ -875,6 +896,7 @@ update_task 会先校验整次修改，再统一保存。目标任务和依赖�
 【原文】
 
 ```python
+# ⚠ 已删除（阶段 27）——这段代码不在仓库里，仅作历史记录
 def can_start(task_id: str) -> bool:
     return not incomplete_dependencies(load_task(task_id))
 ```
@@ -897,6 +919,7 @@ Agent 开始做一个任务时，调用 claim_task：设置 owner，状态从 pe
 【原文】
 
 ```python
+# ⚠ 已删除（阶段 27）——这段代码不在仓库里，仅作历史记录
 def claim_task(task_id: str, owner: str = "agent") -> str:
     task = load_task(task_id)
     if task.status != "pending":
@@ -926,6 +949,7 @@ def claim_task(task_id: str, owner: str = "agent") -> str:
 【原文】
 
 ```python
+# ⚠ 已删除（阶段 27）——这段代码不在仓库里，仅作历史记录
 def complete_task(task_id: str, owner: str = "agent") -> str:
     task = load_task(task_id)
     if task.status != "in_progress":
@@ -966,6 +990,7 @@ list_tasks 只显示一行摘要。get_task 返回完整的任务 JSON，包括 
 【原文】
 
 ```python
+# ⚠ 已删除（阶段 27）——这段代码不在仓库里，仅作历史记录
 def get_task(task_id: str) -> str:
     task = load_task(task_id)
     return json.dumps(asdict(task), indent=2)
@@ -975,7 +1000,8 @@ def get_task(task_id: str) -> str:
 |---|---|
 | `get_task("task_5a6b7c8d")` | 完整 JSON（逐字对应 17.2 的数据结构，含 `description` 与 `blockedBy`） |
 
-```json
+```jsonc
+// ⚠ 已删除（阶段 27）——这段结构不在仓库里，仅作历史记录
 {
   "id": "task_5a6b7c8d",
   "subject": "deploy",
@@ -994,6 +1020,7 @@ def get_task(task_id: str) -> str:
 【原文】
 
 ```
+⚠ 已删除（阶段 27）——以下内容不在仓库里，仅作历史记录
 pending ──claim──→ in_progress ──complete──→ completed
 ```
 
@@ -1016,6 +1043,7 @@ pending ──claim──→ in_progress ──complete──→ completed
 【原文】SVG 源码逐字保留（可直接存成 `.svg` 用浏览器打开）：
 
 ```svg
+<!-- ⚠ 已删除（阶段 27）——这段 SVG 不在仓库里，仅作历史记录 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 400" font-family="system-ui, -apple-system, sans-serif">
   <defs>
     <marker id="dep" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
@@ -1155,9 +1183,12 @@ JSON 损坏（实现按"拒绝并回文本"处理，契约测试覆盖，不静�
 | 11 | `get_task` 返回 `json.dumps(asdict(task), indent=2)`，含 `description` | 文本与字段断言 |
 | 12 | 状态机只有两条迁移；三个状态名在 schema enum、代码与测试里**字面一致** | 契约测试断言 enum；`grep` 断言无第四种状态名 |
 
-## 18. 落地记录（阶段 13，任务图 Task DAG）
+## 18. 落地记录（阶段 13，任务图 Task DAG）——**已随任务图下线（阶段 27）**
 
-§17 的设计稿已实施：`todo_write` 答不了的两件事（**这条现在能不能开工**、**谁在做**）由
+> 本节记的是当时的落地过程，里面的文件、门禁与验收数字**都已不在代码里**（见 §17 开头横幅）。
+> 保留它是为了留下"当时怎么验的"这一层证据：README 式的结论容易忘，验收清单与偏差记录不会。
+
+§17 的设计稿在阶段 13 实施：`todo_write` 答不了的两件事（**这条现在能不能开工**、**谁在做**）由
 `.tasks/` 里的任务图补上。
 
 ### 18.1 落地范围

@@ -47,7 +47,7 @@ uv run --env-file .env pytest -q -m eval -s         # 全量
 | 组 | case | tier | 为什么这组能显出机制差异 |
 |---|---|---|---|
 | 长上下文 | `c01` 36 片日志 / `c02` 规则+30 片 / `c03` 40 跳链 | 3–4 | 消息数被推过 snip 阈值（50），早期结论与「读到哪了」都要自己维护 |
-| 依赖规划 | `c04` 隐藏 DAG / `c05` 废弃跳转 / `c06` 8 源合并 | 3–5 | 顺序与状态不写在题面里，靠任务图/TODO 跟踪才能不漏步 |
+| 依赖规划 | `c04` 隐藏 DAG / `c05` 废弃跳转 / `c06` 8 源合并 | 3–5 | 顺序与状态不写在题面里，靠 TODO 清单跟踪才能不漏步 |
 | 委派校验 | `c07` 12 个独立模块 / `c08` 两份清单核对 / `c09` 先失败再补缓存 | 3–4 | 子任务可并行；不一致要交叉验证；错误信息里写着下一步 |
 
 v0 的 12 条没有 `tier`（它就是「基础」那一档），也**不会被补标**——那个版本已经冻结。
@@ -58,9 +58,9 @@ v0 的 12 条没有 `tier`（它就是「基础」那一档），也**不会被�
 |--------|------------------|-------------------------------------|----------------------|
 | bare   | `bare.py` 朴素循环 | read_file / glob / bash            | 关                   |
 | core   | `agent_loop`     | 与 bare **完全相同**                | 开                   |
-| full   | `agent_loop`     | 全部（+ todo / 任务图 / subagent / skill） | 开              |
+| full   | `agent_loop`     | 全部（+ todo / subagent / skill） | 开              |
 
-`core − bare` = 循环与上下文机制的增益；`full − core` = 任务图 / 子 agent / 技能的增益。
+`core − bare` = 循环与上下文机制的增益；`full − core` = 子 agent / 技能与 todo 的增益。
 三者共用同一份 `SYSTEM_PROMPT`（只有工具清单不同），每次运行会把规格写进 `result.json`
 的 `variant_spec`。
 
@@ -102,7 +102,7 @@ text = ["sum=4176"]
 `tests/test_bench_cases.py` 钉住。另外三种原语由 `tests/test_bench_graders.py` 单测钉住，
 等可写 case 进来再用。
 
-**只读**的准确含义：不改动 fixture 的受判文件。`.avid/`（会话）与 `.tasks/`（任务图）
+**只读**的准确含义：不改动 fixture 的受判文件。`.avid/`（会话）
 是 runtime 写在**工作区里**的簿记目录，判定与 manifest 一律排除它们；case 跑在
 `mkdtemp` 出来的临时副本上，`fixtures/` 永不被写。
 

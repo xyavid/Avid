@@ -16,14 +16,14 @@
 | 能力面 | 状态 | 入口 | 主要证据 |
 |---|---|---|---|
 | 多步 Agent 循环 | 已落地 | `agent_loop`、`avid --agent`、`POST /api/sessions/{id}/runs` | `src/avid/runtime/loop.py:102-295` |
-| 工具调用协议（15 个工具） | 已落地 | 模型自主调用 | `src/avid/tools/__init__.py:45-92` |
+| 工具调用协议（9 个工具） | 已落地 | 模型自主调用 | `src/avid/tools/__init__.py:45-92` |
 | 工具参数校验与失败分类 | 已落地 | 循环内自动 | `src/avid/tools/validate.py`、`src/avid/runtime/execution.py:70-188` |
 | 安全分层：三轴预设 + 四级 deny 阶梯 + bwrap 沙箱 + 审计 | 已落地 | `--permission {manual,auto,full}`、`--allow-full-access`、Web 选择器（full 二次确认）、`POST /runs {permission,full_access_ack}`、`~/.avid/policy.toml`、`~/.avid/audit/*.jsonl` | `src/avid/policy/{modes,action,rules,engine,sandbox,audit,permission}.py`、`src/avid/tools/shell.py` |
 | 工作区（干活地点 / 权限边界 / 会话归属） | 已落地 | `--workspace`、`avid workspace`、导航列 ＋、`POST /api/workspaces` | `src/avid/workspaces.py`、`src/avid/svc/picker.py` |
 | 会话持久化与分支 | 已落地 | `--session`/`--new-session`/`--list-sessions`/`--delete-session`、Web 分支选择器 | `src/avid/session/` |
 | 上下文压缩（五步阶梯） | 已落地 | 自动（每轮 `context.prepare`） | `src/avid/policy/compaction.py`、`src/avid/runtime/context.py` |
 | TODO 清单与提醒 | 已落地 | 模型调 `todo_write` | `src/avid/policy/todo.py`、`src/avid/runtime/state.py:179-187` |
-| 任务图（跨会话 DAG） | 已落地 | 六个任务工具；Web 任务板**只读** | `src/avid/tools/tasks.py` |
+| 待办清单面板 | 已落地（阶段 27） | 输入条正上方常驻；从条目里最后一次 `todo_write` 推导，零新接口 | `web/src/features/conversation/components/TodoPanel.tsx`、`web/src/features/conversation/lib/todos.ts` |
 | 子 agent 并行派发 | 已落地 | 模型调 `subagent`（≤4 个子任务） | `src/avid/tools/subagent.py` |
 | 技能系统 | 已落地 | `skills/*/SKILL.md` + `load_skill`；`GET /api/skills` | `src/avid/policy/skills.py` |
 | 流式模型调用 | 已落地 | Web 运行路径（`?deltas=1` 订阅） | `src/avid/ai/client.py` 的 `stream_completion`、`src/avid/svc/runs.py` |
@@ -35,7 +35,7 @@
 
 ---
 
-## 2. 工具层（15 个）
+## 2. 工具层（9 个）
 
 注册表：`TOOLS`（`src/avid/tools/__init__.py:47-63`）与 `TOOL_IMPLS`（`:65-82`）名字一一对应，
 由 `tests/test_tools_contract.py` 钉住。子 agent 用 `SUB_TOOLS` / `SUB_HANDLERS`（`:84-89`）——
@@ -49,12 +49,6 @@
 | `edit_file` | **path**、**old_string**、**new_string** | 精确替换一次；`old_string` 必须恰好出现一次，0 次或多次都不改并报错 | 同上 |
 | `glob` | **pattern**；path | 按文件名匹配，`*` 不匹配点开头文件；结果上限 200 条 | 同上 |
 | `todo_write` | **todos**（`[{content, status}]`，status ∈ pending/in_progress/completed） | **整份替换**当前 TODO 列表，空数组表示清空 | `src/avid/policy/todo.py` |
-| `create_task` | **subject**；description | 建任务节点并返回 `task_xxxxxxxx`；新任务 `blockedBy` 固定为空 | `src/avid/tools/tasks.py` |
-| `update_task` | **task_id**、**addBlockedBy** | 只加依赖（连边）；目标必须 pending 且无 owner；不能自依赖或成环；重复添加幂等；整次校验后才保存 | 同上 |
-| `can_start` | **task_id** | 依赖全部 completed（且依赖文件都在）才为真 | 同上 |
-| `claim_task` | **task_id**；owner | `pending → in_progress` 并记 owner；非 pending 或被挡都拒绝 | 同上 |
-| `complete_task` | **task_id**；owner | `in_progress → completed`；只有 owner 能完成；报告**本次新解锁**的下游 | 同上 |
-| `get_task` | **task_id** | 读完整 JSON（含 description 与 blockedBy） | 同上 |
 | `subagent` | **tasks**（`[{description, prompt}]`） | 并行执行互不依赖的子任务；**一次最多 4 个**；单子任务最多 30 轮、300s 超时；子 agent 看不到父对话，prompt 必须自包含 | `src/avid/tools/subagent.py` |
 | `load_skill` | **name** | 读取技能全文；名字必须与系统提示里的技能目录一致 | `src/avid/tools/skill.py` |
 | `web_search` | **query**；max_results | 检索公开网页，返回「标题 / 链接 / 摘要」清单（默认 5 条，上限 20）；**只在模型判断需要联网时调用**；Tavily 凭据来自 `TAVILY_API_KEY`（缺 Key → 回 `错误：` 并给出设置方法，不抛异常）；失败/空结果各给各的下一步；摘要按 800 字符截断 | `src/avid/tools/web_search.py`、`src/avid/tools/search_config.py` |
@@ -112,7 +106,7 @@
 - **会话归属**写在会话 header 的 `workspaceId` 字段；会话数据始终在各自工作区的
   `<root>/.avid/sessions/` 下（`src/avid/session/jsonl.py:94-108`）。
 - **运行级工作区根**：`RunState.workspace_root` 决定文件类工具的相对路径基准、`bash` 的
-  cwd、`.tasks/` 与压缩落盘的落点（`src/avid/runtime/state.py:49-51`、`tests/test_run_workspace.py`）。
+  cwd 与压缩落盘的落点（`src/avid/runtime/state.py:49-51`、`tests/test_run_workspace.py`）。
 - **界面新增工作区**：服务端弹宿主机文件夹选择器（`AVID_PICKER_CMD` → tkinter → zenity/kdialog
   → Windows/WSL → osascript 依次探测），取消什么都不做，重复返回 409 并切到已有项
   （`src/avid/svc/picker.py`、`src/avid/web/routes/workspaces.py:27-47`）。
@@ -201,24 +195,17 @@
 
 ---
 
-## 7. 任务图（跨会话 Task DAG）
+## 7. 任务图（跨会话 Task DAG）——已下线（阶段 27）
 
-存储：一个任务一个 JSON 文件，`<工作区根>/.tasks/{id}.json`；id 形如 `task_1a2b3c4d`
-（`^task_[0-9a-f]{8}$`）；创建用 `O_EXCL` 不覆盖，更新走 `tmp + os.replace`
-（`src/avid/tools/tasks.py:41-70, 281-300`）。
+六个任务工具（`create_task` / `update_task` / `can_start` / `claim_task` / `complete_task` /
+`get_task`）与它们的存储（`<工作区根>/.tasks/{id}.json`、`TaskStore`）、应用服务
+（`svc/tasks.py`）、只读接口（`GET /api/tasks{,/{id}}`）与前端页面（`/tasks`、
+`features/tasks/**`）在阶段 27 一并删除；工具数 15 → 9。
 
-| 状态机 | 说明 |
-|---|---|
-| 3 个状态 | `pending` / `in_progress` / `completed`（`tasks.py:44`） |
-| 2 个动作 | `claim`（pending → in_progress，记 owner）、`complete`（in_progress → completed） |
-| 守卫 | claim 要求 pending 且无未完成前置；complete 要求 in_progress 且 `owner` 匹配；**没有回退/重开动作** |
-| 依赖 | `blockedBy` 列表；加边时校验存在性、自依赖与环；目标必须 pending 且无 owner |
-| 文件缺失 | 算未完成（`<任务文件缺失>`），不静默当作已完成 |
-| 并发 | 按目录共享的 `threading.RLock`；`store_for_root` / `store_for(state)` 取运行级任务库 |
-
-与 TODO 的分工：`todo_write` 是**本次运行内**的清单（整份替换、无 ID），任务图是**跨会话、
-有稳定 ID 与依赖**的图；建图固定两阶段（先批量 `create_task` 拿 ID，下一轮再 `update_task` 连边，
-同一轮的工具调用互相看不到结果）。Web 任务板**只读**：`GET /api/tasks`、`GET /api/tasks/{id}`。
+删除理由与当时的实现记录见 `docs/design/runtime-architecture.md` §17（该章开头有下线横幅）。
+一句话：它的**唯一消费者**是那个只读页面，而"这次对话拆成了哪几步、走到第几步"由 `todo_write`
+承接，前端从会话条目推导成输入条上方的待办清单（见下面 §8 之后的前端一节）。
+旧的 `<工作区根>/.tasks/` 数据不迁移、不删除，只是不再被读。
 
 ---
 
@@ -334,9 +321,9 @@ durable、事件总数上限 4096、终态记录保留 600s 或最多 200 个 ru
 |---|---|---|
 | L0 | `ui/tokens.css`、`ui/glass.css`、`ui/primitives/`、`ui/glass/` | 不得出现业务名词；玻璃面 / 高光边 / 投影三档 / 圆角四档只在这里定义 |
 | L1 | `ui/patterns/` | 只接受 props；不读 store、不发请求 |
-| L2 | `features/*`（9 个：approvals、branches、composer、conversation、inspector、sessions、settings、skills、tasks） | 可依赖 L0/L1；**feature 之间不得互相 import** |
+| L2 | `features/*`（8 个：approvals、branches、composer、conversation、inspector、sessions、settings、skills） | 可依赖 L0/L1；**feature 之间不得互相 import** |
 | L3 | `layouts/AppShell` | 不得直接读运行 store |
-| L4 | `routes/`（会话、任务板、技能目录、设置） | 唯一允许把查询结果与活动状态拼在一起的地方 |
+| L4 | `routes/`（会话、技能目录、设置） | 唯一允许把查询结果与活动状态拼在一起的地方 |
 
 状态分三域：REST 权威域（查询缓存）、活动域（事件流 + 纯 reducer）、界面域（localStorage）。
 
@@ -367,7 +354,7 @@ durable、事件总数上限 4096、终态记录保留 600s 或最多 200 个 ru
 | 入口 | 用法 | 说明 |
 |---|---|---|
 | 提问 | `avid "问题"` | 单轮问答；stdout 只放回复，stderr 放 trace 与 token 用量 |
-| Agent | `avid --agent "…"` | 走循环，模型可调用 15 个工具；help 里的工具清单从 `TOOLS` 派生 |
+| Agent | `avid --agent "…"` | 走循环，模型可调用 9 个工具；help 里的工具清单从 `TOOLS` 派生 |
 | 审批 | `--yes` | 替所有审批答「是」（**硬拒绝与阶梯 deny 仍然生效，沙箱也不关**） |
 | 权限 | `--permission {manual,auto,full}` + `--allow-full-access` | 缺省按工作区默认权限，没设过就是 `manual`；`full` 必须同时给第二个开关，否则拒绝启动 |
 | 工作区 | `--workspace PATH\|ID` | 缺省当前目录（会打印解析结果） |

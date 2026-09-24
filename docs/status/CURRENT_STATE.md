@@ -48,14 +48,14 @@
 
 | 层 | 问题 | Avid 的答案 | 现在到什么程度 |
 |---|---|---|---|
-| 能力层 | 想把某类任务交给 agent 自动完成 | 一个能自主多步调用工具的循环 | 已跑通：没有轮数上限（跑到模型不再请求工具）、15 个工具、TODO 与任务图、subagent（§3） |
+| 能力层 | 想把某类任务交给 agent 自动完成 | 一个能自主多步调用工具的循环 | 已跑通：没有轮数上限（跑到模型不再请求工具）、9 个工具、TODO 清单与提醒、subagent（§3） |
 | 工程层 | 用别人的框架 = 黑盒，prompt / 上下文 / 重试 / 权限都改不动 | 每层都是自有代码，边界清晰、可替换 | 已跑通：分层 + `A1`–`A13` 门禁把边界变成会失败的断言（`ARCHITECTURE.md` §4） |
 | 认知层 | 懂概念但没形成可运行整体，改动靠感觉 | 有 trace、有评测集、有基线，改动可度量 | **仪器已就位**：trace + `benchmarks/` 的评测集与基线（§3、`BENCHMARK.md` §9）；但首轮基线没有区分度，所以「改动可度量」目前是**能测**而不是**能判**（§6、§7） |
 
 落到具体用户价值，目前真实成立的是这三条：
 
 1. **在选定的工作区里干活**：会话归属某个工作区，文件类工具的相对路径基准、`bash` 的
-   工作目录、`.avid/` 与 `.tasks/` 的落点都由该工作区决定（`src/avid/runtime/state.py:49-51`、
+   工作目录、`.avid/` 的落点都由该工作区决定（`src/avid/runtime/state.py:49-51`、
    `docs/design/workspace-permission.md:12`）。
 2. **危险动作有裁决、有账本、有物理边界**：四级 deny 阶梯 × 三轴预设，同一次运行内同类操作只问一次，
    区分「永远不许」与「这次不行」（`src/avid/policy/permission.py:351-410`）。
@@ -67,25 +67,25 @@
 
 ## 3. Avid 当前可以做什么？
 
-一句话：**能在选定工作区里跑一个多步 Agent 会话，自主调用 15 个工具，带审批、TODO、
+一句话：**能在选定工作区里跑一个多步 Agent 会话，自主调用 9 个工具，带审批、TODO、
 跨会话任务图、并行子 agent、技能与上下文压缩，从 CLI 或本地 Web 操作，全过程可回放；
 并且能用一条命令把「能不能把任务做成」量成通过率、成本与轨迹（`benchmarks/`）。**
 
 | 能力 | 关键事实 | 证据 |
 |---|---|---|
 | Agent 循环 | **没有轮数上限**（也没有这个开关）：跑到模型不再请求工具为止；Stop 被拦最多补 1 轮；两个取消检查点（每轮开始前、每批工具执行前）；取消走 `RunCancelled`，不返回半成品 | `src/avid/runtime/loop.py`（`itertools.count(1)`） |
-| 工具调用协议 | 15 个工具；参数在 `execute_one` 里按**发给模型的那份 schema** 统一校验（required/type/enum/数值边界）；失败按参数错误 / 执行失败 / 业务拒绝三类给不同的下一步；工具失败不中断循环 | `src/avid/tools/__init__.py:47-82`、`src/avid/tools/validate.py`、`src/avid/runtime/loop.py:275-285` |
+| 工具调用协议 | 9 个工具；参数在 `execute_one` 里按**发给模型的那份 schema** 统一校验（required/type/enum/数值边界）；失败按参数错误 / 执行失败 / 业务拒绝三类给不同的下一步；工具失败不中断循环 | `src/avid/tools/__init__.py:47-82`、`src/avid/tools/validate.py`、`src/avid/runtime/loop.py:275-285` |
 | 安全分层（阶段 26） | 三轴（`approval`/`sandbox`/`network`）正交 × 三个预设（`manual`/`auto`/`full`）；deny > ask > allow 的四级阶梯（ADMIN → SYSTEM`~/.avid/policy.toml` → PROJECT `<ws>/.avid/policy.toml` → USER 账本，仓库文件只能加严）；bwrap 沙箱（只读系统 + 可写工作区 + 掩蔽宿主凭据 + 无出网 + 环境白名单 + 按能力授予挂载）；`full` 三重锁；审计落 `~/.avid/audit/`（放行也记）；沙箱不可用不静默降级 | `src/avid/policy/{modes,action,rules,engine,sandbox,classifier,audit,permission}.py`、`src/avid/tools/shell.py` |
 | 工作区 | 用户级注册表 `~/.avid/workspaces.json`；id 由根目录派生（重复登记幂等、索引丢失不丢数据）；运行级工作区根取代模块全局；CLI/Web/前端都能选与新增 | `src/avid/workspaces.py:31-70,113-264`、`src/avid/svc/picker.py` |
 | 会话持久化 | 新建 / 续接 / 列举 / 删除；条目树 + 值 + 分支 + 变更线；内存与 JSONL 两个后端共用一套一致性用例；每条消息一次提交；跨进程 flock + 短写回滚 + 末行残片自愈 | `src/avid/session/__init__.py:1-21,75-125`、`src/avid/session/jsonl.py` |
 | 分支 | 分支只是「链尾是谁」的一个值；可从任一历史条目分叉；条目树只增不改 | `src/avid/session/values.py`、`docs/guide/web-ui.md:110-121` |
 | 上下文压缩 | 五步阶梯（工具结果落盘 → 按条数裁剪 → 免费瘦身 → 摘要替换 → 模型报超限兜底），阈值集中在 `policy/compaction.py`；完整记录落盘到 `.avid/context/` 并回一句「用 read_file 读回」；自动压缩与兜底各最多一次 | `src/avid/policy/compaction.py:42-71,188-402`、`src/avid/runtime/context.py:64-80` |
 | 计划与提醒 | `todo_write` 整份替换的清单；连续 3 轮未更新时注入提醒；同名同参工具第 3、5 次追加建议性提醒（只提醒不阻断） | `src/avid/runtime/state.py:34`、`src/avid/runtime/loop.py:188-198`、`src/avid/runtime/hooks.py:334-384` |
-| 任务图（跨会话） | 6 个工具；3 状态（`pending`/`in_progress`/`completed`）、2 个动作（`claim`/`complete`）；`blockedBy` 表达依赖、`owner` 表达分工；落在 `.tasks/{id}.json`，id 形如 `task_1a2b3c4d`；完成时报告本次新解锁的下游 | `src/avid/tools/tasks.py:41-64,121-360`、`src/avid/tools/schemas.py:235-301` |
+| 待办清单面板 | 输入条正上方常驻；内容从会话条目里最后一次 `todo_write` 推导（零新接口、零新存储），默认展开、可折叠，没有清单时整块不渲染 | `web/src/features/conversation/components/TodoPanel.tsx`、`web/src/features/conversation/lib/todos.ts`（阶段 27） |
 | 子 agent | `subagent` 一次最多 4 个子任务，并行执行后汇总；子运行结构上去掉 `subagent` 自己（`SUB_TOOLS`）；子 agent 看不到父对话，prompt 必须自包含 | `src/avid/tools/__init__.py:80-81`、`src/avid/tools/subagent.py`、`src/avid/tools/schemas.py:172-203` |
 | 技能 | 目录下 3 个技能（`agent-builder` / `code-review` / `pdf`）；系统提示里只放 `name + description`，正文由 `load_skill` 按需读取；目录在运行开始时重新扫描 | `skills/`、`src/avid/policy/skills.py:65-111`、`src/avid/runtime/state.py:100-123` |
 | 模型接入 | OpenAI 兼容 `/chat/completions` 直连 httpx（不套 SDK）；非流式 `chat_completion` 与流式 `stream_completion` 返回**同形**的 `Turn`，两条解析路径共用同一个 usage 归一化；连接超时 10s / 读超时 60s | `src/avid/ai/client.py:22-35`、`src/avid/ai/client.py` 的 `stream_completion`、`src/avid/runtime/loop.py:228-237` |
-| Web 与前端 | 22 个 HTTP 端点（会话 / 运行 / 审批 / 事件流 / 任务 / 技能 / 工作区 / 元信息）；18 类事件分三档（16 durable + `run_status` + `assistant_delta`）；时间线 / 任务板 / 技能目录 / 设置四个页面；前端 L0–L4 分层；`pnpm run verify` 串起 7 项检查（分层 / token / 样式 / 对比度 / 类型 / 单测 / 体积） | `src/avid/web/routes/*.py`、`src/avid/runtime/events.py:24-104`、`web/package.json` |
+| Web 与前端 | 20 个 HTTP 端点（会话 / 运行 / 审批 / 事件流 / 技能 / 工作区 / 元信息）；18 类事件分三档（16 durable + `run_status` + `assistant_delta`）；时间线 / 技能目录 / 设置三个页面（待办清单长在会话底栏里，不是独立页面）；前端 L0–L4 分层；`pnpm run verify` 串起 7 项检查（分层 / token / 样式 / 对比度 / 类型 / 单测 / 体积） | `src/avid/web/routes/*.py`、`src/avid/runtime/events.py:24-104`、`web/package.json` |
 | CLI | `--agent` / `--yes` / `--permission` / `--workspace` / `--session` / `--new-session` / `--session-name` / `--list-sessions` / `--delete-session`；子命令 `web`、`workspace {add,list,remove,permission}` | `src/avid/cli.py:85-140,317-333` |
 | 用量台账（阶段 22） | `ai/usage.py` 把 OpenAI / DeepSeek 兼容 / Anthropic / Gemini 四种 usage 写法归一成同一形状（缓存读/写可空）；`RunState.usage_report()` 单点算上下文占用（最近一轮真实 `prompt_tokens` / 窗口 / 占用率）、缓存命中率与压缩读数；每轮进 `run_status`、终态进 `run_finished` 与 `GET /api/runs/{id}`，并**按分支落盘**进会话值（刷新 / 切会话 / 重启后可见）；窗口来自 `AVID_CONTEXT_WINDOW` 或内置模型名小表，查不到就不算占用率 | `src/avid/ai/usage.py`、`src/avid/runtime/state.py` 的 `usage_report`、`src/avid/svc/sessions.py:list_branches` |
 | 可观测 | 逐轮 trace 与用量打到 stderr（含缓存读与命中率、有窗口时含占用率）；事件流 + 运行注册表（重放缓冲 512 条、终态记录保留 600s / 最多 200 个 run）；心跳与兜底常量单点定义 | `src/avid/cli.py:usage_suffix`、`src/avid/svc/runs.py:53-65`、`src/avid/runtime/events.py:108-118` |
@@ -100,14 +100,14 @@
 | 做不到 | 类别 | 证据 |
 |---|---|---|
 | 证明「这次改动变好了」 | 做到一半 | 仪器与两套基线都有（`BENCHMARK.md` §9 / §10），单变量对照也真跑过一次（同 commit 只改压缩阈值，§10.3）——但**对照量到的是抖动，不是机制**（45 次运行最大 transcript 4,657 字符 vs 阈值 400,000）；加难度分层（tier 3–5）同样没有区分度（三臂 9/9），因为 94 次工具调用里 72 次是 `bash`。下一步的证据指向可写任务 |
-| 跨会话记忆（提炼 / 召回 / 遗忘） | 声称有、实际无 | `AGENTS.md:7` 把「记忆」列为自有层；`src/` 下只有会话条目树与任务图，没有任何提炼或召回模块 |
+| 跨会话记忆（提炼 / 召回 / 遗忘） | 声称有、实际无 | `AGENTS.md:7` 把「记忆」列为自有层；`src/` 下只有会话条目树，没有任何提炼或召回模块 |
 | 沙箱执行 | **已落地**（阶段 26）：`bash` 在 bwrap 里跑（只读系统、可写工作区、掩蔽凭据、`--unshare-net`、环境白名单），文件类工具仍由阶梯 + 路径校验守住 | `src/avid/policy/sandbox.py`、`src/avid/tools/shell.py`；E2E `benchmarks/sandbox_boundary/` |
 | 多用户、鉴权、远程安全暴露 | 设计上不做 | `docs/guide/web-ui.md:69-92`：只有回环监听 + Host/Origin 白名单，**明文写着没有认证**，能连上端口的人就能建会话、跑命令 |
 | 多 provider | 设计上不做 | 只有一条 OpenAI 兼容路径（`pyproject.toml:6` 唯一运行期依赖是 httpx）；需求里 D-03 明确「早期不做多 provider 抽象」 |
 | 中断后恢复运行 | 设计上不做 | `docs/design/runtime-architecture.md:308-324` 的「不做」清单含崩溃恢复 / checkpoint / 重放；取消只保证不丢已产生的消息、不产生伪造工具结果 |
 | 两个进程同时操作同一会话的运行 | 做到一半 | 会话**文件**有跨进程锁（`jsonl.py` 的 `<会话>.jsonl.lock`），但「一个会话同时至多一个活动 run」只在进程内成立（`frontend-architecture.md:816` 的 I3 自标「已知缺口」） |
 | 会话的下一段 | 做到一半 | 压缩条目、usage 台账、operation 状态机、SQLite 后端均未做（`runtime-architecture.md:635-643`） |
-| 任务图的下一段 | 做到一半 | 子 agent 的 owner 身份、任务工具进审批、跨进程互斥、`completed` 回退、给人看的**写**路径都没做——Web 任务板是只读的（`runtime-architecture.md:1201-1211`、`docs/guide/web-ui.md:43-67`） |
+| 任务图 | **已下线**（阶段 27） | 六个工具、存储、只读接口与 `/tasks` 页面一并删除；旧 `<工作区根>/.tasks/` 不迁移、不删除，只是不再被读（`docs/design/runtime-architecture.md` §17） |
 | 前端的一部分 | 做到一半 | 虚拟列表、subagent 子事件转发、a11y（axe）用例、性能门禁与基线（C1–C5/C10/C12 无脚本）都没有。**视觉回归已在阶段 23b 落地**（`web/e2e/visual.spec.ts` + 入库基线，容差按实测的 `maxDiffPixels: 3`），但 e2e 仍不进 CI（`frontend-architecture.md` 的 D10、§17 的未验证假设） |
 | 大输出以外的 token/成本管理 | 做到一半 | 只有按轮累加的 `tokens` 计数与摘要调用（`src/avid/runtime/state.py:73-77`）；没有按会话/模型/时间的成本台账，也没有预算上限 |
 | 自动重试 | 设计上不做 | 模型 4xx/5xx 一律 `LLMError` 上抛终止；唯一的重试是「上下文超限 → 兜底压缩 → 重试一次」（`runtime-architecture.md:308-324`、`loop.py:214-226`） |
@@ -237,7 +237,7 @@ AvidBench 的 `denials` 与 `approvals_requested` 从事件流派生（`benchmar
 （`benchmarks/README.md` 的边界）是对的，但现在它们是唯一还有信息量的方向。
 
 **同版不做**：压缩阈值的再校准（当前任务族不可评估，等可写或大上下文 case 进来再谈）、
-长期记忆、多 provider、SQLite 后端、压缩条目、任务图下一段、前端 a11y（axe）、
+长期记忆、多 provider、SQLite 后端、压缩条目、前端 a11y（axe）、
 域名级网络授予（本机代理 + 白名单）。
 
 **已定且不再讨论的取舍**：真模型 + 固定模型版本（`AVID_MODEL` 写进 `result.json`）；评测不进

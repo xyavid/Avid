@@ -1,6 +1,6 @@
 # web/ — Avid 前端
 
-会话时间线、审批队列、任务板（只读）、技能目录与设置。设计依据：
+会话时间线、审批队列、待办清单、技能目录与设置。设计依据：
 `docs/design/frontend-architecture.md`；使用与接口对应关系：`docs/guide/web-ui.md`。
 
 ## 命令
@@ -20,7 +20,7 @@ pnpm run gate:size      # C1/P9/C17/C18：体积预算 + 显式豁免 + CSS/字�
 pnpm run check:contrast # 按 alpha 合成算 token 表里声明的 17 对，正文 <4.8 即红
 pnpm run verify         # 以上全部（不含 build 与 e2e；gate:size 依赖 dist/，先 pnpm build）
 node scripts/measure-glass.mjs --base http://127.0.0.1:8877   # 手动：玻璃的长任务/帧率对照（不进 verify）
-AVID_E2E=1 pnpm test:e2e    # Playwright 47 项（含 5 条视觉基线；需先 pnpm exec playwright install chromium）
+AVID_E2E=1 pnpm test:e2e    # Playwright 49 项（含 4 条视觉基线；需先 pnpm exec playwright install chromium）
 ```
 
 **Node ≥ 22.22**：jsdom 30 依赖 undici 8，后者调 `node:worker_threads.markAsUncloneable`
@@ -52,6 +52,23 @@ AVID_E2E=1 pnpm test:e2e    # Playwright 47 项（含 5 条视觉基线；需先
 `AppShell` 外层 `h-dvh overflow-hidden`、内层行 `h-full min-h-0`，往下每级 flex 容器都带
 `min-h-0`：只有高度链确定，「时间线是唯一滚动容器」与「输入条常驻视口内」才成立。
 改回 `min-h-screen` 会让内容撑高整页（回归用例 `e2e/layout.spec.ts`）。
+
+## 底栏：待办清单在上，输入条在下
+
+会话卡的底栏（`ConversationView` 里 `border-t-bold` 那一块）从上到下是**待办清单**与输入条：
+清单贴着输入条正上方。放这里是因为"agent 把这次对话拆成哪几步、走到第几步"是边说边要看的
+上下文，不该为了看它离开对话（阶段 27 之前，同类信息只能去另一个页面看）。
+
+清单的权威副本不在这块组件里、也不在某个接口上——它是 transcript 里**最后一次** `todo_write`
+的调用参数 `arguments.todos`（该工具每次都全量提交整份列表，所以"最后一次合法调用"就是当前
+计划）。唯一的推导点是 `src/features/conversation/lib/todos.ts` 的 `latestTodos`：
+**零新接口、零新存储**，刷新、重进会话、切分支看到的都正好是那条链上的计划。没调过
+`todo_write`（或清单为空）时**整块不渲染**，连它自己那份上边距也不留——"没有计划"不该在
+输入条上方留一条空框。
+
+展开态是界面域偏好（`uiStore.todoExpanded`）：默认展开，收起过一次就记住，切会话不丢。
+时间线里那次 `todo_write` 仍以工具卡留在历史里（它记的是"当时提交了什么"），这块面板显示的
+是"现在的计划"——两者不是同一份东西，所以不合并、也不互相覆盖。回归用例 `e2e/todos.spec.ts`。
 
 ## 分层（单向依赖，越往上越知道业务）
 
@@ -87,7 +104,7 @@ L0/L1**——阶段 23b 的整个卖点。颜色的可读性由 `check:contrast`
 ## 交互反馈（按键一律有方框）
 
 **行动型按键本身就有方框**，与「改名」等次级按钮同族：`variant="secondary"`（时间线的
-复制 / 从此处分支两枚图标按钮、工具卡收起、处理中展开、任务卡展开、审批原因、关闭检查器、
+复制 / 从此处分支两枚图标按钮、工具卡收起、处理中展开、待办清单折叠、审批原因、关闭检查器、
 导航折叠、会话项删除）走 `ui/primitives/Button.tsx` 的同一套 `surface-chip`——玻璃面 +
 1px 高光边（`--glass-edge`）、`--r-chip` 圆角、`--lift-1` 投影。
 悬停由 `ui/glass.css` 统一抬升一档投影并加一点亮度，按住时投影收掉；键盘聚焦有全局
@@ -109,7 +126,7 @@ L0/L1**——阶段 23b 的整个卖点。颜色的可读性由 `check:contrast`
 
 | 域 | 机制 | 权威来源 |
 |---|---|---|
-| 权威域 | TanStack Query（`api/queries.ts`） | `session/` 文件与 `tools/tasks.py` |
+| 权威域 | TanStack Query（`api/queries.ts`） | `session/` 文件 |
 | 活动域 | `state/runStore.ts` + `events/reducer.ts`（纯函数）+ `events/coalescer.ts` | 事件流（与权威域最终一致） |
 | 界面域 | `state/uiStore.ts`（localStorage） | 用户偏好 |
 
