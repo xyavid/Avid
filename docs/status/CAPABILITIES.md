@@ -151,14 +151,24 @@
 |---|---|---|---|
 | ① 工具结果预算 | 每轮 | 工具结果字符总量超预算时，把**最大的一项**落盘（最近 3 条永不落盘） | 否 |
 | ② 条数裁剪 | 每轮 | 消息数超上限时裁中间、保留头 8 尾 24，切口只落安全边界 | 否 |
-| ③ 免费瘦身 | 超 `CONTEXT_CHAR_LIMIT` | 把较早的工具结果落盘，直到降到限值的 80% | 否 |
+| ③ 免费瘦身 | 超**当前阈值** | 把较早的工具结果落盘，直到降到限值的 80% | 否 |
 | ④ 摘要替换 | ③ 之后仍超限 | 先落盘完整记录，再用一次模型调用生成 `[历史摘要]` 替换历史 | 是（整个运行最多一次） |
 | ⑤ 兜底 | 模型报上下文超限 | 总结更早历史、保留最近 5 条后重试一次 | 是（整个运行最多一次） |
 
-阈值单一出处（`src/avid/policy/compaction.py:42-51`）：`TOOL_RESULT_CHAR_BUDGET = 200_000`、
+阈值单一出处（`src/avid/policy/compaction.py:41-60`）：`TOOL_RESULT_CHAR_BUDGET = 200_000`、
 `TOOL_RESULT_KEEP_RECENT = 3`、`MAX_MESSAGES = 50`、`SNIP_KEEP_HEAD = 8`、`SNIP_KEEP_TAIL = 24`、
 `CONTEXT_CHAR_LIMIT = 400_000`、`MICRO_COMPACT_KEEP_RECENT = 3`、`MICRO_COMPACT_TARGET_RATIO = 0.8`、
-`REACTIVE_KEEP_RECENT = 5`、`SUMMARY_MAX_TOKENS = 4000`。
+`REACTIVE_KEEP_RECENT = 5`、`SUMMARY_MAX_TOKENS = 4000`、`WINDOW_TRIGGER_RATIO = 0.8`、
+`MIN_CHARS_PER_TOKEN = 0.5`、`MAX_CHARS_PER_TOKEN = 6.0`。
+
+**③④ 的阈值随真实窗口派生**（`context.effective_budget` → `compact.derived_context_chars`）：
+有窗口、且拿到过一轮真实读数时按``窗口 × 0.8 × 实测 chars/token −（系统提示 + 工具定义 字符）``
+现算；`chars/token` 由 `RunState.last_usage.prompt_tokens` 与 `RunState.prompt_parts`（发出那次
+请求前记下的三块字符数）这一对反推——所以中英混排的语言差异自动被吸收，而不是靠一个查表来的
+语言系数。缺任一项（没窗口、没读数）就**逐字**回落到 `CONTEXT_CHAR_LIMIT`；调用方显式注入
+阈值时用 `ContextBudget(from_window=False)` 关掉派生（否则注入值会被盖掉）。派生理由会拼进
+`context_compacted` 事件的 `detail`，界面据此回答"为什么现在压"。E2E：`benchmarks/context_window/`
+（真循环 + 按窗口记账的标尺模型，4 个臂给 5 条布尔结论）。
 
 **落盘（spill）**：目录 `.avid/context`（相对运行级工作区根），文件名
 `<kind>-<run_tag 或进程标识>-<seq:04d>.txt`，回给模型一句 `[已落盘] …用 read_file 读回`；

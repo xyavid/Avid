@@ -231,12 +231,16 @@ def test_injected_context_chars_is_recorded_only_where_it_applies(tmp_path: Path
 
     `bare` 没有压缩机制：给它一个阈值等于无声无效，所以既不传也不记——记了就会凭空
     多出一个不存在的差异来源。
+
+    `from_window=False` 也是这次对照的前提：内核默认会按真实窗口**自己派生** ③④ 的
+    阈值，注入阈值时不关掉它，注入的数字就被盖掉了——所以它与 `context_chars` 一样
+    要记在运行记录里（否则两组差值没法解释）。
     """
     case = load_cases(ids=["b01_largest_file"])[0]
     for variant, expected in (
         ("bare", {}),
-        ("core", {"context_chars": 30_000}),
-        ("full", {"context_chars": 30_000}),
+        ("core", {"context_chars": 30_000, "from_window": False}),
+        ("full", {"context_chars": 30_000, "from_window": False}),
     ):
         result = run_case(
             case,

@@ -155,10 +155,12 @@ class ContextBudget:
     max_messages: int = 50
     keep_head: int = 8
     keep_tail: int = 24
-    context_chars: int = 400_000
+    context_chars: int = 400_000        # ③④ 的回落值：窗口/读数拿不到时用它
     micro_keep_recent: int = 3
     micro_target_ratio: float = 0.8
     reactive_keep_recent: int = 5
+    from_window: bool = True            # 有窗口+读数时按窗口现算 context_chars
+    window_ratio: float = 0.8
 
 @dataclass(frozen=True)
 class Preparation:
@@ -176,6 +178,16 @@ def prepare(
 - `prepare` 是**唯一**知道"①② 每轮跑、③④ 有条件"的地方。循环只调它一次。
 - `summarize` 作为参数传入而不是让 `prepare` 自己 import：这从**类型上**保证了 ①②③ 无法触达模型（判据 §6 不变量 I4）。原实现靠 `inspect.signature` 事后断言，现在由签名保证。
 - `compact_history` 的"整轮最多一次"由 `state.compacted` 决定，但**只有 `prepare` 写这个字段**——循环不改它。
+
+> **后续修正（阈值来源）**：`context_chars` 曾经就是 ③④ 的判据本身（写死 400_000），于是
+> 它与真实窗口脱钩——中文（1 字符 ≈ 1 token）会先撞 provider 的上下文超限、只剩 ⑤ 兜底，
+> 1M 窗口的模型又会被过早摘要。现在 `prepare` 先调 `effective_budget`：有窗口、且拿到过
+> 一轮真实读数（`RunState.prompt_parts` 与 `RunState.last_usage` 是同一对）时，按
+> `窗口 × window_ratio × 实测 chars/token −（系统提示 + 工具定义）` 现算（`compact.derived_context_chars`，
+> 纯函数、不碰状态）；缺任一项就**逐字**回落到 `CONTEXT_CHAR_LIMIT`，默认路径行为不变。
+> 派生理由拼进 `CompactReport.detail` → `context_compacted` 事件，界面据此回答"为什么现在压"。
+> 显式注入阈值做 A/B（评测）时必须 `from_window=False`：否则派生会盖掉注入值，
+> 对照的差值就不再只来自那一个变量。E2E 与四个臂见 `benchmarks/context_window/`。
 
 ### 4.4 `runtime/execution.py` —— 工具执行环节
 

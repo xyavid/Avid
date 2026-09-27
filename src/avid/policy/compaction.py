@@ -50,6 +50,15 @@ MICRO_COMPACT_TARGET_RATIO = 0.8
 REACTIVE_KEEP_RECENT = 5
 SUMMARY_MAX_TOKENS = 4000
 
+# ③④ 的字符阈值与**真实窗口**的关系。有窗口、且拿到过一轮真实读数时按
+# 「窗口 × WINDOW_TRIGGER_RATIO × 实测 chars/token − 两块固定文本字符」现算
+# （见 derived_context_chars）；CONTEXT_CHAR_LIMIT 退居"窗口或读数拿不到"时的回落值。
+WINDOW_TRIGGER_RATIO = 0.8
+# 实测 chars/token 的可信区间。下界挡"读数报得太小 → 压得过狠"，上界挡
+# "读数报得太大 → 等于永不压缩"：读数不像话时不跟着跑。
+MIN_CHARS_PER_TOKEN = 0.5
+MAX_CHARS_PER_TOKEN = 6.0
+
 # 落盘目录必须在工作区内：read_file 有工作区边界校验，落到外面就再也读不回来了。
 SPILL_DIR = ".avid/context"
 SPILL_PREFIX = "[已落盘]"
@@ -93,6 +102,49 @@ class CompactReport:
 
     def describe(self) -> str:
         return f"{self.step} — {self.detail}"
+
+
+def derived_context_chars(
+    *,
+    window: int | None,
+    prompt_tokens: int | None,
+    chars: tuple[int, int, int] | None,
+    ratio: float = WINDOW_TRIGGER_RATIO,
+) -> tuple[int, float] | None:
+    """把"模型的窗口"折算成**对话消息**的字符阈值；前提不齐就返回 ``None``。
+
+    只做一件事：用**上一轮的真实读数**（``prompt_tokens``）与发出那次请求时记下的
+    三块字符数（系统提示 / 工具定义 / 对话消息）反推这次运行**自己的** ``chars/token``，
+    再把窗口乘成字符预算：
+
+        阈值 = 窗口 × ratio × chars/token −（系统提示 + 工具定义 的字符数）
+
+    为什么是实测反推、而不是一个固定的语言系数：同样字符数的中文与英文 token 数差几倍，
+    任何固定系数都会在其中一种语言上系统性偏掉（中英混排时更糟——这正是写死的
+    ``CONTEXT_CHAR_LIMIT`` 会"中文先撞上下文超限、大窗口又被过早压缩"的原因）。
+    ``chars/token`` 从**这次会话自己的真实文本**上量出来，语言换了它跟着换。
+
+    两块固定文本的字符数在这里减掉，是因为阈值只管对话消息；它们的 token 也按同一个
+    换算率折回字符，两边口径一致（占比分配见 ``RunState._split_context``，同一套假设）。
+
+    缺任一项——没窗口、没真实读数、没字符数、三块全零、窗口非正——都返回 ``None``：
+    宁可回落到 ``CONTEXT_CHAR_LIMIT``，也不拿半份读数算一个假阈值。
+    """
+    if window is None or window <= 0:
+        return None
+    if chars is None:
+        return None
+    total = sum(chars)
+    if total <= 0:
+        return None
+    if prompt_tokens is None or prompt_tokens <= 0:
+        return None
+
+    per_token = min(
+        max(total / prompt_tokens, MIN_CHARS_PER_TOKEN), MAX_CHARS_PER_TOKEN
+    )
+    limit = int(window * ratio * per_token) - (chars[0] + chars[1])
+    return max(1, limit), per_token
 
 
 # ---------------- 落盘 ----------------

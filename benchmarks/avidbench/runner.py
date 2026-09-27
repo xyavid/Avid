@@ -174,12 +174,19 @@ def _execute(
     )
     # 注入的阈值只对 avid 循环有作用面：bare 没有压缩，给它一个阈值等于无声无效，
     # 所以既不传也不记（否则结果里会出现一个不存在的差异来源）。
+    #
+    # `from_window=False` 是单变量对照的前提：内核现在会在有窗口、有真实读数时**自己
+    # 按窗口派生** ③④ 的阈值，不关掉它，这里注入的数字会被静默盖掉，两组结果的差值就
+    # 不再只来自这个变量。不给 `--context-chars` 时走内核默认（派生生效），那正是生产
+    # 行为——所以那种运行**没有** overrides。
     budget = (
-        ContextBudget(context_chars=context_chars)
+        ContextBudget(context_chars=context_chars, from_window=False)
         if context_chars is not None and variant.loop == "avid"
         else None
     )
-    overrides = {"context_chars": context_chars} if budget is not None else {}
+    overrides = (
+        {"context_chars": context_chars, "from_window": False} if budget is not None else {}
+    )
 
     def emit(message: dict[str, Any]) -> None:
         telemetry.on_message(message)

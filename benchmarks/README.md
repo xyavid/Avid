@@ -126,11 +126,16 @@ benchmarks/runs/<UTC 时间>-<commit>/
 
 ## 边界
 
-- **内核只开了一个口**：`agent_loop(..., budget=...)` 接收压缩阈值（默认 `None` = 与以前
-  逐字一致），由 `--context-chars` 注入。别的差异一律只经既有注入点（`chat` / `tools` /
+- **内核只开了一个口**：`agent_loop(..., budget=...)` 接收压缩阈值（默认 `None` = 内核
+  默认行为），由 `--context-chars` 注入。别的差异一律只经既有注入点（`chat` / `tools` /
   `registry` / `state` / `hooks` / `on_message` / `on_event`）。硬超时用既有的取消检查点。
   为什么要开这个口：**单变量对照必须在同一个 commit 上跑**，而"改常量再跑一次"会把代码
   差异混进差值里；注入值会写进每次运行的 `overrides`。
+- **注入阈值时必须关掉"随窗口派生"**：内核现在会在有窗口、有真实读数时自己按窗口算 ③④
+  的字符阈值（见 `docs/status/CAPABILITIES.md` §5 与 E2E `benchmarks/context_window/`），
+  注入 `--context-chars` 时 `runner` 一并传 `from_window=False`，否则注入的数字会被静默
+  盖掉、两组结果的差值不再只来自这个变量。**不给** `--context-chars` 的运行走内核默认
+  （派生生效）——那是生产行为，所以那种运行没有 `overrides`。
 - **`overrides` 与 `variant_spec` 一样重要**：没有它，两组对照的数字放在一起无法解释。
 - **不建第二套 runtime**：`runner` 只做物化 → 装配 → 跑循环 → 判最终状态 → 落盘。
 - **只有三个臂**：完整消融矩阵（±task / ±subagent / ±compaction）要等统计功效与可切换
