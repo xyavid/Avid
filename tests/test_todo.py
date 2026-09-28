@@ -4,7 +4,6 @@ import pytest
 
 from avid.policy.todo import (
     TodoList,
-    build_reminder,
     todo_write,
 )
 from avid.runtime.state import RunState
@@ -150,26 +149,5 @@ def test_run_state_instances_own_their_own_list():
     assert RunState().todo is not RunState().todo
 
 
-# ---------- reminder ----------
-
-
-def test_reminder_mentions_the_count_and_current_list(state):
-    write(state, [{"content": "剩下的活", "status": "pending"}])
-
-    reminder = build_reminder(state.todo, 3)
-
-    assert reminder.startswith("[提醒]")
-    assert "连续 3 轮" in reminder
-    assert "剩下的活" in reminder
-
-
-def test_reminder_threshold_lives_in_run_state():
-    from avid.runtime.state import TODO_REMINDER_AFTER_ROUNDS
-
-    assert TODO_REMINDER_AFTER_ROUNDS == 3
-
-
-def test_reminder_works_with_an_empty_list(state):
-    assert "列表为空" in build_reminder(state.todo, 3)
 
 

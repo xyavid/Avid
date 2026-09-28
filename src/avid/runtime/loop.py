@@ -41,7 +41,7 @@ from .context_manager import ComposedRequest, ContextBudget, ContextManager
 from .events import RunObserver
 from .execution import execute_batch
 from .hooks import BLOCK, HookRegistry
-from .state import MAX_CONSECUTIVE_DENIALS, TODO_REMINDER_AFTER_ROUNDS, RunState
+from .state import MAX_CONSECUTIVE_DENIALS, RunState
 
 if TYPE_CHECKING:  # 只有类型标注用它：注解是惰性的，运行时不必跨层 import 策略层
     from ..policy.permission import ApprovalLedger, AskUser, RunSecurity
@@ -71,13 +71,6 @@ class RunCancelled(RuntimeError):
     的消息在产生时就已落库，所以取消不需要补偿写，也不产生伪造的工具结果
     （不变量 I9）。
     """
-
-
-def _calls_todo_write(tool_calls: list[dict[str, Any]]) -> bool:
-    """本轮是否更新过 TODO —— 用来决定提醒计数是归零还是累加。"""
-    return any(
-        (call.get("function") or {}).get("name") == "todo_write" for call in tool_calls
-    )
 
 
 def _submit_input(
@@ -171,7 +164,6 @@ def agent_loop(
     # 只有**并发安全**的工具会被并进同一段，写类/bash/任务类/子 agent 是串行屏障
     # （分类见 `tools/safety.py`，调度见 `execution.execute_batch`）。
     max_parallel_tools: int | None = None,
-    todo_reminder_after: int = TODO_REMINDER_AFTER_ROUNDS,
     on_message: Callable[[dict[str, Any]], Any] | None = None,
     ask: AskUser | None = None,
     on_event: RunObserver | None = None,
@@ -186,10 +178,10 @@ def agent_loop(
 
     ``on_message`` 是循环**唯一的消息通道**：本次运行产生或改写的每条消息按
     发生顺序回调一次——先是触发用户消息（UserPromptSubmit 注入**之后**的版本），
-    然后是每轮追加的 assistant、工具结果、注入的 TODO 提醒与 Stop nudge。
-    循环不 import 会话层，落库与否由回调决定（不变量 I7）。
+    然后是每轮追加的 assistant、工具结果与 Stop nudge。计划与运行状态走 tail 块
+    （不落库），不经过这条通道。循环不 import 会话层，落库与否由回调决定（不变量 I7）。
 
-    ``on_event`` 是**步骤级事实**的通道（轮次、TODO 提醒、Stop nudge、取消），
+    ``on_event`` 是**步骤级事实**的通道（轮次、Stop nudge、取消），
     不是第二个消息通道：``on_message`` 仍然是消息的唯一出口。两者都不改调度。
 
     ``hooks`` 注入这次运行的 hook 注册表（None = 进程级默认）：以前注册表是模块级
@@ -291,18 +283,6 @@ def agent_loop(
         state.round = round_index
         state.check_cancelled()  # 检查点 1：每轮开始前（§7.4）
 
-        # TODO 提醒依赖"第几轮"，这确实是循环自身的事实；
-        # 但"该不该提醒、提醒什么"由 state 决定，循环只负责追加。
-        reminder = state.todo_reminder(todo_reminder_after)
-        if reminder is not None:
-            message = {"role": "user", "content": reminder}
-            transcript.append(message)
-            # 先生成事件，再发消息：svc 据此把这条 user 消息认成 TODO 提醒，
-            # 而不是用户输入（避免靠解析「[提醒]」文本前缀分类，§5.3）。
-            state.emit(events.TODO_REMINDER, content=reminder, message=message)
-            emit(message)
-            logger.info("注入 TODO 提醒（连续 %d 轮未更新）", state.rounds_since_todo)
-
         state.emit(events.RUN_STATUS, round=round_index, tokens=state.tokens, activity="model")
 
         # 上下文装配与压缩都在 compose 里：①② 每轮跑，③④ 超限时才做，
@@ -355,10 +335,6 @@ def agent_loop(
             turn.finish_reason or "-",
             len(turn.tool_calls),
             turn.usage.total_tokens,
-        )
-
-        state.rounds_since_todo = (
-            0 if _calls_todo_write(turn.tool_calls) else state.rounds_since_todo + 1
         )
 
         if not turn.tool_calls:

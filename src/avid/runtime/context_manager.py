@@ -298,20 +298,33 @@ class ContextManager:
         """
         reports = self._compact()
         if self._system is None:
-            blocks = self._collect(SYSTEM)
-            texts = [block.content for block in blocks]
-            texts += [str(text) for text in (injected or []) if str(text).strip()]
-            self._system = "\n\n".join(texts)
-            self._system_parts = {}
-            for block in blocks:
-                self._system_parts[block.kind] = (
-                    self._system_parts.get(block.kind, 0) + len(block.content)
-                )
-            for text in injected or []:
-                self._system_parts[INJECTED] = (
-                    self._system_parts.get(INJECTED, 0) + len(str(text))
-                )
+            self._freeze_system(list(injected or []))
         return self._assemble(reports)
+
+    def system_prompt(self) -> str:
+        """只渲染系统提示词：不压缩、不渲染 tail。
+
+        bare 循环这类「无机制」基准臂用——它们的系统提示词与 avid 臂同源
+        （同一批 SYSTEM 块），但不参与压缩与 tail。
+        """
+        if self._system is None:
+            self._freeze_system([])
+        return self._system
+
+    def _freeze_system(self, injected: list[str]) -> None:
+        blocks = self._collect(SYSTEM)
+        texts = [block.content for block in blocks]
+        texts += [str(text) for text in injected if str(text).strip()]
+        self._system = "\n\n".join(texts)
+        self._system_parts = {}
+        for block in blocks:
+            self._system_parts[block.kind] = (
+                self._system_parts.get(block.kind, 0) + len(block.content)
+            )
+        for text in injected:
+            self._system_parts[INJECTED] = (
+                self._system_parts.get(INJECTED, 0) + len(str(text))
+            )
 
     def render(self) -> ComposedRequest:
         """重渲染：兜底压缩改写 transcript 后重算 tail 与记账。system 不变、不压缩。"""

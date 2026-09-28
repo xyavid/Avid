@@ -113,7 +113,8 @@ def test_register_hook_works_as_a_decorator(clean):
 
 
 def test_default_hooks_are_registered_on_import():
-    assert DEFAULT_HOOKS.registered("UserPromptSubmit") == [hooks.context_inject_hook]
+    # UserPromptSubmit 上没有默认回调：环境注入已是 ContextManager 的 environment 块
+    assert DEFAULT_HOOKS.registered("UserPromptSubmit") == []
     assert DEFAULT_HOOKS.registered("PreToolUse") == [hooks.permission_hook, hooks.log_hook]
     assert DEFAULT_HOOKS.registered("PostToolUse") == [
         hooks.repeat_call_hook,
@@ -124,15 +125,6 @@ def test_default_hooks_are_registered_on_import():
 
 
 # ---------- 五个回调各自的行为 ----------
-
-
-def test_context_inject_hook_reports_environment(clean):
-    context = {"prompt": "你好", "injected": []}
-
-    assert hooks.context_inject_hook(context) is None
-    assert len(context["injected"]) == 1
-    assert "工作区根目录" in context["injected"][0]
-    assert "bash" in context["injected"][0]
 
 
 def test_permission_hook_blocks_and_records_reason(clean):

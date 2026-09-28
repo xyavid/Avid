@@ -1,7 +1,8 @@
 """技能系统：目录常驻，全文按需。
 
-系统提示里只放技能目录（name + description，每个一行），完整说明要模型主动调
-``load_skill`` 才进上下文——技能变多也不会撑爆 system prompt。
+技能目录（name + description，每个一行）由 ``runtime/context_manager.py`` 渲染进
+系统提示词，完整说明要模型主动调 ``load_skill`` 才进上下文——技能变多也不会撑爆
+system prompt。本模块只负责扫描与查询：谁在装配提示词，谁去找装配器。
 
 注册表按运行隔离：``agent_loop`` 每次运行新建一个 ``SkillLoader``，所以磁盘上的
 技能目录一变，下次运行的 system prompt 就是新的。
@@ -28,13 +29,6 @@ def default_skills_dir(root: str | Path | None = None) -> Path:
     调用时求值——这是本函数存在的全部理由（见模块 docstring）。
     """
     return (Path(root) if root is not None else Path.cwd()) / SKILLS_SUBDIR
-
-AGENT_INSTRUCTIONS = (
-    "你是 Avid，一个能自主调用工具完成任务的 agent。"
-    "需要外部信息或动作时调用工具；信息足够时直接给出答案。"
-    "任务需要三步以上时，先用 todo_write 列出计划再逐步执行，"
-    "每完成一步就重新提交整份列表并更新状态。"
-)
 
 
 def _split_frontmatter(text: str) -> tuple[dict[str, str], str]:
@@ -110,22 +104,6 @@ class SkillLoader:
         return "\n".join(
             f"- {name}: {self.skills[name]['description']}"
             for name in sorted(self.skills)
-        )
-
-    def build_system_prompt(
-        self, instructions: str = AGENT_INSTRUCTIONS, workdir: str | None = None
-    ) -> str:
-        # 延迟导入：tools 包要 import tools/skill.py，而它要 import 本模块。
-        from ..tools import workspace
-
-        # 运行级工作区根优先（一个进程可以服务多个工作区），否则用进程默认根。
-        root = workdir or workspace.WORKSPACE_ROOT
-        return (
-            f"{instructions}\n"
-            f"工作目录：{root}\n"
-            "Act, don't explain.\n\n"
-            f"## 可用技能\n{self.catalog() or '（当前没有可用技能）'}\n\n"
-            "Use load_skill to read the full instructions when a skill applies."
         )
 
     def load(self, name: str) -> str:

@@ -677,12 +677,10 @@ class RunRegistry:
         都发，同一条提醒会变成两条 durable 事件，而循环那条不带 ``entry_id``、sink 那条
         不带 ``content``——前端于是画出一个有文字、一个空白的两枚通知。
         """
-        if event.type in (events.TODO_REMINDER, events.STOP_NUDGE):
+        if event.type == events.STOP_NUDGE:
             message = event.data.get("message")
             if isinstance(message, dict):
-                record.injected[id(message)] = (
-                    "todo" if event.type == events.TODO_REMINDER else "nudge"
-                )
+                record.injected[id(message)] = "nudge"
             return
         if event.type == events.RUN_STATUS:
             # 轮次与 token 的权威在 state（循环里只写 state.round / state.tokens），
@@ -702,19 +700,17 @@ class RunRegistry:
     ) -> Callable[[dict[str, Any]], None]:
         """消息通道 → 落库 + durable 消息事件。
 
-        ``on_message`` 仍是消息的唯一出口（§7.1）。注入的 TODO 提醒 / Stop nudge
-        由循环**先**发 ``on_event``，这里按对象身份认出它们，而不是解析文本前缀
-        （§5.3）；``entry_id`` 来自 ``SessionRecorder``（唯一落库点，I2）。
+        ``on_message`` 仍是消息的唯一出口（§7.1）。注入的 Stop nudge 由循环**先**发
+        ``on_event``，这里按对象身份认出它们，而不是解析文本前缀（§5.3）；
+        ``entry_id`` 来自 ``SessionRecorder``（唯一落库点，I2）。
         """
 
         def sink(message: dict[str, Any]) -> None:
-            # 先认身份再落库：注入的提醒要按 NOTICE_ENTRY 存，渲染侧才不会把它画成
+            # 先认身份再落库：注入的 nudge 要按 NOTICE_ENTRY 存，渲染侧才不会把它画成
             # 用户说的话（文本上认不出来——nudge 的文本由 Stop hook 任意给定）。
             label = record.injected.pop(id(message), None)
             entry_id = recorder.on_message(message, notice=label is not None)
-            if label == "todo":
-                type = events.TODO_REMINDER
-            elif label == "nudge":
+            if label == "nudge":
                 type = events.STOP_NUDGE
             else:
                 type = _MESSAGE_EVENTS.get(str(message.get("role")), "")
@@ -723,7 +719,7 @@ class RunRegistry:
             payload: dict[str, Any] = {"entry_id": entry_id, "message": message}
             if label is not None:
                 # 提醒类事件的唯一一次发射：循环那次只用于标注（见 _observe），
-                # 这里补上内容——事件类型不变，消费者照旧按 todo_reminder 分支。
+                # 这里补上内容——事件类型不变，消费者照旧按 stop_nudge 分支。
                 payload["content"] = str(message.get("content") or "")
             self.emit(record, type, **payload)
 

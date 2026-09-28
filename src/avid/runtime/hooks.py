@@ -168,33 +168,6 @@ DEFAULT_HOOKS = HookRegistry()
 # ---------------- 默认回调 ----------------
 
 
-def context_inject_hook(context: dict[str, Any]) -> str | None:
-    """UserPromptSubmit：注入工作区路径与可用工具，省掉模型猜环境的往返。
-
-    工作区根优先取运行级上下文（``state.workspace_root``，阶段 18 起每个会话可以属于
-    不同工作区），没有时回落到进程默认根。
-
-    **可用工具取本次运行的那一份**（``context["tool_names"]``，由循环按真正发给模型的
-    ``tools`` 算出），不是全局注册表：subagent 只带 ``SUB_TOOLS``（去掉自己），用全局表
-    注入会让它的系统提示宣称能调用 ``subagent``，而调用只会得到「未知工具」。字段缺失
-    （不跑循环的直调路径）时回落到全局 ``TOOLS``。
-
-    ``injected`` 里的内容由循环并进**系统提示词**，不改写用户消息——它是运行级上下文，
-    每轮重建、不落库；写进 user content 会让界面把内核的话当成用户说的话显示。
-    """
-    from ..tools import TOOLS, workspace
-
-    root = context.get("workspace_root") or workspace.WORKSPACE_ROOT
-    names_list = context.get("tool_names")
-    if names_list is None:
-        names_list = [item["function"]["name"] for item in TOOLS]
-    names = "、".join(str(name) for name in names_list)
-    context.setdefault("injected", []).append(
-        f"[环境] 工作区根目录：{root}\n[环境] 可用工具：{names}"
-    )
-    return None
-
-
 def permission_facts(
     name: str, arguments: dict[str, Any], root: str | None = None
 ) -> tuple[str | None, str | None]:
@@ -405,7 +378,8 @@ REPEAT_REMIND_AT: tuple[int, ...] = (3, 5)
 # 注册顺序有意义：permission_hook 先跑，log_hook 才能看到 denied_reason；
 # repeat_call_hook 先于 large_output_hook，提醒才算进上下文预算；
 # large_output_hook 先跑，log_hook 才能报出"已被截断"。
-DEFAULT_HOOKS.register("UserPromptSubmit", context_inject_hook)
+# UserPromptSubmit 上没有默认回调：环境注入已是 ContextManager 的 environment 块，
+# 这个事件保留给用户 hook 做「拦截输入 / 注入自定义系统文本」用。
 DEFAULT_HOOKS.register("PreToolUse", permission_hook)
 DEFAULT_HOOKS.register("PreToolUse", log_hook)
 DEFAULT_HOOKS.register("PostToolUse", repeat_call_hook)

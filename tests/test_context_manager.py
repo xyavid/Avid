@@ -8,6 +8,7 @@ import pytest
 
 from avid.ai.config import Config
 from avid.ai.transcript import Transcript
+from avid.policy.skills import SkillLoader
 from avid.runtime import context_manager as cm
 from avid.runtime.context_manager import Block, ContextBudget, ContextManager
 from avid.runtime.state import RunState
@@ -99,6 +100,21 @@ def test_custom_system_section_source_joins_the_template():
 
     assert "租户：acme" in request.system
     assert request.parts["tenant"] > 0
+
+
+def test_skill_catalog_renders_into_system(tmp_path):
+    (tmp_path / "code-review").mkdir()
+    (tmp_path / "code-review" / "SKILL.md").write_text(
+        "---\ndescription: 做代码审查\n---\n", encoding="utf-8"
+    )
+    state = RunState()
+    state.skills = SkillLoader(tmp_path).scan()
+
+    request = make_manager(state=state).compose()
+
+    assert "- code-review: 做代码审查" in request.system
+    assert "Use load_skill" in request.system
+    assert request.parts["skill_catalog"] > 0
 
 
 # ---------- tail 落位 ----------

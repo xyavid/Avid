@@ -133,6 +133,10 @@ def test_bare_runs_without_hooks_and_core_uses_defaults():
 
 
 def test_system_prompt_is_shared_by_all_variants():
+    """三臂共用同一份指令文案：同一输入下装配出的 system 必须逐字相同。"""
+    from avid.ai.transcript import Transcript
+    from avid.runtime.context_manager import ContextManager
+
     case = load_cases(ids=["b01_largest_file"])[0]
     with materialized(case) as root:
         prompts = set()
@@ -140,7 +144,15 @@ def test_system_prompt_is_shared_by_all_variants():
             state = RunState.for_run(
                 workspace_root=str(root), hooks=hooks_for(VARIANTS[variant])
             )
-            prompts.add(state.system_prompt(SYSTEM_PROMPT))
+            manager = ContextManager(
+                transcript=Transcript([{"role": "user", "content": "x"}]),
+                state=state,
+                config=CONFIG,
+                instructions=SYSTEM_PROMPT,
+                # 工具清单固定：变体间工具集的差异不该混进这条断言
+                tool_names=CORE_TOOLS,
+            )
+            prompts.add(manager.compose().system)
     assert len(prompts) == 1, "三个变体的系统提示词必须同源"
 
 

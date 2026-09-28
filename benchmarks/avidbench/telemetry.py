@@ -41,7 +41,6 @@ class Telemetry:
     approvals_requested: int = 0
     approvals_resolved: int = 0
     compactions: int = 0
-    todo_reminders: int = 0
     stop_nudges: int = 0
     messages: int = 0
     finish_reasons: list[str] = field(default_factory=list)
@@ -92,9 +91,6 @@ class Telemetry:
             self.compactions += 1
             self._note("compacted", step=data.get("step"), detail=data.get("detail"),
                        before=data.get("before"), after=data.get("after"))
-        elif kind == events.TODO_REMINDER:
-            self.todo_reminders += 1
-            self._note("todo_reminder", content=data.get("content"))
         elif kind == events.STOP_NUDGE:
             self.stop_nudges += 1
             self._note("stop_nudge", content=data.get("content"))
@@ -130,7 +126,6 @@ class Telemetry:
             "approvals_requested": self.approvals_requested,
             "approvals_resolved": self.approvals_resolved,
             "compactions": self.compactions,
-            "todo_reminders": self.todo_reminders,
             "stop_nudges": self.stop_nudges,
             "messages": self.messages,
             "finish_reasons": list(self.finish_reasons),

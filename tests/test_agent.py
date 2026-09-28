@@ -682,13 +682,12 @@ def test_user_prompt_submit_injects_context(hook_registry):
     assert "[环境] 测试注入" in chat.requests[0]["system"]
 
 
-def test_injected_tool_list_follows_the_runs_tools(hook_registry):
-    """注入的「可用工具」必须是本次运行真正发给模型的那一份。
+def test_environment_block_lists_the_runs_tools(hook_registry):
+    """系统提示里的「可用工具」必须是本次运行真正发给模型的那一份。
 
-    subagent 只带 `SUB_TOOLS`（去掉自己）：用全局注册表注入会让它的系统提示宣称能
+    subagent 只带 `SUB_TOOLS`（去掉自己）：用全局注册表渲染会让它的系统提示宣称能
     调用 `subagent`，而调用只得到「未知工具」——白烧一轮。
     """
-    hook_registry.register("UserPromptSubmit", hooks.context_inject_hook)
     chat = FakeChat(make_turn("好的"))
     messages = [{"role": "user", "content": "读"}]
     only_read = [item for item in TOOLS if item["function"]["name"] == "read_file"]
@@ -702,7 +701,7 @@ def test_injected_tool_list_follows_the_runs_tools(hook_registry):
     )
 
     system = chat.requests[0]["system"]
-    assert "[环境] 可用工具：read_file" in system
+    assert "可用工具：read_file" in system
     assert "subagent" not in system
 
 
@@ -915,80 +914,49 @@ def test_todo_state_does_not_leak_between_runs(hook_registry):
         config=CONFIG,
         chat=second,
         registry={"read_file": lambda a: "x"},
-        todo_reminder_after=1,
     )
 
-    reminder = next(
-        m["content"]
-        for m in messages
-        if str(m.get("content", "")).startswith("[提醒]")
+    # 计划块由**本次运行**的 TodoList 渲染：上一轮的"任务A"不得出现在任何地方
+    assert all("任务A" not in str(m.get("content", "")) for m in messages)
+    assert all(
+        "任务A" not in str(m.get("content", ""))
+        for request in second.requests
+        for m in request["messages"]
     )
 
-    assert "列表为空" in reminder  # 上一次运行的"任务A"没有泄漏过来
 
-
-def test_todo_write_resets_the_silence_counter(hook_registry):
+def test_plan_block_follows_the_todo_list(hook_registry):
+    """计划块挂在每轮请求末尾（tail），随 todo_write 实时增减，且不进消息通道。"""
     chat = FakeChat(
-        *[
-            make_turn("", [tool_call("todo_write", '{"todos": []}', f"c{i}")])
-            for i in range(4)
-        ],
+        make_turn(
+            "",
+            [
+                tool_call(
+                    "todo_write",
+                    '{"todos": [{"content": "第一步", "status": "in_progress"}]}',
+                    "c1",
+                )
+            ],
+        ),
+        make_turn("", [tool_call("todo_write", '{"todos": []}', "c2")]),
         make_turn("好了"),
     )
     messages = [{"role": "user", "content": "x"}]
 
-    agent_loop(messages, config=CONFIG, chat=chat, todo_reminder_after=2)
+    agent_loop(messages, config=CONFIG, chat=chat)
 
-    assert not [m for m in messages if str(m.get("content", "")).startswith("[提醒]")]
-
-
-def test_reminder_is_injected_before_the_next_model_call(hook_registry):
-    chat = FakeChat(
-        make_turn("", [tool_call("read_file")]),
-        make_turn("", [tool_call("read_file", '{"path": "a.txt"}', "c2")]),
-        make_turn("好了"),
-    )
-    messages = [{"role": "user", "content": "x"}]
-
-    agent_loop(
-        messages,
-        config=CONFIG,
-        chat=chat,
-        registry={"read_file": lambda a: "x"},
-        todo_reminder_after=2,
-    )
-
-    reminders = [m for m in messages if str(m.get("content", "")).startswith("[提醒]")]
-
-    assert len(reminders) == 1
-    # 注入发生在第 3 次请求之前，所以第 3 次请求看得到它
-    assert any(
-        str(m.get("content", "")).startswith("[提醒]")
-        for m in chat.requests[2]["messages"]
-    )
+    first = chat.requests[0]["messages"][-1]["content"]
+    second = chat.requests[1]["messages"][-1]["content"]
+    third = chat.requests[2]["messages"][-1]["content"]
+    assert first.startswith("[上下文]")
+    assert "当前计划" not in first, "提交前没有计划块"
+    assert "当前计划" in second and "第一步" in second and "[~] 1. 第一步" in second
+    assert "当前计划" not in third, "清空后计划块整个不渲染"
+    # tail 不落库：消息通道里没有一条内核写的计划
+    assert not [m for m in messages if str(m.get("content", "")).startswith("[上下文]")]
 
 
-def test_reminder_fires_once_per_silent_streak(hook_registry):
-    chat = FakeChat(
-        *[make_turn("", [tool_call("read_file", '{"path": "a.txt"}', f"c{i}")]) for i in range(6)],
-        make_turn("好了"),
-    )
-    messages = [{"role": "user", "content": "x"}]
-
-    agent_loop(
-        messages,
-        config=CONFIG,
-        chat=chat,
-        registry={"read_file": lambda a: "x"},
-        todo_reminder_after=1,
-    )
-
-    assert (
-        sum(1 for m in messages if str(m.get("content", "")).startswith("[提醒]")) == 1
-    )
-
-
-def test_reminder_rearms_after_a_todo_write(hook_registry):
+def test_plan_is_visible_to_the_model_on_every_round(hook_registry):
     chat = FakeChat(
         make_turn("", [tool_call("read_file")]),
         make_turn(
@@ -997,6 +965,7 @@ def test_reminder_rearms_after_a_todo_write(hook_registry):
                 tool_call(
                     "todo_write",
                     '{"todos": [{"content": "a", "status": "pending"}]}',
+                    "c2",
                 )
             ],
         ),
@@ -1005,26 +974,13 @@ def test_reminder_rearms_after_a_todo_write(hook_registry):
     )
     messages = [{"role": "user", "content": "x"}]
 
-    agent_loop(
-        messages,
-        config=CONFIG,
-        chat=chat,
-        registry={"read_file": lambda a: "x"},
-        todo_reminder_after=1,
-    )
-
-    assert (
-        sum(1 for m in messages if str(m.get("content", "")).startswith("[提醒]")) == 2
-    )
-
-
-def test_default_threshold_does_not_fire_on_short_runs(hook_registry):
-    chat = FakeChat(make_turn("直接答"))
-    messages = [{"role": "user", "content": "x"}]
-
     agent_loop(messages, config=CONFIG, chat=chat)
 
-    assert not [m for m in messages if str(m.get("content", "")).startswith("[提醒]")]
+    # 提交计划之后的每一轮请求，末尾的 tail 都带着当前计划（不再是每 N 轮提醒一次）
+    assert "当前计划" not in chat.requests[0]["messages"][-1]["content"]
+    for request in chat.requests[2:]:
+        tail = request["messages"][-1]["content"]
+        assert "当前计划" in tail and "1. a" in tail
 
 
 # ---------- 技能系统接入 ----------

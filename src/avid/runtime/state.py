@@ -25,17 +25,12 @@ from ..policy.permission import (
     validate_mode,
 )
 from ..policy.skills import SkillLoader, default_skills_dir
-from ..policy.todo import TodoList, build_reminder
+from ..policy.todo import TodoList
 from . import hooks as hooks_module
 from .events import RunObserver, event
 
 if TYPE_CHECKING:  # 与 loop.py 同理：AskUser 只出现在注解里
     from ..policy.permission import AskUser
-
-# TODO 提醒阈值：连续多少轮没更新就提醒一次。
-# 它是**运行级配置**（循环的节奏）而不是策略层的规则，所以放这里——
-# 循环取默认值时不必 import 策略层。
-TODO_REMINDER_AFTER_ROUNDS = 3
 
 # 连续这么多次工具调用被权限策略拒绝（期间**没有一次通过**）就停止整个运行。
 # 判据是「被拒且毫无进展」，不是「拒绝总数」：任何一次成功调用都会把连击清零，
@@ -111,7 +106,6 @@ class RunState:
 
     # 轮次与终止
     round: int = 0
-    rounds_since_todo: int = 0
     stop_blocks: int = 0
 
     # 一次性标志：谁负责"整个运行最多一次"
@@ -323,16 +317,6 @@ class RunState:
             self.repeat_calls[key] = times
             return times
 
-    def system_prompt(self, instructions: str | None = None) -> str:
-        """固定指令 + 环境信息 + 技能目录。
-
-        ``instructions`` 为 None 时用策略层的默认指令——于是循环不必知道那段默认文案。
-        工作目录取运行级根：模型看到的路径必须与实际解析用的根一致。
-        """
-        if instructions is None:
-            return self.skills.build_system_prompt(workdir=self.workspace_root)
-        return self.skills.build_system_prompt(instructions, workdir=self.workspace_root)
-
     def snapshot(self) -> dict[str, int]:
         """Stop 事件要看到的运行统计。"""
         return {
@@ -416,13 +400,3 @@ class RunState:
                 "last_step": self.last_compaction_step,
             },
         }
-
-    def todo_reminder(self, threshold: int) -> str | None:
-        """连续 threshold 轮没更新 TODO 时给出提醒文本，否则 None。
-
-        "该不该提醒"与"提醒什么"都在这里，循环只负责把它追加进消息——
-        于是循环不必 import 策略层（原本它要拿阈值常量与文案函数）。
-        """
-        if self.rounds_since_todo != threshold:
-            return None
-        return build_reminder(self.todo, self.rounds_since_todo)

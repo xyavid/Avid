@@ -600,28 +600,24 @@ def test_run_record_reports_the_real_round_and_tokens(sandbox):
 # ---------------- 注入提醒的条目类型 ----------------
 
 
-def test_injected_reminder_is_persisted_as_a_notice_entry(sandbox):
-    """注入的 TODO 提醒照样落库（续接要逐字一致），但类型是 ``notice``。
+def test_plan_travels_in_the_tail_not_in_the_history(sandbox):
+    """计划不再以 user 提醒注入：它走每轮重渲染的 tail 块，不落库、不发事件。
 
-    它的 ``role`` 确实是 ``user``、内容是内核写的，渲染侧只能靠类型分辨——文本上
-    认不出来（Stop nudge 的文本由 hook 任意给定，没有稳定前缀）。
+    旧机制把「[提醒] 连续 N 轮……」当 user 消息塞进对话并落库，渲染侧只能靠 notice
+    类型把它和用户输入分开；tail 不进消息通道，这条约束整个消失。
     """
     tools = RecordingTools().registry("read_file")
     services = build(sandbox, many_rounds(4), tools)
     record = run_to_end(services)
 
     entries = services.sessions.entries(record.session_id, order="asc")["entries"]
-    notices = [entry for entry in entries if entry["type"] == NOTICE_ENTRY]
-    assert len(notices) == 1
-    assert notices[0]["message"]["role"] == "user"
-    assert "[提醒]" in notices[0]["message"]["content"]
+    assert [entry for entry in entries if entry["type"] == NOTICE_ENTRY] == []
 
-    # 事件侧照旧把它认成 todo_reminder，而不是用户输入
     kinds = [event.type for event in collect(services, record.run_id)]
-    assert kinds.count(events.TODO_REMINDER) == 1
+    assert kinds.count(events.TODO_REMINDER) == 0
     assert kinds.count(events.USER_MESSAGE) == 1
 
-    # 投影不变：提醒仍在模型的历史里。
+    # 投影不变：落库的历史里没有内核写的提醒文本。
     #
     # 直读会话文件要先等运行线程交还句柄，再持句柄锁打开：`record.terminal` 说的是
     # "注册表已定终态"，句柄是紧接着才交还的（见 `support.wait_handle_released`）。
@@ -635,7 +631,7 @@ def test_injected_reminder_is_persisted_as_a_notice_entry(sandbox):
             ]
         finally:
             session.close()
-    assert sum("[提醒]" in text for text in history) == 1
+    assert not any("[提醒]" in text for text in history)
 
 
 # ---------------- 阶段 22：用量快照 ----------------

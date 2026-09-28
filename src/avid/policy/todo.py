@@ -90,11 +90,3 @@ def todo_write(args: dict[str, Any], *, state: "RunState") -> str:
         f"已更新 TODO（{len(state.todo.items)} 项：{state.todo.summary()}）\n"
         f"{state.todo.render()}"
     )
-
-
-def build_reminder(todo: TodoList, rounds: int) -> str:
-    return (
-        f"[提醒] 已经连续 {rounds} 轮没有更新 TODO 列表。"
-        "如果任务还需要多步，请用 todo_write 重新提交完整列表并更新进度；"
-        "如果已经做完，请在最终答复里说明。\n当前列表：\n" + todo.render()
-    )

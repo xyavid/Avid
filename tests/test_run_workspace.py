@@ -9,10 +9,23 @@ from __future__ import annotations
 
 import pytest
 
+from avid.ai.config import Config
+from avid.ai.transcript import Transcript
 from avid.policy import compaction
+from avid.runtime.context_manager import ContextManager
 from avid.runtime.state import RunState
 from avid.tools import shell
 from avid.tools.files import read_file, write_file
+
+CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
+
+
+def system_of(state):
+    return ContextManager(
+        transcript=Transcript([{"role": "user", "content": "x"}]),
+        state=state,
+        config=CONFIG,
+    ).compose().system
 
 
 @pytest.fixture
@@ -43,13 +56,13 @@ def test_file_tools_resolve_against_the_run_root(sandbox, other):
     assert read_file({"path": "notes.txt"}, state=state) == "在第二个工作区"
 
 
-def test_system_prompt_reports_the_run_root(sandbox, other):
+def test_environment_block_reports_the_run_root(sandbox, other):
     state = RunState.for_run(workspace_root=str(other))
 
-    prompt = state.system_prompt()
+    system = system_of(state)
 
-    assert f"工作目录：{other}\n" in prompt
-    assert f"工作目录：{sandbox}\n" not in prompt
+    assert f"工作目录：{other}\n" in system
+    assert f"工作目录：{sandbox}\n" not in system
 
 
 def test_compaction_spills_into_the_run_root(sandbox, other):
@@ -65,7 +78,7 @@ def test_without_a_run_root_everything_falls_back_to_the_process_root(sandbox):
     state = RunState.for_run()
 
     write_file({"path": "fallback.txt", "content": "默认根"}, state=state)
-    prompt = state.system_prompt()
+    system = system_of(state)
 
     assert (sandbox / "fallback.txt").exists()
-    assert f"工作目录：{sandbox}" in prompt
+    assert f"工作目录：{sandbox}" in system

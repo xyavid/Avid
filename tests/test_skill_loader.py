@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from avid.policy.skills import AGENT_INSTRUCTIONS, SkillLoader
+from avid.policy.skills import SkillLoader
 
 REPO_SKILLS = Path(__file__).resolve().parent.parent / "skills"
 
@@ -106,48 +106,21 @@ def test_catalog_lists_name_and_description_sorted(tmp_path):
     assert SkillLoader(tmp_path).scan().catalog() == "- alpha: 第一个\n- beta: 第二个"
 
 
-# ---------- build_system_prompt ----------
+# ---------- 技能目录（渲染在 runtime/context_manager，用例见 test_context_manager） ----------
 
 
-def test_system_prompt_contains_the_required_parts(tmp_path, monkeypatch):
-    from avid.tools import workspace
-
-    monkeypatch.setattr(workspace, "WORKSPACE_ROOT", tmp_path)
-    skills_root = tmp_path / "skills"
-    write_skill(skills_root, "code-review", "---\ndescription: 做代码审查\n---\n")
-
-    prompt = SkillLoader(skills_root).scan().build_system_prompt()
-
-    assert str(tmp_path) in prompt  # WORKDIR
-    assert "Act, don't explain." in prompt
-    assert "todo_write" in prompt  # 固定 Agent 指令
-    assert "- code-review: 做代码审查" in prompt
-    assert "Use load_skill to read the full instructions when a skill applies." in prompt
-
-
-def test_system_prompt_follows_directory_changes(tmp_path):
-    """验收项：技能目录变化后 system prompt 同步更新。"""
+def test_catalog_follows_directory_changes(tmp_path):
+    """验收项：技能目录变化后，下一次扫描出的目录就是新的。"""
     loader = SkillLoader(tmp_path)
-    assert "code-review" not in loader.scan().build_system_prompt()
+    assert "code-review" not in loader.scan().catalog()
 
     write_skill(tmp_path, "code-review", "---\ndescription: 做代码审查\n---\n")
 
-    assert "code-review" in loader.scan().build_system_prompt()
+    assert "code-review" in loader.scan().catalog()
 
 
-def test_system_prompt_accepts_custom_instructions(tmp_path):
-    prompt = SkillLoader(tmp_path).scan().build_system_prompt("你是 subagent，只做一件事。")
-
-    assert prompt.startswith("你是 subagent，只做一件事。")
-    assert "Act, don't explain." in prompt
-
-
-def test_system_prompt_says_so_when_there_are_no_skills(tmp_path):
-    assert "（当前没有可用技能）" in SkillLoader(tmp_path).scan().build_system_prompt()
-
-
-def test_default_instructions_ask_for_a_plan_first():
-    assert "todo_write" in AGENT_INSTRUCTIONS
+def test_catalog_is_empty_without_skills(tmp_path):
+    assert SkillLoader(tmp_path).scan().catalog() == ""
 
 
 # ---------- load ----------

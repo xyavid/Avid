@@ -2,7 +2,7 @@
 
 消融表（v0.1 只有三臂，理由见 `benchmarks/README.md`）：
 
-| 变体   | 循环                | 工具集                        | 压缩/提醒/nudge/hook |
+| 变体   | 循环                | 工具集                        | 压缩/计划tail/nudge/hook |
 |--------|---------------------|-------------------------------|----------------------|
 | bare   | `bare.py` 朴素循环  | read_file / glob / bash       | 关                   |
 | core   | `agent_loop`        | 与 bare **完全相同**          | 开                   |
@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from avid.ai.client import Config
+from avid.ai.transcript import Transcript
+from avid.runtime.context_manager import ContextManager
 from avid.runtime.hooks import HookRegistry
 from avid.runtime.loop import agent_loop
 from avid.runtime.state import RunState
@@ -55,7 +57,7 @@ class Variant:
     loop: str  # "bare" | "avid"
     tools: tuple[str, ...] | None  # None = 全部注册工具
     compaction: bool
-    todo_reminder: bool
+    plan_tail: bool
     stop_nudge: bool
     hooks: bool
     description: str
@@ -74,7 +76,7 @@ class Variant:
             "tools": list(self.all_tools),
             "mechanisms": {
                 "compaction": self.compaction,
-                "todo_reminder": self.todo_reminder,
+                "plan_tail": self.plan_tail,
                 "stop_nudge": self.stop_nudge,
                 "hooks": self.hooks,
             },
@@ -88,7 +90,7 @@ VARIANTS: dict[str, Variant] = {
         loop="bare",
         tools=CORE_TOOLS,
         compaction=False,
-        todo_reminder=False,
+        plan_tail=False,
         stop_nudge=False,
         hooks=False,
         description="自写朴素循环 + 核心只读工具；Avid 机制全关（基准线）",
@@ -98,17 +100,17 @@ VARIANTS: dict[str, Variant] = {
         loop="avid",
         tools=CORE_TOOLS,
         compaction=True,
-        todo_reminder=True,
+        plan_tail=True,
         stop_nudge=True,
         hooks=True,
-        description="真 agent_loop + 压缩/提醒/hook；工具集与 bare 相同",
+        description="真 agent_loop + 压缩/计划tail/nudge/hook；工具集与 bare 相同",
     ),
     "full": Variant(
         name="full",
         loop="avid",
         tools=None,
         compaction=True,
-        todo_reminder=True,
+        plan_tail=True,
         stop_nudge=True,
         hooks=True,
         description="全部工具与机制（含 todo / subagent / skill）",
@@ -166,11 +168,19 @@ def run_agent(
     顺带换掉工具派发方式。要做「串行 vs 并行」对照就显式传（见
     `benchmarks/parallel_tools/`）。
     """
-    system = state.system_prompt(SYSTEM_PROMPT)
     if variant.loop == "bare":
+        # bare 是"无机制"基准线：系统提示词照常装配（与 avid 臂同源），但压缩与
+        # tail 块都不参与——只取装配器的 system 渲染。
+        bare_ctx = ContextManager(
+            transcript=Transcript(messages),
+            state=state,
+            config=config,
+            instructions=SYSTEM_PROMPT,
+            tool_names=list(variant.all_tools),
+        )
         return bare_loop(
             messages,
-            system=system,
+            system=bare_ctx.system_prompt(),
             tools=schemas(variant),
             registry=registry(variant),
             config=config,
@@ -181,7 +191,8 @@ def run_agent(
         )
     return agent_loop(
         messages,
-        system=system,
+        # 指令覆盖；环境/技能目录/tail/压缩由循环内的 ContextManager 装配
+        system=SYSTEM_PROMPT,
         tools=schemas(variant),
         registry=registry(variant),
         config=config,
