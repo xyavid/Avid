@@ -11,14 +11,20 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 # 在 import 时固定；测试通过 monkeypatch 替换成临时目录。
 WORKSPACE_ROOT = Path.cwd()
 
-# bash 里可能带路径的记号：按空白与 shell 元字符切开。
+# bash 里可能带路径的记号：按空白与 shell 元字符切开。**只用于引号内部**——
+# 带空格的路径靠引号保护，见 `_iter_marks` 与 `_mark_paths`。
 _TOKEN_SPLIT = re.compile(r"[\s;|&()<>'\"]+")
+#: shell 的引号与元字符：`_iter_marks` 逐字符扫描时要知道这两个集合。
+_QUOTE_CHARS = "'\""
+_META_CHARS = ";|&()<>"
+#: 引号包住的一整段先按"它本身是不是绝对路径"试一次；`~/`、`$HOME/` 同义。
+_QUOTED_WHOLE_PREFIXES = ("/", "~", "$HOME")
 _PATHLIKE = re.compile(r"(?:^|/)(?:\.\.?)(?:/|$)")
 
 
@@ -103,9 +109,27 @@ def _candidate(token: str, base: Path) -> Path | None:
     `/` 而整条规则失效（E2E 实测过：`echo x > .git/hooks/pre-commit` 在三种模式下都被
     放行）。它们解析到工作区内，因此不改变"是否越界"的判定；改变的只是"这条规则管不管
     得到它"。
+
+    三种"看着像路径、其实不是"的记号要排除（都是现场审计里的假阳性）：
+
+    * URL（``https://pypi.org/simple``）：``://`` 之后是主机名，不是工作区下的相对
+      路径；
+    * 命令选项（``--target=./libs``）：选项本身不是路径，但 ``=`` 后面的取值是，所以
+      取出来继续判；没有 ``=`` 的选项（``-la``）直接不算；
+    * Python 属性（``type(e).__name__`` 里的 ``.__name__``）：``._`` 开头的是属性名，
+      不是工作区里一个点开头的文件。``.env``、``.git/hooks/pre-commit`` 不受影响。
     """
     token = token.strip().rstrip(",;)")
     if not token:
+        return None
+    if token.startswith("-"):
+        _, sep, value = token.partition("=")
+        if not sep:
+            return None
+        token = value.strip().rstrip(",;)")
+        if not token:
+            return None
+    if "://" in token:
         return None
     if token.startswith("~"):
         return Path.home() / token[2:] if token.startswith("~/") else Path.home()
@@ -113,6 +137,9 @@ def _candidate(token: str, base: Path) -> Path | None:
         return Path.home() / token[6:] if token.startswith("$HOME/") else Path.home()
     if token.startswith("/"):
         return Path(token)
+    if token.startswith("._"):
+        # `type(e).__name__` 的属性名，不是工作区下的文件。
+        return None
     if (
         token == ".."
         or token.startswith("../")
@@ -122,6 +149,71 @@ def _candidate(token: str, base: Path) -> Path | None:
     ):
         return base / token
     return None
+
+
+def _iter_marks(command: str) -> Iterator[tuple[str, bool]]:
+    """把命令切成记号，并标出这个记号里出现过引号。
+
+    与 _TOKEN_SPLIT 的差别只有一处：**引号内的空白不再是分隔符**。
+    cd "/a b c" 于是得到 ("/a b c", True)，而不是拆成两个记号——现场会话
+    01a0d277 的工作区根是 /…/Avid workspace，被切开之后 /…/Avid 成了「区外目标」，
+    同一份探针被连续 deny 了 15 次。
+
+    引号里的内容有两种身份：带空格的**路径**，或者写给解释器的**程序文本**
+    （python3 -c "…"）。这里不猜，两种都交给 _mark_paths 两段式处理。
+    """
+    buffer: list[str] = []
+    quoted = False
+    index = 0
+    length = len(command)
+    while index < length:
+        char = command[index]
+        if char in _QUOTE_CHARS:
+            end = command.find(char, index + 1)
+            if end < 0:  # 引号没闭合：剩下的都算内容。宁可多扫，不少扫。
+                quoted = True
+                buffer.append(command[index + 1 :])
+                break
+            quoted = True
+            buffer.append(command[index + 1 : end])
+            index = end + 1
+            continue
+        if char.isspace() or char in _META_CHARS:
+            if buffer:
+                yield "".join(buffer), quoted
+                buffer, quoted = [], False
+            index += 1
+            continue
+        buffer.append(char)
+        index += 1
+    if buffer:
+        yield "".join(buffer), quoted
+
+
+def _mark_paths(mark: str, quoted: bool, base: Path) -> list[Path]:
+    """一个记号可能对应多个路径：**先整段、后拆开**。
+
+    整段成立的条件很窄：引号包住的一整段**本身就是绝对路径**（cd "/…/Avid workspace"）
+    ——带空格的绝对路径只能靠这条活下来。其余记号一律按空白与元字符拆开，于是
+    bash -c "rm -rf /etc/passwd"、git commit -m "修 /etc/hosts" 里的绝对路径照样扫得到，
+    python3 -c "…" 里的程序文本也不会因为多了一个空格而改变结论。两段都在旧行为上
+    只做减法：多出来的是「整段是绝对路径」这一种，少掉的是程序文本里的属性名。
+    """
+    if quoted and mark.startswith(_QUOTED_WHOLE_PREFIXES):
+        whole = _candidate(mark, base)
+        if whole is not None:
+            return [whole]
+    paths: list[Path] = []
+    for token in _TOKEN_SPLIT.split(mark):
+        if quoted and token.startswith(".") and "/" not in token:
+            # 引号里的**程序文本**：点开头又没有斜杠的记号是属性访问
+            # （`os .environ.get` 被空白切开后的 `.environ.get`），不是工作区下的
+            # 隐藏文件——真要点开头的相对路径会带斜杠（`./.env`）。
+            continue
+        candidate = _candidate(token, base)
+        if candidate is not None:
+            paths.append(candidate)
+    return paths
 
 
 def outside_command_target(command: str, *, root: Path | None = None) -> str | None:
@@ -145,20 +237,21 @@ def command_targets(command: str, *, root: Path | None = None) -> tuple[Path, ..
     这是越界判定与"目标识别"共用的唯一一份扫描器：``outside_command_target``
     只要第一个区外目标，Tool Broker（``policy/action.py``）要全部目标 + 敏感命中。
     两份实现会漂移，所以只有一份。
+
+    两段式（见 _mark_paths）：**先整段、后拆开**。带空格的路径只能靠前一段活下来；
+    先拆后合的顺序永远救不回它。
     """
     if not isinstance(command, str) or not command.strip():
         return ()
     base = _base(root)
 
     found: list[Path] = []
-    for token in _TOKEN_SPLIT.split(command):
-        candidate = _candidate(token, base)
-        if candidate is None:
-            continue
-        try:
-            resolved = candidate.resolve()
-        except (OSError, RuntimeError):  # pragma: no cover - 取决于文件系统
-            continue
-        if resolved not in found:
-            found.append(resolved)
+    for mark, quoted in _iter_marks(command):
+        for candidate in _mark_paths(mark, quoted, base):
+            try:
+                resolved = candidate.resolve()
+            except (OSError, RuntimeError):  # pragma: no cover - 取决于文件系统
+                continue
+            if resolved not in found:
+                found.append(resolved)
     return tuple(found)
