@@ -1439,3 +1439,72 @@ round=5  （收尾）                 → 模型自己说明"tests 仍被 endpoi
   新增价格表（缓存读/写与普通输入单价不同，本阶段明确不做）；③ 需要按运行回看历史 →
   见 §20.2 的条目类型方案；④ 出现"窗口表给错分母"的误判 → 优先修表，或把占用率改成
   只显示 tokens（宁可少一个数，不要一个错的分母）。
+
+## 21. 落地记录（阶段 29，ContextManager：上下文装配单点化）
+
+### 21.1 目标与块模型
+
+「模型这一轮看到什么」此前散在 9 处（技能模板拼接、hook 环境注入、TODO 提醒、
+subagent 常量、压缩编排、bench 提示词……），新增一类上下文要同时改循环、hooks、
+skills 三个模块。阶段 29 把所有进模型的内容先声明为**块**（`Block(kind, content,
+section)`），由 `runtime/context_manager.py` 的 `ContextManager` 统一落位、记账与
+渲染：
+
+- **SYSTEM 落位**：渲染进系统提示词，**首轮定型、运行内不变**——provider 前缀缓存
+  按请求前缀命中，系统提示词中途变化会把整段会话的缓存打穿。内置块：`instructions`
+  （默认文案或调用方覆盖）、`environment`（工作目录 + 可用工具 + Act, don't
+  explain.）、`skill_catalog`、`injected`（UserPromptSubmit hook 产物，只首轮生效）。
+- **TAIL 落位**：每轮重渲染的一条附加 user 消息（固定头 `[上下文]`），挂在请求
+  **末尾**且**不落库**——计划与运行状态是派生事实，持久层只存用户原话与真实消息；
+  放末尾是因为它每轮都变，放中间会打穿前缀缓存。内置块：`plan`（来自
+  `TodoList.render()`，空清单整个不渲染）、`run_state`（轮次 / 工具调用 / 被拒 /
+  连击 / 压缩计数）。
+- **对话本体**（用户问题、历史、工具调用与结果）就是 `Transcript` 本身：不经过
+  sources，只参与记账，结构与唯一所有权仍归 `ai/transcript.py`。
+
+新增一类上下文 = 写一个来源函数（返回 `Block | None`）+ `register_source(kind, fn)`
+一行。本阶段按澄清结论**只做现有来源**（Q1）：RAG / Knowledge / Memory / 身份 /
+租户 / Artifact 等块不做枚举占位，将来接入时再定 kind 字符串。
+
+### 21.2 与压缩的关系
+
+压缩是 history / tool_results 两个可变块的预算策略：五步管线留在
+`policy/compaction.py`（签名不变，①②③ 在类型上碰不到模型 API），编排自
+`runtime/context.py` 整体并入 `ContextManager._compact()` / `reactive()`（Q2）——
+装配与预算同属一个所有者，`compose()` = 压缩 + 渲染，`render()` = 兜底压缩后的
+重渲染（不压缩、system 不变）。`effective_budget` / `announce` / `ContextBudget`
+随迁，评测注入 `budget` 的开口不变。
+
+### 21.3 行为变化（Q3 允许重排）
+
+- 系统提示词模板重构：`工作目录` 原先出现两次（模板一次、hook 注入一次），并作
+  environment 块一处；`可用工具` 从 hook 注入改为模板固定内容。
+- TODO 计划从「每 N 轮注入一条 `[提醒]` user 消息并落库」改为 tail 块常驻：模型
+  **每轮**可见、不再需要沉默计数器（`rounds_since_todo`、`todo_reminder_after`、
+  `TODO_REMINDER_AFTER_ROUNDS` 全部退役），`TODO_REMINDER` 事件不再发射（事件常量
+  保留作 wire 兼容，旧会话的 notice 条目照常渲染）。
+- 请求末尾常驻一条不落库的 tail 消息（`run_state` 恒有、`plan` 有清单时才有）。
+
+### 21.4 退役清单与单点化判据
+
+`state.system_prompt()`、`skills.build_system_prompt()` / `AGENT_INSTRUCTIONS`、
+`todo.build_reminder()`、`hooks.context_inject_hook()`、`runtime/context.py` 全部
+删除。subagent 与 bench 的提示词走同一装配器（Q5）：`SUB_SYSTEM` / bench
+`SYSTEM_PROMPT` 都以 instructions 覆盖传入；bare 臂经
+`ContextManager.system_prompt()` 取与 avid 臂同源的系统提示词。压缩摘要的
+`SUMMARY_SYSTEM` 留在 `policy/compaction.py`（policy 不得 import runtime，依赖
+方向优先于文案集中）。**可 grep 的判据**：`src` 内「你是」开头的提示词只剩三处——
+`context_manager.DEFAULT_INSTRUCTIONS`、`subagent.SUB_SYSTEM`（作为 instructions
+块进装配器）、`compaction.SUMMARY_SYSTEM`（叶子调用）。
+
+### 21.5 取舍与已知缺口
+
+- **记账**：内部按 kind 细分（`ComposedRequest.parts`），对外 `record_prompt_parts`
+  仍折成 system / tools / messages 三块（Q4，前端与 `derived_context_chars` 不动；
+  前端占用条后续整体重构时再开放细分口径）。
+- **牺牲了什么**：tail 消息每轮重渲染且不落库，意味着「这轮模型看到了什么计划」
+  不在会话记录里——要看当时的计划，看时间线里那条 `todo_write` 工具卡。
+- **什么信号出现时重新考虑**：① 需要让 tail 块也参与重放/审计 → 给它加落库开关
+  （块模型已支持，改 section 即可）；② 某类 SYSTEM 块需要每轮变化 → 会打穿前缀
+  缓存，届时应改为 TAIL 落位而不是解除定格；③ 接入 memory / RAG 时发现 tail 挤占
+  对话预算 → 给 TAIL 块引入独立的预算行。
