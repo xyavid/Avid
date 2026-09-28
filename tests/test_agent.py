@@ -14,7 +14,7 @@ from avid.tools import TOOLS
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
 
 
-def make_turn(text="", tool_calls=(), finish_reason="stop"):
+def make_turn(text="", tool_calls=(), finish_reason="stop", reasoning="", usage=None):
     message = {"role": "assistant", "content": text}
     if tool_calls:
         message["tool_calls"] = list(tool_calls)
@@ -25,6 +25,7 @@ def make_turn(text="", tool_calls=(), finish_reason="stop"):
         usage=Usage(prompt_tokens=1, completion_tokens=2, total_tokens=3),
         model="m",
         finish_reason=finish_reason,
+        reasoning=reasoning,
     )
 
 
@@ -543,6 +544,64 @@ def test_one_successful_call_clears_the_denial_streak(hook_registry):
     )
 
     assert text == "做完了"
+
+
+# ---------- A1：空答复 / 被上限截断不算「答完了」 ----------
+
+
+def test_blank_answer_notice_names_the_reason(hook_registry):
+    """A2 接进 A1：说明要写清"为什么没有正文"，而不是一句通用的空答复。
+
+    现场那条空响应的实际情形是"输出预算全花在思维链上"——修完 A2 之后，这句话可以从
+    数据里得出（思维链字符数 / 推理 token 数），不必再靠人翻 JSONL 才知道。
+    """
+    skipped = make_turn("", finish_reason="length", reasoning="先看目录，再读文件。" * 2)
+
+    chat = FakeChat(skipped, skipped)
+    messages = [{"role": "user", "content": "做"}]
+
+    text = agent_loop(messages, config=CONFIG, chat=chat)
+
+    assert "思维链" in text
+    assert f"{len(skipped.reasoning)} 字符" in text
+    # 补问也要带上原因：模型得知道自己上一轮"想完就停"了。
+    nudge = [m for m in messages if m.get("role") == "user" and "可见正文" in m["content"]]
+    assert len(nudge) == 1
+    assert "思维链" in nudge[0]["content"]
+
+
+def test_empty_answer_is_not_accepted_as_final(hook_registry):
+    """没有可见正文的一轮不是终点：按一次 Stop 拦截处理，补问要一句可见答复。
+
+    现场（会话 01a0d277）：输出被上限截断 → 正文为空、无 tool_calls → 循环把它当成
+    「模型答完了」，整个运行以「成功 + 空答复」收尾，前端把空条目整条隐藏，用户看到的
+    是没有任何解释的结束。
+    """
+    chat = FakeChat(
+        make_turn("", finish_reason="length"),
+        make_turn("环境探测完成：无显示、无外网。"),
+    )
+    messages = [{"role": "user", "content": "做"}]
+
+    assert agent_loop(messages, config=CONFIG, chat=chat) == "环境探测完成：无显示、无外网。"
+    assert len(chat.requests) == 2
+    # 补问走 Stop nudge 那条通道（同一份预算、同一个事件、同一条消息出口）。
+    nudges = [m for m in messages if m.get("role") == "user" and "可见" in m["content"]]
+    assert len(nudges) == 1
+    # 被截断的那一轮仍在上下文里：模型要看得见自己刚才没说完。
+    assert messages.count(messages[1]) == 1
+
+
+def test_still_blank_after_the_nudge_ends_with_a_visible_notice(hook_registry):
+    """补问也补不出正文：用一条**可见**的 notice 收尾，绝不返回空串。"""
+    chat = FakeChat(make_turn("", finish_reason="length"), make_turn(""))
+    messages = [{"role": "user", "content": "做"}]
+
+    text = agent_loop(messages, config=CONFIG, chat=chat)
+
+    assert text.strip(), "空答复不能算运行成功"
+    assert messages[-1]["role"] == "assistant"
+    assert "可见答复" in messages[-1]["content"]
 
 
 # ---------- ③ PostToolUse ----------

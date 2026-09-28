@@ -50,6 +50,18 @@ logger = logging.getLogger("avid.runtime.loop")
 # Stop 被拦截后最多再补几轮。防止写坏的回调把循环拖成死循环。
 MAX_STOP_BLOCKS = 1
 
+#: 一轮**没有可见正文**（被输出上限截断，或只产出了思考）时的补问文案。
+#: 这一轮不算「答完了」：它按一次 Stop 拦截处理，所以共用同一份补问预算。
+BLANK_ANSWER_NUDGE = (
+    "上一轮没有可见正文（{reason}）。请直接给出可见答复：总结已完成的事与当前结论；"
+    "要继续动手就发起工具调用。"
+)
+#: 补问后仍然没有正文时的收尾文案。**必须可见**：空答复加「运行成功」是最坏的一种
+#: 静默失败——前端把空正文的 assistant 条目整条隐藏，用户看到的是没有任何解释的结束。
+BLANK_ANSWER_NOTICE = (
+    "（本次运行没有产生可见答复：{reason}。请看上一条工具结果，或重试这一轮。）"
+)
+
 
 class RunCancelled(RuntimeError):
     """运行被显式取消（终止原因，不是错误）。
@@ -100,6 +112,28 @@ def _submit_input(
         return None
 
     return index, [str(item) for item in (submit.get("injected") or [])]
+
+
+def _blank_answer(turn: Turn) -> bool:
+    """这一轮算不算「没有可见正文」。只在 `not turn.tool_calls` 的分支里用。
+
+    判据是「正文为空」而不是某个特定的 finish_reason：被上限截断（length）与模型自己
+    交白卷（stop）对用户是同一件事——都没有答复。
+    """
+    return not turn.text.strip()
+
+
+def _blank_reason(turn: Turn) -> str:
+    """这一轮为什么没有可见正文。给用户看的，所以用具体数字，不用"未知原因"。"""
+    thinking = turn.reasoning.strip()
+    if thinking:
+        base = f"最近一轮只产出了思考（{len(thinking)} 字符思维链）"
+    elif turn.finish_reason == "length":
+        base = "最近一轮在输出上限处被截断"
+    else:
+        base = "最近一轮输出为空"
+    tokens = turn.usage.reasoning_tokens
+    return f"{base}，推理 token {tokens}" if tokens else base
 
 
 def agent_loop(
@@ -326,6 +360,13 @@ def agent_loop(
                 **state.snapshot(),
             }
             blocked = state.hooks.trigger("Stop", stop) == BLOCK
+            blank = _blank_answer(turn)
+            reason = _blank_reason(turn) if blank else ""
+            if blank and not blocked:
+                # 没有可见正文不算「答完了」：按一次 Stop 拦截处理，先补问一句。
+                # 放在 Stop 之后判断，是为了不与回调的要求打架（回调要补问就用它的文案）。
+                blocked = True
+                stop["nudge"] = BLANK_ANSWER_NUDGE.format(reason=reason)
             if blocked and state.stop_blocks < max_stop_blocks:
                 state.stop_blocks += 1
                 nudge = stop.get("nudge")
@@ -336,6 +377,20 @@ def agent_loop(
                     emit(message)
                 logger.info("Stop 被拦截（第 %d 次），继续循环", state.stop_blocks)
                 continue
+            if blank:
+                # 补问也补不出正文：用一条**可见**的 notice 收尾。绝不返回空串——
+                # 那正是现场那条「成功但没有答复」的路径。
+                notice = BLANK_ANSWER_NOTICE.format(reason=reason)
+                message = {"role": "assistant", "content": notice}
+                transcript.append(message)
+                emit(message)
+                logger.warning(
+                    "仍然没有可见正文（%s；finish_reason=%s，round=%d），以 notice 收尾",
+                    reason,
+                    turn.finish_reason or "-",
+                    round_index,
+                )
+                return notice
             if blocked:
                 logger.warning("Stop 拦截次数已达上限 %d，照常退出", max_stop_blocks)
             return turn.text
