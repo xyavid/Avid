@@ -127,7 +127,7 @@ def agent_loop(
     ledger: "ApprovalLedger | None" = None,
     security: "RunSecurity | None" = None,
     workspace_root: str | None = None,
-    max_tokens: int = DEFAULT_MAX_TOKENS,
+    max_tokens: int | None = DEFAULT_MAX_TOKENS,
     max_stop_blocks: int = MAX_STOP_BLOCKS,
     # 一步内并行工具调用的上限。None = 用 `config.max_parallel_tool_calls`
     # （环境变量 `AVID_MAX_PARALLEL_TOOL_CALLS`，缺省 10）；1 = 完全串行。

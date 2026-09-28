@@ -10,6 +10,7 @@ from avid.ai.client import (
     StreamState,
     ask,
     build_payload,
+    build_request,
     iter_sse_events,
     merge_stream_chunk,
     parse_reply,
@@ -505,3 +506,24 @@ def test_connect_timeout_is_tighter_than_the_read_timeout():
     assert timeout.connect == CONNECT_TIMEOUT_SECONDS
     assert timeout.read == TIMEOUT_SECONDS
     assert CONNECT_TIMEOUT_SECONDS < TIMEOUT_SECONDS
+# ---------- 输出预算：默认不设上限 ----------
+
+
+def test_request_sends_no_max_tokens_by_default():
+    """默认不设输出上限：写死的上限会被推理吃光，正文一个字都产不出来。
+
+    实测（api.commandcode.ai + deepseek-v4.1-flash）：max_tokens=64 时响应正文为空、
+    finish_reason 是 length；8000 也不够长推理用。上限交给服务商，客户端不替它决定。
+    """
+    request = build_request(CONFIG, [{"role": "user", "content": "hi"}])
+
+    assert "max_tokens" not in request
+
+
+def test_request_still_sends_max_tokens_when_the_caller_caps_it():
+    """能力还在：调用方显式给上限时照发（评测与预算实验要用）。"""
+    request = build_request(
+        CONFIG, [{"role": "user", "content": "hi"}], max_tokens=1234
+    )
+
+    assert request["max_tokens"] == 1234

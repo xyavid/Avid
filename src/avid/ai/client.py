@@ -24,7 +24,12 @@ from .usage import normalize_usage
 TIMEOUT_SECONDS = 60.0
 # 连接超时单独收紧：端点不可达时不该等满 60 秒（读超时仍给长回答留足）。
 CONNECT_TIMEOUT_SECONDS = 10.0
-DEFAULT_MAX_TOKENS = 8000
+#: 默认**不设**输出上限（None = 请求体里不带 max_tokens 字段，上限交给服务商）。
+#: 曾经写死 8000：推理模型的可见输出与思维链争同一份配额，被吃光时正文为空、
+#: finish_reason=length，而没有 tool_calls 的轮次会被循环当成「模型答完了」——一次
+#: 空答复就这样「成功」收尾（现场会话 01a0d277，见 dev/diagnosis/2026-09-27-stop-and-compaction.md）。
+#: 需要复现某次实验的用量时，调用方仍然可以显式传一个数字。
+DEFAULT_MAX_TOKENS: int | None = None
 
 # 进程内复用一个 Client。以前每次调用都新建 `httpx.Client` 再关掉：每轮模型调用
 # 都要重新 TCP/TLS 握手，多轮 agent 与 subagent 场景下线性叠加。`httpx.Client`
@@ -182,14 +187,19 @@ def build_request(
     *,
     system: str | None = None,
     tools: list[dict[str, Any]] | None = None,
-    max_tokens: int = DEFAULT_MAX_TOKENS,
+    max_tokens: int | None = DEFAULT_MAX_TOKENS,
 ) -> dict[str, Any]:
-    """system 走 messages 首条，不写回调用方的 messages。"""
+    """system 走 messages 首条，不写回调用方的 messages。
+
+    max_tokens 为 None（默认）时**不放这个字段**：让服务商决定上限，也避免把
+    推理模型的思维链计进我们的固定配额里。
+    """
     request: dict[str, Any] = {
         "model": config.model,
-        "max_tokens": max_tokens,
         "messages": ([{"role": "system", "content": system}] if system else []) + list(messages),
     }
+    if max_tokens is not None:
+        request["max_tokens"] = max_tokens
     if tools:
         request["tools"] = list(tools)
     return request
@@ -284,7 +294,7 @@ def chat_completion(
     *,
     system: str | None = None,
     tools: list[dict[str, Any]] | None = None,
-    max_tokens: int = DEFAULT_MAX_TOKENS,
+    max_tokens: int | None = DEFAULT_MAX_TOKENS,
     client: httpx.Client | None = None,
 ) -> Turn:
     request = build_request(
@@ -434,7 +444,7 @@ def stream_completion(
     *,
     system: str | None = None,
     tools: list[dict[str, Any]] | None = None,
-    max_tokens: int = DEFAULT_MAX_TOKENS,
+    max_tokens: int | None = DEFAULT_MAX_TOKENS,
     on_delta: DeltaCallback | None = None,
     client: httpx.Client | None = None,
 ) -> Turn:

@@ -1182,3 +1182,14 @@ def test_injected_budget_lowers_the_compaction_threshold(tmp_path, hook_registry
     assert text == "读完了"
     assert compacted, "注入更低阈值后应当压缩"
     assert compacted[0].data["before"] > compacted[0].data["after"]
+def test_loop_does_not_cap_the_output_budget(hook_registry):
+    """主轮次默认不设 max_tokens：上限交给服务商。
+
+    现场事故：固定 8000 被推理吃满 → 正文为空、无 tool_calls → 循环把它当成
+    「模型答完了」，整个运行以空答复「成功」收尾。
+    """
+    chat = FakeChat(make_turn("你好"))
+
+    agent_loop([{"role": "user", "content": "hi"}], config=CONFIG, chat=chat)
+
+    assert chat.requests[0].get("max_tokens") is None

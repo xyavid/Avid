@@ -48,7 +48,6 @@ CONTEXT_CHAR_LIMIT = 400_000
 MICRO_COMPACT_KEEP_RECENT = 3
 MICRO_COMPACT_TARGET_RATIO = 0.8
 REACTIVE_KEEP_RECENT = 5
-SUMMARY_MAX_TOKENS = 4000
 
 # ③④ 的字符阈值与**真实窗口**的关系。有窗口、且拿到过一轮真实读数时按
 # 「窗口 × WINDOW_TRIGGER_RATIO × 实测 chars/token − 两块固定文本字符」现算
@@ -211,9 +210,10 @@ def _summarize(
         {"role": "user", "content": "请把以上对话压缩成要点摘要。"}
     ]
     try:
-        turn = chat(
-            config, request, system=SUMMARY_SYSTEM, max_tokens=SUMMARY_MAX_TOKENS
-        )
+        # 摘要调用同样不设 max_tokens：推理模型的思维链与摘要正文争同一份配额，
+        # 写死上限会让摘要变成空——而空摘要被上面当作"这一步没做成"，于是压缩静默
+        # 降级成"保留原历史"，看起来像"没到阈值"。上限交给服务商。
+        turn = chat(config, request, system=SUMMARY_SYSTEM)
     except (LLMError, OSError, ValueError) as exc:
         # 摘要失败不该让整个运行崩掉：调用超限、网络断、响应不是合法 JSON 都算
         # "这一步没做成"，降级成保留原历史。**程序错误不许吞**——AssertionError /

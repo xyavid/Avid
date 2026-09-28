@@ -482,3 +482,14 @@ def test_reactive_gives_up_with_nothing_earlier():
 
     assert reactive_compact(Transcript(messages), config=CONFIG, chat=chat, keep_recent=5) is None
     assert chat.requests == []
+
+
+def test_summary_call_is_not_capped(spill_root):
+    """摘要也是模型调用：写死的上限会被推理吃光，摘要变空 → 这一步静默失效。"""
+    chat = FakeChat("这是摘要")
+    messages = [user("x" * 2000), assistant("y" * 2000)]
+
+    compact_history(Transcript(messages), config=CONFIG, chat=chat, limit=100)
+
+    assert len(chat.requests) == 1
+    assert chat.requests[0].get("max_tokens") is None
