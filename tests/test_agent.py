@@ -8,6 +8,7 @@ from avid.ai.config import Config
 from avid.policy.compaction import CompactReport
 from avid.runtime import hooks
 from avid.runtime.loop import agent_loop
+from avid.runtime.state import MAX_CONSECUTIVE_DENIALS
 from avid.tools import TOOLS
 
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
@@ -485,6 +486,63 @@ def test_denied_tool_calls_do_not_terminate_the_loop(hook_registry):
     denied = [m for m in messages if m.get("role") == "tool"]
     assert len(denied) == 2
     assert all("Permission denied" in m["content"] for m in denied)
+
+
+def test_consecutive_denials_stop_the_run(hook_registry):
+    """连续被拒、期间一次都没通过 → 停下来，而不是一直重试。
+
+    现场（会话 01a0d277）：同一份探针被拒 15 次，每一轮都照样再要一次模型。判据是
+"连击"而不是"拒绝总数"——任何一次成功调用都会把它清零（见下一个用例）。
+    """
+    hook_registry.register("PreToolUse", lambda ctx: hooks.BLOCK)
+    chat = FakeChat(
+        *[
+            make_turn("", [tool_call("read_file", call_id=f"c{i}")])
+            for i in range(MAX_CONSECUTIVE_DENIALS + 2)
+        ]
+    )
+    messages = [{"role": "user", "content": "读"}]
+
+    text = agent_loop(
+        messages,
+        config=CONFIG,
+        chat=chat,
+        registry={"read_file": lambda a: "内容"},
+    )
+
+    assert "停止" in text and "连续" in text
+    # 到阈值就停：没有再问第 MAX+1 轮（多给的轮次是给「没停住」留的失败信号）。
+    assert len(chat.requests) == MAX_CONSECUTIVE_DENIALS
+    assert messages[-1]["role"] == "assistant"
+    assert "停止" in messages[-1]["content"]
+
+
+def test_one_successful_call_clears_the_denial_streak(hook_registry):
+    """交替「被拒 → 通过」不算连击：普通任务里偶发的拒绝不该把整个运行判负。"""
+    counter = {"n": 0}
+
+    def roughly(context):
+        counter["n"] += 1
+        return hooks.BLOCK if counter["n"] % 2 else None
+
+    hook_registry.register("PreToolUse", roughly)
+    chat = FakeChat(
+        *[
+            make_turn("", [tool_call("read_file", call_id=f"c{i}")])
+            for i in range(2 * MAX_CONSECUTIVE_DENIALS + 2)
+        ],
+        make_turn("做完了"),
+    )
+    messages = [{"role": "user", "content": "读"}]
+
+    text = agent_loop(
+        messages,
+        config=CONFIG,
+        chat=chat,
+        registry={"read_file": lambda a: "内容"},
+    )
+
+    assert text == "做完了"
 
 
 # ---------- ③ PostToolUse ----------

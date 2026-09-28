@@ -162,6 +162,10 @@ def execute_one(
         # 文案由拦截它的回调决定；回调没说就用兜底值。
         return str(before.get("denied_content") or DENIED_CONTENT)
 
+    # 这一条通过了权限：把"连续被拒"的连击清零（见 MAX_CONSECUTIVE_DENIALS）。
+    # 只在放行那一刻记，工具自身失败不算被拒——那是模型看得见的另一回事。
+    state.note_allowed()
+
     try:
         if name in STATEFUL_TOOLS:
             content = _as_text(impl(arguments, state=state))

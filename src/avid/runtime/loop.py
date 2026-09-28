@@ -40,7 +40,7 @@ from . import context, events
 from .events import RunObserver
 from .execution import execute_batch
 from .hooks import BLOCK, HookRegistry
-from .state import TODO_REMINDER_AFTER_ROUNDS, RunState
+from .state import MAX_CONSECUTIVE_DENIALS, TODO_REMINDER_AFTER_ROUNDS, RunState
 
 if TYPE_CHECKING:  # 只有类型标注用它：注解是惰性的，运行时不必跨层 import 策略层
     from ..policy.permission import ApprovalLedger, AskUser, RunSecurity
@@ -129,6 +129,8 @@ def agent_loop(
     workspace_root: str | None = None,
     max_tokens: int | None = DEFAULT_MAX_TOKENS,
     max_stop_blocks: int = MAX_STOP_BLOCKS,
+    # 连续被拒到这个数（期间没有一次通过）就停止整个运行。见 state 里的常量说明。
+    max_consecutive_denials: int = MAX_CONSECUTIVE_DENIALS,
     # 一步内并行工具调用的上限。None = 用 `config.max_parallel_tool_calls`
     # （环境变量 `AVID_MAX_PARALLEL_TOOL_CALLS`，缺省 10）；1 = 完全串行。
     # 只有**并发安全**的工具会被并进同一段，写类/bash/任务类/子 agent 是串行屏障
@@ -361,6 +363,22 @@ def agent_loop(
             transcript.append(message)
             emit(message)
 
+        if state.denial_streak >= max_consecutive_denials:
+            # 策略连续拒绝、期间一次都没通过：再问下去只是把同一堵墙撞 N 遍。
+            # 停在这里而不是继续调度——文案走 on_message，前端照常看得见这张卡片；
+            # 不新增事件类型（事件契约与前端映射都不动）。
+            halt = (
+                f"（运行已停止：连续 {state.denial_streak} 次工具调用被权限策略拒绝，"
+                "期间没有一次通过。请向用户说明需要哪个目标或哪条命令的授权，"
+                "再开新一轮。）"
+            )
+            logger.warning(
+                "连续 %d 次工具调用被拒，运行提前结束", state.denial_streak
+            )
+            message = {"role": "assistant", "content": halt}
+            transcript.append(message)
+            emit(message)
+            return halt
     # 静态检查器不认"无限 for"（`itertools.count` 在它们眼里照样会结束），所以这里
     # 必须给一个显式出口。运行期不可达：循环只从模型的 return、取消或异常退出。
     raise AssertionError("轮次循环没有正常出口")

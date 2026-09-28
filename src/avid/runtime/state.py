@@ -37,6 +37,13 @@ if TYPE_CHECKING:  # 与 loop.py 同理：AskUser 只出现在注解里
 # 循环取默认值时不必 import 策略层。
 TODO_REMINDER_AFTER_ROUNDS = 3
 
+# 连续这么多次工具调用被权限策略拒绝（期间**没有一次通过**）就停止整个运行。
+# 判据是「被拒且毫无进展」，不是「拒绝总数」：任何一次成功调用都会把连击清零，
+# 所以交替成功/被拒的正常任务永远踩不到这条线（现场会话 01a0d277 是同一份探针
+# 被拒 15 次、15 轮里一次都没通过）。放在这里而不是策略层，理由同 TODO 阈值：
+# 这是循环的节奏，循环取默认值时不必 import 策略层。
+MAX_CONSECUTIVE_DENIALS = 5
+
 
 def _split_context(
     tokens: int | None, chars: tuple[int, int, int] | None
@@ -114,6 +121,8 @@ class RunState:
     # 统计：进 Stop 事件，供 hook 与测试观察
     tool_calls: int = 0
     denials: int = 0
+    #: 当前连击：从最后一次**通过**的调用算起，连续被拒了几次。
+    denial_streak: int = 0
     compactions: int = 0
     # 累计用量：整个运行所有轮次 total_tokens 之和。它**不是**上下文占用——
     # 占用看下面的 `last_usage.prompt_tokens`（同一份上下文会被反复计费）。
@@ -289,9 +298,19 @@ class RunState:
             self.tool_calls += 1
 
     def note_denial(self) -> None:
-        """记一次被拦截的调用。理由同上。"""
+        """记一次被拦截的调用。理由同上。连击 +1（见 MAX_CONSECUTIVE_DENIALS）。"""
         with self._counters_lock:
             self.denials += 1
+            self.denial_streak += 1
+
+    def note_allowed(self) -> None:
+        """记一次**通过**权限的调用：连击清零。
+
+        只用「有没有被拒」判连击，不看工具是否执行成功——工具自己报错是模型看得见的
+        信息，属于有进展；被拒才是原地打转。
+        """
+        with self._counters_lock:
+            self.denial_streak = 0
 
     def note_repeat(self, key: str) -> int:
         """同一个键的出现次数（从 1 开始）。读改写在一把锁里完成。
@@ -320,6 +339,7 @@ class RunState:
             "rounds": self.round,
             "tool_calls": self.tool_calls,
             "denials": self.denials,
+            "denial_streak": self.denial_streak,
             "compactions": self.compactions,
         }
 
