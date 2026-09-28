@@ -14,6 +14,7 @@ import pytest
 from support import ScriptedChat, make_turn, tool_call
 
 from avid.ai.client import Config
+from avid.runtime.context_manager import TAIL_HEADER
 from avid.runtime.state import RunState
 from benchmarks.avidbench import load_cases, run_all
 from benchmarks.avidbench.case import Limits
@@ -150,7 +151,16 @@ def test_followup_resume_carries_history_and_fresh_does_not(tmp_path: Path):
     assert [item.condition for item in results] == ["phase1", "resume", "fresh"]
     assert results[0].status == "unscored", "第一轮不计分"
     assert results[1].resolved and results[2].resolved
-    messages = [request["messages"] for request in chat.requests]
+
+    def history(request):
+        """发给模型的历史（tail 块每轮重渲染且不落库，不参与这条断言）。"""
+        return [
+            message
+            for message in request["messages"]
+            if not str(message.get("content", "")).startswith(TAIL_HEADER)
+        ]
+
+    messages = [history(request) for request in chat.requests]
     assert len(messages[0]) == 1
     assert len(messages[1]) == 3, "resume：第一轮的两条消息 + 第二轮 prompt"
     assert len(messages[2]) == 1, "fresh：不许把第一轮的历史偷偷带过来"

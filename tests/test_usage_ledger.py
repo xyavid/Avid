@@ -15,7 +15,7 @@ from support import ScriptedChat, make_turn
 from avid.ai.config import Config
 from avid.ai.usage import Usage
 from avid.policy.compaction import CompactReport
-from avid.runtime import context
+from avid.runtime.context_manager import announce
 from avid.runtime.state import RunState
 from avid.session import (
     USAGE_NS,
@@ -66,7 +66,7 @@ def test_last_compaction_tokens_comes_from_the_next_real_call():
     """压缩后还剩多少由下一次模型调用回答——不在这里做本地估算。"""
     state = RunState(context_window=200_000)
     state.record_usage(Usage(150_000, 10, 150_010))
-    context.announce(CompactReport("micro_compact", "落盘 3 条", 400, 200), state)
+    announce(CompactReport("micro_compact", "落盘 3 条", 400, 200), state)
 
     report = state.usage_report()
     assert report["compaction"] == {
@@ -83,10 +83,10 @@ def test_last_compaction_tokens_comes_from_the_next_real_call():
 
 def test_compaction_counter_counts_only_real_reports():
     state = RunState()
-    context.announce(None, state)  # 没压成 → 不计数
+    announce(None, state)  # 没压成 → 不计数
     assert state.compactions == 0
-    context.announce(CompactReport("snip_compact", "裁掉中间", 10, 8), state)
-    context.announce(CompactReport("compact_history", "摘要", 9, 3), state)
+    announce(CompactReport("snip_compact", "裁掉中间", 10, 8), state)
+    announce(CompactReport("compact_history", "摘要", 9, 3), state)
     assert state.compactions == 2
     assert state.usage_report()["compaction"]["last_step"] == "compact_history"
 

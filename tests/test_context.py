@@ -1,8 +1,8 @@
 """上下文管线编排的测试。
 
 这些用例原来在 test_agent.py 里靠 monkeypatch `agent_module.*` 来验证，
-现在编排逻辑住在 context.prepare 里，所以直接在它这一层测——不需要为了
-测编排去伪造整个循环。
+编排逻辑并入 ContextManager 后直接在它这一层测——compose() 的第一步就是
+压缩编排，不需要为了测编排去伪造整个循环。
 """
 
 import pytest
@@ -11,7 +11,7 @@ from avid.ai.client import Usage
 from avid.ai.config import Config
 from avid.ai.transcript import Transcript
 from avid.policy import compaction as compact
-from avid.runtime import context
+from avid.runtime.context_manager import ContextBudget, ContextManager
 from avid.runtime.state import RunState
 
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
@@ -25,6 +25,25 @@ def summarize(*args, **kwargs):
     raise AssertionError("这个用例不该调用模型")
 
 
+def prepare(transcript, state, *, budget=None):
+    """compose 的压缩半程：本文件只关心编排，不关心渲染。"""
+    manager = ContextManager(
+        transcript=transcript,
+        state=state,
+        config=CONFIG,
+        summarize=summarize,
+        budget=budget,
+    )
+    return manager.compose()
+
+
+def reactive(transcript, state):
+    manager = ContextManager(
+        transcript=transcript, state=state, config=CONFIG, summarize=summarize
+    )
+    return manager.reactive()
+
+
 def test_free_steps_run_before_the_expensive_ones(monkeypatch):
     order = []
     monkeypatch.setattr(
@@ -32,7 +51,7 @@ def test_free_steps_run_before_the_expensive_ones(monkeypatch):
     )
     monkeypatch.setattr(compact, "snip_compact", lambda t, **k: order.append("snip"))
 
-    context.prepare(Transcript([user()]), RunState(), config=CONFIG, summarize=summarize)
+    prepare(Transcript([user()]), RunState())
 
     assert order == ["budget", "snip"]
 
@@ -41,7 +60,7 @@ def test_summary_is_skipped_when_the_free_steps_suffice(monkeypatch):
     """③ 够用就不做 ④——"整理后仍超限才生成摘要"的直接体现。"""
     transcript = Transcript([user("x" * 5000)])
     state = RunState()
-    budget = context.ContextBudget(context_chars=100)
+    budget = ContextBudget(context_chars=100)
 
     def fake_micro(t, **kwargs):
         t.replace_all([user("short")])
@@ -54,9 +73,7 @@ def test_summary_is_skipped_when_the_free_steps_suffice(monkeypatch):
         compact, "compact_history", lambda t, **k: pytest.fail("不该生成摘要")
     )
 
-    result = context.prepare(
-        transcript, state, config=CONFIG, summarize=summarize, budget=budget
-    )
+    result = prepare(transcript, state, budget=budget)
 
     assert result.changed
     assert state.compacted is False
@@ -65,7 +82,7 @@ def test_summary_is_skipped_when_the_free_steps_suffice(monkeypatch):
 def test_auto_compaction_happens_at_most_once(monkeypatch):
     transcript = Transcript([user("x" * 5000)])
     state = RunState()
-    budget = context.ContextBudget(context_chars=10)
+    budget = ContextBudget(context_chars=10)
 
     calls = []
 
@@ -79,9 +96,7 @@ def test_auto_compaction_happens_at_most_once(monkeypatch):
     monkeypatch.setattr(compact, "compact_history", fake_history)
 
     for _ in range(3):
-        context.prepare(
-            transcript, state, config=CONFIG, summarize=summarize, budget=budget
-        )
+        prepare(transcript, state, budget=budget)
 
     assert calls == [1]
     assert state.compacted is True
@@ -101,12 +116,10 @@ def test_steps_below_the_limit_do_nothing(monkeypatch):
         compact, "compact_history", lambda t, **k: pytest.fail("没超限不该摘要")
     )
 
-    result = context.prepare(
+    result = prepare(
         transcript,
         state,
-        config=CONFIG,
-        summarize=summarize,
-        budget=context.ContextBudget(context_chars=100_000),
+        budget=ContextBudget(context_chars=100_000),
     )
 
     assert not result.changed
@@ -122,10 +135,8 @@ def test_each_step_is_announced_and_counted(monkeypatch, caplog):
     monkeypatch.setattr(compact, "snip_compact", lambda t, **k: None)
 
     state = RunState()
-    with caplog.at_level("INFO", logger="avid.runtime.context"):
-        context.prepare(
-            Transcript([user()]), state, config=CONFIG, summarize=summarize
-        )
+    with caplog.at_level("INFO", logger="avid.runtime.context_manager"):
+        prepare(Transcript([user()]), state)
 
     assert any(
         "compact: tool_result_budget" in record.getMessage()
@@ -147,7 +158,7 @@ def test_multiple_steps_in_one_round_all_count(monkeypatch):
     )
 
     state = RunState()
-    context.prepare(Transcript([user()]), state, config=CONFIG, summarize=summarize)
+    prepare(Transcript([user()]), state)
 
     assert state.compactions == 2
 
@@ -166,7 +177,7 @@ def test_compaction_arms_the_next_real_reading(monkeypatch):
 
     state = RunState(context_window=200_000)
     state.record_usage(Usage(150_000, 1, 150_001))
-    context.prepare(Transcript([user()]), state, config=CONFIG, summarize=summarize)
+    prepare(Transcript([user()]), state)
 
     # 压完还没调用模型：不给数（界面显示「—」），也不猜。
     assert state.usage_report()["compaction"]["last_compaction_tokens"] is None
@@ -187,9 +198,7 @@ def test_reactive_announces_and_counts(monkeypatch):
     )
 
     state = RunState()
-    report = context.reactive(
-        Transcript([user()]), state, config=CONFIG, summarize=summarize
-    )
+    report = reactive(Transcript([user()]), state)
 
     assert report is not None
     assert state.compactions == 1
@@ -199,16 +208,14 @@ def test_reactive_no_op_is_not_counted(monkeypatch):
     monkeypatch.setattr(compact, "reactive_compact", lambda t, **k: None)
 
     state = RunState()
-    report = context.reactive(
-        Transcript([user()]), state, config=CONFIG, summarize=summarize
-    )
+    report = reactive(Transcript([user()]), state)
 
     assert report is None
     assert state.compactions == 0
 
 
 def test_default_budget_references_the_compact_constants():
-    limits = context.ContextBudget()
+    limits = ContextBudget()
 
     assert limits.tool_result_chars == compact.TOOL_RESULT_CHAR_BUDGET
     assert limits.context_chars == compact.CONTEXT_CHAR_LIMIT
@@ -239,12 +246,10 @@ def test_budget_is_injectable_so_orchestration_is_testable(monkeypatch):
         lambda t, **k: expensive.append(k["limit"]) or None,
     )
 
-    context.prepare(
+    prepare(
         Transcript([user("x" * 500)]),
         RunState(),
-        config=CONFIG,
-        summarize=summarize,
-        budget=context.ContextBudget(context_chars=100),
+        budget=ContextBudget(context_chars=100),
     )
 
     assert seen == [100]

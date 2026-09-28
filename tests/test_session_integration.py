@@ -14,6 +14,7 @@ import pytest
 from avid.ai.client import Turn, Usage
 from avid.ai.config import Config
 from avid.ai.transcript import Transcript
+from avid.runtime.context_manager import TAIL_HEADER
 from avid.runtime.hooks import BLOCK
 from avid.runtime.loop import agent_loop
 from avid.session import (
@@ -116,7 +117,15 @@ def test_second_run_continues_from_the_session(hook_registry, session):
     chat = FakeChat(make_turn("第二答"))
     agent_loop(second, config=CONFIG, chat=chat, on_message=recorder.on_message)
 
-    assert [message["content"] for message in chat.requests[0]["messages"]] == [
+    def visible(request):
+        """发给模型的历史（tail 块每轮重渲染且不落库，不参与这条断言）。"""
+        return [
+            message["content"]
+            for message in request["messages"]
+            if not str(message.get("content", "")).startswith(TAIL_HEADER)
+        ]
+
+    assert visible(chat.requests[0]) == [
         "第一问",
         "第一答",
         "第二问",

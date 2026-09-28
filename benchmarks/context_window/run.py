@@ -51,7 +51,7 @@ from avid.ai.transcript import text_of  # noqa: E402
 from avid.policy import compaction as compact  # noqa: E402
 from avid.policy.compaction import CONTEXT_CHAR_LIMIT  # noqa: E402
 from avid.runtime import events as events_module  # noqa: E402
-from avid.runtime.context import ContextBudget  # noqa: E402
+from avid.runtime.context_manager import ContextBudget  # noqa: E402
 from avid.runtime.loop import agent_loop  # noqa: E402
 from avid.runtime.state import RunState  # noqa: E402
 from avid.tools.schemas import READ_FILE  # noqa: E402

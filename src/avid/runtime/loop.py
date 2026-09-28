@@ -4,7 +4,7 @@
 
 * 消息结构与不变量：``ai/transcript.py``
 * 运行状态与一次性标志：``runtime/state.py``
-* 压缩编排：``runtime/context.py``
+* 上下文装配与压缩编排：``runtime/context_manager.py``
 * 工具调用协议：``runtime/execution.py``
 * 扩展点：``runtime/hooks.py``
 
@@ -36,7 +36,8 @@ from ..ai.client import (
 from ..ai.config import Config, load_config
 from ..ai.transcript import Transcript
 from ..tools import TOOL_IMPLS, TOOLS, ToolImpl
-from . import context, events
+from . import events
+from .context_manager import ComposedRequest, ContextBudget, ContextManager
 from .events import RunObserver
 from .execution import execute_batch
 from .hooks import BLOCK, HookRegistry
@@ -152,7 +153,7 @@ def agent_loop(
     # 为什么要能注入：压缩的收益与代价（省多少 token / 会不会丢早期事实）只能靠
     # **同一个任务集跑两组不同阈值**量出来，而"改常量再跑一次"会把代码差异混进差值里。
     # 这是评测唯一要的内核开口，默认路径一行未变。
-    budget: context.ContextBudget | None = None,
+    budget: ContextBudget | None = None,
     auto_approve: bool = False,
     # 权限模式（strict / workspace / system）与"同意一次"账本。None 交给 RunState
     # 取默认（循环不认识策略层的默认值）。账本由调用方传入时与子 agent 共用，
@@ -180,7 +181,8 @@ def agent_loop(
     """跑到模型不再要工具为止，返回最后一轮的 assistant 文本。
 
     ``messages`` 原地更新：每轮的 assistant 消息与工具结果都会写回同一个 list。
-    ``system`` 是「固定指令部分」，技能目录由 SkillLoader 统一追加。
+    ``system`` 是指令覆盖（None = 默认文案）；环境、技能目录与每轮的 tail 块
+    由 ContextManager 统一装配，循环不再自己拼系统提示词。
 
     ``on_message`` 是循环**唯一的消息通道**：本次运行产生或改写的每条消息按
     发生顺序回调一次——先是触发用户消息（UserPromptSubmit 注入**之后**的版本），
@@ -230,7 +232,6 @@ def agent_loop(
         if on_message is not None:
             on_message(message)
 
-    transcript = Transcript(messages)
     # 注册表与 system prompt 都由 state 负责——循环不知道默认指令文案，也不持有注册表。
     state = state or RunState.for_run(
         auto_approve=auto_approve,
@@ -250,29 +251,37 @@ def agent_loop(
     if state.context_window is None:
         state.context_window = config.context_window
 
-    system_prompt = state.system_prompt(system)
+    # 上下文（system 装配、环境、技能目录、tail 块与压缩）都归 manager；循环只把
+    # 这次运行的实事交给它：指令覆盖、本轮真实下发的工具清单、阈值与摘要入口。
+    ctx = ContextManager(
+        transcript=Transcript(messages),
+        state=state,
+        config=config,
+        instructions=system,
+        tool_names=[str(item["function"]["name"]) for item in tools],
+        budget=budget,
+        summarize=summarize,
+    )
+    transcript = ctx.transcript
 
     trigger = _submit_input(transcript, state, [str(item["function"]["name"]) for item in tools])
     if trigger is None:
         return ""
     index, injected = trigger
-    if injected:
-        # 注入的上下文进**系统提示词**（每轮重建，不落库），不改写用户消息：
-        # 用户消息就是用户写的那句话，落库、事件与界面都保持它原样。
-        system_prompt = f"{system_prompt}\n\n" + "\n".join(injected)
     emit(transcript.as_messages()[index])
 
-    def note_prompt_parts() -> None:
+    def note_prompt_parts(request: ComposedRequest) -> None:
         """发请求前记下三块文本的字符数。
 
         系统提示与工具定义**从不发给前端**（前端只有对话条目），所以"上下文被谁占了"
         只能在发请求的这一刻、由内核自己算并随快照带出去；分配成 token 由
-        ``RunState.usage_report()`` 做（按字符占比，不引入绝对系数）。
+        ``RunState.usage_report()`` 做（按字符占比，不引入绝对系数）。tail 块计入
+        messages——它们确实随请求发出去了，只是不落库。
         """
         state.record_prompt_parts(
-            system=len(system_prompt),
+            system=request.system_chars,
             tools=len(json.dumps(tools, ensure_ascii=False)) if tools else 0,
-            messages=transcript.estimate_chars(),
+            messages=request.messages_chars,
         )
 
     # `itertools.count` 表达"轮次没有天然终点"：循环的出口只有模型的回答与取消
@@ -296,16 +305,17 @@ def agent_loop(
 
         state.emit(events.RUN_STATUS, round=round_index, tokens=state.tokens, activity="model")
 
-        # 上下文管线：①② 每轮跑，③④ 超限时才跑，④ 整个运行最多一次
-        context.prepare(transcript, state, config=config, summarize=summarize, budget=budget)
+        # 上下文装配与压缩都在 compose 里：①② 每轮跑，③④ 超限时才做，
+        # ④ 整个运行最多一次。injected 只在首轮生效（system 定格）。
+        request = ctx.compose(injected=injected)
 
         # 模型调用；报上下文超限时兜底压缩并重试一次（整个运行最多一次）
-        note_prompt_parts()
+        note_prompt_parts(request)
         try:
             turn = chat(
                 config,
-                transcript.as_messages(),
-                system=system_prompt,
+                request.messages,
+                system=request.system,
                 tools=tools,
                 max_tokens=max_tokens,
             )
@@ -314,13 +324,14 @@ def agent_loop(
                 raise
             state.retried = True
             logger.warning("compact: 模型报上下文超限，兜底压缩后重试一次")
-            context.reactive(transcript, state, config=config, summarize=summarize, budget=budget)
-            # 兜底压缩改过候选消息，分块要按**这一次**的实际请求重算。
-            note_prompt_parts()
+            ctx.reactive()
+            # 兜底压缩改过候选消息，tail 与分块要按**这一次**的实际请求重算。
+            request = ctx.render()
+            note_prompt_parts(request)
             turn = chat(
                 config,
-                transcript.as_messages(),
-                system=system_prompt,
+                request.messages,
+                system=request.system,
                 tools=tools,
                 max_tokens=max_tokens,
             )

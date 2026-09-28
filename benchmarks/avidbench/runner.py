@@ -23,7 +23,7 @@ from typing import Any
 
 from avid.ai.client import LLMError, chat_completion
 from avid.ai.config import Config
-from avid.runtime.context import ContextBudget
+from avid.runtime.context_manager import ContextBudget
 from avid.runtime.loop import RunCancelled
 from avid.runtime.state import RunState
 from avid.session import MemorySessionRepo, SessionRecorder, messages_for_branch

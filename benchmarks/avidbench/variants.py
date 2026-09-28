@@ -31,7 +31,7 @@ from avid.tools import TOOL_IMPLS, TOOLS
 from .bare import bare_loop
 
 if TYPE_CHECKING:
-    from avid.runtime.context import ContextBudget
+    from avid.runtime.context_manager import ContextBudget
 
 #: 三个臂共用的系统提示词。不含任何工具名——工具清单由循环按变体注入，
 #: 否则 bare 会被要求去调用它没有的工具。

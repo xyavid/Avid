@@ -20,7 +20,7 @@ from avid.ai.config import Config
 from avid.ai.transcript import Transcript
 from avid.policy import compaction as compact
 from avid.policy.compaction import derived_context_chars
-from avid.runtime import context
+from avid.runtime.context_manager import ContextBudget, ContextManager, effective_budget
 from avid.runtime.state import RunState
 
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
@@ -152,7 +152,7 @@ def state_with_readings(window: int = 32_768) -> RunState:
 
 
 def test_effective_budget_derives_from_this_runs_own_reading():
-    limits, note = context.effective_budget(context.ContextBudget(), state_with_readings())
+    limits, note = effective_budget(ContextBudget(), state_with_readings())
 
     assert limits.context_chars == 2_214
     assert note is not None and "窗口" in note and "字符/token" in note
@@ -169,7 +169,7 @@ def test_effective_budget_derives_from_this_runs_own_reading():
     ],
 )
 def test_effective_budget_falls_back_to_the_constant(state):
-    limits, note = context.effective_budget(context.ContextBudget(), state)
+    limits, note = effective_budget(ContextBudget(), state)
 
     assert limits.context_chars == compact.CONTEXT_CHAR_LIMIT
     assert note is None
@@ -177,8 +177,8 @@ def test_effective_budget_falls_back_to_the_constant(state):
 
 def test_explicit_budget_is_not_overwritten():
     """显式注入阈值做单变量对照时，派生必须让路（否则注入的那个数被静默盖掉）。"""
-    limits, note = context.effective_budget(
-        context.ContextBudget(context_chars=12_345, from_window=False),
+    limits, note = effective_budget(
+        ContextBudget(context_chars=12_345, from_window=False),
         state_with_readings(),
     )
 
@@ -205,9 +205,12 @@ def test_derived_limit_reaches_the_third_and_fourth_steps(monkeypatch):
         lambda t, **k: pytest.fail("③ 已经把上下文压下来了，不该再摘要"),
     )
 
-    result = context.prepare(
-        Transcript([user("x" * 5_000)]), state, config=CONFIG, summarize=not_called
-    )
+    result = ContextManager(
+        transcript=Transcript([user("x" * 5_000)]),
+        state=state,
+        config=CONFIG,
+        summarize=not_called,
+    ).compose()
 
     assert seen == [2_214]
     assert result.changed
@@ -229,12 +232,12 @@ def test_default_path_detail_is_unchanged(monkeypatch):
     monkeypatch.setattr(compact, "micro_compact", fake_micro)
     monkeypatch.setattr(compact, "compact_history", lambda t, **k: pytest.fail("不该摘要"))
 
-    result = context.prepare(
-        Transcript([user("x" * 5_000)]),
-        state,
+    result = ContextManager(
+        transcript=Transcript([user("x" * 5_000)]),
+        state=state,
         config=CONFIG,
         summarize=not_called,
-        budget=context.ContextBudget(context_chars=100, from_window=False),
-    )
+        budget=ContextBudget(context_chars=100, from_window=False),
+    ).compose()
 
     assert result.reports[0].detail == original

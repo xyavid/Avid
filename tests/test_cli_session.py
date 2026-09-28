@@ -15,6 +15,7 @@ import pytest
 
 from avid import cli
 from avid.ai.client import Turn, Usage
+from avid.runtime.context_manager import TAIL_HEADER
 from avid.runtime.loop import agent_loop as real_agent_loop
 from avid.tools import workspace
 
@@ -118,7 +119,12 @@ def test_existing_session_continues_with_history(sandbox, model, capsys):
     err = capsys.readouterr().err
     assert "续接" in err
 
-    assert [message["content"] for message in chat.requests[0]["messages"]] == [
+    visible = [
+        message["content"]
+        for message in chat.requests[0]["messages"]
+        if not str(message.get("content", "")).startswith(TAIL_HEADER)
+    ]
+    assert visible == [
         "第一问",
         "第一答",
         "第二问",

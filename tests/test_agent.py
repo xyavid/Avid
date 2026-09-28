@@ -101,7 +101,10 @@ def test_executes_tool_call_then_finishes():
         "tool_call_id": "call_1",
         "content": "文件内容",
     }
-    assert chat.requests[1]["messages"][-1]["role"] == "tool"
+    # 请求末尾是每轮重渲染的上下文 tail（user，不落库），工具结果在它前面
+    assert chat.requests[1]["messages"][-2]["role"] == "tool"
+    assert chat.requests[1]["messages"][-1]["role"] == "user"
+    assert chat.requests[1]["messages"][-1]["content"].startswith("[上下文]")
 
 
 def test_multiple_tool_calls_become_multiple_tool_messages():
@@ -1116,8 +1119,8 @@ def test_unknown_skill_returns_error_text_without_raising(hook_registry, tmp_pat
 def test_context_pipeline_runs_before_every_model_call(hook_registry, monkeypatch):
     rounds = []
     monkeypatch.setattr(
-        "avid.runtime.context.prepare",
-        lambda transcript, state, **kwargs: rounds.append(state.round),
+        "avid.runtime.context_manager.ContextManager._compact",
+        lambda self: rounds.append(self.state.round) or [],
     )
 
     chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
@@ -1142,12 +1145,14 @@ def test_prompt_too_long_triggers_one_reactive_retry(hook_registry, monkeypatch)
             raise PromptTooLongError("超了")
         return make_turn("好的")
 
-    def fake_reactive(transcript, state, **kwargs):
+    def fake_reactive(self):
         calls["reactive"] += 1
-        transcript.replace_all([{"role": "user", "content": "[历史摘要] 压缩过了"}])
+        self.transcript.replace_all([{"role": "user", "content": "[历史摘要] 压缩过了"}])
         return CompactReport("reactive_compact", "摘要更早的 3 条", 999, 10)
 
-    monkeypatch.setattr("avid.runtime.context.reactive", fake_reactive)
+    monkeypatch.setattr(
+        "avid.runtime.context_manager.ContextManager.reactive", fake_reactive
+    )
     messages = [{"role": "user", "content": "x"}]
 
     result = agent_loop(messages, config=CONFIG, chat=fake_chat)
@@ -1166,11 +1171,13 @@ def test_reactive_is_not_retried_twice(hook_registry, monkeypatch):
         calls["chat"] += 1
         raise PromptTooLongError("还是超")
 
-    def fake_reactive(transcript, state, **kwargs):
+    def fake_reactive(self):
         calls["reactive"] += 1
         return CompactReport("reactive_compact", "摘要", 999, 10)
 
-    monkeypatch.setattr("avid.runtime.context.reactive", fake_reactive)
+    monkeypatch.setattr(
+        "avid.runtime.context_manager.ContextManager.reactive", fake_reactive
+    )
 
     with pytest.raises(PromptTooLongError):
         agent_loop(
@@ -1192,16 +1199,19 @@ def test_reactive_retry_sends_the_compressed_history(hook_registry, monkeypatch)
             raise PromptTooLongError("超了")
         return make_turn("好的")
 
-    def fake_reactive(transcript, state, **kwargs):
-        transcript.replace_all([{"role": "user", "content": "压缩后的历史"}])
+    def fake_reactive(self):
+        self.transcript.replace_all([{"role": "user", "content": "压缩后的历史"}])
         return CompactReport("reactive_compact", "摘要", 999, 10)
 
-    monkeypatch.setattr("avid.runtime.context.reactive", fake_reactive)
+    monkeypatch.setattr(
+        "avid.runtime.context_manager.ContextManager.reactive", fake_reactive
+    )
 
     agent_loop([{"role": "user", "content": "x"}], config=CONFIG, chat=fake_chat)
 
-    assert seen[0] == ["x"]
-    assert seen[1] == ["压缩后的历史"]
+    # tail 块挂在请求末尾（不落库），所以历史本体看第一条就够
+    assert seen[0][0] == "x"
+    assert seen[1][0] == "压缩后的历史"
 
 
 def test_compaction_is_logged(hook_registry, monkeypatch, caplog):
@@ -1212,7 +1222,7 @@ def test_compaction_is_logged(hook_registry, monkeypatch, caplog):
         ),
     )
 
-    with caplog.at_level("INFO", logger="avid.runtime.context"):
+    with caplog.at_level("INFO", logger="avid.runtime.context_manager"):
         agent_loop(
             [{"role": "user", "content": "x"}],
             config=CONFIG,
@@ -1247,11 +1257,13 @@ def test_run_state_is_created_per_run(hook_registry, monkeypatch):
     """两次运行各有自己的 RunState——状态不跨运行泄漏。"""
     states = []
 
-    def fake_prepare(transcript, state, **kwargs):
-        states.append(state)
-        return
+    def fake_compact(self):
+        states.append(self.state)
+        return []
 
-    monkeypatch.setattr("avid.runtime.context.prepare", fake_prepare)
+    monkeypatch.setattr(
+        "avid.runtime.context_manager.ContextManager._compact", fake_compact
+    )
 
     agent_loop(
         [{"role": "user", "content": "a"}],
@@ -1278,7 +1290,7 @@ def test_injected_budget_lowers_the_compaction_threshold(tmp_path, hook_registry
     用空 hook 注册表是为了让字符数可算——生产路径上 `large_output_hook` 会先把每个
     工具结果截到 8000 字符，实机要达到同一个阈值需要更多轮。
     """
-    from avid.runtime.context import ContextBudget
+    from avid.runtime.context_manager import ContextBudget
 
     for index in range(5):
         (tmp_path / f"big{index}.txt").write_text("x" * 20_000, encoding="utf-8")
