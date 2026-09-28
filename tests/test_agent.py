@@ -1,5 +1,6 @@
 import threading
 import time
+from dataclasses import replace
 
 import pytest
 
@@ -22,7 +23,7 @@ def make_turn(text="", tool_calls=(), finish_reason="stop", reasoning="", usage=
         message=message,
         text=text,
         tool_calls=list(tool_calls),
-        usage=Usage(prompt_tokens=1, completion_tokens=2, total_tokens=3),
+        usage=usage or Usage(prompt_tokens=1, completion_tokens=2, total_tokens=3),
         model="m",
         finish_reason=finish_reason,
         reasoning=reasoning,
@@ -568,6 +569,17 @@ def test_blank_answer_notice_names_the_reason(hook_registry):
     nudge = [m for m in messages if m.get("role") == "user" and "可见正文" in m["content"]]
     assert len(nudge) == 1
     assert "思维链" in nudge[0]["content"]
+
+
+def test_blank_answer_notice_reports_reasoning_tokens(hook_registry):
+    """有推理 token 数就报出来：这一轮花掉的输出预算看得见。"""
+    spend = make_turn("", finish_reason="length")
+    spend = replace(spend, usage=Usage(1, 900, 901, reasoning_tokens=880))
+
+    chat = FakeChat(spend, spend)
+    text = agent_loop([{"role": "user", "content": "做"}], config=CONFIG, chat=chat)
+
+    assert "880" in text
 
 
 def test_empty_answer_is_not_accepted_as_final(hook_registry):
@@ -1299,6 +1311,8 @@ def test_injected_budget_lowers_the_compaction_threshold(tmp_path, hook_registry
     assert text == "读完了"
     assert compacted, "注入更低阈值后应当压缩"
     assert compacted[0].data["before"] > compacted[0].data["after"]
+
+
 def test_loop_does_not_cap_the_output_budget(hook_registry):
     """主轮次默认不设 max_tokens：上限交给服务商。
 

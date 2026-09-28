@@ -584,6 +584,8 @@ def test_connect_timeout_is_tighter_than_the_read_timeout():
     assert timeout.connect == CONNECT_TIMEOUT_SECONDS
     assert timeout.read == TIMEOUT_SECONDS
     assert CONNECT_TIMEOUT_SECONDS < TIMEOUT_SECONDS
+
+
 # ---------- 输出预算：默认不设上限 ----------
 
 
