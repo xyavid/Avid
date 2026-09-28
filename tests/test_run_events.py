@@ -295,6 +295,21 @@ def test_reading_while_a_run_starts_never_double_opens_the_session(sandbox):
 # ---------------- 运行记录的取消与统计 ----------------
 
 
+def test_reasoning_delta_is_a_delta_tier_event(sandbox):
+    """A2：思维链增量走 delta 档——默认不投递、不落盘、不占重放预算。"""
+    services = build(sandbox, ScriptedChat(make_turn("答")), buffer_size=8)
+    record = services.runs.get(services.runs.start(new_session(services), "跑").run_id)
+
+    services.runs.emit_delta(
+        record, services.runs, "它在想", event_type=events.REASONING_DELTA
+    )
+
+    deltas = [event for event in record.events if event.seq is None]
+    assert [event.type for event in deltas] == [events.REASONING_DELTA]
+    assert deltas[0].data == {"text": "它在想"}
+    assert events.REASONING_DELTA in events.DELTA_EVENT_TYPES
+
+
 def test_delta_bookkeeping_keeps_the_buffer_consistent(sandbox):
     """delta 记账必须与"从头重算"完全一致。
 

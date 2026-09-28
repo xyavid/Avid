@@ -268,3 +268,52 @@ def test_probe_can_be_switched_off(probe_cache, monkeypatch):
     window, calls = probe(config, model_listing({"id": "vendor/x-flash", "context_length": 1}))
     assert window is None
     assert calls == []
+
+
+def test_reasoning_tokens_are_read_from_the_nested_details():
+    """A2：推理 token 是 completion 的子集，OpenAI 兼容写法放在 details 里。"""
+    usage = normalize_usage(
+        {
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 90,
+                "total_tokens": 100,
+                "completion_tokens_details": {"reasoning_tokens": 64},
+            }
+        }
+    )
+
+    assert usage.reasoning_tokens == 64
+
+
+def test_a_flat_reasoning_token_field_is_accepted_too():
+    """有的网关把 reasoning_tokens 直接放在 usage 顶层。"""
+    usage = normalize_usage(
+        {"usage": {"prompt_tokens": 1, "completion_tokens": 9, "reasoning_tokens": 7}}
+    )
+
+    assert usage.reasoning_tokens == 7
+
+
+def test_gemini_thoughts_count_as_reasoning_tokens():
+    usage = normalize_usage(
+        {
+            "usageMetadata": {
+                "promptTokenCount": 3,
+                "candidatesTokenCount": 5,
+                "totalTokenCount": 8,
+                "thoughtsTokenCount": 40,
+            }
+        }
+    )
+
+    assert usage.reasoning_tokens == 40
+
+
+def test_missing_reasoning_tokens_stay_none():
+    """没有这个数就是 None：0 会被界面读成"思考了零个 token"。"""
+    usage = normalize_usage(
+        {"usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}}
+    )
+
+    assert usage.reasoning_tokens is None

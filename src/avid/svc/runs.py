@@ -509,13 +509,22 @@ class RunRegistry:
                 config,
                 messages,
                 on_delta=lambda text: self.emit_delta(record, self, text),
+                on_reasoning=lambda text: self.emit_delta(
+                    record, self, text, event_type=events.REASONING_DELTA
+                ),
                 **kwargs,
             )
 
         return chat
 
     @staticmethod
-    def emit_delta(record: RunRecord, registry: "RunRegistry", text: str) -> None:
+    def emit_delta(
+        record: RunRecord,
+        registry: "RunRegistry",
+        text: str,
+        *,
+        event_type: str = events.ASSISTANT_DELTA,
+    ) -> None:
         """delta 不进重放、不进会话：只让**当前**订阅者看到（I15）。
 
         它仍走 ``record.events`` 这条实时队列（订阅者靠同一把 condition 被唤醒），但
@@ -524,7 +533,7 @@ class RunRegistry:
         with record.condition:
             record.events.append(
                 RunEvent(
-                    type=events.ASSISTANT_DELTA,
+                    type=event_type,
                     data={"text": text},
                     run_id=record.run_id,
                     seq=None,

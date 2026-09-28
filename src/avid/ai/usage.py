@@ -49,6 +49,10 @@ class Usage:
     # None = 这次上报里没有这个数。不要用 0 冒充：0 是"确实一次都没命中"。
     cache_read_tokens: int | None = None
     cache_write_tokens: int | None = None
+    # 推理 token 是 ``completion_tokens`` 的**子集**（各家口径都是"含在输出里"），
+    # 不是另加的一块。它存在的意义是解释"输出都花在哪了"：现场那条空正文响应的
+    # 9466 个输出 token 全在思维链上，只看 completion 看不出这一层。
+    reasoning_tokens: int | None = None
 
 
 def _as_int(value: Any) -> int | None:
@@ -102,12 +106,17 @@ def _openai_like(payload: Mapping[str, Any]) -> Usage | None:
         cached = _as_int(payload.get("cached_tokens"))
     if cached is None:
         cached = _as_int(payload.get("prompt_cache_hit_tokens"))
+    # 推理 token 两种写法都见过：OpenAI 兼容放在 details 里，有的网关直接平铺。
+    reasoning = _nested_int(payload.get("completion_tokens_details"), "reasoning_tokens")
+    if reasoning is None:
+        reasoning = _as_int(payload.get("reasoning_tokens"))
     return Usage(
         prompt_tokens=prompt,
         completion_tokens=completion,
         total_tokens=total,
         cache_read_tokens=cached,
         cache_write_tokens=None,
+        reasoning_tokens=reasoning,
     )
 
 
@@ -120,6 +129,7 @@ def _anthropic_like(payload: Mapping[str, Any]) -> Usage | None:
     completion = _as_int(payload.get("output_tokens")) or 0
     # input_tokens 不含缓存部分，所以总量要加回来（模块文档里的第二条口径差异）。
     prompt = inbound + (read or 0) + (write or 0)
+    # Anthropic 把思维链算在 output_tokens 里，没有单独的计数字段：不猜，留 None。
     return Usage(
         prompt_tokens=prompt,
         completion_tokens=completion,
@@ -141,6 +151,7 @@ def _gemini_like(payload: Mapping[str, Any]) -> Usage | None:
         total_tokens=total,
         cache_read_tokens=_as_int(payload.get("cachedContentTokenCount")),
         cache_write_tokens=None,
+        reasoning_tokens=_as_int(payload.get("thoughtsTokenCount")),
     )
 
 

@@ -28,6 +28,7 @@ export type AvidEventType =
   | 'resync'
   | 'run_status'
   | 'assistant_delta'
+  | 'reasoning_delta'
 // EVENTS:END
 
 /** durable：带 id/seq、可重放。重连补齐的粒度就是它。 */
@@ -54,7 +55,12 @@ export const DURABLE_EVENT_TYPES: readonly AvidEventType[] = [
 export const TRANSIENT_EVENT_TYPES: readonly AvidEventType[] = ['run_status']
 
 /** delta：不带 id，可任意丢；默认不投递，需 `?deltas=1` 显式订阅。 */
-export const DELTA_EVENT_TYPES: readonly AvidEventType[] = ['assistant_delta']
+/** delta：不带 id，可任意丢；默认不投递，需 `?deltas=1` 显式订阅。 */
+export const DELTA_EVENT_TYPES: readonly AvidEventType[] = [
+  'assistant_delta',
+  // A2：思维链增量。与正文分开，前端把它显示在「思考中」卡片里。
+  'reasoning_delta',
+]
 
 /** 终态事件：渲染前必须 cancel 待处理 delta（不变量 I12）。 */
 export const TERMINAL_EVENT_TYPES: readonly AvidEventType[] = [

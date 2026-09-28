@@ -11,6 +11,7 @@ from avid.ai.client import (
     ask,
     build_payload,
     build_request,
+    delta_reasoning,
     iter_sse_events,
     merge_stream_chunk,
     parse_reply,
@@ -423,6 +424,83 @@ def test_sse_reader_rejects_broken_frame():
         list(iter_sse_events(["data: {not json}", ""]))
 
     assert "不是合法 JSON" in str(exc.value)
+
+
+REASONING_NON_STREAM = {
+    "model": "test-model",
+    "choices": [
+        {
+            "message": {
+                "role": "assistant",
+                "content": "有两个文件。",
+                "reasoning_content": "先看目录。然后读文件。",
+            },
+            "finish_reason": "stop",
+        }
+    ],
+    "usage": {"prompt_tokens": 7, "completion_tokens": 9, "total_tokens": 16},
+}
+
+
+REASONING_STREAM_FRAMES = [
+    _frame({"reasoning_content": "先看目录。"}),
+    _frame({"reasoning_content": "然后读文件。"}),
+    _frame({"content": "有两个文件。"}, finish="stop"),
+    {"model": "test-model", "choices": [], "usage": REASONING_NON_STREAM["usage"]},
+]
+
+
+def test_reasoning_gets_its_own_field_and_stays_out_of_the_text():
+    """A2：思维链单独累加——它既不是正文，也不能被写回下一轮 messages。
+
+    现场的推理模型把输出预算**全部**花在思维链上，正文为空；旧代码不认这些字段，
+    于是"花掉 9466 个 completion token"与"看起来什么都没发生"同时成立。
+    """
+    turn = fold(REASONING_STREAM_FRAMES).to_turn()
+
+    assert turn.reasoning == "先看目录。然后读文件。"
+    assert turn.text == "有两个文件。"
+    assert turn.message == {"role": "assistant", "content": "有两个文件。"}
+
+
+def test_reasoning_is_parsed_the_same_way_on_both_paths():
+    """B9 的延伸：带思维链的响应，流式与非流式仍然逐字段相等。"""
+    assert fold(REASONING_STREAM_FRAMES).to_turn() == parse_turn(REASONING_NON_STREAM)
+
+
+def test_delta_reasoning_reads_only_the_thinking_piece():
+    """三家写法都给同一个结果；正文与工具参数不算思维链。"""
+    assert delta_reasoning(_frame({"reasoning": "嗯"})) == "嗯"
+    assert delta_reasoning(_frame({"reasoning_content": "嗯"})) == "嗯"
+    assert delta_reasoning(_frame({"reasoning_details": [{"text": "嗯"}]})) == "嗯"
+    assert delta_reasoning(_frame({"content": "正文"})) == ""
+    assert delta_reasoning({"model": "m", "choices": [], "usage": REASONING_NON_STREAM["usage"]}) == ""
+
+
+def test_stream_completion_reports_reasoning_on_its_own_callback():
+    """思考与正文走两个回调：前端分开显示，正文才合成气泡。"""
+    thought: list[str] = []
+    body: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=sse_payload(REASONING_STREAM_FRAMES).encode("utf-8"),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        turn = stream_completion(
+            CONFIG,
+            [{"role": "user", "content": "看两个文件"}],
+            on_delta=body.append,
+            on_reasoning=thought.append,
+            client=client,
+        )
+
+    assert thought == ["先看目录。", "然后读文件。"]
+    assert body == ["有两个文件。"]
+    assert turn.reasoning == "先看目录。然后读文件。"
 
 
 def test_stream_completion_returns_turn_and_reports_deltas():

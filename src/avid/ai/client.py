@@ -172,6 +172,9 @@ class Turn:
     usage: Usage
     model: str
     finish_reason: str
+    # 思维链原文（A2）。**不进 message**：回传会污染下一轮，多数端点也拒收这些字段。
+    # 它不参与"模型答了什么"的判断，但决定了用户能不能看懂"这一轮为什么没有正文"。
+    reasoning: str = ""
 
 
 def build_payload(config: Config, prompt: str) -> dict[str, Any]:
@@ -228,6 +231,27 @@ def _content_text(raw: Any) -> str:
     return ""
 
 
+def _reasoning_text(raw: Mapping[str, Any]) -> str:
+    """把一段 delta / message 里的思维链归一成字符串。
+
+    三家写法：`reasoning`（OpenAI 兼容）/ `reasoning_content`（DeepSeek 系）/
+    `reasoning_details`（分片数组，取其中的 text）。归一的口径与 `_content_text`
+    一致——流式与非流式两条路径必须给出同一个值（B9）。
+    """
+    for key in ("reasoning_content", "reasoning"):
+        value = raw.get(key)
+        if isinstance(value, str):
+            return value
+    details = raw.get("reasoning_details")
+    if isinstance(details, list):
+        return "".join(
+            item.get("text", "")
+            for item in details
+            if isinstance(item, Mapping) and isinstance(item.get("text"), str)
+        )
+    return ""
+
+
 def parse_turn(data: dict[str, Any]) -> Turn:
     try:
         choice = data["choices"][0]
@@ -252,6 +276,7 @@ def parse_turn(data: dict[str, Any]) -> Turn:
         usage=_usage_of(data),
         model=str(data.get("model", "")),
         finish_reason=str(choice.get("finish_reason", "")),
+        reasoning=_reasoning_text(raw),
     )
 
 
@@ -317,6 +342,7 @@ class StreamState:
     """
 
     content: str = ""
+    reasoning: str = ""
     tool_calls: tuple[dict[str, Any], ...] = ()
     usage: Usage | None = None
     model: str = ""
@@ -335,6 +361,7 @@ class StreamState:
             usage=self.usage or Usage(0, 0, 0),
             model=self.model,
             finish_reason=self.finish_reason,
+            reasoning=self.reasoning,
         )
 
 
@@ -384,6 +411,7 @@ def merge_stream_chunk(state: StreamState, chunk: Mapping[str, Any]) -> StreamSt
     finish = choice.get("finish_reason")
     return StreamState(
         content=state.content + str(delta.get("content") or ""),
+        reasoning=state.reasoning + _reasoning_text(delta),
         tool_calls=tuple(calls),
         usage=_usage_of(chunk) if chunk.get("usage") else state.usage,
         model=str(chunk.get("model") or state.model),
@@ -398,6 +426,14 @@ def delta_text(chunk: Mapping[str, Any]) -> str:
         return ""
     delta = choices[0].get("delta") or {}
     return str(delta.get("content") or "")
+
+
+def delta_reasoning(chunk: Mapping[str, Any]) -> str:
+    """一帧里的思维链增量。与 `delta_text` 分开：它不是要显示成回复的正文。"""
+    choices = chunk.get("choices") or []
+    if not choices:
+        return ""
+    return _reasoning_text(choices[0].get("delta") or {})
 
 
 def _decode_stream_frame(payload: str) -> dict[str, Any]:
@@ -446,11 +482,14 @@ def stream_completion(
     tools: list[dict[str, Any]] | None = None,
     max_tokens: int | None = DEFAULT_MAX_TOKENS,
     on_delta: DeltaCallback | None = None,
+    on_reasoning: DeltaCallback | None = None,
     client: httpx.Client | None = None,
 ) -> Turn:
     """流式调用，返回与 `chat_completion` **同形**的 `Turn`。
 
-    `on_delta` 每收到一段正文就回调一次；它做什么与本模块无关（svc 把它接到事件流上）。
+    `on_delta` 每收到一段正文就回调一次，`on_reasoning` 每收到一段**思维链**回调一次；
+    它们做什么与本模块无关（svc 把它接到事件流上）。两个回调分开是有意的：正文要合成
+    回复气泡，思维链只是"它在想"——粘在一起会让空正文的那一轮看起来像真有回复。
     回调抛错会中断这次调用——这是有意的：实现方只该做入队，不该失败。
     """
     request = build_request(
@@ -484,6 +523,10 @@ def stream_completion(
                     text = delta_text(chunk)
                     if text:
                         on_delta(text)
+                if on_reasoning is not None:
+                    thinking = delta_reasoning(chunk)
+                    if thinking:
+                        on_reasoning(thinking)
     except httpx.HTTPError as exc:
         raise LLMError(f"请求 {config.chat_completions_url} 失败：{exc}") from exc
 

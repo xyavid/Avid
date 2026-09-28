@@ -47,6 +47,8 @@ RUN_STATUS = "run_status"
 # ---- 事件名：delta ----
 
 ASSISTANT_DELTA = "assistant_delta"
+#: 思维链增量（A2）。与正文分开：前端把它显示在「思考中」卡片里，不合成回复气泡。
+REASONING_DELTA = "reasoning_delta"
 
 
 DURABLE_EVENT_TYPES: tuple[str, ...] = (
@@ -70,7 +72,7 @@ DURABLE_EVENT_TYPES: tuple[str, ...] = (
 
 TRANSIENT_EVENT_TYPES: tuple[str, ...] = (RUN_STATUS,)
 
-DELTA_EVENT_TYPES: tuple[str, ...] = (ASSISTANT_DELTA,)
+DELTA_EVENT_TYPES: tuple[str, ...] = (ASSISTANT_DELTA, REASONING_DELTA)
 
 #: 事件名的**唯一手写清单**。`EVENT_TYPES` 由它派生（`get_args`），所以"联合类型
 #: 里有一个、清单里没有"这种分叉不可能出现——以前是两份字面量靠人对齐。
@@ -93,6 +95,7 @@ EventType = Literal[
     "resync",
     "run_status",
     "assistant_delta",
+    "reasoning_delta",
 ]
 
 #: 完整清单（顺序 = `EventType` 的书写顺序）。前端类型联合按它比对。
@@ -162,6 +165,7 @@ __all__ = [
     "DURABLE_SET",
     "EVENT_TYPES",
     "EventType",
+    "REASONING_DELTA",
     "RESYNC",
     "RUN_CANCELLED",
     "RUN_FAILED",
