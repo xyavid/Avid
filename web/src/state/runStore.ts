@@ -11,7 +11,7 @@ import { create } from 'zustand'
 
 import type { Entry, RunStatus } from '../api/types'
 import type { EventEnvelope } from '../events/types'
-import { applyDelta, applyEvent, emptyView, viewFromEntries } from '../events/reducer'
+import { applyDelta, applyEvent, applyReasoning, emptyView, viewFromEntries } from '../events/reducer'
 import type { RunPhase, RunView } from '../events/reducer'
 
 export function phaseFromStatus(status: RunStatus): RunPhase {
@@ -35,6 +35,7 @@ interface RunStoreState {
   view: RunView
   apply: (event: EventEnvelope) => void
   commitDelta: (text: string) => void
+  commitReasoning: (text: string) => void
   rebuild: (entries: Entry[]) => void
   reset: (sessionId: string | null) => void
   setPhase: (phase: RunPhase) => void
@@ -46,6 +47,7 @@ export const useRunStore = create<RunStoreState>((set) => ({
   view: emptyView(),
   apply: (event) => set((state) => ({ view: applyEvent(state.view, event) })),
   commitDelta: (text) => set((state) => ({ view: applyDelta(state.view, text) })),
+  commitReasoning: (text) => set((state) => ({ view: applyReasoning(state.view, text) })),
   rebuild: (entries) => set((state) => ({ view: viewFromEntries(state.view, entries) })),
   reset: (sessionId) => set({ view: emptyView(sessionId) }),
   setPhase: (phase) => set((state) => ({ view: { ...state.view, phase } })),
@@ -66,6 +68,7 @@ export const useRunSelector = <T,>(selector: (view: RunView) => T): T =>
 export const runStoreActions = {
   apply: (event: EventEnvelope) => useRunStore.getState().apply(event),
   commitDelta: (text: string) => useRunStore.getState().commitDelta(text),
+  commitReasoning: (text: string) => useRunStore.getState().commitReasoning(text),
   rebuild: (entries: Entry[]) => useRunStore.getState().rebuild(entries),
   reset: (sessionId: string | null) => useRunStore.getState().reset(sessionId),
   setPhase: (phase: RunPhase) => useRunStore.getState().setPhase(phase),

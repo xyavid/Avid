@@ -102,6 +102,7 @@ export const DICTIONARY: Record<Locale, Entry> = {
     'chat.round': '第 {round} 轮',
     'chat.tokens': '{tokens} tokens',
     'chat.activeTool': '正在执行 {tool}',
+    'chat.reasoning': '思考中',
     'chat.loadEarlier': '加载更早',
     'chat.loadingEarlier': '正在加载…',
     'chat.scrollToBottom': '回到最新',

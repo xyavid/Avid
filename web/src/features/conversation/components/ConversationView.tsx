@@ -92,6 +92,7 @@ export function ConversationView(props: ConversationViewProps) {
             round={view.round}
             tokens={view.tokens}
             activeTool={activeTool}
+            reasoning={view.thinkingText}
           />
         </div>
       ) : null}

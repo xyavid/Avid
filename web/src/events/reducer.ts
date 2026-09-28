@@ -55,6 +55,11 @@ export interface RunView {
   approvals: ApprovalRequest[]
   compactions: CompactionNote[]
   deltaText: string
+  /**
+   * 当前这一轮的思维链增量（A2）。只用于「思考中」卡片，**不进 entries**：
+   * 它是过程不是回复。durable 的 assistant_message 到达即清空（那一轮结束了）。
+   */
+  thinkingText: string
   error: { code: string; message: string } | null
   cancelRequested: boolean
   cancelReason: string | null
@@ -80,6 +85,7 @@ export function emptyView(sessionId: string | null = null): RunView {
     approvals: [],
     compactions: [],
     deltaText: '',
+    thinkingText: '',
     error: null,
     cancelRequested: false,
     cancelReason: null,
@@ -127,6 +133,12 @@ export function applyDelta(view: RunView, text: string): RunView {
   // durable 事件都没有，攒着等于整轮结束时才一次性出现——delta 的流式收益为 0
   // （首屏可见 token 的目标也就不可达）。`flushDelta` 仍是唯一的合成点。
   return flushDelta({ ...view, deltaText: view.deltaText + text })
+}
+
+/** 思维链增量：只累加，不合成乐观条目——它不是回复正文（与 `applyDelta` 对照）。 */
+export function applyReasoning(view: RunView, text: string): RunView {
+  if (!text) return view
+  return { ...view, thinkingText: view.thinkingText + text }
 }
 
 function toolCallsOf(message: MessagePayload | undefined): ToolCallRef[] {
@@ -202,6 +214,7 @@ export function applyEvent(view: RunView, event: EventEnvelope): RunView {
       return {
         ...next,
         phase: 'streaming',
+        thinkingText: '',
         startedAt: event.ts,
         error: null,
         detached: false,
@@ -212,12 +225,14 @@ export function applyEvent(view: RunView, event: EventEnvelope): RunView {
       const kind =
         event.type === 'user_message' ? 'user' : event.type === 'assistant_message' ? 'assistant' : 'tool'
       const cleaned = kind === 'assistant' ? next.entries.filter((e) => !e.optimistic) : next.entries
+      // 这一轮的回答落地了：思维链属于上一轮，随答案一起收掉。
+      const thinkingText = kind === 'assistant' ? '' : next.thinkingText
       const entry = messageEntry(event, kind)
       const entries = [...cleaned]
       const duplicate = entries.findIndex((item) => item.id === entry.id)
       if (duplicate >= 0) entries[duplicate] = entry
       else entries.push(entry)
-      return { ...next, entries }
+      return { ...next, entries, thinkingText }
     }
     case 'tool_call_started':
       return upsertTool(next, {
@@ -323,6 +338,7 @@ export function applyEvent(view: RunView, event: EventEnvelope): RunView {
       return {
         ...next,
         phase: 'done',
+        thinkingText: '',
         finishedAt: event.ts,
         tokens: Number(event.data.tokens ?? next.tokens),
         usage: event.data.usage ?? next.usage,
@@ -331,6 +347,7 @@ export function applyEvent(view: RunView, event: EventEnvelope): RunView {
       return {
         ...next,
         phase: 'failed',
+        thinkingText: '',
         finishedAt: event.ts,
         error: {
           code: String(event.data.code ?? 'internal'),
@@ -341,6 +358,7 @@ export function applyEvent(view: RunView, event: EventEnvelope): RunView {
       return {
         ...next,
         phase: 'cancelled',
+        thinkingText: '',
         finishedAt: event.ts,
         cancelReason: String(event.data.reason ?? ''),
       }
@@ -348,6 +366,8 @@ export function applyEvent(view: RunView, event: EventEnvelope): RunView {
       return { ...next, detached: true }
     case 'assistant_delta':
       return applyDelta(next, String(event.data.text ?? ''))
+    case 'reasoning_delta':
+      return applyReasoning(next, String(event.data.text ?? ''))
     default:
       return next
   }

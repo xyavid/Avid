@@ -45,6 +45,14 @@ export function useEventStream({
     })
   }
 
+  // 思维链单独一路：它不进回复气泡，合并节奏与正文一致（≤1 commit/帧）。
+  const reasoning = useRef<Coalescer | null>(null)
+  if (reasoning.current === null) {
+    reasoning.current = createCoalescer({
+      commit: (text) => runStoreActions.commitReasoning(text),
+    })
+  }
+
   useEffect(() => {
     if (!runId) return
     const controller = new AbortController()
@@ -63,9 +71,19 @@ export function useEventStream({
               coalescer.current?.push(String(event.data.text ?? ''))
               continue
             }
+            if (event.type === 'reasoning_delta') {
+              reasoning.current?.push(String(event.data.text ?? ''))
+              continue
+            }
             // durable 事件渲染前：终止类丢弃待落地 delta，其余先 flush（I12）。
-            if (deltaAction(event.type) === 'cancel') coalescer.current?.cancel()
-            else coalescer.current?.flush()
+            // 思维链同样处理：先落地，再由随后的 durable 事件决定要不要清空。
+            if (deltaAction(event.type) === 'cancel') {
+              coalescer.current?.cancel()
+              reasoning.current?.cancel()
+            } else {
+              coalescer.current?.flush()
+              reasoning.current?.flush()
+            }
             runStoreActions.apply(event)
             if (deltaAction(event.type) === 'cancel') refresh()
           } else if (signal.kind === 'resync') {

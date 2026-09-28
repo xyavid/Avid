@@ -42,6 +42,30 @@ function fold(events: EventEnvelope[], seed: RunView = emptyView(SESSION)): RunV
   return events.reduce((view, event) => applyEvent(view, event), seed)
 }
 
+const reasoning = ev('reasoning_delta', null, { text: '先看目录。' })
+
+describe('A2：思维链增量只进「思考中」卡片', () => {
+  it('累加但不合成条目——它不是回复正文', () => {
+    const view = fold([started, reasoning, ev('reasoning_delta', null, { text: '再读文件。' })])
+
+    expect(view.thinkingText).toBe('先看目录。再读文件。')
+    expect(view.entries.filter((entry) => entry.kind === 'assistant')).toHaveLength(0)
+    expect(view.entries.some((entry) => entry.optimistic)).toBe(false)
+  })
+
+  it('回答落地或运行收尾后不留残片（否则会串到下一轮）', () => {
+    expect(fold([started, reasoning, assistantMessage]).thinkingText).toBe('')
+    expect(fold([started, reasoning, finished]).thinkingText).toBe('')
+    expect(fold([started, reasoning, ev('run_failed', 5, { code: 'x' })]).thinkingText).toBe('')
+  })
+
+  it('新一轮开始时也清掉上一轮的思维链', () => {
+    const view = fold([started, reasoning, ev('run_started', 6)])
+
+    expect(view.thinkingText).toBe('')
+  })
+})
+
 describe('applyEvent：durable 是权威，delta 是易失的', () => {
   it('只喂 durable 的最终状态 == 混入任意 delta（中途被打断）的最终状态', () => {
     const durableOnly = fold([started, userMessage, assistantMessage, finished])
