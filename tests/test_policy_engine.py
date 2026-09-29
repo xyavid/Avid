@@ -6,6 +6,9 @@
 
 from __future__ import annotations
 
+import shutil
+import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -36,7 +39,26 @@ BROKEN_PROBE = BackendProbe(
 
 SECRET = "sudo ls"
 OUTSIDE = "cat /etc/hostname"
+#: 区外**写**：这才是越过沙箱的动作（沙箱只保证工作区可写）。只做裁决、不执行。
+OUTSIDE_WRITE = "echo x >> /etc/hostname"
 HARD = "rm -rf /"
+
+#: 沙箱只能把**已存在**的路径挂进来，所以区外写的用例必须在 /var/tmp 里放真文件。
+#: 刻意避开 /tmp：沙箱把它换成私有 tmpfs，写它不碰宿主，因此不算越过沙箱。
+@contextmanager
+def outside_files(*names: str):
+    directory = Path("/var/tmp") / f"avid-outside-{uuid.uuid4().hex}"
+    directory.mkdir(parents=True, exist_ok=True)
+    try:
+        paths = []
+        for name in names:
+            path = directory / name
+            path.write_text("outside\n", encoding="utf-8")
+            paths.append(path)
+        yield paths
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
+
 
 
 def security(root: Path, mode: str, probe: BackendProbe = WORKING_PROBE, **kwargs):
@@ -102,32 +124,40 @@ def test_manual_denies_when_no_answerer_is_available(sandbox: Path, specs):
 
 
 def test_manual_asks_once_per_path_not_per_command(sandbox: Path, specs):
-    """越界按**路径**记账：同意 `/etc/hostname` 不等于同意 `/etc/hosts`。"""
-    ledger = ApprovalLedger()
-    asked: list[str] = []
+    """越过沙箱的写按**路径**记账：批准 `a` 不表示批准 `b`。"""
+    with outside_files("a.txt", "b.txt") as (first, second):
+        ledger = ApprovalLedger()
+        asked: list[str] = []
 
-    def ask(name, arguments, reason):
-        asked.append(reason)
-        return True
+        def ask(name, arguments, reason):
+            asked.append(reason)
+            return True
 
-    first = run(
-        "bash", {"command": OUTSIDE}, spec=specs["manual"], root=sandbox, ledger=ledger, ask=ask
-    )
-    assert first.allowed and first.grants == (("/etc/hostname", "ro"),)
-    assert len(asked) == 1
+        command = f"echo x >> {first}"
+        accepted = run(
+            "bash", {"command": command}, spec=specs["manual"], root=sandbox, ledger=ledger, ask=ask
+        )
+        assert accepted.allowed and accepted.grants == ((str(first), "rw"),)
+        assert len(asked) == 1
 
-    # 同一个目标再来一次：账本命中，不再问
-    again = run(
-        "bash", {"command": OUTSIDE}, spec=specs["manual"], root=sandbox, ledger=ledger, ask=ask
-    )
-    assert again.allowed and again.answered_by == "ledger"
-    assert len(asked) == 1
+        # 同一条命令再来一次：账本命中，不再问
+        again = run(
+            "bash", {"command": command}, spec=specs["manual"], root=sandbox, ledger=ledger, ask=ask
+        )
+        assert again.allowed and again.answered_by == "ledger"
+        assert len(asked) == 1
 
-    # 换一个区外目标：重新问
-    other = run(
-        "bash", {"command": "cat /etc/hosts"}, spec=specs["manual"], root=sandbox, ledger=ledger, ask=ask
-    )
-    assert other.allowed and len(asked) == 2
+        # 换一个区外目标：重新问
+        other = run(
+            "bash",
+            {"command": f"echo x >> {second}"},
+            spec=specs["manual"],
+            root=sandbox,
+            ledger=ledger,
+            ask=ask,
+        )
+        assert other.allowed and len(asked) == 2
+
 
 
 def test_auto_never_asks_the_user(sandbox: Path, specs):
@@ -220,7 +250,9 @@ TABLE = [
         ("deny", "rule"),
     ),
     # 放行的行也保留 kind：它记的是"**因为什么**被审过"，审计与事件都要这个信息。
-    ("越界", "bash", {"command": OUTSIDE}, ("deny", "outside"), ("deny", "outside"), ("allow", "outside")),
+    ("区外只读（沙箱已保证）", "bash", {"command": OUTSIDE}, ("allow", ""), ("allow", ""), ("allow", "")),
+    ("越过沙箱（写区外）", "bash", {"command": OUTSIDE_WRITE}, ("deny", "outside"), ("deny", "outside"), ("allow", "outside")),
+
     ("危险", "bash", {"command": SECRET}, ("deny", "danger"), ("deny", "danger"), ("allow", "danger")),
     ("成本", "subagent", {}, ("deny", "cost"), ("allow", "cost"), ("allow", "cost")),
     ("区内只读", "read_file", {"path": "a.txt"}, ("allow", ""), ("allow", ""), ("allow", "")),
@@ -242,7 +274,8 @@ def test_decision_table(sandbox: Path, specs, label, tool, arguments, manual, au
 
 #: REVIEW 的四类理由。manual 下它们会变成一次询问；auto 下由分类器判；full 直接放行。
 REVIEW_TABLE = [
-    ("越界", "bash", {"command": OUTSIDE}, "outside"),
+    ("越过沙箱（写区外）", "bash", {"command": OUTSIDE_WRITE}, "outside"),
+
     ("危险", "bash", {"command": SECRET}, "danger"),
     ("成本", "subagent", {}, "cost"),
     ("ask 规则", "read_file", {"path": ".env"}, "rule"),
@@ -378,31 +411,118 @@ def test_degraded_state_is_visible_in_the_spec(sandbox: Path):
 # ---------------------------------------------------------------- 能力账本
 
 
-def test_file_tool_outside_read_grant_never_allows_write(sandbox: Path, specs):
+def test_reading_outside_the_workspace_stays_inside_the_sandbox(sandbox: Path, specs):
+    """沙箱以 ``--ro-bind / /`` 提供整个文件系统的只读访问：读区外是**已有能力**。
+
+    边界不在"工作区"，而在"沙箱保证不了什么"：Codex 的 ``workspace-write``
+    （"permits reading files, editing files in cwd and writable_roots"）与
+    Claude Code 沙箱的 read / write 分层都是这个口径。
+    """
+    for mode in ("manual", "auto", "full"):
+        for tool, arguments in (
+            ("bash", {"command": OUTSIDE}),
+            ("read_file", {"path": "/etc/hostname"}),
+            ("glob", {"pattern": "*", "path": "/etc"}),
+        ):
+            decision = run(tool, arguments, spec=specs[mode], root=sandbox)
+            assert decision.allowed, f"{tool} / {mode}"
+            assert decision.answered_by == "policy"
+            assert decision.type == "SAFE_AUTO"
+
+
+def test_tmp_is_inside_the_sandbox_for_bash_but_not_for_file_tools(sandbox: Path, specs):
+    """``bash`` 跑在沙箱里，宿主 /tmp 已被换成私有 tmpfs：写它碰不到宿主，不必问。
+    文件工具在 agent 进程里跑，它的 /tmp 写会落到宿主，因此仍要授权。"""
     from avid.runtime.state import RunState
     from avid.tools.files import write_file
 
-    outside = sandbox.parent / "outside-access.txt"
-    outside.write_text("original")
+    decision = run("bash", {"command": "echo x > /tmp/avid-probe.txt"}, spec=specs["manual"], root=sandbox)
+    assert decision.verdict == "allow" and decision.kind == ""
+
     state = RunState.for_run(security=specs["manual"], workspace_root=str(sandbox))
-    state.ledger.remember(("path", str(outside), "ro"))
-    assert "拒绝访问" in write_file({"path": str(outside), "content": "x"}, state=state)
-    assert outside.read_text() == "original"
+    assert "拒绝访问" in write_file({"path": "/tmp/avid-file-probe.txt", "content": "x"}, state=state)
 
 
-    ledger = ApprovalLedger()
-    ledger.remember(("path", "/etc/hostname", "ro"))
-    multiple = run("bash", {"command": "cat /etc/hostname /etc/hosts"}, spec=specs["manual"], root=sandbox, ledger=ledger)
-    assert multiple.type == "NEEDS_APPROVAL"
-    write = run("bash", {"command": "echo x > /etc/hostname"}, spec=specs["manual"], root=sandbox, ledger=ledger)
-    assert write.type == "NEEDS_APPROVAL"
+def test_outside_source_is_not_a_write_capability(sandbox: Path, specs):
+    """外部源只读、写入工作区：不能把全命令的 write 误归到只读源上。"""
+    for command in ("cp /etc/hostname local.txt", "cat /etc/hostname > local.txt"):
+        decision = run("bash", {"command": command}, spec=specs["manual"], root=sandbox)
+        assert decision.allowed and not decision.grants, command
 
 
-    ledger = ApprovalLedger()
-    run("bash", {"command": OUTSIDE}, spec=specs["manual"], root=sandbox, ledger=ledger, ask=lambda *a: True)
-    assert ledger.path_grants() == (("/etc/hostname", "ro"),)
-    assert ledger.outside_allowed("/etc/hostname") is True
-    assert ledger.outside_allowed("/etc/shadow") is False
+def test_approval_mounts_only_the_outside_write_destination(sandbox: Path, specs):
+    """批准外部目标写入时，不能顺带把命令中的外部只读源挂成可写。"""
+    with outside_files("source.txt", "destination.txt") as (source, destination):
+        ledger = ApprovalLedger()
+        decision = run(
+            "bash",
+            {"command": f"cp {source} {destination}"},
+            spec=specs["manual"], root=sandbox, ledger=ledger, ask=lambda *args: True,
+        )
+        assert decision.grants == ((str(destination), "rw"),)
+        assert ledger.path_grants() == ((str(destination), "rw"),)
+
+
+
+    """只读授予不能给文件工具写权限：越出沙箱的写必须按 rw 口径批准。"""
+    from avid.runtime.state import RunState
+    from avid.tools.files import write_file
+
+    with outside_files("write.txt") as (outside,):
+        state = RunState.for_run(security=specs["manual"], workspace_root=str(sandbox))
+        state.ledger.remember(("path", str(outside), "ro"))
+        assert "拒绝访问" in write_file({"path": str(outside), "content": "x"}, state=state)
+        assert outside.read_text() == "outside\n"
+
+
+def test_grants_do_not_authorize_other_targets_or_upgrade_read_to_write(sandbox: Path, specs):
+    """一个目标一次授权：只读授予不给写，多目标命令要**每个**目标都获准。"""
+    with outside_files("a.txt", "b.txt") as (first, second):
+        ledger = ApprovalLedger()
+        ledger.remember(("path", str(first), "ro"))
+        write_one = run(
+            "bash", {"command": f"echo x >> {first}"}, spec=specs["manual"], root=sandbox, ledger=ledger
+        )
+        assert write_one.type == "NEEDS_APPROVAL"
+
+        run(
+            "bash",
+            {"command": f"echo x >> {first}"},
+            spec=specs["manual"],
+            root=sandbox,
+            ledger=ledger,
+            ask=lambda *a: True,
+        )
+        multi = run(
+            "bash",
+            {"command": f"echo x >> {first} >> {second}"},
+            spec=specs["manual"],
+            root=sandbox,
+            ledger=ledger,
+        )
+        assert multi.type == "NEEDS_APPROVAL"
+
+
+def test_ledger_records_path_capabilities_with_access(sandbox: Path, specs):
+    """区外**读**不写账本（沙箱已保证），只有越出沙箱的**写**才记能力。"""
+    with outside_files("granted.txt") as (path,):
+        ledger = ApprovalLedger()
+        run("read_file", {"path": str(path)}, spec=specs["manual"], root=sandbox, ledger=ledger)
+        assert ledger.path_grants() == ()
+
+        run(
+            "bash",
+            {"command": f"echo x >> {path}"},
+            spec=specs["manual"],
+            root=sandbox,
+            ledger=ledger,
+            ask=lambda *a: True,
+        )
+        assert ledger.path_grants() == ((str(path), "rw"),)
+        assert ledger.outside_allowed(str(path), "rw") is True
+        assert ledger.outside_allowed(str(path), "ro") is True
+        assert ledger.outside_allowed("/etc/shadow", "rw") is False
+
 
 
 def test_write_grants_are_rw_and_win_over_ro(sandbox: Path, specs):
@@ -452,42 +572,45 @@ def test_hard_deny_is_identical_in_every_mode(sandbox: Path, specs):
 
 def test_messages_say_what_the_model_should_do_next(sandbox: Path, specs):
     hard = run("bash", {"command": HARD}, spec=specs["manual"], root=sandbox)
-    outside = run("bash", {"command": OUTSIDE}, spec=specs["manual"], root=sandbox)
+    beyond = run("bash", {"command": OUTSIDE_WRITE}, spec=specs["manual"], root=sandbox)
     danger = run("bash", {"command": SECRET}, spec=specs["manual"], root=sandbox)
 
     assert "永久禁止" in hard.message
-    assert "不要重复尝试同一路径" in outside.message
+    assert "不要重复尝试同一目标" in beyond.message
     assert "不要重复提交同一条命令" in danger.message
-    assert len({hard.message, outside.message, danger.message}) == 3
+    assert len({hard.message, beyond.message, danger.message}) == 3
 
 
-def test_approval_answers_grant_read_only_for_reads(sandbox: Path, specs):
+def test_outside_reads_never_reach_approval(sandbox: Path, specs):
+    """读工作区之外是沙箱已有能力，所以任何一种模式下都不该打问号。"""
     ledger = ApprovalLedger()
-    # read_file 的越界目标是只读授予：写不进去，因为沙箱按 ro 挂
-    decision = run(
-        "read_file",
-        {"path": "/etc/hostname"},
-        spec=specs["manual"],
-        root=sandbox,
-        ledger=ledger,
-        ask=lambda *a: True,
-    )
-    assert decision.allowed
-    assert decision.grants == (("/etc/hostname", "ro"),)
+
+    def ask(*args):
+        raise AssertionError("区外读不该触发审批")
+
+    for tool, arguments in (
+        ("bash", {"command": OUTSIDE}),
+        ("read_file", {"path": "/etc/hostname"}),
+    ):
+        decision = run(
+            tool, arguments, spec=specs["manual"], root=sandbox, ledger=ledger, ask=ask
+        )
+        assert decision.allowed and decision.answered_by == "policy"
+    assert ledger.path_grants() == ()
+
 
 
 def test_approval_answers_grant_rw_for_write_commands(sandbox: Path, specs):
-    outside = sandbox.parent / "rw-existing.txt"
-    outside.write_text("original")
-    ledger = ApprovalLedger()
-    decision = run(
-        "bash",
-        {"command": f"echo x > {outside}"},
-        spec=specs["manual"],
-        root=sandbox,
-        ledger=ledger,
-        ask=lambda *a: True,
-    )
-    assert decision.allowed
-    assert decision.grants == ((str(outside), "rw"),)
-    assert specs["manual"].approval == APPROVAL_USER
+    with outside_files("rw-existing.txt") as (outside,):
+        ledger = ApprovalLedger()
+        decision = run(
+            "bash",
+            {"command": f"echo x > {outside}"},
+            spec=specs["manual"],
+            root=sandbox,
+            ledger=ledger,
+            ask=lambda *a: True,
+        )
+        assert decision.allowed
+        assert decision.grants == ((str(outside), "rw"),)
+        assert specs["manual"].approval == APPROVAL_USER

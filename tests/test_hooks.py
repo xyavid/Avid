@@ -175,7 +175,7 @@ def test_permission_hook_writes_the_audit_record(sandbox, clean, tmp_path, monke
     state = RunState.for_run(permission_mode="auto", workspace_root=str(sandbox))
     context = {
         "tool": "bash",
-        "arguments": {"command": "cat /etc/hostname"},
+        "arguments": {"command": "echo x >> /etc/hostname"},
         "security": state.security,
         "approval_ledger": state.ledger,
         "workspace_root": str(sandbox),

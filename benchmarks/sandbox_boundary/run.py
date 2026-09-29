@@ -111,6 +111,7 @@ def probes() -> list[Probe]:
     """探针表。每条的 ``why`` 就是它要证明的那句话。"""
     deny_all = dict.fromkeys(("manual", "manual_yes", "auto", "full"), "denied")
     review = {"manual": "denied", "manual_yes": "executed", "auto": "denied", "full": "executed"}
+    executed_all = dict.fromkeys(("manual", "manual_yes", "auto", "full"), "executed")
     return [
         # ---------------- 硬拒绝 / ADMIN 凭据：连 full 也挡 ----------------
         Probe(
@@ -162,13 +163,14 @@ def probes() -> list[Probe]:
             expect=dict(review),
             why="同一个目标走文件工具也是同一条规则（两条路径共用一份阶梯）",
         ),
-        # ---------------- 越界：REVIEW 的三个出口 ----------------
+        # ---------------- 沙箱边界：读整个文件系统是已有能力，写区外才要授权 ----------------
         Probe(
             "outside_read_benign",
             "bash",
             {"command": "cat /etc/hostname"},
-            expect=dict(review),
-            why="越界读：manual 的拒是没有回答者，manual_yes 批准后按能力授予真的读得到",
+            expect=dict(executed_all),
+            why="区外读：沙箱用 --ro-bind / / 提供整个文件系统只读访问，三种模式都直接读，"
+            "不问人——边界是沙箱能力，不是工作区",
         ),
         Probe(
             "approved_capability_is_real",
@@ -176,9 +178,8 @@ def probes() -> list[Probe]:
             {"command": f"echo appended >> {GRANTED_CANARY} && echo APPENDED"},
             expect=dict(review),
             contains={"manual_yes": "APPENDED"},
-            why="批准**确实**授予了那条路径的能力——否则「被沙箱拦住」就只是空话。"
-            "注意授予只覆盖这条路径：`rm` 要动父目录，仍然会被只读挡下（这正是"
-            "「授予尽量窄」的字面含义）",
+            why="写区外是**越过沙箱**：manual 先问、批准后按能力授予真的写得到"
+            "（否则「被沙箱拦住」就只是空话）。授予只覆盖这条路径：它的父目录仍然只读",
         ),
         # ---------------- 沙箱兜底：策略看不见的越界，仍然拦得住 ----------------
         Probe(
@@ -228,8 +229,9 @@ def probes() -> list[Probe]:
             "tmp_write_is_ephemeral",
             "bash",
             {"command": f"echo ephemeral > {TMP_WRITE}; echo WROTE"},
-            expect=dict(review),
-            why="沙箱里的 /tmp 是一块空 tmpfs：写进去的东西**不会**出现在宿主上",
+            expect=dict(executed_all),
+            why="沙箱把 /tmp 换成空 tmpfs：写它是沙箱内部动作（不碰宿主，因此不必批准），"
+            "宿主上不留文件由 mount 证明",
         ),
     ]
 
@@ -545,6 +547,15 @@ def build_checks(arms: dict[str, dict[str, Any]], probe_count: int) -> dict[str,
              and obs("manual_yes", "invisible_outside_write")["executed"] if manual_yes else True)
             and all(denied(arm, "invisible_outside_write") for arm in sandboxed if arm != "manual_yes")
         ),
+        # 4b 边界是**沙箱能力**而不是工作区：区外读在所有臂里直接执行（沙箱只读挂了整个
+        #    文件系统），而越过沙箱的写只有被批准的那一臂执行
+        "sandbox_boundary_is_not_a_workspace_boundary": (
+            all(obs(arm, "outside_read_benign")["executed"] for arm in arms)
+            and obs("manual", "approved_capability_is_real")["executed"] is False
+            and (
+                obs("manual_yes", "approved_capability_is_real")["executed"] if manual_yes else True
+            )
+        ),
         # 5 带沙箱的臂跑完之后，宿主上没留下那两个文件
         "sandboxed_arms_did_not_touch_the_host": all(
             arms[arm]["host_after"]["invisible_target_exists"] is False
@@ -601,7 +612,8 @@ def build_checks(arms: dict[str, dict[str, Any]], probe_count: int) -> dict[str,
             arms["auto"]["approvals_requested"] == 0 if "auto" in arms else True
         ),
         "manual_without_an_answerer_fails_closed": (
-            arms["manual"]["status"] == "finished" and denied("manual", "outside_read_benign")
+            arms["manual"]["status"] == "finished"
+            and denied("manual", "approved_capability_is_real")
             if "manual" in arms
             else True
         ),

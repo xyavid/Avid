@@ -26,9 +26,17 @@ uv run --no-sync python benchmarks/sandbox_boundary/run.py
 | 类型 | 例子 | 证据长什么样 |
 |---|---|---|
 | 策略拒绝 | `rm -rf /`、读 `~/.ssh`、写 `.git/hooks` | 没有 `tool_call_started` 的完成、有一条 `tool_call_denied`（带 `kind`） |
-| 能力授予 | 批准 `/etc/hostname` 后真的读得到 | 命令输出 + 宿主哨兵文件真的变了 |
+| 越过沙箱 | 写 `/var/tmp/...`（工作区之外） | `manual` 问（无人答复→拒）；`manual_yes` 批准后**真的写进去**（能力授予是实的）；`auto` 拒 |
+| 沙箱已有能力 | 读 `/etc/hostname`、写沙箱私有的 `/tmp` | 四个臂都直接执行、不打问号——沙箱用 `--ro-bind / /` 保证读，用私有 tmpfs 保证 `/tmp` |
 | 物理边界 | 网络、宿主 `/tmp`、掩蔽的宿主凭据、只读挂载 | 未批准的解释器调用先拒绝；`manual_yes` 批准后再以 `Network is unreachable` / `Read-only file system` / `RC_MASKED` 验证 OS 强制边界 |
 | 审计 | 每条裁决 | `~/.avid/audit/*.jsonl` 里每个臂 ≥ 探针条数的 `decision` 记录，带三轴快照 |
+
+**边界是沙箱能力，不是工作区**（`sandbox_boundary_is_not_a_workspace_boundary`）：
+`outside_read_benign` 与 `tmp_write_is_ephemeral` 证明"在工作区之外"本身不是拦的理由
+（沙箱已经把"读整个文件系统""写私有 `/tmp`"变成已有能力），
+`approved_capability_is_real` 证明要审批的是"写沙箱保证不了的目标"、且批准后能力是真的。
+这与 Codex `workspace-write`（reads files anywhere、edits only `cwd` + `writable_roots`）、
+Claude Code 沙箱的 read / write 分层、opencode `read` 默认 allow 是同一口径。
 
 **看不见的越界写**（`invisible_outside_write`）证明两层各有职责：解释器执行
 在 `manual` 下要批准、`auto` 下拒绝；`manual_yes` 批准后，命令里的路径由解释器用

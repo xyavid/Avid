@@ -26,8 +26,14 @@ Agent Intent → Policy → Approval → Capability → Sandbox → OS
 ## 1. 概念与所有权
 
 **工作区（Workspace）**：一个本地目录，承担三件事——干活的地点（文件工具相对路径基准、
-`bash` 的 cwd、`.avid/` 与 `.tasks/` 的落点）、权限边界（越过它的操作叫「越界」）、
+`bash` 的 cwd、`.avid/` 与 `.tasks/` 的落点）、**沙箱的可写根**（`--bind <root> <root>`）、
 会话归属。
+
+**边界不是"工作区"。** 安全边界是**沙箱保证的能力**：读整个文件系统（`--ro-bind / /`）
+是已有能力，"路径在工作区之外"本身不构成拦的理由；要审批的是**写/删沙箱管不到的目标**。
+口径与主流实现一致（Codex `workspace-write`：permits reading files, editing files in
+`cwd` and `writable_roots`；Claude Code 沙箱把文件系统隔离分成 read / write 两层；
+opencode 的 `read` 默认 allow、`external_directory` 默认 ask）。
 
 | 数据 | 谁创建 | 谁是权威 | 存在哪 | 可变性 |
 |---|---|---|---|---|
@@ -53,8 +59,8 @@ Agent Intent → Policy → Approval → Capability → Sandbox → OS
 
 | 模式 | approval | sandbox | network | 一句话 |
 |---|---|---|---|---|
-| `manual`（默认） | `user` | `workspace` | `restricted` | 沙箱内免问；危险命令与越界一律问人 |
-| `auto` | `classifier` | `workspace` | `restricted` | 沙箱内免问；越界与危险由分类器裁决，判不准即拒（**不问人**） |
+| `manual`（默认） | `user` | `workspace` | `restricted` | 沙箱内免问（含读整个文件系统）；写沙箱之外与危险命令一律问人 |
+| `auto` | `classifier` | `workspace` | `restricted` | 同样的沙箱；写沙箱之外与危险由分类器裁决，判不准即拒（**不问人**） |
 | `full` | `none` | `disabled` | `open` | 不问、不套沙箱、不限制网络；**必须显式授权** |
 
 三轴各自回答一个不同的问题，**代码里不许互相推导**：
@@ -67,9 +73,10 @@ Agent Intent → Policy → Approval → Capability → Sandbox → OS
 （静态扫描 `sandbox=` 的右值里不许出现 `approval`）是这条的机械守护。`manual` 与 `auto`
 的沙箱逐字相同——"`auto` = 关沙箱"在这张表上不可能出现。
 
-**一条必然推论**：沙箱可用时，`manual` 对**沙箱能保证的区内常规动作不问**。否则
-`approval` 与 `sandbox` 退化成同一件事，正交就成了空话。代价是旧 `strict` 的"每次写入
-都问"不再存在，替代品是"沙箱 + 越界/危险问人"（见 §2.2 迁移）。
+**一条必然推论**：沙箱可用时，`manual` 对**沙箱能保证的动作不问**——包括区内常规命令，
+也包括**读工作区之外的路径**（沙箱只读挂了整个文件系统）。否则 `approval` 与 `sandbox`
+就退化成同一件事，正交成了空话。代价是旧 `strict` 的"每次写入都问"不再存在，替代品是
+"沙箱 + 越过沙箱的写/危险命令问人"（见 §2.2 迁移）。
 
 ### 2.1 `full` 三重锁（full ≠ default）
 
@@ -117,11 +124,11 @@ tool_call{name, arguments}
    ├─ engine.decide()      Policy Engine（policy/engine.py）
    │     1 硬拒绝 ADMIN → deny
    │     2 四级 deny 阶梯 → deny（**包括 full**）；ask 档 → REVIEW
-   │     3 越界 → REVIEW
+   │     3 越过沙箱（写/删沙箱管不到的目标）→ REVIEW
    │     4 危险类别 → REVIEW
    │     5 沙箱降级（要沙箱而不可用，且是受管工具）→ REVIEW
    │     6 成本规则（subagent）→ REVIEW
-   │     7 其余 → allow
+   │     7 其余 → allow（**含读整个文件系统**）
    │
    ├─ REVIEW 由 approval 回答
    │     user       → 问人；同意则记进能力账本
@@ -141,11 +148,14 @@ tool_call{name, arguments}
 | PROJECT 默认（`.git/hooks`、`.github/workflows`…） | ⛔ | ⛔ | ⛔ | 仓库策略；本会话的批准不可覆盖 |
 | ask 档（`.env`） | ? 问一次 | ⛔ 分类器拒 | + | §4 |
 | 危险命令（提权、磁盘、服务、远程、容器…） | ? 写类别 | ⛔ 分类器拒 | + | 与模式无关的**事实**，出口由 approval 定 |
-| 越界（文件工具与 bash） | ? 记路径 | ⛔ | + | §5.4 |
+| 越过沙箱（写/删工作区与授予清单之外的目标） | ? 记路径 | ⛔ | + | §5.4 |
 | 沙箱降级下的受管工具 | ? 逐个问 | ⛔ | + | §5.5 |
 | 成本规则 `subagent` | ? 一次 | + | + | 非安全规则 |
 | 区内只读（`read_file` / `glob`） | + | + | + | 与现状一致：区内读取从不审批 |
+| 读工作区之外（`read_file` / `glob` / `cat /etc/hostname`） | + | + | + | **沙箱已有能力**：`--ro-bind / /` 让读整个文件系统不必授权 |
 | 区内常规命令（沙箱保证） | + | + | + | §2 的推论 |
+| 写沙箱私有 `/tmp`（`bash`） | + | + | + | 沙箱把 `/tmp` 换成私有 tmpfs：写它碰不到宿主，因此不是"越过沙箱" |
+| 写 `/tmp`（**文件工具**） | ? 记路径 | ⛔ | + | 文件工具不在沙箱里跑，它的 `/tmp` 写会落到宿主，仍要授权 |
 
 `verdict` 只有 `allow` / `deny` 两个终局；REVIEW 是中间态，`Decision.kind` 记录
 **因为什么被审**（`hard|credential|rule|outside|danger|degraded|cost`），
@@ -163,8 +173,15 @@ tool_call{name, arguments}
 `brokerize` 对 shell 按分隔符切分，并递归分析 `bash/sh -c`、`powershell -Command`、
 命令替换、环境赋值和 `git -C`；按命令及其**参数**分析读写、删除、网络、解释器执行、
 提权、对外副作用等 capability。无法完整解析的结构不自动判安全；真正的文件与网络
-强制边界仍由 OS 沙箱承担，解析器不是安全隔离层。批准区外只读目标不能让文件工具
-或另一条命令写它，多目标调用需要每个目标都已获准。
+强制边界仍由 OS 沙箱承担，解析器不是安全隔离层。多目标调用需要每个目标都已获准。
+
+**读 / 写的边界是分开的。** `exceeds_sandbox(action)` 是唯一的判据：当动作带
+`filesystem_write` / `filesystem_delete` 且目标落在沙箱可写集合之外时返回
+`(capability, target)`；只读动作永远返回 `None`——沙箱以只读方式挂了整个文件系统。
+可写集合 = 工作区 + 本次运行授予的路径 + 沙箱自带的 `/tmp`（`bash` 私有 tmpfs）。对 shell
+多目标命令，Tool Broker 还区分只读来源与写入目的地：例如 `cp /etc/hostname local.txt`
+不因来源在工作区外而触发外部写审批；`cp source destination` 只向实际外部目的地授予 `rw`。
+无法可靠解析的命令保持保守，交给 OS 沙箱做最终拦截。
 
 `network=restricted` 且沙箱正在执行时，显式网络命令会在执行前得到
 `SANDBOX_DENIED`，其中 `code=SANDBOX_NETWORK_DENIED`、
@@ -292,11 +309,15 @@ tmpfs（实测报 `Can't mount tmpfs on …: No such file or directory`）。掩
 ### 5.4 能力授予（升级 = 授予能力，不是关沙箱）
 
 账本的键就是能力的类型：`("command", 归一化命令原文)` / `("path", 绝对路径, ro|rw)` /
-`("tool", 工具名)`。批准一次越界后：
+`("tool", 工具名)`。**只有越过沙箱的写会产生路径授予**——读区外不写账本（沙箱已经保证）。
+批准一次区外写后：
 
-* 文件工具的行为由 `RunState.outside_allowed` 放行（只读账本，不做决定）；
-* `bash` 的下一次执行把该路径作为 `--ro-bind` / `--bind` 挂进来——**只挂这条路径**，
+* 文件工具的行为由 `RunState.outside_allowed(path, "rw")` 放行（只读账本，不做决定；
+  只有 `rw` 授权能满足写，`ro` 授权不能升级）；
+* `bash` 的下一次执行把该路径作为 `--bind` 挂进来——**只挂这条路径**，
   它的父目录仍然只读（所以"批准了文件"≠"批准了它所在的目录"）；
+* 目标还不存在时无法逐路径挂载（不为此放开父目录）：`decide` 在执行前给出
+  `SANDBOX_FILESYSTEM_DENIED`（`operation` 是该 capability、`target` 是目标）；
 * 掩蔽路径上的授予被**拒绝挂载**（并记一条 warning）：掩蔽晚于授予这条顺序再加一道保险。
 
 "`full` 不等于无所不能"：ADMIN 与阶梯中的 deny 在 `full` 下同样成立
@@ -309,8 +330,8 @@ tmpfs（实测报 `Can't mount tmpfs on …: No such file or directory`）。掩
 
 | 模式 | 行为 |
 |---|---|
-| `manual` | 受管工具（`bash` / `write_file` / `edit_file`）**逐个问人**（= 阶段 18 的 `strict`）；区内只读仍然不问 |
-| `auto` | **失败关闭**：区外/危险一律拒，并给出可执行的下一步（装 bwrap 或切 manual） |
+| `manual` | 受管工具（`bash` / `write_file` / `edit_file`）**逐个问人**（= 阶段 18 的 `strict`）；区内与区外的**读**仍然不问 |
+| `auto` | **失败关闭**：越过沙箱的写与危险一律拒，并给出可执行的下一步（装 bwrap 或切 manual） |
 | `full` | 不受影响（它本来就不要沙箱） |
 
 降级是**可见**的：CLI 打一行「⚠ 沙箱不可用…」，`run_started` 的 `sandbox_state.degraded=true`
@@ -407,7 +428,8 @@ reason/landlock_abi）。
 | I-P1 | 硬拒绝清单里的命令在任何模式、任何回答下都不执行 | `engine.decide` 第 1 步 | 唯一入口是 `decide`；`auto_approve` 也走它 |
 | I-P2 | 危险命令在任何模式下都至少经过一次 REVIEW | `engine.decide` 第 4 步 | 新增工具若自带执行路径会绕过 → 契约测试枚举工具注册表 |
 | I-P3 | 四级 deny 不可被下层 allow 抵消 | `Ladder.check`（deny 全局优先） + `verdict_for` | 放松点只有 SYSTEM `[allow]`，且只对 `relaxable` 规则 |
-| I-P4 | 文件工具越界**失败关闭**：没有账本记录就不放行 | 账本只由 `decide` 写、工具只读 | `tools/workspace.py` 的 `outside_ok` 缺省为假；`tools/files.py` 另有一道 deny/ask 兜底 |
+| I-P4 | 文件工具的**区外写**失败关闭：没有 `rw` 账本记录就不放行（区外读按沙箱口径放行） | 账本只由 `decide` 写、工具只读 | `tools/files.py` 的 `_read_outside_ok` 要求 run 级规格、`_grant(state, "write")` 只认 rw；`tools/workspace.py` 的 `outside_ok` 缺省为假 |
+| I-P4b | 边界是**沙箱能力**而不是工作区：读区外不需要授权，只有越过沙箱的写才要 | `action.exceeds_sandbox` 是唯一判据（engine、classifier、`decide` 的第 3 步共用） | 任何"因为路径在工作区之外"就直接拒的写法都是缺陷；`tests/test_policy_engine.py` 与 E2E 的 `sandbox_boundary_is_not_a_workspace_boundary` 钉住这条 |
 | I-P5 | 运行级安全规格不漏传给子 agent | `tools/subagent.py` 逐字段前传（含 `security`） | 漏传 → 子 agent 自己重算一份规格（沙箱可能不同、审计分家） |
 | I-P6 | 三轴互相独立，没有任何一处从 approval 推导 sandbox | `tests/test_modes.py` 的两条守卫 | 静态扫描 `sandbox=` 的右值 |
 | I-P7 | `full` 必须显式授权，且不能成为默认值 | `full_grant_error` 的三个调用点 + DTO 类型 + 注册表 | CLI 双开关 / Web ack / `workspace_default` 一律拒 |

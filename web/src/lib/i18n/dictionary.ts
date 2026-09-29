@@ -251,8 +251,8 @@ export const DICTIONARY: Record<Locale, Entry> = {
     'permission.mode.manual': '手动',
     'permission.mode.auto': '自动',
     'permission.mode.full': '完全访问',
-    'permission.hint.manual': '手动：沙箱内免问；危险命令与越界一律问你',
-    'permission.hint.auto': '自动：沙箱内免问；越界与危险由分类器裁决，判不准即拒（不问你）',
+    'permission.hint.manual': '手动：沙箱内免问（含读整个文件系统）；写沙箱之外与危险命令问你',
+    'permission.hint.auto': '自动：同样沙箱；写沙箱之外与危险命令由分类器裁决，判不准即拒（不问你）',
     'permission.hint.full': '完全访问：不问、不套沙箱、不限制网络。必须显式确认，且不能作为工作区默认',
     'permission.full.title': '确认关闭沙箱？',
     'permission.full.body':

@@ -8,12 +8,17 @@
 1 硬拒绝             ``rm -rf /``、``mkfs``、写块设备、关机            deny（任何模式、任何人）
 2 阶梯               ADMIN / SYSTEM / PROJECT deny                    deny（**包括 full**）
 2 阶梯（ask 档）     敏感但合法的目标（``.env``）                     REVIEW
-3 越界               目标在工作区之外                                 REVIEW
+3 越过沙箱           写工作区与授予清单之外的目标                      REVIEW
 4 危险              提权 / 磁盘 / 服务 / 网络直接执行 / 容器 / 远程    REVIEW
 5 降级               要沙箱而沙箱不可用，且动作会改动状态              REVIEW
 6 成本              ``subagent`` 这类"不危险但花钱"的动作             REVIEW
-7 其余              区内只读、区内写入（沙箱保证）                    allow
+7 其余              区内只读、区内写入、**读整个文件系统**（沙箱保证）  allow
 ===================  =============================================  ========================
+
+**边界是沙箱，不是工作区**：步骤 3 判的是"这次调用要不要沙箱保证不了的能力"，
+不是"路径在不在工作区里"。沙箱以 ``--ro-bind / /`` 提供整个文件系统的只读访问，
+所以读工作区之外是**已有能力**（与 Codex ``workspace-write``、Claude Code 沙箱的
+read/write 分层同口径）；要审批的只有写/删区外目标。降级时边界挪回人身上（步骤 5）。
 
 REVIEW 由三轴的 ``approval`` 回答：
 
@@ -38,6 +43,7 @@ from .action import (
     OPERATION_WRITE,
     Action,
     brokerize,
+    exceeds_sandbox,
 )
 from .classifier import classify
 from .modes import (
@@ -99,8 +105,9 @@ DANGER_MESSAGE = (
     "不要重复提交同一条命令；请改用非破坏性做法，或说明你需要它做什么。"
 )
 OUTSIDE_MESSAGE = (
-    "Permission denied. 原因：目标在工作区之外且未获批准（{reason}）。"
-    "不要重复尝试同一路径；请在工作区内完成，或说明为什么需要它。"
+    "Permission denied. 原因：要写沙箱保证之外的目标且未获批准（{reason}）。"
+    "读文件不受影响；请改到工作区内完成，或让用户批准这条路径后再写。"
+    "不要重复尝试同一目标。"
 )
 DEGRADED_MESSAGE = (
     "Permission denied. 原因：沙箱不可用（{reason}），当前模式不再信任自动化放行。"
@@ -246,9 +253,10 @@ def review_facts(
         prefix = "受保护的宿主资源" if rule.tier == TIER_ADMIN else "安全策略要求逐次批准"
         return kind, f"{prefix}（{rule.reason}）", rule.reason
 
-    if action.outside:
-        target = action.outside[0]
-        return KIND_OUTSIDE, f"目标 {target} 在工作区之外", target
+    beyond = exceeds_sandbox(action)
+    if beyond is not None:
+        capability, target = beyond
+        return KIND_OUTSIDE, f"需要写沙箱保证之外的 {target}（{capability}）", target
 
     risks = [risk for risk in action.risks if risk != "越界"]
     if risks:
@@ -269,7 +277,7 @@ def review_facts(
 
 def _grant_key(action: Action) -> tuple[tuple[str, str], ...]:
     access = access_for(action)
-    return tuple((target, access) for target in action.outside)
+    return tuple((target, access) for target in action.outside_writes)
 
 
 def _message(kind: str, reason: str) -> str:
@@ -308,19 +316,25 @@ def decide(
         reason = f"{rule.reason}（{rule.tier}）"
         return Decision(VERDICT_DENY, kind, rule.tier, reason, _message(kind, rule.reason))
 
-    # 只读系统 + 单文件能力挂载无法创建不存在的区外路径。
-    if sandbox.enforced and action.tool == "bash" and action.operations[:1] == (OPERATION_WRITE,):
-        missing = next((path for path in action.outside
-                        if not Path(path).exists()
-                        and not Path(path).is_relative_to("/tmp")
-                        and not Path(path).is_relative_to("/dev/tcp")
-                        and not Path(path).is_relative_to("/dev/udp")), None)
-        if missing is not None:
-            return Decision(
-                VERDICT_DENY, KIND_OUTSIDE, "", f"沙箱无法挂载不存在的区外目标 {missing}",
-                f"SANDBOX_FILESYSTEM_DENIED: filesystem_write 超出可挂载的路径（{missing}）。",
-                code="SANDBOX_FILESYSTEM_DENIED", operation="filesystem_write", target=missing,
-            )
+    # 沙箱只挂载**已存在**的路径：区外新建文件无法授予（不为此放开整个父目录），
+    # 所以在执行前把这件事说成沙箱拒绝，而不是批准之后收到一个只读文件系统错误。
+    # 判据用 exceeds_sandbox：写沙箱自带可写位置（/tmp、/dev）的动作用不到这条。
+    if sandbox.enforced:
+        beyond = exceeds_sandbox(action)
+        if beyond is not None and action.tool == "bash":
+            capability, target = beyond
+            if not Path(target).exists():
+                return Decision(
+                    VERDICT_DENY,
+                    KIND_OUTSIDE,
+                    "",
+                    f"沙箱无法挂载尚不存在的区外目标 {target}",
+                    f"SANDBOX_FILESYSTEM_DENIED: {capability} 需要工作区之外已存在的目标"
+                    f"（{target}）；请先在工作区内完成，或让用户把它加进可写根。",
+                    code="SANDBOX_FILESYSTEM_DENIED",
+                    operation=capability,
+                    target=target,
+                )
 
     # 沙箱决定资源上限，与命令是否被人批准正交。限制网络时即使审批通过也
     # 没有出网能力：在执行前告知结构化错误，不能等 curl 的 DNS 错误冒充结论。
@@ -348,10 +362,10 @@ def decide(
 
     # 4 账本复用：同一能力同意过一次就够。
     path_access = access_for(action)
-    paths_granted = bool(action.outside) and all(
+    paths_granted = bool(action.outside_writes) and all(
         ledger.knows(("path", target, path_access))
         or (path_access == "ro" and ledger.knows(("path", target, "rw")))
-        for target in action.outside
+        for target in action.outside_writes
     ) if ledger is not None else False
     if ledger is not None and (ledger.knows(key) or paths_granted):
         return Decision(VERDICT_ALLOW, kind, "", reason, key=key, answered_by="ledger")

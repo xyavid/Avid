@@ -15,9 +15,9 @@
 
 1. 命中 deny 阶梯（凭据 / 宿主策略）→ 拒；
 2. ``ask`` 阶梯命中（例如 ``.env``）→ 拒（auto 下没有人可以回答这一问）；
-3. 区外目标 → 拒；
+3. 越过沙箱（写工作区与授予清单之外的目标）→ 拒；
 4. 危险类别（提权、磁盘、服务、网络直接执行、容器、远程…）→ 拒；
-5. 工作区在读或写、且没有任何风险信号 → 放行；
+5. 工作区在读或写、读整个文件系统、且没有任何风险信号 → 放行；
 6. 沙箱要求了但不可用（降级）而这次动作会改变状态 → 拒。
 """
 
@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .action import Action
+from .action import Action, exceeds_sandbox
 from .rules import VERDICT_ASK, VERDICT_DENY, Rule  # noqa: F401  (VERDICT_* 供类型读者)
 from .sandbox import SandboxSpec
 
@@ -53,8 +53,10 @@ def classify(
     if rule is not None and rule.verdict == VERDICT_ASK:
         return Review(False, f"该目标需要逐次批准（{rule.reason}），auto 下无人可答")
 
-    if action.outside:
-        return Review(False, f"目标在工作区之外：{action.outside[0]}")
+    beyond = exceeds_sandbox(action)
+    if beyond is not None:
+        capability, target = beyond
+        return Review(False, f"需要写沙箱保证之外的目标：{target}（{capability}）")
 
     risks = [risk for risk in action.risks if risk != "越界"]
     if risks:

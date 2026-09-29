@@ -38,8 +38,22 @@ def test_read_file_accepts_absolute_path_inside_workspace(sandbox):
     assert read_file({"path": str(target)}) == "内容"
 
 
-def test_read_file_refuses_escape(sandbox):
+def test_read_file_without_a_run_spec_refuses_escape(sandbox):
+    """没有 run 级安全规格就连 deny/ask 阶梯都查不了，失败方向只能是关闭。"""
     assert "工作区外" in read_file({"path": "../outside.txt"})
+
+
+def test_read_file_reads_outside_the_workspace_with_a_run_spec(sandbox):
+    """边界是沙箱能力而不是工作区：读区外是沙箱已有能力（同 Codex workspace-write）。"""
+    from avid.runtime.state import RunState
+
+    outside = sandbox.parent / "outside-read.txt"
+    outside.write_text("外面\n", encoding="utf-8")
+    state = RunState.for_run(
+        permission_mode="manual", workspace_root=str(sandbox), audit_enabled=False
+    )
+
+    assert read_file({"path": str(outside)}, state=state) == "外面"
 
 
 def test_read_file_reports_missing_file(sandbox):
@@ -92,8 +106,23 @@ def test_write_file_refuses_escape(sandbox):
     assert not (sandbox.parent / "x.txt").exists()
 
 
-def test_write_file_requires_string_content(sandbox):
-    assert "content" in write_file({"path": "a.txt"})
+def test_full_run_can_write_outside_workspace(sandbox):
+    """full 关闭沙箱后，区外写不应再被旧的工作区检查拦截。"""
+    from avid.runtime.state import RunState
+
+    target = sandbox.parent / "outside-full-write.txt"
+    state = RunState.for_run(
+        permission_mode="full",
+        workspace_root=str(sandbox),
+        full_ack=True,
+        audit_enabled=False,
+    )
+    try:
+        result = write_file({"path": str(target), "content": "full\n"}, state=state)
+        assert "已新建" in result
+        assert target.read_text(encoding="utf-8") == "full\n"
+    finally:
+        target.unlink(missing_ok=True)
 
 
 # ---------- edit_file ----------

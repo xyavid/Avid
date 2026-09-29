@@ -153,6 +153,91 @@ WRITE_TOOLS: frozenset[str] = frozenset({"write_file", "edit_file"})
 OPERATION_READ = "read"
 OPERATION_WRITE = "write"
 
+#: 会改动沙箱**之外**状态的 capability。沙箱保证的是"读整个文件系统 + 写工作区（与授予的
+#: 路径、它自己的临时目录）"，所以读不算越出边界，写/删区外才算。
+WRITE_CAPABILITIES: frozenset[str] = frozenset({"filesystem_write", "filesystem_delete"})
+
+#: 沙箱自己提供、与工作区无关的可写位置：私有的 ``/tmp``（tmpfs）与 ``/dev``。
+#: 写它们碰不到宿主，因此不构成"越出沙箱"。
+SANDBOX_WRITABLE_PREFIXES: tuple[str, ...] = ("/tmp", "/dev")
+
+
+def in_sandbox_writable(path: str) -> bool:
+    """这个路径是不是沙箱自带的、写它碰不到宿主的位置。"""
+    text = str(path)
+    return any(
+        text == prefix or text.startswith(prefix + "/") for prefix in SANDBOX_WRITABLE_PREFIXES
+    )
+
+
+def exceeds_sandbox(action: Action) -> tuple[str, str] | None:
+    """这次调用是否需要沙箱**没有**保证的能力；是则返回 ``(capability, target)``。
+
+    判据是"写/删一个沙箱管不到的目标"，**不是**"路径在工作区之外"：沙箱以
+    ``--ro-bind / /`` 提供整个文件系统的只读访问，读工作区之外的路径是已有能力。
+    这与主流实现同口径——Codex 的 ``workspace-write`` 是 "permits reading files,
+    editing files in ``cwd`` and ``writable_roots``. Editing files in other
+    directories requires approval"；Claude Code 的沙箱把文件系统隔离分成 read /
+    write 两层；opencode 的 ``read`` 默认 allow、只有 ``external_directory`` 默认 ask。
+
+    于是边界落在"写"上：写工作区与授予清单之外的目标，才是要审批的能力请求；批不下来
+    （目标不存在、无法逐路径挂载）就是沙箱拒绝。
+
+    ``bash`` 在执行时跑在沙箱里（宿主 ``/tmp`` 已被换成私有 tmpfs），文件工具则在
+    agent 进程里跑——所以"沙箱自带可写位置"只对前者成立：文件工具写 ``/tmp`` 会真的
+    落到宿主上，仍然需要授权。
+    """
+    if not action.outside_writes:
+        return None
+    writes = sorted(WRITE_CAPABILITIES & set(action.capabilities))
+    if not writes:
+        return None
+    for target in action.outside_writes:
+        if action.tool == "bash" and in_sandbox_writable(target):
+            continue
+        return writes[0], target
+    return None
+
+
+
+def _outside_write_targets(command: str, outside: tuple[str, ...], root: str | None) -> tuple[str, ...]:
+    """只对可确定的常见 shell 形状收窄写目标；其它形状保守保留全部区外目标。
+
+    这只是审批前的提示，不是物理隔离：未知命令仍由 bwrap 只读挂载拦截。
+    不解析选项、变量展开或 shell 重定向的边角语义，避免把未知目的地误判为只读源。
+    """
+    from ..tools import workspace
+
+    facts = parse_shell(command)
+    if facts.uncertain:
+        return outside
+    writes: set[str] = set()
+    for segment in facts.segments:
+        if not segment:
+            continue
+        words = list(segment)
+        program = Path(words[0]).name
+        redirect_targets: list[str] = []
+        for index, word in enumerate(words):
+            if word in {">", ">>", "<>"}:
+                if index + 1 >= len(words):
+                    return outside
+                redirect_targets.append(str(workspace.target_path(words[index + 1], root=Path(root) if root else None)))
+        if program in {"cp", "mv", "install", "ln"}:
+            # 只识别无选项的 source... destination；-t、-T 等选项保守走原路径。
+            operands = [word for word in words[1:] if word not in {">", ">>", "<>"}]
+            if len(operands) < 2 or any(word.startswith("-") for word in operands):
+                return outside
+            writes.add(str(workspace.target_path(operands[-1], root=Path(root) if root else None)))
+        elif program in {"cat", "echo", "printf", "rg", "grep", "head", "tail", "wc"}:
+            # 这些命令自身只读，写入只能来自重定向。
+            pass
+        else:
+            # 非白名单命令可能写任意参数，不能靠重定向推断其输入均为只读。
+            writes.update(outside)
+        writes.update(redirect_targets)
+    return tuple(target for target in outside if target in writes)
+
 
 def _under(path: Path, base: Path) -> bool:
     """path 是否在 base 之内（含 base 本身）。策略层不 import tools，自己写一份。"""
@@ -343,6 +428,7 @@ class Action:
     normalized: str = ""
     targets: tuple[str, ...] = ()
     outside: tuple[str, ...] = ()
+    outside_writes: tuple[str, ...] = ()
     credentials: tuple[str, ...] = ()
     risks: tuple[str, ...] = ()
     damage: str | None = None
@@ -382,6 +468,10 @@ def brokerize(
     command = args.get("command") if isinstance(args.get("command"), str) else None
 
     targets, outside, credentials = _scan_paths(name, args, root)
+    outside_writes = (
+        _outside_write_targets(command, outside, root) if name == "bash" and command
+        else outside if name in WRITE_TOOLS else ()
+    )
     # full（approval=none）下"区外"这个事实仍然要被记录与审计，只是不再拦——
     # 所以这里不做任何过滤，是否设限由 engine 按三轴裁决。
     risks = list(danger_categories(name, args))
@@ -403,6 +493,7 @@ def brokerize(
         normalized=normalized,
         targets=targets,
         outside=outside,
+        outside_writes=outside_writes,
         credentials=credentials,
         risks=tuple(risks),
         damage=hard_deny(name, args),
@@ -428,16 +519,20 @@ __all__ = [
     "OPERATION_READ",
     "OPERATION_WRITE",
     "PATH_TOOLS",
+    "SANDBOX_WRITABLE_PREFIXES",
     "SENSITIVE_ABSOLUTE",
     "SENSITIVE_COMPONENTS",
     "SENSITIVE_SUFFIX",
+    "WRITE_CAPABILITIES",
     "WRITE_TOOLS",
     "Action",
     "brokerize",
     "command_key",
     "danger_categories",
     "danger_reason",
+    "exceeds_sandbox",
     "hard_deny",
+    "in_sandbox_writable",
     "is_unrestricted",
     "normalize_command",
     "reaches_network",

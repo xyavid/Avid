@@ -3,9 +3,14 @@
 失败一律返回以"错误："开头的文本，而不是抛异常——工具回传文本，
 循环才能继续，模型才有机会自纠。
 
-``state`` 是**可选**的运行级上下文：有它就用运行级工作区根，并据此判断越界目标是否
-已获授权；没有它（直接调用工具、单元测试）回落到进程默认根且越界一律回绝。授权由
-``policy.permission.gate`` 决定并写进账本，这里只读结果——工具不做权限决定。
+**边界是沙箱能力，不是工作区**：``bash`` 跑在沙箱里，沙箱以 ``--ro-bind / /`` 让读
+整个文件系统成为已有能力、只把工作区（与授予的路径）留成可写；文件工具不在沙箱里跑，
+所以这里按同一份口径执行——**读**区外不需要授权，**写**区外仍然需要账本里的 rw 授权。
+
+``state`` 是**可选**的运行级上下文：有它就用运行级工作区根、读区外放行、写区外查账本；
+没有它（直接调用工具、单元测试）回落到进程默认根且区外一律回绝——没有 run 级安全规格
+就连 deny/ask 阶梯都查不了，失败方向只能是关闭。授权由 ``policy.permission.gate`` 决定
+并写进账本，这里只读结果——工具不做权限决定。
 
 **受保护目标还有一道工具级兜底**：命中 deny 阶梯（凭据、``.git/hooks``…）的路径在这里
 再拒一次。它不是重复劳动——它是"权限层从未批准"时的失败关闭（直接调用工具、答复超时
@@ -40,6 +45,17 @@ def _grant(state: "RunState | None", operation: str = "read"):
         return None
     access = "rw" if operation == "write" else "ro"
     return lambda path: state.outside_allowed(path, access)
+
+
+def _read_outside_ok(state: "RunState | None") -> bool:
+    """区外读要不要授权：不要，但必须有 run 级安全规格。
+
+    沙箱把"读整个文件系统"当作已有能力（同 Codex ``workspace-write``：permits reading
+    files），所以读区外不查能力账本。仍然要求 ``security`` 存在，是因为受保护目标
+    （``~/.ssh``、``/etc/shadow``…）的 deny/ask 判定来自那份阶梯；没有它就只能关闭。
+    """
+    return getattr(state, "security", None) is not None
+
 
 
 def _protected(state: "RunState | None", path: Path, operation: str) -> str | None:
@@ -109,7 +125,7 @@ def _read_window(handle: Any, offset: int, limit: int) -> tuple[list[str], bool]
 
 def read_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     raw = str(args.get("path", ""))
-    path, error = resolve(raw, root=_root(state), outside_ok=_grant(state))
+    path, error = resolve(raw, root=_root(state), outside_ok=_read_outside_ok(state))
     if error:
         return f"错误：{error}"
     assert path is not None  # resolve 成功时必有路径（error 与 path 二选一）
@@ -222,7 +238,7 @@ def glob_files(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
         return "错误：缺少参数 pattern"
 
     raw = str(args.get("path", ".") or ".")
-    root, error = resolve(raw, root=_root(state), outside_ok=_grant(state))
+    root, error = resolve(raw, root=_root(state), outside_ok=_read_outside_ok(state))
     if error:
         return f"错误：{error}"
     assert root is not None  # resolve 成功时必有路径
