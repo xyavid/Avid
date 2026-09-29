@@ -108,11 +108,11 @@
       "arguments": {
         "command": "cat /etc/hostname"
       },
-      "why": "越界读：manual 的拒是没有回答者，manual_yes 批准后按能力授予真的读得到",
+      "why": "区外读：沙箱用 --ro-bind / / 提供整个文件系统只读访问，三种模式都直接读，不问人——边界是沙箱能力，不是工作区",
       "expect": {
-        "manual": "denied",
+        "manual": "executed",
         "manual_yes": "executed",
-        "auto": "denied",
+        "auto": "executed",
         "full": "executed"
       }
     },
@@ -122,7 +122,7 @@
       "arguments": {
         "command": "echo appended >> /var/tmp/avid-e2e-granted/canary.txt && echo APPENDED"
       },
-      "why": "批准**确实**授予了那条路径的能力——否则「被沙箱拦住」就只是空话。注意授予只覆盖这条路径：`rm` 要动父目录，仍然会被只读挡下（这正是「授予尽量窄」的字面含义）",
+      "why": "写区外是**越过沙箱**：manual 先问、批准后按能力授予真的写得到（否则「被沙箱拦住」就只是空话）。授予只覆盖这条路径：它的父目录仍然只读",
       "expect": {
         "manual": "denied",
         "manual_yes": "executed",
@@ -192,11 +192,11 @@
       "arguments": {
         "command": "echo ephemeral > /tmp/avid-e2e-write-probe; echo WROTE"
       },
-      "why": "沙箱里的 /tmp 是一块空 tmpfs：写进去的东西**不会**出现在宿主上",
+      "why": "沙箱把 /tmp 换成空 tmpfs：写它是沙箱内部动作（不碰宿主，因此不必批准），宿主上不留文件由 mount 证明",
       "expect": {
-        "manual": "denied",
+        "manual": "executed",
         "manual_yes": "executed",
-        "auto": "denied",
+        "auto": "executed",
         "full": "executed"
       }
     }
@@ -211,7 +211,7 @@
       "status": "finished",
       "finished": true,
       "final_text": "",
-      "approvals_requested": 9,
+      "approvals_requested": 7,
       "approvals": [
         {
           "tool": "bash",
@@ -225,12 +225,7 @@
         },
         {
           "tool": "bash",
-          "reason": "目标 /etc/hostname 在工作区之外",
-          "decision": "deny"
-        },
-        {
-          "tool": "bash",
-          "reason": "目标 /var/tmp/avid-e2e-granted/canary.txt 在工作区之外",
+          "reason": "需要写沙箱保证之外的 /var/tmp/avid-e2e-granted/canary.txt（filesystem_write）",
           "decision": "deny"
         },
         {
@@ -240,7 +235,7 @@
         },
         {
           "tool": "bash",
-          "reason": "目标 /dev/null 在工作区之外",
+          "reason": "敏感路径、解释器执行、无法证明安全的 shell 结构",
           "decision": "deny"
         },
         {
@@ -250,12 +245,7 @@
         },
         {
           "tool": "bash",
-          "reason": "目标 /dev/tcp/1.1.1.1/80 在工作区之外",
-          "decision": "deny"
-        },
-        {
-          "tool": "bash",
-          "reason": "目标 /tmp/avid-e2e-write-probe 在工作区之外",
+          "reason": "解释器执行",
           "decision": "deny"
         }
       ],
@@ -272,7 +262,7 @@
           "enforced": true,
           "degraded": false,
           "reason": null,
-          "root": "/tmp/avid-e2e-boundary-nxy6f84t/manual",
+          "root": "/tmp/avid-e2e-boundary-g2wxz1cy/manual",
           "notes": []
         }
       },
@@ -298,20 +288,20 @@
         "--tmpfs",
         "/home/fishy/.config/gh",
         "--ro-bind",
-        "/tmp/avid-e2e-home-36d49gbp/run/empty-mask",
+        "/tmp/avid-e2e-home-r7hzt8kd/run/empty-mask",
         "/home/fishy/.docker/config.json",
         "--ro-bind",
-        "/tmp/avid-e2e-home-36d49gbp/run/empty-mask",
+        "/tmp/avid-e2e-home-r7hzt8kd/run/empty-mask",
         "/home/fishy/.bashrc",
         "--ro-bind",
-        "/tmp/avid-e2e-home-36d49gbp/run/empty-mask",
+        "/tmp/avid-e2e-home-r7hzt8kd/run/empty-mask",
         "/home/fishy/.profile",
         "--ro-bind",
-        "/tmp/avid-e2e-home-36d49gbp/run/empty-mask",
+        "/tmp/avid-e2e-home-r7hzt8kd/run/empty-mask",
         "/home/fishy/.bash_history",
         "--bind",
-        "/tmp/avid-e2e-boundary-nxy6f84t/manual",
-        "/tmp/avid-e2e-boundary-nxy6f84t/manual",
+        "/tmp/avid-e2e-boundary-g2wxz1cy/manual",
+        "/tmp/avid-e2e-boundary-g2wxz1cy/manual",
         "--unshare-net",
         "--unshare-pid",
         "--unshare-uts",
@@ -326,6 +316,9 @@
         "LANG",
         "C.UTF-8",
         "--setenv",
+        "LC_CTYPE",
+        "C.UTF-8",
+        "--setenv",
         "LOGNAME",
         "fishy",
         "--setenv",
@@ -333,7 +326,7 @@
         "/home/fishy/.nvm",
         "--setenv",
         "PATH",
-        "<1461 字符>",
+        "<1582 字符>",
         "--setenv",
         "PWD",
         "/home/fishy/Avid",
@@ -342,7 +335,7 @@
         "/bin/bash",
         "--setenv",
         "TERM",
-        "xterm-256color",
+        "dumb",
         "--setenv",
         "USER",
         "fishy",
@@ -350,7 +343,7 @@
         "VIRTUAL_ENV",
         "/home/fishy/Avid/.venv",
         "--chdir",
-        "/tmp/avid-e2e-boundary-nxy6f84t/manual",
+        "/tmp/avid-e2e-boundary-g2wxz1cy/manual",
         "--",
         "bash",
         "-c",
@@ -358,9 +351,10 @@
       ],
       "audit": {
         "available": true,
-        "records": 15,
-        "decisions": 14,
+        "records": 17,
+        "decisions": 16,
         "verdicts": [
+          "allow",
           "deny"
         ],
         "axes": {
@@ -376,14 +370,14 @@
           "enforced": true,
           "degraded": false,
           "reason": null,
-          "root": "/tmp/avid-e2e-boundary-nxy6f84t/manual",
+          "root": "/tmp/avid-e2e-boundary-g2wxz1cy/manual",
           "notes": []
         },
         "sample": [
           {
-            "ts": 1790242589537,
+            "ts": 1790659429826,
             "kind": "decision",
-            "run": "run_79c88262b9b0",
+            "run": "run_e26987093c58",
             "mode": "manual",
             "axes": {
               "approval": "user",
@@ -398,7 +392,7 @@
               "enforced": true,
               "degraded": false,
               "reason": null,
-              "root": "/tmp/avid-e2e-boundary-nxy6f84t/manual",
+              "root": "/tmp/avid-e2e-boundary-g2wxz1cy/manual",
               "notes": []
             },
             "tool": "bash",
@@ -426,9 +420,9 @@
             "reason": "删除根目录或家目录"
           },
           {
-            "ts": 1790242589542,
+            "ts": 1790659429834,
             "kind": "decision",
-            "run": "run_79c88262b9b0",
+            "run": "run_e26987093c58",
             "mode": "manual",
             "axes": {
               "approval": "user",
@@ -443,7 +437,7 @@
               "enforced": true,
               "degraded": false,
               "reason": null,
-              "root": "/tmp/avid-e2e-boundary-nxy6f84t/manual",
+              "root": "/tmp/avid-e2e-boundary-g2wxz1cy/manual",
               "notes": []
             },
             "tool": "read_file",
@@ -618,18 +612,18 @@
           "arguments": {
             "command": "cat /etc/hostname"
           },
-          "executed": false,
-          "denied_kind": "outside",
-          "denied_reason": "bash：目标 /etc/hostname 在工作区之外",
+          "executed": true,
+          "denied_kind": null,
+          "denied_reason": null,
           "denied_mark": false,
-          "output_excerpt": "",
-          "expect": "denied",
+          "output_excerpt": "LAPTOP-3M7941PJ\n[exit 0]",
+          "expect": "executed",
           "expect_ok": true,
           "contains": null,
           "contains_ok": true,
           "absent": null,
           "absent_ok": true,
-          "why": "越界读：manual 的拒是没有回答者，manual_yes 批准后按能力授予真的读得到"
+          "why": "区外读：沙箱用 --ro-bind / / 提供整个文件系统只读访问，三种模式都直接读，不问人——边界是沙箱能力，不是工作区"
         },
         {
           "id": "approved_capability_is_real",
@@ -639,7 +633,7 @@
           },
           "executed": false,
           "denied_kind": "outside",
-          "denied_reason": "bash：目标 /var/tmp/avid-e2e-granted/canary.txt 在工作区之外",
+          "denied_reason": "bash：需要写沙箱保证之外的 /var/tmp/avid-e2e-granted/canary.txt（filesystem_write）",
           "denied_mark": false,
           "output_excerpt": "",
           "expect": "denied",
@@ -648,7 +642,7 @@
           "contains_ok": true,
           "absent": null,
           "absent_ok": true,
-          "why": "批准**确实**授予了那条路径的能力——否则「被沙箱拦住」就只是空话。注意授予只覆盖这条路径：`rm` 要动父目录，仍然会被只读挡下（这正是「授予尽量窄」的字面含义）"
+          "why": "写区外是**越过沙箱**：manual 先问、批准后按能力授予真的写得到（否则「被沙箱拦住」就只是空话）。授予只覆盖这条路径：它的父目录仍然只读"
         },
         {
           "id": "invisible_outside_write",
@@ -676,8 +670,8 @@
             "command": "d=$HOME; n=$(ls -A \"$d/.ssh\" 2>/dev/null | wc -l); if [ \"$n\" -gt 0 ]; then echo SSH_VISIBLE; else echo SSH_MASKED; fi"
           },
           "executed": false,
-          "denied_kind": "outside",
-          "denied_reason": "bash：目标 /dev/null 在工作区之外",
+          "denied_kind": "danger",
+          "denied_reason": "bash：敏感路径、解释器执行、无法证明安全的 shell 结构",
           "denied_mark": false,
           "output_excerpt": "",
           "expect": "denied",
@@ -714,8 +708,8 @@
             "command": "timeout 3 bash -c 'echo > /dev/tcp/1.1.1.1/80' 2>&1 || true; echo NET_DONE"
           },
           "executed": false,
-          "denied_kind": "outside",
-          "denied_reason": "bash：目标 /dev/tcp/1.1.1.1/80 在工作区之外",
+          "denied_kind": "danger",
+          "denied_reason": "bash：解释器执行",
           "denied_mark": false,
           "output_excerpt": "",
           "expect": "denied",
@@ -732,18 +726,18 @@
           "arguments": {
             "command": "echo ephemeral > /tmp/avid-e2e-write-probe; echo WROTE"
           },
-          "executed": false,
-          "denied_kind": "outside",
-          "denied_reason": "bash：目标 /tmp/avid-e2e-write-probe 在工作区之外",
+          "executed": true,
+          "denied_kind": null,
+          "denied_reason": null,
           "denied_mark": false,
-          "output_excerpt": "",
-          "expect": "denied",
+          "output_excerpt": "WROTE\n[exit 0]",
+          "expect": "executed",
           "expect_ok": true,
           "contains": null,
           "contains_ok": true,
           "absent": null,
           "absent_ok": true,
-          "why": "沙箱里的 /tmp 是一块空 tmpfs：写进去的东西**不会**出现在宿主上"
+          "why": "沙箱把 /tmp 换成空 tmpfs：写它是沙箱内部动作（不碰宿主，因此不必批准），宿主上不留文件由 mount 证明"
         }
       ]
     },
@@ -756,7 +750,7 @@
       "status": "finished",
       "finished": true,
       "final_text": "",
-      "approvals_requested": 9,
+      "approvals_requested": 7,
       "approvals": [
         {
           "tool": "bash",
@@ -770,12 +764,7 @@
         },
         {
           "tool": "bash",
-          "reason": "目标 /etc/hostname 在工作区之外",
-          "decision": "allow"
-        },
-        {
-          "tool": "bash",
-          "reason": "目标 /var/tmp/avid-e2e-granted/canary.txt 在工作区之外",
+          "reason": "需要写沙箱保证之外的 /var/tmp/avid-e2e-granted/canary.txt（filesystem_write）",
           "decision": "allow"
         },
         {
@@ -785,7 +774,7 @@
         },
         {
           "tool": "bash",
-          "reason": "目标 /dev/null 在工作区之外",
+          "reason": "敏感路径、解释器执行、无法证明安全的 shell 结构",
           "decision": "allow"
         },
         {
@@ -795,12 +784,7 @@
         },
         {
           "tool": "bash",
-          "reason": "目标 /dev/tcp/1.1.1.1/80 在工作区之外",
-          "decision": "allow"
-        },
-        {
-          "tool": "bash",
-          "reason": "目标 /tmp/avid-e2e-write-probe 在工作区之外",
+          "reason": "解释器执行",
           "decision": "allow"
         }
       ],
@@ -817,7 +801,7 @@
           "enforced": true,
           "degraded": false,
           "reason": null,
-          "root": "/tmp/avid-e2e-boundary-nxy6f84t/manual_yes",
+          "root": "/tmp/avid-e2e-boundary-g2wxz1cy/manual_yes",
           "notes": []
         }
       },
@@ -843,20 +827,20 @@
         "--tmpfs",
         "/home/fishy/.config/gh",
         "--ro-bind",
-        "/tmp/avid-e2e-home-36d49gbp/run/empty-mask",
+        "/tmp/avid-e2e-home-r7hzt8kd/run/empty-mask",
         "/home/fishy/.docker/config.json",
         "--ro-bind",
-        "/tmp/avid-e2e-home-36d49gbp/run/empty-mask",
+        "/tmp/avid-e2e-home-r7hzt8kd/run/empty-mask",
         "/home/fishy/.bashrc",
         "--ro-bind",
-        "/tmp/avid-e2e-home-36d49gbp/run/empty-mask",
+        "/tmp/avid-e2e-home-r7hzt8kd/run/empty-mask",
         "/home/fishy/.profile",
         "--ro-bind",
-        "/tmp/avid-e2e-home-36d49gbp/run/empty-mask",
+        "/tmp/avid-e2e-home-r7hzt8kd/run/empty-mask",
         "/home/fishy/.bash_history",
         "--bind",
-        "/tmp/avid-e2e-boundary-nxy6f84t/manual_yes",
-        "/tmp/avid-e2e-boundary-nxy6f84t/manual_yes",
+        "/tmp/avid-e2e-boundary-g2wxz1cy/manual_yes",
+        "/tmp/avid-e2e-boundary-g2wxz1cy/manual_yes",
         "--unshare-net",
         "--unshare-pid",
         "--unshare-uts",
@@ -871,6 +855,9 @@
         "LANG",
         "C.UTF-8",
         "--setenv",
+        "LC_CTYPE",
+        "C.UTF-8",
+        "--setenv",
         "LOGNAME",
         "fishy",
         "--setenv",
@@ -878,7 +865,7 @@
         "/home/fishy/.nvm",
         "--setenv",
         "PATH",
-        "<1461 字符>",
+        "<1582 字符>",
         "--setenv",
         "PWD",
         "/home/fishy/Avid",
@@ -887,7 +874,7 @@
         "/bin/bash",
         "--setenv",
         "TERM",
-        "xterm-256color",
+        "dumb",
         "--setenv",
         "USER",
         "fishy",
@@ -895,7 +882,7 @@
         "VIRTUAL_ENV",
         "/home/fishy/Avid/.venv",
         "--chdir",
-        "/tmp/avid-e2e-boundary-nxy6f84t/manual_yes",
+        "/tmp/avid-e2e-boundary-g2wxz1cy/manual_yes",
         "--",
         "bash",
         "-c",
@@ -903,8 +890,8 @@
       ],
       "audit": {
         "available": true,
-        "records": 15,
-        "decisions": 14,
+        "records": 16,
+        "decisions": 15,
         "verdicts": [
           "allow",
           "deny"
@@ -922,14 +909,14 @@
           "enforced": true,
           "degraded": false,
           "reason": null,
-          "root": "/tmp/avid-e2e-boundary-nxy6f84t/manual_yes",
+          "root": "/tmp/avid-e2e-boundary-g2wxz1cy/manual_yes",
           "notes": []
         },
         "sample": [
           {
-            "ts": 1790242589802,
+            "ts": 1790659430099,
             "kind": "decision",
-            "run": "run_3a17ba93ef34",
+            "run": "run_c965ada9cb48",
             "mode": "manual",
             "axes": {
               "approval": "user",
@@ -944,7 +931,7 @@
               "enforced": true,
               "degraded": false,
               "reason": null,
-              "root": "/tmp/avid-e2e-boundary-nxy6f84t/manual_yes",
+              "root": "/tmp/avid-e2e-boundary-g2wxz1cy/manual_yes",
               "notes": []
             },
             "tool": "bash",
@@ -972,9 +959,9 @@
             "reason": "删除根目录或家目录"
           },
           {
-            "ts": 1790242589806,
+            "ts": 1790659430103,
             "kind": "decision",
-            "run": "run_3a17ba93ef34",
+            "run": "run_c965ada9cb48",
             "mode": "manual",
             "axes": {
               "approval": "user",
@@ -989,7 +976,7 @@
               "enforced": true,
               "degraded": false,
               "reason": null,
-              "root": "/tmp/avid-e2e-boundary-nxy6f84t/manual_yes",
+              "root": "/tmp/avid-e2e-boundary-g2wxz1cy/manual_yes",
               "notes": []
             },
             "tool": "read_file",
@@ -1175,7 +1162,7 @@
           "contains_ok": true,
           "absent": null,
           "absent_ok": true,
-          "why": "越界读：manual 的拒是没有回答者，manual_yes 批准后按能力授予真的读得到"
+          "why": "区外读：沙箱用 --ro-bind / / 提供整个文件系统只读访问，三种模式都直接读，不问人——边界是沙箱能力，不是工作区"
         },
         {
           "id": "approved_capability_is_real",
@@ -1194,7 +1181,7 @@
           "contains_ok": true,
           "absent": null,
           "absent_ok": true,
-          "why": "批准**确实**授予了那条路径的能力——否则「被沙箱拦住」就只是空话。注意授予只覆盖这条路径：`rm` 要动父目录，仍然会被只读挡下（这正是「授予尽量窄」的字面含义）"
+          "why": "写区外是**越过沙箱**：manual 先问、批准后按能力授予真的写得到（否则「被沙箱拦住」就只是空话）。授予只覆盖这条路径：它的父目录仍然只读"
         },
         {
           "id": "invisible_outside_write",
@@ -1289,7 +1276,7 @@
           "contains_ok": true,
           "absent": null,
           "absent_ok": true,
-          "why": "沙箱里的 /tmp 是一块空 tmpfs：写进去的东西**不会**出现在宿主上"
+          "why": "沙箱把 /tmp 换成空 tmpfs：写它是沙箱内部动作（不碰宿主，因此不必批准），宿主上不留文件由 mount 证明"
         }
       ]
     },
@@ -1317,7 +1304,7 @@
           "enforced": true,
           "degraded": false,
           "reason": null,
-          "root": "/tmp/avid-e2e-boundary-nxy6f84t/auto",
+          "root": "/tmp/avid-e2e-boundary-g2wxz1cy/auto",
           "notes": []
         }
       },
@@ -1343,20 +1330,20 @@
         "--tmpfs",
         "/home/fishy/.config/gh",
         "--ro-bind",
-        "/tmp/avid-e2e-home-36d49gbp/run/empty-mask",
+        "/tmp/avid-e2e-home-r7hzt8kd/run/empty-mask",
         "/home/fishy/.docker/config.json",
         "--ro-bind",
-        "/tmp/avid-e2e-home-36d49gbp/run/empty-mask",
+        "/tmp/avid-e2e-home-r7hzt8kd/run/empty-mask",
         "/home/fishy/.bashrc",
         "--ro-bind",
-        "/tmp/avid-e2e-home-36d49gbp/run/empty-mask",
+        "/tmp/avid-e2e-home-r7hzt8kd/run/empty-mask",
         "/home/fishy/.profile",
         "--ro-bind",
-        "/tmp/avid-e2e-home-36d49gbp/run/empty-mask",
+        "/tmp/avid-e2e-home-r7hzt8kd/run/empty-mask",
         "/home/fishy/.bash_history",
         "--bind",
-        "/tmp/avid-e2e-boundary-nxy6f84t/auto",
-        "/tmp/avid-e2e-boundary-nxy6f84t/auto",
+        "/tmp/avid-e2e-boundary-g2wxz1cy/auto",
+        "/tmp/avid-e2e-boundary-g2wxz1cy/auto",
         "--unshare-net",
         "--unshare-pid",
         "--unshare-uts",
@@ -1371,6 +1358,9 @@
         "LANG",
         "C.UTF-8",
         "--setenv",
+        "LC_CTYPE",
+        "C.UTF-8",
+        "--setenv",
         "LOGNAME",
         "fishy",
         "--setenv",
@@ -1378,7 +1368,7 @@
         "/home/fishy/.nvm",
         "--setenv",
         "PATH",
-        "<1461 字符>",
+        "<1582 字符>",
         "--setenv",
         "PWD",
         "/home/fishy/Avid",
@@ -1387,7 +1377,7 @@
         "/bin/bash",
         "--setenv",
         "TERM",
-        "xterm-256color",
+        "dumb",
         "--setenv",
         "USER",
         "fishy",
@@ -1395,7 +1385,7 @@
         "VIRTUAL_ENV",
         "/home/fishy/Avid/.venv",
         "--chdir",
-        "/tmp/avid-e2e-boundary-nxy6f84t/auto",
+        "/tmp/avid-e2e-boundary-g2wxz1cy/auto",
         "--",
         "bash",
         "-c",
@@ -1403,9 +1393,10 @@
       ],
       "audit": {
         "available": true,
-        "records": 15,
-        "decisions": 14,
+        "records": 17,
+        "decisions": 16,
         "verdicts": [
+          "allow",
           "deny"
         ],
         "axes": {
@@ -1421,14 +1412,14 @@
           "enforced": true,
           "degraded": false,
           "reason": null,
-          "root": "/tmp/avid-e2e-boundary-nxy6f84t/auto",
+          "root": "/tmp/avid-e2e-boundary-g2wxz1cy/auto",
           "notes": []
         },
         "sample": [
           {
-            "ts": 1790242590215,
+            "ts": 1790659430496,
             "kind": "decision",
-            "run": "run_33692d7f3f86",
+            "run": "run_af24b9e3ec78",
             "mode": "auto",
             "axes": {
               "approval": "classifier",
@@ -1443,7 +1434,7 @@
               "enforced": true,
               "degraded": false,
               "reason": null,
-              "root": "/tmp/avid-e2e-boundary-nxy6f84t/auto",
+              "root": "/tmp/avid-e2e-boundary-g2wxz1cy/auto",
               "notes": []
             },
             "tool": "bash",
@@ -1471,9 +1462,9 @@
             "reason": "删除根目录或家目录"
           },
           {
-            "ts": 1790242590219,
+            "ts": 1790659430500,
             "kind": "decision",
-            "run": "run_33692d7f3f86",
+            "run": "run_af24b9e3ec78",
             "mode": "auto",
             "axes": {
               "approval": "classifier",
@@ -1488,7 +1479,7 @@
               "enforced": true,
               "degraded": false,
               "reason": null,
-              "root": "/tmp/avid-e2e-boundary-nxy6f84t/auto",
+              "root": "/tmp/avid-e2e-boundary-g2wxz1cy/auto",
               "notes": []
             },
             "tool": "read_file",
@@ -1663,18 +1654,18 @@
           "arguments": {
             "command": "cat /etc/hostname"
           },
-          "executed": false,
-          "denied_kind": "outside",
-          "denied_reason": "bash：目标 /etc/hostname 在工作区之外",
+          "executed": true,
+          "denied_kind": null,
+          "denied_reason": null,
           "denied_mark": false,
-          "output_excerpt": "",
-          "expect": "denied",
+          "output_excerpt": "LAPTOP-3M7941PJ\n[exit 0]",
+          "expect": "executed",
           "expect_ok": true,
           "contains": null,
           "contains_ok": true,
           "absent": null,
           "absent_ok": true,
-          "why": "越界读：manual 的拒是没有回答者，manual_yes 批准后按能力授予真的读得到"
+          "why": "区外读：沙箱用 --ro-bind / / 提供整个文件系统只读访问，三种模式都直接读，不问人——边界是沙箱能力，不是工作区"
         },
         {
           "id": "approved_capability_is_real",
@@ -1684,7 +1675,7 @@
           },
           "executed": false,
           "denied_kind": "outside",
-          "denied_reason": "bash：目标 /var/tmp/avid-e2e-granted/canary.txt 在工作区之外",
+          "denied_reason": "bash：需要写沙箱保证之外的 /var/tmp/avid-e2e-granted/canary.txt（filesystem_write）",
           "denied_mark": false,
           "output_excerpt": "",
           "expect": "denied",
@@ -1693,7 +1684,7 @@
           "contains_ok": true,
           "absent": null,
           "absent_ok": true,
-          "why": "批准**确实**授予了那条路径的能力——否则「被沙箱拦住」就只是空话。注意授予只覆盖这条路径：`rm` 要动父目录，仍然会被只读挡下（这正是「授予尽量窄」的字面含义）"
+          "why": "写区外是**越过沙箱**：manual 先问、批准后按能力授予真的写得到（否则「被沙箱拦住」就只是空话）。授予只覆盖这条路径：它的父目录仍然只读"
         },
         {
           "id": "invisible_outside_write",
@@ -1721,8 +1712,8 @@
             "command": "d=$HOME; n=$(ls -A \"$d/.ssh\" 2>/dev/null | wc -l); if [ \"$n\" -gt 0 ]; then echo SSH_VISIBLE; else echo SSH_MASKED; fi"
           },
           "executed": false,
-          "denied_kind": "outside",
-          "denied_reason": "bash：目标 /dev/null 在工作区之外",
+          "denied_kind": "danger",
+          "denied_reason": "bash：敏感路径、解释器执行、无法证明安全的 shell 结构",
           "denied_mark": false,
           "output_excerpt": "",
           "expect": "denied",
@@ -1759,8 +1750,8 @@
             "command": "timeout 3 bash -c 'echo > /dev/tcp/1.1.1.1/80' 2>&1 || true; echo NET_DONE"
           },
           "executed": false,
-          "denied_kind": "outside",
-          "denied_reason": "bash：目标 /dev/tcp/1.1.1.1/80 在工作区之外",
+          "denied_kind": "danger",
+          "denied_reason": "bash：解释器执行",
           "denied_mark": false,
           "output_excerpt": "",
           "expect": "denied",
@@ -1777,18 +1768,18 @@
           "arguments": {
             "command": "echo ephemeral > /tmp/avid-e2e-write-probe; echo WROTE"
           },
-          "executed": false,
-          "denied_kind": "outside",
-          "denied_reason": "bash：目标 /tmp/avid-e2e-write-probe 在工作区之外",
+          "executed": true,
+          "denied_kind": null,
+          "denied_reason": null,
           "denied_mark": false,
-          "output_excerpt": "",
-          "expect": "denied",
+          "output_excerpt": "WROTE\n[exit 0]",
+          "expect": "executed",
           "expect_ok": true,
           "contains": null,
           "contains_ok": true,
           "absent": null,
           "absent_ok": true,
-          "why": "沙箱里的 /tmp 是一块空 tmpfs：写进去的东西**不会**出现在宿主上"
+          "why": "沙箱把 /tmp 换成空 tmpfs：写它是沙箱内部动作（不碰宿主，因此不必批准），宿主上不留文件由 mount 证明"
         }
       ]
     },
@@ -1816,7 +1807,7 @@
           "enforced": false,
           "degraded": false,
           "reason": "沙箱被显式关闭（full）",
-          "root": "/tmp/avid-e2e-boundary-nxy6f84t/full",
+          "root": "/tmp/avid-e2e-boundary-g2wxz1cy/full",
           "notes": []
         }
       },
@@ -1827,8 +1818,8 @@
       ],
       "audit": {
         "available": true,
-        "records": 15,
-        "decisions": 14,
+        "records": 16,
+        "decisions": 15,
         "verdicts": [
           "allow",
           "deny"
@@ -1846,14 +1837,14 @@
           "enforced": false,
           "degraded": false,
           "reason": "沙箱被显式关闭（full）",
-          "root": "/tmp/avid-e2e-boundary-nxy6f84t/full",
+          "root": "/tmp/avid-e2e-boundary-g2wxz1cy/full",
           "notes": []
         },
         "sample": [
           {
-            "ts": 1790242590354,
+            "ts": 1790659430680,
             "kind": "decision",
-            "run": "run_d774a2183162",
+            "run": "run_d22431982c46",
             "mode": "full",
             "axes": {
               "approval": "none",
@@ -1868,7 +1859,7 @@
               "enforced": false,
               "degraded": false,
               "reason": "沙箱被显式关闭（full）",
-              "root": "/tmp/avid-e2e-boundary-nxy6f84t/full",
+              "root": "/tmp/avid-e2e-boundary-g2wxz1cy/full",
               "notes": []
             },
             "tool": "bash",
@@ -1896,9 +1887,9 @@
             "reason": "删除根目录或家目录"
           },
           {
-            "ts": 1790242590358,
+            "ts": 1790659430684,
             "kind": "decision",
-            "run": "run_d774a2183162",
+            "run": "run_d22431982c46",
             "mode": "full",
             "axes": {
               "approval": "none",
@@ -1913,7 +1904,7 @@
               "enforced": false,
               "degraded": false,
               "reason": "沙箱被显式关闭（full）",
-              "root": "/tmp/avid-e2e-boundary-nxy6f84t/full",
+              "root": "/tmp/avid-e2e-boundary-g2wxz1cy/full",
               "notes": []
             },
             "tool": "read_file",
@@ -2099,7 +2090,7 @@
           "contains_ok": true,
           "absent": null,
           "absent_ok": true,
-          "why": "越界读：manual 的拒是没有回答者，manual_yes 批准后按能力授予真的读得到"
+          "why": "区外读：沙箱用 --ro-bind / / 提供整个文件系统只读访问，三种模式都直接读，不问人——边界是沙箱能力，不是工作区"
         },
         {
           "id": "approved_capability_is_real",
@@ -2118,7 +2109,7 @@
           "contains_ok": true,
           "absent": null,
           "absent_ok": true,
-          "why": "批准**确实**授予了那条路径的能力——否则「被沙箱拦住」就只是空话。注意授予只覆盖这条路径：`rm` 要动父目录，仍然会被只读挡下（这正是「授予尽量窄」的字面含义）"
+          "why": "写区外是**越过沙箱**：manual 先问、批准后按能力授予真的写得到（否则「被沙箱拦住」就只是空话）。授予只覆盖这条路径：它的父目录仍然只读"
         },
         {
           "id": "invisible_outside_write",
@@ -2213,7 +2204,7 @@
           "contains_ok": true,
           "absent": null,
           "absent_ok": true,
-          "why": "沙箱里的 /tmp 是一块空 tmpfs：写进去的东西**不会**出现在宿主上"
+          "why": "沙箱把 /tmp 换成空 tmpfs：写它是沙箱内部动作（不碰宿主，因此不必批准），宿主上不留文件由 mount 证明"
         }
       ]
     }
@@ -2223,6 +2214,7 @@
     "project_deny_holds_in_every_arm": true,
     "relative_paths_reach_the_rules": true,
     "invisible_outside_write_is_blocked_by_the_sandbox": true,
+    "sandbox_boundary_is_not_a_workspace_boundary": true,
     "sandboxed_arms_did_not_touch_the_host": true,
     "approved_capability_is_real": true,
     "masks_survive_approval_grants": true,
