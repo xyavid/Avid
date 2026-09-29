@@ -260,10 +260,39 @@ def make_turn(text: str, call: tuple[str, str, dict[str, Any]] | None) -> Turn:
 
 
 class ScriptedChat:
-    """每个探针一轮，最后再要一轮收尾。多要一轮就是 bug，直接报错。"""
+    """每个探针一轮，最后再要一轮收尾。多要一轮就是 bug，直接报错。
 
-    def __init__(self, items: list[Probe]) -> None:
-        self.turns = [make_turn("", (p.id, p.tool, p.arguments)) for p in items]
+    阶段 28 起，运行会在「连续 5 次工具调用被拒」时提前终止——那是给真实 agent
+    的护栏（对着同一堵墙撞 N 遍没有意义）。而探针表开头就是**连续的预期拒绝**
+    （硬拒绝 / ADMIN / PROJECT 一组 5 条），不加隔离的话四个臂全部死在第 5 条
+    探针上，后面的探针永远执行不到。所以按臂在预期被拒的探针之间插「间隔轮」：
+    一个所有臂都放行的区内读取，把拒连击清零。间隔轮的 ``tool_call_id`` 不在
+    探针表里，观测收集不受影响。
+    """
+
+    SPACER_EVERY = 4  # 连续预期被拒每到这里就插一个间隔轮（护栏阈值是 5）
+
+    def __init__(self, items: list[Probe], arm: str = "manual_yes") -> None:
+        self.turns: list[Turn] = []
+        streak = 0
+        for index, probe in enumerate(items):
+            self.turns.append(make_turn("", (probe.id, probe.tool, probe.arguments)))
+            if probe.expect.get(arm) == "denied":
+                streak += 1
+            else:
+                streak = 0
+            following = items[index + 1 :]
+            if (
+                streak >= self.SPACER_EVERY
+                and following
+                and following[0].expect.get(arm) == "denied"
+            ):
+                # 区内读一个不存在的文件：工具真的执行了（回错误文本），不算被拒——
+                # 连击因此清零，而这条调用不进任何探针的观测。
+                self.turns.append(
+                    make_turn("", ("spacer", "read_file", {"path": "probe-spacer.txt"}))
+                )
+                streak = 0
         self.turns.append(make_turn(FINAL_TEXT, None))
 
     def __call__(self, config: Any, messages: list[dict], **kwargs: Any) -> Turn:
@@ -402,7 +431,7 @@ def run_arm(arm: str, probes_list: list[Probe], root: Path) -> dict[str, Any]:
         start["full_access_ack"] = True
 
     services = Services(
-        workspace_root=root, chat=ScriptedChat(probes_list), tool_registry=TOOL_IMPLS
+        workspace_root=root, chat=ScriptedChat(probes_list, arm=arm), tool_registry=TOOL_IMPLS
     )
     client = TestClient(create_app(services=services), base_url="http://127.0.0.1:8765")
     session_id = services.sessions.create(
