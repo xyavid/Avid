@@ -29,6 +29,23 @@ SUB_HANDLERS: dict[str, ToolImpl] = {
     name: impl for name, impl in TOOL_IMPLS.items() if name != "subagent"
 }
 
+
+def build_toolset(state: Any | None = None) -> tuple[list[dict[str, Any]], dict[str, ToolImpl]]:
+    """本次运行下发给模型的工具集：内置注册表 + 该工作区声明的 MCP 工具。
+
+    MCP server 由运行入口装配进 ``state.mcp``（进程随 run 起停，阶段 30e）；没有它
+    就是纯内置工具集——CLI 裸路径与全部既有用例的行为不变。MCP 工具排在内置之后，
+    名字自带 ``mcp__<server>__<tool>`` 前缀，闸门与前端据此认识它们。
+    """
+    schemas = list(TOOLS)
+    impls = dict(TOOL_IMPLS)
+    manager = getattr(state, "mcp", None)
+    if manager is not None:
+        extra_schemas, extra_impls = manager.toolset()
+        schemas.extend(extra_schemas)
+        impls.update(extra_impls)
+    return schemas, impls
+
 __all__ = [
     "SUB_HANDLERS",
     "SUB_TOOLS",
@@ -36,5 +53,6 @@ __all__ = [
     "TOOL_IMPLS",
     "ToolImpl",
     "ToolSpec",
+    "build_toolset",
     "specs",
 ]

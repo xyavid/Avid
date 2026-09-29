@@ -31,6 +31,7 @@ from .events import RunObserver, event
 
 if TYPE_CHECKING:  # 与 loop.py 同理：AskUser 只出现在注解里
     from ..policy.permission import AskUser
+    from ..tools.mcp import McpManager
 
 # 连续这么多次工具调用被权限策略拒绝（期间**没有一次通过**）就停止整个运行。
 # 判据是「被拒且毫无进展」，不是「拒绝总数」：任何一次成功调用都会把连击清零，
@@ -171,6 +172,10 @@ class RunState:
     # 运行期实例
     todo: TodoList = field(default_factory=TodoList)
     skills: SkillLoader = field(default_factory=SkillLoader)
+    # MCP 工具管理器（阶段 30e）：由运行入口装配（svc/_run、cli），server 进程随
+    # run 起停（finally 里 close_mcp）。循环经 tools.build_toolset(state) 把它的
+    # 工具并进本次运行的工具清单；None = 这次运行没有 MCP 工具。
+    mcp: "McpManager | None" = None
     # hook 注册表归运行所有（以前是 `hooks.HOOKS` 模块级字典）：`agent_loop(hooks=…)`
     # 能注入一份，不注入就用进程级默认。子 agent 用父运行那一份（`copy()`）。
     # 通过模块取默认值（而不是 `from .hooks import DEFAULT_HOOKS`）：默认注册表只有
@@ -285,6 +290,12 @@ class RunState:
         """请求取消。只置位，不打断当前步骤——粒度写进 UI 文案（§7.4）。"""
         self.cancelled = True
         self.cancel_reason = reason or "cancelled"
+
+    def close_mcp(self) -> None:
+        """收掉这次运行的 MCP server 进程（运行入口的 finally 调用）。幂等。"""
+        if self.mcp is not None:
+            self.mcp.close()
+            self.mcp = None
 
     def check_cancelled(self) -> None:
         """循环的两个检查点调用它；命中抛 ``RunCancelled``。

@@ -47,7 +47,8 @@ from .session import (
     messages_for_branch,
 )
 from .svc.workspaces import WorkspaceInvalid, bound_workspace
-from .tools import TOOLS, workspace
+from .tools import TOOLS, build_toolset, workspace
+from .tools.mcp import McpManager
 from .web.app import (
     LOOPBACK_HOSTS,
     STATIC_DIR,
@@ -100,6 +101,18 @@ def _resolve_workspace(selection: str | None) -> Workspace:
 def _default_mode_choices() -> tuple[str, ...]:
     """能**持久化**成工作区默认值的模式。full 不在里面：full ≠ default。"""
     return tuple(mode for mode in MODES if mode != FULL_MODE)
+
+
+def _start_mcp(state: RunState) -> None:
+    """装配这次运行的 MCP server（``<工作区>/.avid/mcp.json``，阶段 30e）。
+
+    起不来的 server 只打警告不拦运行——run 里还有内置工具可用；进程的关闭
+    由调用方的 finally 走 ``state.close_mcp()``。
+    """
+    manager = McpManager(state.workspace_root)
+    state.mcp = manager
+    for warning in manager.start_all():
+        print(f"警告：{warning}", file=sys.stderr)
 
 
 def _announce_security(security: RunSecurity | None) -> None:
@@ -244,6 +257,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"安全配置错误：{exc}", file=sys.stderr)
             return 2
         _announce_security(state.security)
+        _start_mcp(state)
+        schemas, impls = build_toolset(state)
         if args.session or args.new_session:
             return _run_session(args, config, state)
         try:
@@ -252,11 +267,16 @@ def main(argv: list[str] | None = None) -> int:
                     [{"role": "user", "content": args.prompt}],
                     config=config,
                     state=state,
+                    tools=schemas,
+                    registry=impls,
                 )
             )
         except LLMError as exc:
             print(f"循环中止：{exc}", file=sys.stderr)
             return 1
+        finally:
+            # MCP server 进程随 run 起停（阶段 30e）。
+            state.close_mcp()
         return 0
 
     try:
@@ -356,6 +376,9 @@ def _run_session(args: argparse.Namespace, config, state: RunState | None = None
         if session is not None and not session.closed:
             session.close()
         repo.close()
+        if state is not None:
+            # MCP server 进程随 run 起停（阶段 30e）。
+            state.close_mcp()
 
     print(reply)
     print(

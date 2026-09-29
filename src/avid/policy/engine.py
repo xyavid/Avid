@@ -44,6 +44,8 @@ from .action import (
     Action,
     brokerize,
     exceeds_sandbox,
+    is_mcp_tool,
+    mcp_server,
 )
 from .classifier import classify
 from .modes import (
@@ -85,6 +87,8 @@ KIND_DANGER = "danger"
 KIND_DEGRADED = "degraded"
 KIND_NETWORK = "network"
 KIND_COST = "cost"
+#: 外部 MCP 工具（阶段 30e）：语义分类器看不见，口径是 manual 问一次、auto 拒、full 放。
+KIND_MCP = "mcp"
 
 #: 回传给模型的文案。三类拒绝给不同的下一步指引（"永远不许"与"这次不行"对模型意味着
 #: 完全不同的事，混为一谈会让它反复重试）。
@@ -125,6 +129,11 @@ USER_MESSAGE = (
     "Permission denied. 原因：本次未获用户批准。"
     "不要重复提交同一条调用；请说明你需要它做什么，或改用其它工具。"
 )
+MCP_MESSAGE = (
+    "Permission denied. 原因：外部 MCP 工具（{reason}）未获批准。"
+    "它的行为只有 server 自己知道，需要用户逐个工具批准；"
+    "请向用户说明要调用哪个工具、为什么，或改用内置工具完成任务。"
+)
 
 MESSAGE_FOR: dict[str, str] = {
     KIND_HARD: HARD_MESSAGE,
@@ -135,6 +144,7 @@ MESSAGE_FOR: dict[str, str] = {
     KIND_DEGRADED: DEGRADED_MESSAGE,
     KIND_NETWORK: NETWORK_MESSAGE,
     KIND_COST: USER_MESSAGE,
+    KIND_MCP: MCP_MESSAGE,
 }
 
 AskUser = Callable[[str, dict[str, Any], str], bool]
@@ -228,7 +238,11 @@ def review_key(action: Action) -> tuple[str, ...]:
     """REVIEW 的记账键：bash 按归一化命令原文，其它按第一个目标。
 
     "同意一次即生效"的粒度就是它——同一条命令重跑不再问，换个命令照问。
+    MCP 工具固定按 (tool, 全名) 记：它的参数是 server 自己的 schema，里面的
+    "path" 与我们的路径账本无关，不能掉进下面的路径分支。
     """
+    if is_mcp_tool(action.tool):
+        return ("tool", action.tool)
     if action.tool == "bash" and action.normalized:
         return ("command", action.normalized)
     if action.targets:
@@ -252,6 +266,13 @@ def review_facts(
         kind = KIND_CREDENTIAL if rule.tier == TIER_ADMIN else KIND_RULE
         prefix = "受保护的宿主资源" if rule.tier == TIER_ADMIN else "安全策略要求逐次批准"
         return kind, f"{prefix}（{rule.reason}）", rule.reason
+
+    if is_mcp_tool(action.tool):
+        # 外部 MCP 工具永远进 REVIEW：行为只有 server 自己知道，闸门给不出"它安全"
+        # 的证据。manual 问一次（账本按工具名记），auto 下无人可答 → 第 5 步拒绝，
+        # full 不问（第 3 步放行）。
+        server = mcp_server(action.tool)
+        return KIND_MCP, f"外部 MCP 工具（{server} server）", action.tool
 
     beyond = exceeds_sandbox(action)
     if beyond is not None:

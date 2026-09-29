@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .action import Action, exceeds_sandbox
+from .action import Action, exceeds_sandbox, is_mcp_tool
 from .rules import VERDICT_ASK, VERDICT_DENY, Rule  # noqa: F401  (VERDICT_* 供类型读者)
 from .sandbox import SandboxSpec
 
@@ -52,6 +52,11 @@ def classify(
         return Review(False, f"命中 {rule.tier} deny：{rule.reason}")
     if rule is not None and rule.verdict == VERDICT_ASK:
         return Review(False, f"该目标需要逐次批准（{rule.reason}），auto 下无人可答")
+
+    if is_mcp_tool(action.tool):
+        # 外部 MCP 工具的参数含义只有 server 自己知道，确定性分类器看不见它的语义；
+        # "判不准就拒"在这里就是字面执行（manual 下它会问人，auto 没有人可问）。
+        return Review(False, "外部 MCP 工具的语义不可静态判定，auto 下判不准即拒")
 
     beyond = exceeds_sandbox(action)
     if beyond is not None:

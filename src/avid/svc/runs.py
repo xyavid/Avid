@@ -38,6 +38,8 @@ from ..session import (
     SessionRecorder,
     messages_for_branch,
 )
+from ..tools import TOOLS, build_toolset
+from ..tools.mcp import McpManager
 from ..workspaces import SESSION_DIR
 from .approvals import APPROVAL_TIMEOUT_SECONDS, ApprovalTable
 from .errors import (
@@ -759,8 +761,16 @@ class RunRegistry:
             if record.cancel_requested:
                 state.cancel(record.cancel_reason or "user")
 
+            # MCP 工具随这次运行起停（阶段 30e）：server 进程在这里创建，
+            # finally 里关闭。起不来的 server 记 warning 后跳过，不拦运行。
+            mcp = McpManager(state.workspace_root)
+            state.mcp = mcp
+            for warning in mcp.start_all():
+                logger.warning("run %s: %s", record.run_id, warning)
+
             # 没有注入 chat = 生产路径：主轮次流式、摘要非流式（见 agent_loop 的 summarize）。
             streaming = chat is None
+            mcp_schemas, mcp_impls = build_toolset(state)
             text = agent_loop(
                 messages,
                 config=config,
@@ -769,7 +779,9 @@ class RunRegistry:
                 auto_approve=auto_approve,
                 on_message=self._message_sink(record, recorder),
                 state=state,
-                registry=self.tool_registry,
+                # 注入注册表（测试/bench）沿用旧口径：纯内置工具，不合 MCP。
+                tools=TOOLS if self.tool_registry is not None else mcp_schemas,
+                registry=self.tool_registry if self.tool_registry is not None else mcp_impls,
             )
             record.text = text
             self._finish(record, events.RUN_FINISHED, text=text)
@@ -788,6 +800,10 @@ class RunRegistry:
         finally:
             if record.approvals is not None:
                 record.approvals.close("run_ended")
+            # MCP server 进程随 run 终结（阶段 30e）；record.state 在装配成功后就有
+            # 值，之前失败（比如读不到配置）则没有 MCP 可关。
+            if record.state is not None:
+                record.state.close_mcp()
             # 先摘句柄再关：读路径正在用这个句柄时必须等它读完（否则读一半句柄被关掉）。
             with self.session_lock(record.session_id):
                 with self._lock:

@@ -510,6 +510,26 @@ def is_unrestricted(approval: str) -> bool:
     return approval == APPROVAL_NONE
 
 
+# ---------------- MCP 工具（阶段 30e） ----------------
+#
+# MCP 工具的名字由 tools/mcp.py 合成：``mcp__<server>__<tool>``。它们不是注册表里的
+# 内置工具，但闸门必须认识这个前缀：外部工具的语义分类器看不见（参数含义只有 server
+# 自己知道），裁决口径因此与内置工具不同（engine.review_facts / classifier.classify）。
+
+MCP_TOOL_PREFIX = "mcp__"
+
+
+def is_mcp_tool(name: str) -> bool:
+    """这个工具是不是 MCP 工具（由某个 server 动态提供）。"""
+    return name.startswith(MCP_TOOL_PREFIX)
+
+
+def mcp_server(name: str) -> str:
+    """从 ``mcp__<server>__<tool>`` 里取出 server 名。"""
+    rest = name[len(MCP_TOOL_PREFIX) :]
+    return rest.split("__", 1)[0]
+
+
 __all__ = [
     "APPROVAL_RULES",
     "COST_RULES",
@@ -519,6 +539,7 @@ __all__ = [
     "OPERATION_READ",
     "OPERATION_WRITE",
     "PATH_TOOLS",
+    "MCP_TOOL_PREFIX",
     "SANDBOX_WRITABLE_PREFIXES",
     "SENSITIVE_ABSOLUTE",
     "SENSITIVE_COMPONENTS",
@@ -533,7 +554,9 @@ __all__ = [
     "exceeds_sandbox",
     "hard_deny",
     "in_sandbox_writable",
+    "is_mcp_tool",
     "is_unrestricted",
+    "mcp_server",
     "normalize_command",
     "reaches_network",
     "sensitive_reason",
