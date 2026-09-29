@@ -1,71 +1,122 @@
-"""模型调用层：OpenAI 兼容的 /chat/completions。
+"""模型调用层门面：按 provider 分发到 ``providers/``。
 
 直接用 HTTP 不套 SDK：请求体与响应字段保持可见，阶段 4 的 trace 与评测依赖这一点。
-协议选择见 dev/drafts/requirements.md 的 D-03 / D-08。
 
-流式（F3）与非流式**同形**：`stream_completion` 返回的 `Turn` 与 `chat_completion`
-逐字段可比，循环因此不需要知道模型是流式还是整条返回的（设计文档 §7.5）。
+阶段 30 起，``client.py`` 只回答"这次调用走哪家协议"：OpenAI 兼容、Anthropic
+Messages、Gemini generateContent 三条实现路径在 ``providers/`` 里，每家对循环
+返回**同形**的 :class:`Turn`（流式与非流式也同形，B9）。传输与重试在
+``ai/transport.py``。这里同时保留 OpenAI 兼容路径的既有公开名与窗口探测
+（``fetch_context_length``，OpenAI 兼容网关专属）作为再导出，老调用方不动。
 """
 
 from __future__ import annotations
 
-import json
 import threading
-from collections.abc import Callable, Iterable, Iterator, Mapping
-from dataclasses import dataclass
+from collections.abc import Mapping
 from typing import Any
 
 import httpx
 
 from .config import Config, model_info_enabled
+from .protocol import (  # 再导出：三个 provider 与门面共用同一套词表
+    DEFAULT_MAX_TOKENS,
+    DeltaCallback,
+    LLMError,
+    PromptTooLongError,
+    Reply,
+    Turn,
+    iter_sse_events,
+)
+from .providers import openai_compat
+from .transport import (  # 再导出：测试与调用方从 client 拿这些名字
+    CONNECT_TIMEOUT_SECONDS,
+    TIMEOUT_SECONDS,
+    RetryPolicy,
+    _timeout,
+    shared_client,
+)
 from .usage import Usage as Usage  # 再导出：`from avid.ai.client import Usage` 的老路径照旧
 from .usage import normalize_usage
 
-TIMEOUT_SECONDS = 60.0
-# 连接超时单独收紧：端点不可达时不该等满 60 秒（读超时仍给长回答留足）。
-CONNECT_TIMEOUT_SECONDS = 10.0
-#: 默认**不设**输出上限（None = 请求体里不带 max_tokens 字段，上限交给服务商）。
-#: 曾经写死 8000：推理模型的可见输出与思维链争同一份配额，被吃光时正文为空、
-#: finish_reason=length，而没有 tool_calls 的轮次会被循环当成「模型答完了」——一次
-#: 空答复就这样「成功」收尾（现场会话 01a0d277，见 dev/diagnosis/2026-09-27-stop-and-compaction.md）。
-#: 需要复现某次实验的用量时，调用方仍然可以显式传一个数字。
-DEFAULT_MAX_TOKENS: int | None = None
+# OpenAI 兼容路径的公开名（老测试与直调方继续从这里 import）。
+from .providers.openai_compat import (  # noqa: F401
+    StreamState,
+    build_payload,
+    build_request,
+    delta_reasoning,
+    delta_text,
+    merge_stream_chunk,
+    parse_reply,
+    parse_turn,
+    post,
+)
 
-# 进程内复用一个 Client。以前每次调用都新建 `httpx.Client` 再关掉：每轮模型调用
-# 都要重新 TCP/TLS 握手，多轮 agent 与 subagent 场景下线性叠加。`httpx.Client`
-# 是线程安全的（连接池自己带锁），所以整个进程共用一个实例。
-_CLIENT_LOCK = threading.Lock()
-_CLIENT: httpx.Client | None = None
-
-
-def _timeout() -> httpx.Timeout:
-    return httpx.Timeout(TIMEOUT_SECONDS, connect=CONNECT_TIMEOUT_SECONDS)
+# 进程内缓存（重导出给测试清空用——见 test_usage.py）。
+_MODEL_WINDOWS: dict[tuple[str, str], int | None] = {}
+_MODEL_WINDOW_LOCK = threading.Lock()
 
 
-def shared_client() -> httpx.Client:
-    """共享的 HTTP 客户端（首次调用时建，之后复用）。"""
-    global _CLIENT
-    with _CLIENT_LOCK:
-        if _CLIENT is None or _CLIENT.is_closed:
-            _CLIENT = httpx.Client(timeout=_timeout())
-        return _CLIENT
+def chat_completion(
+    config: Config,
+    messages: list[dict[str, Any]],
+    *,
+    system: str | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    max_tokens: int | None = DEFAULT_MAX_TOKENS,
+    client: httpx.Client | None = None,
+) -> Turn:
+    """按 ``config.resolved_provider`` 分发的非流式调用。"""
+    return _impl(config.resolved_provider).chat(
+        config, messages, system=system, tools=tools, max_tokens=max_tokens, client=client
+    )
 
 
-# ---------------- 模型窗口探测 ----------------
+def stream_completion(
+    config: Config,
+    messages: list[dict[str, Any]],
+    *,
+    system: str | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    max_tokens: int | None = DEFAULT_MAX_TOKENS,
+    on_delta: DeltaCallback | None = None,
+    on_reasoning: DeltaCallback | None = None,
+    client: httpx.Client | None = None,
+) -> Turn:
+    """按 ``config.resolved_provider`` 分发的流式调用，返回与 `chat_completion` 同形的 Turn。"""
+    return _impl(config.resolved_provider).stream(
+        config,
+        messages,
+        system=system,
+        tools=tools,
+        max_tokens=max_tokens,
+        on_delta=on_delta,
+        on_reasoning=on_reasoning,
+        client=client,
+    )
+
+
+def _impl(provider: str):
+    from .providers import impl
+
+    return impl(provider)
+
+
+def ask(config: Config, prompt: str, *, client: httpx.Client | None = None) -> Reply:
+    turn = chat_completion(config, [{"role": "user", "content": prompt}], client=client)
+    return Reply(text=turn.text, usage=turn.usage, model=turn.model)
+
+
+# ---------------- 模型窗口探测（OpenAI 兼容网关专属） ----------------
 #
 # 环境变量与内置表都查不到窗口时，问一次 `{base_url}/models`：OpenAI 兼容网关普遍在
-# 这里给 `context_length`（本机在用的 api.commandcode.ai 就是），于是"占用率"能在
-# 不改配置的前提下显示出来。
+# 这里给 `context_length`，于是"占用率"能在不改配置的前提下显示出来。Anthropic 与
+# Gemini 的原生 API 没有这个端点：窗口靠内置表或 AVID_CONTEXT_WINDOW。
 #
 # 三条纪律：**问不到就回 None**（绝不抛错、绝不猜）、**进程内缓存**（成功与失败都缓存
 # 一次，重启进程才会重试）、**只在窗口缺失时问**（调用点负责，见 `runtime/loop.py`）。
 
 #: 探测超时：这是元数据请求，不该跟模型调用共用 60 秒读超时。
 MODEL_INFO_TIMEOUT_SECONDS = 5.0
-
-#: (base_url, model) → 窗口 或 None。None 也缓存：失败不重试，免得每轮都打端点。
-_MODEL_WINDOWS: dict[tuple[str, str], int | None] = {}
-_MODEL_WINDOW_LOCK = threading.Lock()
 
 #: 各家中等价的名字（OpenRouter 用 context_length，vLLM 用 max_model_len，等等）。
 _WINDOW_KEYS = ("context_length", "context_window", "max_model_len", "max_context_length")
@@ -93,6 +144,9 @@ def fetch_context_length(
     ``AVID_MODEL_INFO=off`` 关掉它（单测与明确不想联网的部署用）。
     """
     if not model_info_enabled():
+        return None
+    # /models 探测是 OpenAI 兼容网关的习惯：原生 API 没有等价端点，不白打一次。
+    if config.resolved_provider != "openai":
         return None
     key = (config.base_url, config.model)
     with _MODEL_WINDOW_LOCK:
@@ -124,417 +178,3 @@ def _ask_context_length(
         if isinstance(item, Mapping) and str(item.get("id")) == config.model:
             return _window_of(item)
     return None
-
-
-class LLMError(Exception):
-    """调用失败。信息包含状态码与响应正文片段，便于定位。"""
-
-
-class PromptTooLongError(LLMError):
-    """请求超出模型上下文长度。循环据此做一次兜底压缩后重试。"""
-
-
-# 各家措辞不同，命中任一即可判定为上下文超限。
-_PROMPT_TOO_LONG_SIGNS = (
-    "prompt is too long",
-    "prompt_too_long",
-    "context length",
-    "context_length_exceeded",
-    "maximum context",
-    "too many tokens",
-    "request too large",
-    "reduce the length",
-    "input is too long",
-)
-
-
-def _prompt_too_long(response: httpx.Response) -> bool:
-    if response.status_code not in (400, 413, 422):
-        return False
-    body = response.text.lower()
-    return any(sign in body for sign in _PROMPT_TOO_LONG_SIGNS)
-
-
-@dataclass(frozen=True)
-class Reply:
-    text: str
-    usage: Usage
-    model: str
-
-
-@dataclass(frozen=True)
-class Turn:
-    """一轮模型响应。message 是清洗过的 assistant 消息，可直接追加进 messages。"""
-
-    message: dict[str, Any]
-    text: str
-    tool_calls: list[dict[str, Any]]
-    usage: Usage
-    model: str
-    finish_reason: str
-    # 思维链原文（A2）。**不进 message**：回传会污染下一轮，多数端点也拒收这些字段。
-    # 它不参与"模型答了什么"的判断，但决定了用户能不能看懂"这一轮为什么没有正文"。
-    reasoning: str = ""
-
-
-def build_payload(config: Config, prompt: str) -> dict[str, Any]:
-    return {
-        "model": config.model,
-        "messages": [{"role": "user", "content": prompt}],
-    }
-
-
-def build_request(
-    config: Config,
-    messages: list[dict[str, Any]],
-    *,
-    system: str | None = None,
-    tools: list[dict[str, Any]] | None = None,
-    max_tokens: int | None = DEFAULT_MAX_TOKENS,
-) -> dict[str, Any]:
-    """system 走 messages 首条，不写回调用方的 messages。
-
-    max_tokens 为 None（默认）时**不放这个字段**：让服务商决定上限，也避免把
-    推理模型的思维链计进我们的固定配额里。
-    """
-    request: dict[str, Any] = {
-        "model": config.model,
-        "messages": ([{"role": "system", "content": system}] if system else []) + list(messages),
-    }
-    if max_tokens is not None:
-        request["max_tokens"] = max_tokens
-    if tools:
-        request["tools"] = list(tools)
-    return request
-
-
-def _usage_of(data: Mapping[str, Any]) -> Usage:
-    """响应信封 → 统一口径。方言识别全在 ``ai/usage.py``（流式与非流式共用它）。"""
-    return normalize_usage(data)
-
-
-def _content_text(raw: Any) -> str:
-    """把 assistant 的 ``content`` 归一成正文。
-
-    各家的等价写法必须走同一条路：``null`` / 缺字段 / 分片数组都要变成字符串，
-    否则非流式路径会把 ``None`` 原样写进回传给模型的消息（而流式路径写 ``""``），
-    两条路径宣称的"同形"就不成立。
-    """
-    if isinstance(raw, str):
-        return raw
-    if isinstance(raw, list):  # content parts：拼其中的 text 字段
-        return "".join(
-            item.get("text", "")
-            for item in raw
-            if isinstance(item, dict) and isinstance(item.get("text"), str)
-        )
-    return ""
-
-
-def _reasoning_text(raw: Mapping[str, Any]) -> str:
-    """把一段 delta / message 里的思维链归一成字符串。
-
-    三家写法：`reasoning`（OpenAI 兼容）/ `reasoning_content`（DeepSeek 系）/
-    `reasoning_details`（分片数组，取其中的 text）。归一的口径与 `_content_text`
-    一致——流式与非流式两条路径必须给出同一个值（B9）。
-    """
-    for key in ("reasoning_content", "reasoning"):
-        value = raw.get(key)
-        if isinstance(value, str):
-            return value
-    details = raw.get("reasoning_details")
-    if isinstance(details, list):
-        return "".join(
-            item.get("text", "")
-            for item in details
-            if isinstance(item, Mapping) and isinstance(item.get("text"), str)
-        )
-    return ""
-
-
-def parse_turn(data: dict[str, Any]) -> Turn:
-    try:
-        choice = data["choices"][0]
-        raw = choice["message"]
-    except (KeyError, IndexError, TypeError) as exc:
-        # 只回一段截断的响应：完整响应体可能很大，也可能含不该进日志的内容。
-        raise LLMError(f"响应缺少 choices[0].message：{repr(data)[:300]}") from exc
-
-    tool_calls = list(raw.get("tool_calls") or [])
-    text = _content_text(raw.get("content"))
-
-    # 只保留协议字段：服务商可能附带的额外字段（如 reasoning_content）
-    # 原样回传会污染下一轮请求。
-    message: dict[str, Any] = {"role": "assistant", "content": text}
-    if tool_calls:
-        message["tool_calls"] = tool_calls
-
-    return Turn(
-        message=message,
-        text=text,
-        tool_calls=tool_calls,
-        usage=_usage_of(data),
-        model=str(data.get("model", "")),
-        finish_reason=str(choice.get("finish_reason", "")),
-        reasoning=_reasoning_text(raw),
-    )
-
-
-def parse_reply(data: dict[str, Any]) -> Reply:
-    turn = parse_turn(data)
-    return Reply(text=turn.text, usage=turn.usage, model=turn.model)
-
-
-def post(config: Config, request: dict[str, Any], *, client: httpx.Client | None = None) -> dict:
-    headers = {
-        "Authorization": f"Bearer {config.api_key}",
-        "Content-Type": "application/json",
-    }
-
-    # 注入的 client（测试）归调用方管；没有就复用进程级的那个（不关它）。
-    http = client or shared_client()
-    try:
-        response = http.post(config.chat_completions_url, json=request, headers=headers)
-    except httpx.HTTPError as exc:
-        raise LLMError(f"请求 {config.chat_completions_url} 失败：{exc}") from exc
-
-    if response.status_code != 200:
-        if _prompt_too_long(response):
-            raise PromptTooLongError(
-                f"HTTP {response.status_code} — 上下文超限：{response.text[:300]}"
-            )
-        raise LLMError(f"HTTP {response.status_code} — {response.text[:500]}")
-
-    try:
-        return response.json()
-    except ValueError as exc:
-        # 网关返回 HTML 错误页之类：必须收敛成 LLMError，否则调用方按
-        # "模型层失败"分类的路径会漏掉它（svc 会把它归成 internal）。
-        raise LLMError(f"响应不是合法 JSON：{response.text[:200]}") from exc
-
-
-def chat_completion(
-    config: Config,
-    messages: list[dict[str, Any]],
-    *,
-    system: str | None = None,
-    tools: list[dict[str, Any]] | None = None,
-    max_tokens: int | None = DEFAULT_MAX_TOKENS,
-    client: httpx.Client | None = None,
-) -> Turn:
-    request = build_request(
-        config, messages, system=system, tools=tools, max_tokens=max_tokens
-    )
-    return parse_turn(post(config, request, client=client))
-
-
-# ---------------- 流式（F3） ----------------
-
-DeltaCallback = Callable[[str], None]
-
-
-@dataclass(frozen=True)
-class StreamState:
-    """流式累加器的状态：**纯数据**，逐帧 fold 出来，便于按 fixture 断言。
-
-    只保留 `parse_turn` 同样要用的字段，于是 `to_turn()` 的产物与非流式解析能逐字段
-    比较（B9）。`tool_calls` 存元组而不是字典：状态不可变，fold 时才复制。
-    """
-
-    content: str = ""
-    reasoning: str = ""
-    tool_calls: tuple[dict[str, Any], ...] = ()
-    usage: Usage | None = None
-    model: str = ""
-    finish_reason: str = ""
-
-    def to_turn(self) -> Turn:
-        tool_calls = [dict(call) for call in self.tool_calls]
-        # 与 parse_turn 同形：没有工具调用时不给 message 加这个键。
-        message: dict[str, Any] = {"role": "assistant", "content": self.content}
-        if tool_calls:
-            message["tool_calls"] = [dict(call) for call in tool_calls]
-        return Turn(
-            message=message,
-            text=self.content,
-            tool_calls=tool_calls,
-            usage=self.usage or Usage(0, 0, 0),
-            model=self.model,
-            finish_reason=self.finish_reason,
-            reasoning=self.reasoning,
-        )
-
-
-def _blank_tool_call() -> dict[str, Any]:
-    return {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
-
-
-def _copy_tool_calls(calls: tuple[dict[str, Any], ...]) -> list[dict[str, Any]]:
-    """浅拷贝外层、深拷贝 `function`：fold 会改 arguments，不能碰到入参的嵌套字典。"""
-    return [{**call, "function": dict(call.get("function") or {})} for call in calls]
-
-
-def merge_stream_chunk(state: StreamState, chunk: Mapping[str, Any]) -> StreamState:
-    """把一帧流式响应并进状态。**纯函数**：不改入参，返回新状态。
-
-    最容易写错的是 `tool_calls`：`function.arguments` 是**分片**到达的，必须按 `index`
-    归并后逐段拼接，拼完才是一条合法的 JSON 字符串。同一批调用的分片可以交错，所以
-    归并只认 index、不认到达顺序。非流式路径看不到这一步，因此这里单独受测。
-
-    `choices` 为空是合法的：带 `stream_options.include_usage` 时末帧只带 `usage`。
-    """
-    choices = chunk.get("choices") or []
-    choice = choices[0] if choices else {}
-    delta = choice.get("delta") or {}
-
-    calls = _copy_tool_calls(state.tool_calls)
-    for piece in delta.get("tool_calls") or []:
-        index = int(piece.get("index", len(calls)))
-        while len(calls) <= index:
-            calls.append(_blank_tool_call())
-        target = calls[index]
-        if piece.get("id"):
-            target["id"] = str(piece["id"])
-        if piece.get("type"):
-            target["type"] = str(piece["type"])
-        function = piece.get("function") or {}
-        if function.get("name"):
-            # 名字通常只来一片；按增量拼接对「分片送名字」的端点同样成立。
-            target["function"]["name"] = str(target["function"].get("name", "")) + str(
-                function["name"]
-            )
-        if function.get("arguments"):
-            target["function"]["arguments"] = str(
-                target["function"].get("arguments", "")
-            ) + str(function["arguments"])
-
-    finish = choice.get("finish_reason")
-    return StreamState(
-        content=state.content + str(delta.get("content") or ""),
-        reasoning=state.reasoning + _reasoning_text(delta),
-        tool_calls=tuple(calls),
-        usage=_usage_of(chunk) if chunk.get("usage") else state.usage,
-        model=str(chunk.get("model") or state.model),
-        finish_reason=str(finish) if finish else state.finish_reason,
-    )
-
-
-def delta_text(chunk: Mapping[str, Any]) -> str:
-    """一帧里的正文增量。工具调用的参数分片不算：它们不是给人看的文本。"""
-    choices = chunk.get("choices") or []
-    if not choices:
-        return ""
-    delta = choices[0].get("delta") or {}
-    return str(delta.get("content") or "")
-
-
-def delta_reasoning(chunk: Mapping[str, Any]) -> str:
-    """一帧里的思维链增量。与 `delta_text` 分开：它不是要显示成回复的正文。"""
-    choices = chunk.get("choices") or []
-    if not choices:
-        return ""
-    return _reasoning_text(choices[0].get("delta") or {})
-
-
-def _decode_stream_frame(payload: str) -> dict[str, Any]:
-    try:
-        decoded = json.loads(payload)
-    except json.JSONDecodeError as exc:
-        raise LLMError(f"流式响应帧不是合法 JSON：{payload[:200]}") from exc
-    if not isinstance(decoded, dict):
-        raise LLMError(f"流式响应帧不是对象：{payload[:200]}")
-    return decoded
-
-
-def iter_sse_events(lines: Iterable[str]) -> Iterator[dict[str, Any]]:
-    """SSE 行流 → JSON 帧。心跳注释、空帧与 `[DONE]` 都跳过。
-
-    只依赖**行**的切分：半行缓冲由 `httpx.Response.iter_lines()` 负责，所以这里不必
-    再实现一次「分块边界切在 JSON 中间」的容错——那是客户端 SSE 解析器的活（§5.4 第 6 条）。
-    """
-    buffered: list[str] = []
-    for line in lines:
-        if line == "":  # 空行 = 一帧结束
-            payload = "\n".join(buffered)
-            buffered.clear()
-            if not payload.strip():
-                continue
-            if payload.strip() == "[DONE]":
-                return
-            yield _decode_stream_frame(payload)
-            continue
-        if line.startswith(":"):  # 心跳 / 注释
-            continue
-        if line.startswith("data:"):
-            value = line[len("data:") :]
-            buffered.append(value[1:] if value.startswith(" ") else value)
-        # `event:` / `id:` / `retry:` 当前不用：OpenAI 兼容流只用 data 行。
-    payload = "\n".join(buffered)  # 没有末尾空行也不丢最后一帧
-    if payload.strip() and payload.strip() != "[DONE]":
-        yield _decode_stream_frame(payload)
-
-
-def stream_completion(
-    config: Config,
-    messages: list[dict[str, Any]],
-    *,
-    system: str | None = None,
-    tools: list[dict[str, Any]] | None = None,
-    max_tokens: int | None = DEFAULT_MAX_TOKENS,
-    on_delta: DeltaCallback | None = None,
-    on_reasoning: DeltaCallback | None = None,
-    client: httpx.Client | None = None,
-) -> Turn:
-    """流式调用，返回与 `chat_completion` **同形**的 `Turn`。
-
-    `on_delta` 每收到一段正文就回调一次，`on_reasoning` 每收到一段**思维链**回调一次；
-    它们做什么与本模块无关（svc 把它接到事件流上）。两个回调分开是有意的：正文要合成
-    回复气泡，思维链只是"它在想"——粘在一起会让空正文的那一轮看起来像真有回复。
-    回调抛错会中断这次调用——这是有意的：实现方只该做入队，不该失败。
-    """
-    request = build_request(
-        config, messages, system=system, tools=tools, max_tokens=max_tokens
-    )
-    request["stream"] = True
-    # 兼容端点会用这一项在末帧补 usage；不认它的端点会忽略，代价只是 usage 归零。
-    request["stream_options"] = {"include_usage": True}
-    headers = {
-        "Authorization": f"Bearer {config.api_key}",
-        "Content-Type": "application/json",
-        "Accept": "text/event-stream",
-    }
-
-    http = client or shared_client()
-    state = StreamState()
-    try:
-        with http.stream(
-            "POST", config.chat_completions_url, json=request, headers=headers
-        ) as response:
-            if response.status_code != 200:
-                response.read()
-                if _prompt_too_long(response):
-                    raise PromptTooLongError(
-                        f"HTTP {response.status_code} — 上下文超限：{response.text[:300]}"
-                    )
-                raise LLMError(f"HTTP {response.status_code} — {response.text[:500]}")
-            for chunk in iter_sse_events(response.iter_lines()):
-                state = merge_stream_chunk(state, chunk)
-                if on_delta is not None:
-                    text = delta_text(chunk)
-                    if text:
-                        on_delta(text)
-                if on_reasoning is not None:
-                    thinking = delta_reasoning(chunk)
-                    if thinking:
-                        on_reasoning(thinking)
-    except httpx.HTTPError as exc:
-        raise LLMError(f"请求 {config.chat_completions_url} 失败：{exc}") from exc
-
-    return state.to_turn()
-
-
-def ask(config: Config, prompt: str, *, client: httpx.Client | None = None) -> Reply:
-    turn = chat_completion(
-        config, [{"role": "user", "content": prompt}], client=client
-    )
-    return Reply(text=turn.text, usage=turn.usage, model=turn.model)

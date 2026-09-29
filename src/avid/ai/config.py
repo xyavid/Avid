@@ -12,6 +12,9 @@ ENV_API_KEY = "AVID_API_KEY"
 ENV_BASE_URL = "AVID_BASE_URL"
 ENV_MODEL = "AVID_MODEL"
 ENV_CONTEXT_WINDOW = "AVID_CONTEXT_WINDOW"
+# 协议族覆盖。缺省从 base_url 探测（api.anthropic.com → anthropic，
+# generativelanguage → gemini，其余 openai 兼容）；探测规则见 detect_provider。
+ENV_PROVIDER = "AVID_PROVIDER"
 # 关掉"向 provider 问模型窗口"的探测（实现见 `ai/client.py::fetch_context_length`）。
 # 取值 off / 0 / false / no 都算关；缺省 = 开。单测把它关掉，免得去打真实端点。
 ENV_MODEL_INFO = "AVID_MODEL_INFO"
@@ -28,6 +31,31 @@ MAX_PARALLEL_TOOL_CALLS_CEILING = 32
 
 #: `ENV_MODEL_INFO` 的关闭取值（大小写无关）。
 _MODEL_INFO_OFF = ("off", "0", "false", "no")
+
+# ---------------- provider（协议族）----------------
+
+PROVIDER_OPENAI = "openai"
+PROVIDER_ANTHROPIC = "anthropic"
+PROVIDER_GEMINI = "gemini"
+#: 合法取值。providers/ 的注册表是协议实现，这里是配置层的取值域。
+PROVIDERS = (PROVIDER_OPENAI, PROVIDER_ANTHROPIC, PROVIDER_GEMINI)
+
+#: 各家没配 AVID_BASE_URL 时的缺省端点。
+DEFAULT_BASE_URLS: dict[str, str] = {
+    PROVIDER_OPENAI: DEFAULT_BASE_URL,
+    PROVIDER_ANTHROPIC: "https://api.anthropic.com",
+    PROVIDER_GEMINI: "https://generativelanguage.googleapis.com/v1beta",
+}
+
+
+def detect_provider(base_url: str) -> str:
+    """从端点猜协议族。猜不出的都按 OpenAI 兼容处理（自建网关的常态）。"""
+    host = base_url.lower()
+    if "anthropic" in host:
+        return PROVIDER_ANTHROPIC
+    if "generativelanguage" in host:
+        return PROVIDER_GEMINI
+    return PROVIDER_OPENAI
 
 
 def model_info_enabled(source: Mapping[str, str] | None = None) -> bool:
@@ -51,11 +79,15 @@ MODEL_CONTEXT_WINDOWS: tuple[tuple[str, int], ...] = (
     ("claude-sonnet-4", 200_000),
     ("claude-opus-4", 200_000),
     ("claude-3", 200_000),
+    # 家族兜底（最长前缀优先，上面的具体条目不会被它抢占）：Anthropic 当前
+    # 全系 200k，Gemini 当前全系 1M。具体版本变化时按 AVID_CONTEXT_WINDOW 覆盖。
+    ("claude-", 200_000),
     ("deepseek-chat", 65_536),
     ("deepseek-reasoner", 65_536),
     ("gemini-1.5", 1_048_576),
     ("gemini-2.0", 1_048_576),
     ("gemini-2.5", 1_048_576),
+    ("gemini-", 1_048_576),
 )
 
 
@@ -83,9 +115,21 @@ class Config:
     # 模型上下文窗口（tokens）。None = 不认识这个模型，占用率因此不可计算——
     # 调用方显示 tokens 数与「—」，不做任何换算猜测。
     context_window: int | None = None
+    # 协议族（openai / anthropic / gemini）。None = 按 base_url 探测
+    # （见 resolved_provider）；显式给值只在探测不准时需要。
+    provider: str | None = None
     # 一步内并行工具调用的上限。1 = 完全串行。只会影响**并发安全**的工具；
     # 写类调用是屏障，永远单独跑（`tools/safety.py`）。
     max_parallel_tool_calls: int = DEFAULT_MAX_PARALLEL_TOOL_CALLS
+
+    @property
+    def resolved_provider(self) -> str:
+        name = self.provider or detect_provider(self.base_url)
+        if name not in PROVIDERS:
+            raise ConfigError(
+                f"未知 provider {name!r}；可用：{'、'.join(PROVIDERS)}"
+            )
+        return name
 
     @property
     def chat_completions_url(self) -> str:
@@ -104,11 +148,23 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         )
 
     model = source[ENV_MODEL].strip()
+    # provider 与 base_url 互相补位：显式指定 provider 时，缺省端点跟着它走
+    # （AVID_PROVIDER=anthropic 不该打到 api.openai.com）；只配 base_url 时
+    # 协议族由探测决定，不写进 Config（探测结果跟随端点，换网关不用改两处）。
+    raw_base = source.get(ENV_BASE_URL, "").strip()
+    raw_provider = source.get(ENV_PROVIDER, "").strip()
+    if raw_provider and raw_provider not in PROVIDERS:
+        raise ConfigError(
+            f"{ENV_PROVIDER} 必须是 {'、'.join(PROVIDERS)} 之一：{raw_provider!r}"
+        )
+    provider = raw_provider or None
+    base_url = raw_base or DEFAULT_BASE_URLS[provider or PROVIDER_OPENAI]
     return Config(
         api_key=source[ENV_API_KEY].strip(),
-        base_url=source.get(ENV_BASE_URL, "").strip() or DEFAULT_BASE_URL,
+        base_url=base_url,
         model=model,
         context_window=_context_window(source, model),
+        provider=provider,
         max_parallel_tool_calls=_max_parallel_tool_calls(source),
     )
 

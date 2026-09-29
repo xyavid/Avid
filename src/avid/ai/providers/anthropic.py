@@ -1,0 +1,370 @@
+"""Anthropic Messages API（原生协议，不走 OpenAI 兼容端点）。
+
+为什么值得单开一条路：Anthropic 的 thinking 块与 cache_control 语义只有原生 API
+给全，OpenAI 兼容端点是降级视图。请求从**仓库内部的 OpenAI 形状 messages**转换
+过来，响应转回同形的 :class:`Turn`——循环与压缩管线不感知协议差异（转换边界
+只有这一个模块）。
+
+口径要点：
+
+* system 是请求顶层的 ``system`` 字段，不进 messages；
+* ``role:"tool"`` 消息合并成**一条** user 消息里的 ``tool_result`` 块（Anthropic 要求
+  消息按角色交替，多条工具结果必须同块承载）；
+* assistant 的 tool_calls 变回 ``tool_use`` 块，``arguments``（JSON 字符串）解析成
+  ``input`` 对象；
+* ``max_tokens`` 是 Anthropic 的**必填**字段，调用方给 None 时用
+  :data:`DEFAULT_MAX_TOKENS`（足够一次完整回复，不算配额压迫）；
+* usage 直接交给 ``ai/usage.py`` 的 anthropic 方言（input+read+write 的口径在那边）。
+"""
+
+from __future__ import annotations
+
+import contextlib
+import json
+from typing import Any
+
+import httpx
+
+from ..config import Config
+from ..protocol import (
+    DeltaCallback,
+    LLMError,
+    PromptTooLongError,
+    Turn,
+    assistant_message,
+    iter_sse_events,
+    prompt_too_long,
+    usage_of,
+)
+from ..transport import RetryPolicy, send, send_stream, shared_client
+
+#: Anthropic 必填 max_tokens，调用方不指定时的兜底值。
+DEFAULT_MAX_TOKENS = 16384
+
+ANTHROPIC_VERSION = "2023-06-01"
+
+# stop_reason → OpenAI 兼容口径。未知的原样透传（小写化），比猜一个错值诚实。
+_STOP_REASONS = {
+    "end_turn": "stop",
+    "stop_sequence": "stop",
+    "tool_use": "tool_calls",
+    "max_tokens": "length",
+}
+
+
+def messages_url(config: Config) -> str:
+    base = config.base_url.rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-3]
+    return f"{base}/v1/messages"
+
+
+def _headers(config: Config) -> dict[str, str]:
+    return {
+        "x-api-key": config.api_key,
+        "anthropic-version": ANTHROPIC_VERSION,
+        "Content-Type": "application/json",
+    }
+
+
+def _text_of(raw: Any) -> str:
+    if isinstance(raw, str):
+        return raw
+    return ""
+
+
+def _tool_use_block(call: dict[str, Any]) -> dict[str, Any]:
+    function = call.get("function") or {}
+    try:
+        args = json.loads(function.get("arguments") or "{}")
+    except json.JSONDecodeError:
+        args = {}
+    return {
+        "type": "tool_use",
+        "id": str(call.get("id", "")),
+        "name": str(function.get("name", "")),
+        "input": args if isinstance(args, dict) else {},
+    }
+
+
+def build_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """OpenAI 形状 messages → Anthropic 形状。tool 结果随到随并进下一条 user 消息。"""
+    out: list[dict[str, Any]] = []
+    pending_results: list[dict[str, Any]] = []
+
+    def flush_results() -> None:
+        if pending_results:
+            out.append({"role": "user", "content": list(pending_results)})
+            pending_results.clear()
+
+    for message in messages:
+        role = message.get("role")
+        if role == "tool":
+            pending_results.append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": str(message.get("tool_call_id", "")),
+                    "content": _text_of(message.get("content")),
+                }
+            )
+            continue
+        if role == "assistant":
+            flush_results()
+            blocks: list[dict[str, Any]] = []
+            text = _text_of(message.get("content"))
+            if text:
+                blocks.append({"type": "text", "text": text})
+            blocks.extend(_tool_use_block(call) for call in message.get("tool_calls") or [])
+            out.append({"role": "assistant", "content": blocks})
+            continue
+        # user：连续的 user 合并（Anthropic 要求角色交替）。
+        flush_results()
+        text = _text_of(message.get("content"))
+        if out and out[-1].get("role") == "user" and isinstance(out[-1]["content"], str):
+            out[-1]["content"] = out[-1]["content"] + "\n\n" + text
+        else:
+            out.append({"role": "user", "content": text})
+    flush_results()
+    return out
+
+
+def build_request(
+    config: Config,
+    messages: list[dict[str, Any]],
+    *,
+    system: str | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    max_tokens: int | None = None,
+) -> dict[str, Any]:
+    request: dict[str, Any] = {
+        "model": config.model,
+        "max_tokens": max_tokens if max_tokens is not None else DEFAULT_MAX_TOKENS,
+        "messages": build_messages(messages),
+    }
+    if system:
+        request["system"] = system
+    if tools:
+        request["tools"] = [
+            {
+                "name": item["function"]["name"],
+                "description": item["function"].get("description", ""),
+                "input_schema": item["function"].get("parameters", {"type": "object"}),
+            }
+            for item in tools
+        ]
+    return request
+
+
+def _finish_of(stop_reason: Any) -> str:
+    reason = str(stop_reason or "")
+    return _STOP_REASONS.get(reason, reason.lower())
+
+
+def _call_of(block: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": str(block.get("id", "")),
+        "type": "function",
+        "function": {
+            "name": str(block.get("name", "")),
+            "arguments": json.dumps(block.get("input") or {}, ensure_ascii=False),
+        },
+    }
+
+
+def parse_turn(data: dict[str, Any]) -> Turn:
+    texts: list[str] = []
+    reasonings: list[str] = []
+    calls: list[dict[str, Any]] = []
+    for block in data.get("content") or []:
+        kind = block.get("type")
+        if kind == "text":
+            texts.append(str(block.get("text") or ""))
+        elif kind == "thinking":
+            reasonings.append(str(block.get("thinking") or ""))
+        elif kind == "tool_use":
+            calls.append(_call_of(block))
+    text = "".join(texts)
+    return Turn(
+        message=assistant_message(text, calls),
+        text=text,
+        tool_calls=calls,
+        usage=usage_of(data),
+        model=str(data.get("model", "")),
+        finish_reason=_finish_of(data.get("stop_reason")),
+        reasoning="".join(reasonings),
+    )
+
+
+def chat(
+    config: Config,
+    messages: list[dict[str, Any]],
+    *,
+    system: str | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    max_tokens: int | None = DEFAULT_MAX_TOKENS,
+    client: httpx.Client | None = None,
+) -> Turn:
+    request = build_request(
+        config, messages, system=system, tools=tools, max_tokens=max_tokens
+    )
+    http = client or shared_client()
+    response = send(
+        http, "POST", messages_url(config), headers=_headers(config), json_body=request
+    )
+    if response.status_code != 200:
+        if prompt_too_long(response.status_code, response.text):
+            raise PromptTooLongError(
+                f"HTTP {response.status_code} — 上下文超限：{response.text[:300]}"
+            )
+        raise LLMError(f"HTTP {response.status_code} — {response.text[:500]}")
+    try:
+        return parse_turn(response.json())
+    except ValueError as exc:
+        raise LLMError(f"响应不是合法 JSON：{response.text[:200]}") from exc
+
+
+# ---------------- 流式 ----------------
+
+# 累加器按 content_block 的 index 记块：Anthropic 的流是「先声明块，再往里增量」。
+_BLOCK_KINDS = {"text": "text", "thinking": "thinking", "tool_use": "tool"}
+
+
+class _Accumulator:
+    """message_start/content_block_*/message_delta 事件流 → 同形 Turn。
+
+    `feed` 返回这一帧产生的 (正文增量, 思维链增量)，供 on_delta/on_reasoning 回调；
+    两者与 to_turn 的产物同源，流式与非流式因此天然同形（B9）。
+    """
+
+    def __init__(self) -> None:
+        self.model = ""
+        self.blocks: dict[int, dict[str, Any]] = {}
+        self.stop_reason = ""
+        self.input_usage: dict[str, int] = {}
+        self.output_tokens = 0
+
+    def _block(self, index: int, kind: str = "text", **extra: Any) -> dict[str, Any]:
+        return self.blocks.setdefault(
+            index, {"kind": kind, "text": "", "id": "", "name": "", "args": "", **extra}
+        )
+
+    def feed(self, event: dict[str, Any]) -> tuple[str, str]:
+        kind = event.get("type")
+        if kind == "message_start":
+            message = event.get("message") or {}
+            self.model = str(message.get("model") or self.model)
+            usage = message.get("usage") or {}
+            for key in ("input_tokens", "cache_read_input_tokens",
+                        "cache_creation_input_tokens"):
+                if key in usage:
+                    self.input_usage[key] = int(usage[key] or 0)
+            return "", ""
+        if kind == "content_block_start":
+            block = event.get("content_block") or {}
+            self._block(
+                int(event.get("index", 0)),
+                _BLOCK_KINDS.get(str(block.get("type")), "text"),
+                id=str(block.get("id", "")),
+                name=str(block.get("name", "")),
+            )
+            return "", ""
+        if kind == "content_block_delta":
+            slot = self.blocks.get(int(event.get("index", 0)))
+            if slot is None:
+                return "", ""
+            delta = event.get("delta") or {}
+            dtype = delta.get("type")
+            if dtype == "text_delta":
+                piece = str(delta.get("text") or "")
+                slot["text"] += piece
+                return piece, ""
+            if dtype == "thinking_delta":
+                piece = str(delta.get("thinking") or "")
+                slot["text"] += piece
+                return "", piece
+            if dtype == "input_json_delta":
+                slot["args"] += str(delta.get("partial_json") or "")
+            return "", ""
+        if kind == "message_delta":
+            delta = event.get("delta") or {}
+            self.stop_reason = str(delta.get("stop_reason") or self.stop_reason)
+            usage = event.get("usage") or {}
+            if usage.get("output_tokens") is not None:
+                self.output_tokens = int(usage["output_tokens"] or 0)
+            return "", ""
+        return "", ""
+
+    def to_turn(self) -> Turn:
+        texts: list[str] = []
+        reasonings: list[str] = []
+        calls: list[dict[str, Any]] = []
+        for slot in self.blocks.values():
+            if slot["kind"] == "text":
+                texts.append(str(slot["text"]))
+            elif slot["kind"] == "thinking":
+                reasonings.append(str(slot["text"]))
+            elif slot["kind"] == "tool":
+                calls.append(
+                    {
+                        "id": slot["id"],
+                        "type": "function",
+                        "function": {
+                            "name": slot["name"],
+                            "arguments": slot["args"] or "{}",
+                        },
+                    }
+                )
+        text = "".join(texts)
+        usage_input = {**self.input_usage, "output_tokens": self.output_tokens}
+        return Turn(
+            message=assistant_message(text, calls),
+            text=text,
+            tool_calls=calls,
+            usage=usage_of(usage_input),
+            model=self.model,
+            finish_reason=_finish_of(self.stop_reason),
+            reasoning="".join(reasonings),
+        )
+
+
+def stream(
+    config: Config,
+    messages: list[dict[str, Any]],
+    *,
+    system: str | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    max_tokens: int | None = DEFAULT_MAX_TOKENS,
+    on_delta: DeltaCallback | None = None,
+    on_reasoning: DeltaCallback | None = None,
+    client: httpx.Client | None = None,
+) -> Turn:
+    request = build_request(
+        config, messages, system=system, tools=tools, max_tokens=max_tokens
+    )
+    request["stream"] = True
+    headers = {**_headers(config), "Accept": "text/event-stream"}
+
+    http = client or shared_client()
+    acc = _Accumulator()
+    try:
+        response = send_stream(
+            http, "POST", messages_url(config), headers=headers, json_body=request
+        )
+        with contextlib.closing(response):
+            if response.status_code != 200:
+                response.read()
+                if prompt_too_long(response.status_code, response.text):
+                    raise PromptTooLongError(
+                        f"HTTP {response.status_code} — 上下文超限：{response.text[:300]}"
+                    )
+                raise LLMError(f"HTTP {response.status_code} — {response.text[:500]}")
+            for event in iter_sse_events(response.iter_lines()):
+                text_piece, thinking_piece = acc.feed(event)
+                if on_delta is not None and text_piece:
+                    on_delta(text_piece)
+                if on_reasoning is not None and thinking_piece:
+                    on_reasoning(thinking_piece)
+    except httpx.HTTPError as exc:
+        raise LLMError(f"请求 {messages_url(config)} 失败：{exc}") from exc
+
+    return acc.to_turn()

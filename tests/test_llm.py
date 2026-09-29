@@ -1,5 +1,6 @@
 import copy
 import json
+from importlib import import_module
 
 import httpx
 import pytest
@@ -158,8 +159,10 @@ def test_other_400s_stay_plain_llm_errors():
     assert not isinstance(exc.value, PromptTooLongError)
 
 
-def test_server_error_with_overflow_wording_is_not_treated_as_overflow():
+def test_server_error_with_overflow_wording_is_not_treated_as_overflow(monkeypatch):
     """状态码不对就不算上下文超限，避免把服务端故障当成可恢复的。"""
+    # 500 属于传输层可重试：这里抹掉真实等待，只验证"耗尽后按 LLMError 收敛"。
+    monkeypatch.setattr("avid.ai.transport._sleep", lambda seconds: None)
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -566,8 +569,10 @@ def test_the_http_client_is_created_once_and_reused(monkeypatch):
         created.append(1)
         return real_client(*args, **kwargs)
 
-    monkeypatch.setattr(client_module.httpx, "Client", counting_client)
-    monkeypatch.setattr(client_module, "_CLIENT", None)
+    # 单例归 transport 所有：patch 它的 Client 与状态（client 从 transport 再导出）。
+    transport_module = import_module("avid.ai.transport")
+    monkeypatch.setattr(transport_module.httpx, "Client", counting_client)
+    monkeypatch.setattr(transport_module, "_CLIENT", None)
 
     first = client_module.shared_client()
     second = client_module.shared_client()
