@@ -15,10 +15,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -116,6 +117,13 @@ class RunRecord:
     recorder: SessionRecorder | None = None
     # 注入消息的标注：id(message) → "todo" | "nudge"。由 on_event 先标、on_message 后取。
     injected: dict[int, str] = field(default_factory=dict)
+    # 异步订阅者（阶段 30d）：(事件循环, 唤醒事件)。桥线程把 condition 的 notify
+    # 翻译成对它们的 call_soon_threadsafe；同步订阅者不在这里。
+    watchers: list[tuple[asyncio.AbstractEventLoop, asyncio.Event]] = field(
+        default_factory=list
+    )
+    # 每记录至多一条的桥线程（懒启动，终态且无人订阅时自灭）。
+    bridge: threading.Thread | None = None
 
     @property
     def terminal(self) -> bool:
@@ -389,6 +397,50 @@ class RunRegistry:
             del record.events[:cut]
             record.dropped = head
 
+    def _replay_from(
+        self, record: RunRecord, after: int
+    ) -> tuple[list[RunEvent], int, int]:
+        """订阅起点：返回 (要投的事件, 已投递游标, 缓冲下标)。
+
+        有缺口时以一条 durable ``resync`` 开头、不补发残存旧事件（I5）；否则回放
+        缓冲里的历史（delta 不重放，I15；游标之前的重复跳过）。
+        """
+        if self._has_gap(record, after):
+            resync = self.emit(record, events.RESYNC, after=after, reason="buffer_evicted")
+            with record.condition:
+                index = record.absolute_index()
+            return [resync], max(after, resync.seq or after), index
+        with record.condition:
+            replayed = [
+                event
+                for event in record.events
+                if event.type not in events.DELTA_EVENT_TYPES
+                and (event.seq is None or event.seq > after)
+            ]
+            index = record.absolute_index()
+        delivered = after
+        for event in replayed:
+            if event.seq is not None:
+                delivered = max(delivered, event.seq)
+        return replayed, delivered, index
+
+    @staticmethod
+    def _follow_snapshot_raw(
+        record: RunRecord, delivered: int, index: int
+    ) -> tuple[bool, list[RunEvent], int]:
+        """锁内算一份「这一步该投什么」：(是否出现缺口, fresh 事件, 新下标)。
+
+        同步版在同一次持锁里完成"快照 + 等待"；异步版在持锁里 clear 唤醒事件。
+        两个订阅路径都要求调用方**已持有** ``record.condition``。
+        """
+        if record.evicted_upto > delivered:
+            return True, [], index
+        if index < record.dropped:
+            # 只丢了可丢弃的事件（delta / transient）：不补发，从现在继续。
+            return False, [], record.absolute_index()
+        fresh = list(record.events[index - record.dropped :])
+        return False, fresh, record.absolute_index()
+
     def subscribe(
         self,
         run_id: str,
@@ -406,60 +458,29 @@ class RunRegistry:
         **跟随期间**缓冲区翻页时同样要发 ``resync``：订阅时检查一次不够——慢消费者
         还在跟的时候，缓冲可能已经把"还没投递给它"的 durable 事件淘汰掉了，那时的
         静默缺口与订阅时的缺口一样违反 I5。
+
+        等待用 ``condition.wait``：这要求订阅者跑在**线程**里（web 路径经
+        ``iterate_in_threadpool`` 时一条连接占一个线程）。不占线程的版本见
+        ``subscribe_async``——重放与缺口语义同源，只有"怎么等"不同。
         """
         record = self.get(run_id)
-        index = 0
-        delivered = after  # 已投递给这个订阅者的最大 durable seq
+        replayed, delivered, index = self._replay_from(record, after)
+        for event in replayed:
+            yield event
 
-        if self._has_gap(record, after):
-            # 缺口已经存在：先显式告知，再从当前队尾开始跟随（不补发残存的旧事件，
-            # 否则客户端会在重建视图的同时收到更小的 seq）。
-            #
-            # 订阅者自己的游标要推到**这条 resync 的 seq**：缓冲满时每发一条 durable
-            # 都会再淘汰一条，`evicted_upto` 会一直涨；用它的值当游标会让下面的跟随
-            # 循环永远判定"有缺口"，无限发 resync。
-            resync = self.emit(record, events.RESYNC, after=after, reason="buffer_evicted")
-            delivered = max(delivered, resync.seq or delivered)
-            with record.condition:
-                index = record.absolute_index()
-            yield resync
-        else:
-            with record.condition:
-                replayed = list(record.events)
-                index = record.absolute_index()
-            for event in replayed:
-                if event.type in events.DELTA_EVENT_TYPES:
-                    continue
-                if event.seq is not None and event.seq <= after:
-                    continue
-                if event.seq is not None:
-                    delivered = max(delivered, event.seq)
-                yield event
-
-        stale = False
         while True:
             if stop is not None and stop():
                 return
             with record.condition:
-                if self._has_gap(record, delivered):
-                    stale = True
-                    fresh: list[RunEvent] = []
-                elif index < record.dropped:
-                    # 只丢了可丢弃的事件（delta / transient）：不补发，从现在继续。
-                    index = record.absolute_index()
-                    fresh = []
-                else:
-                    fresh = list(record.events[index - record.dropped :])
-                    index = record.absolute_index()
+                stale, fresh, index = self._follow_snapshot_raw(record, delivered, index)
                 if not fresh and not record.terminal and not stale:
+                    # 快照与等待必须**同一次持锁**完成：wait 原子地放锁、醒来后重新
+                    # 持锁，中间的任何 emit 都不会漏 notify。拆开就会留出"快照完、
+                    # 还没等"的窗口，错过的那次唤醒要等一整个心跳才补上。
                     record.condition.wait(timeout=heartbeat)
-                    if self._has_gap(record, delivered):
-                        stale = True
-                    elif index < record.dropped:
-                        index = record.absolute_index()
-                    else:
-                        fresh = list(record.events[index - record.dropped :])
-                        index = record.absolute_index()
+                    stale, fresh, index = self._follow_snapshot_raw(
+                        record, delivered, index
+                    )
 
             if stale:
                 # 跟随期间丢了还没投递的 durable：显式告知后从队尾重新跟随。
@@ -471,7 +492,6 @@ class RunRegistry:
                 delivered = max(delivered, resync.seq or delivered)
                 with record.condition:
                     index = record.absolute_index()
-                stale = False
                 yield resync
                 continue
             if not fresh:
@@ -489,6 +509,121 @@ class RunRegistry:
                 yield event
                 if event.type in events.TERMINAL_EVENT_TYPES:
                     return
+
+    # ---------------- 异步订阅（阶段 30d） ----------------
+    #
+    # 同步 subscribe 跑在线程里（每条 SSE 连接占 anyio 线程池一个线程），连接数一多
+    # 就把 REST 饿死——24 条流的上限就是这道接缝的创可贴。subscribe_async 把"等新
+    # 事件"从 condition.wait 换成 asyncio 事件：emit 侧由一条**每记录一条**的桥线程
+    # 用 call_soon_threadsafe 唤醒，事件循环里的订阅者因此不占任何线程池线程。
+    # 重放/缺口/resync 语义与同步版同源（_replay_from / _follow_snapshot_raw / _has_gap）。
+
+    def _ensure_bridge(self, record: RunRecord) -> None:
+        """桥线程懒启动：第一条异步订阅出现时创建，终态且无人订阅时自灭。"""
+        if record.bridge is not None and record.bridge.is_alive():
+            return
+        record.bridge = threading.Thread(
+            target=self._bridge_loop,
+            args=(record,),
+            name=f"avid-watch-{record.run_id}",
+            daemon=True,
+        )
+        record.bridge.start()
+
+    @staticmethod
+    def _bridge_loop(record: RunRecord) -> None:
+        """把 condition 的唤醒翻译成各订阅者事件循环上的 asyncio 事件。"""
+        while True:
+            with record.condition:
+                if not record.watchers:
+                    if record.terminal:
+                        record.bridge = None
+                        return
+                    # 没人订阅就轻睡：注册/摘除都拿同一把锁并 notify，醒来重估。
+                    record.condition.wait(timeout=1.0)
+                    continue
+                record.condition.wait(timeout=STREAM_HEARTBEAT_SECONDS)
+            for loop, wake in list(record.watchers):
+                try:
+                    loop.call_soon_threadsafe(wake.set)
+                except RuntimeError:
+                    continue  # 事件循环已关：订阅者自己的 finally 会摘除它
+
+    async def subscribe_async(
+        self,
+        run_id: str,
+        *,
+        after: int = 0,
+        deltas: bool = False,
+        heartbeat: float = STREAM_HEARTBEAT_SECONDS,
+    ) -> AsyncIterator[RunEvent | None]:
+        """``subscribe`` 的 asyncio 版：等待走事件桥，不占线程池线程。
+
+        ``None`` 同样表示一次心跳。结束（终态事件已投 / 生成器被关闭）时摘除
+        自己的 watcher；桥线程在终态且无人订阅后自行退出。
+        """
+        record = self.get(run_id)
+        loop = asyncio.get_running_loop()
+        wake = asyncio.Event()
+        with record.condition:
+            record.watchers.append((loop, wake))
+            self._ensure_bridge(record)
+        try:
+            replayed, delivered, index = self._replay_from(record, after)
+            for event in replayed:
+                yield event
+
+            while True:
+                with record.condition:
+                    stale, fresh, index = self._follow_snapshot_raw(
+                        record, delivered, index
+                    )
+                    waiting = not fresh and not record.terminal and not stale
+                    if waiting:
+                        # clear 与快照同锁：clear 之后 emit 的 notify 一定会置位
+                        # （emit 持同一把锁），不会漏唤醒。
+                        wake.clear()
+                if waiting:
+                    try:
+                        await asyncio.wait_for(wake.wait(), timeout=heartbeat)
+                    except TimeoutError:
+                        pass
+                    continue
+
+                if stale:
+                    logger.info("订阅 %s 的游标被缓冲淘汰，发 resync", run_id)
+                    resync = self.emit(
+                        record,
+                        events.RESYNC,
+                        after=delivered,
+                        reason="buffer_evicted",
+                    )
+                    delivered = max(delivered, resync.seq or delivered)
+                    with record.condition:
+                        index = record.absolute_index()
+                    yield resync
+                    continue
+                if not fresh:
+                    if record.terminal:
+                        return
+                    yield None  # 心跳
+                    continue
+                for event in fresh:
+                    if event.type in events.DELTA_EVENT_TYPES and not deltas:
+                        continue
+                    if event.seq is not None:
+                        if event.seq <= delivered:
+                            continue
+                        delivered = event.seq
+                    yield event
+                    if event.type in events.TERMINAL_EVENT_TYPES:
+                        return
+        finally:
+            with record.condition:
+                record.watchers = [
+                    item for item in record.watchers if item[1] is not wake
+                ]
+                record.condition.notify_all()
 
     @staticmethod
     def _has_gap(record: RunRecord, after: int) -> bool:

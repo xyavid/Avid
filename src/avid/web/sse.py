@@ -11,7 +11,7 @@ from ..runtime.events import STREAM_HEARTBEAT_SECONDS
 
 import json
 import logging
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 from .schemas import event_payload
@@ -52,7 +52,7 @@ def stream(
     deltas: bool = False,
     heartbeat: float = HEARTBEAT_SECONDS,
 ) -> Iterator[str]:
-    """把一个 run 的事件流编成 SSE 文本。
+    """把一个 run 的事件流编成 SSE 文本（同步版：跑在线程里）。
 
     游标补齐、缓冲淘汰时的 ``resync``、以及「delta 默认不投递」都在
     ``svc/runs.py`` 里决定；这里只负责把事件变成字节。
@@ -66,4 +66,32 @@ def stream(
         yield encode(event_payload(event, record.session_id))
 
 
-__all__ = ["HEARTBEAT_SECONDS", "PING", "STREAM_HEADERS", "encode", "stream"]
+async def stream_async(
+    registry: Any,
+    record: Any,
+    *,
+    after: int = 0,
+    deltas: bool = False,
+    heartbeat: float = HEARTBEAT_SECONDS,
+) -> AsyncIterator[str]:
+    """``stream`` 的 asyncio 版：等待走事件桥，连接不占线程池线程（阶段 30d）。
+
+    编帧规则与同步版逐字相同——同一条 SSE 语义，只有"怎么等"不同。
+    """
+    async for event in registry.subscribe_async(
+        record.run_id, after=after, deltas=deltas, heartbeat=heartbeat
+    ):
+        if event is None:
+            yield PING
+            continue
+        yield encode(event_payload(event, record.session_id))
+
+
+__all__ = [
+    "HEARTBEAT_SECONDS",
+    "PING",
+    "STREAM_HEADERS",
+    "encode",
+    "stream",
+    "stream_async",
+]

@@ -3,17 +3,19 @@
 游标来源优先级：``?after=`` > ``Last-Event-ID`` header > 0。两者语义相同
 （durable ``seq``），显式参数留给前端在重连时自己算，header 留给浏览器自动重发。
 未知 run → JSON 404，不回落 SPA（不变量 B10）。
+
+阶段 30d 起订阅走 asyncio 事件桥（``subscribe_async``）：连接不再经
+``iterate_in_threadpool`` 占线程池线程，等待发生在事件循环里——24 条流的上限
+因此放开（见 ``svc.MAX_CONCURRENT_STREAMS``）。
 """
 
 from __future__ import annotations
-
-from collections.abc import Iterator
 
 from fastapi import APIRouter, Query, Request, status
 from fastapi.responses import StreamingResponse
 
 from ...svc import STREAM_HEARTBEAT_SECONDS, Services, TooManyStreams
-from ..sse import STREAM_HEADERS, stream
+from ..sse import STREAM_HEADERS, stream_async
 from . import current_services
 
 router = APIRouter()
@@ -29,20 +31,8 @@ def _cursor(request: Request, after: int | None) -> int:
         return 0
 
 
-def _leased(services: Services, body: Iterator[str]) -> Iterator[str]:
-    """把并发额度包在生成器外侧。
-
-    放在生成器里（而不是路由的 try/finally）：`finally` 在正常结束、客户端断连、
-    迭代器被关闭三种情况下都会跑；路由那层只覆盖"返回响应之前就失败"。
-    """
-    try:
-        yield from body
-    finally:
-        services.streams.release()
-
-
 @router.get("/runs/{run_id}/events")
-def stream_events(
+async def stream_events(
     request: Request,
     run_id: str,
     after: int | None = Query(default=None, ge=0),
@@ -50,10 +40,8 @@ def stream_events(
 ) -> StreamingResponse:
     """一个 run 至多一条事件流；delta 需显式订阅（``?deltas=1``）。
 
-    并发额度用尽就回 503：Starlette 对**同步**生成器用 `iterate_in_threadpool`，
-    而生成器的 `next()` 会阻塞到下一个事件或心跳——一条连接因此长期占住 anyio
-    默认线程池（40）里的一个线程。与其让 REST 被悄悄饿死，不如显式拒绝（见
-    `svc.MAX_CONCURRENT_STREAMS` 的说明）。
+    并发额度仍保留一个高水位上限（防失控客户端），但 async 生成器的等待发生在
+    事件循环里，不再与 REST 抢线程——上限从"线程池余量"变成了纯粹的护栏。
     """
     services = current_services(request)
     record = services.runs.get(run_id)
@@ -62,20 +50,24 @@ def stream_events(
         raise TooManyStreams(
             f"同时打开的事件流太多（上限 {services.streams.limit}），稍后重试"
         )
-    body = _leased(
-        services,
-        stream(
-            services.runs,
-            record,
-            after=cursor,
-            deltas=bool(deltas),
-            # 心跳是传输层常量：以前为了拿它调 services.meta()（连带扫一遍技能目录），
-            # 于是"建立一条事件流"变成一次磁盘 IO。
-            heartbeat=STREAM_HEARTBEAT_SECONDS,
-        ),
-    )
+
+    async def body():
+        try:
+            async for frame in stream_async(
+                services.runs,
+                record,
+                after=cursor,
+                deltas=bool(deltas),
+                # 心跳是传输层常量：以前为了拿它调 services.meta()（连带扫一遍技能目录），
+                # 于是"建立一条事件流"变成一次磁盘 IO。
+                heartbeat=STREAM_HEARTBEAT_SECONDS,
+            ):
+                yield frame
+        finally:
+            services.streams.release()
+
     return StreamingResponse(
-        body,
+        body(),
         status_code=status.HTTP_200_OK,
         media_type="text/event-stream",
         headers=dict(STREAM_HEADERS),
