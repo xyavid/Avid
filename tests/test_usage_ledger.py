@@ -32,6 +32,7 @@ def test_report_is_all_none_before_the_first_model_call():
         "context": {"tokens": None, "window": None, "utilization": None, "parts": None},
         "cache": {"read_tokens": None, "write_tokens": None, "hit_ratio": None},
         "compaction": {"count": 0, "last_compaction_tokens": None, "last_step": None},
+        "subagent": {"calls": 0, "tokens": 0},
     }
 
 

@@ -44,6 +44,13 @@ export interface ToolRun {
   reason?: string
   seq: number
   at: number
+  /**
+   * subagent 工具卡专属：所属批内这条子任务的描述（阶段 30c）。
+   * 子运行自己发出的工具卡带 `parentToolCallId` 指向 subagent 卡——它们不进
+   * 时间线顶层，由 groupTimeline 挂到所属卡上。
+   */
+  subagentTask?: string
+  parentToolCallId?: string
 }
 
 export interface ApprovalRequest {

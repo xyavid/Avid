@@ -4,7 +4,7 @@ import { EVENT_GROUP_MIN_SIZE } from '../../../ui/patterns'
 
 export type TimelineBlock =
   | { kind: 'entry'; id: string; entry: TimelineEntry }
-  | { kind: 'tool'; id: string; run: ToolRun; content: string }
+  | { kind: 'tool'; id: string; run: ToolRun; content: string; children?: ToolRun[] }
   | { kind: 'group'; id: string; runs: ToolRun[]; contents: Record<string, string> }
 
 function groupable(run: ToolRun | undefined): boolean {
@@ -17,16 +17,22 @@ function groupable(run: ToolRun | undefined): boolean {
  *
  * 正文为空的 assistant 回合不渲染卡片，但它声明的工具调用照旧落在原位——
  * 这类回合是「只声明调用、没有说话」，真实会话里占相当比例。
+ *
+ * 子 agent 的工具运行（阶段 30c，带 `parentToolCallId`）不进时间线顶层：
+ * 它们挂到所属 subagent 卡的 `children` 上，由卡片折叠渲染。
  */
 export function groupTimeline(
   entries: TimelineEntry[],
-  tools: ToolRun[],
+  allTools: ToolRun[],
 ): TimelineBlock[] {
+  const tools = allTools.filter((run) => !run.parentToolCallId)
   const contents: Record<string, string> = {}
   for (const entry of entries) {
     if (entry.kind === 'tool' && entry.toolCallId) contents[entry.toolCallId] = entry.text
   }
   const byId = new Map(tools.map((run) => [run.toolCallId, run]))
+  const childrenOf = (toolCallId: string) =>
+    allTools.filter((run) => run.parentToolCallId === toolCallId)
   const placed = new Set<string>()
   const blocks: TimelineBlock[] = []
 
@@ -55,18 +61,36 @@ export function groupTimeline(
       })
     } else {
       good.forEach((run) =>
-        blocks.push({ kind: 'tool', id: `tool:${run.toolCallId}`, run, content: contents[run.toolCallId] ?? '' }),
+        blocks.push({
+          kind: 'tool',
+          id: `tool:${run.toolCallId}`,
+          run,
+          content: contents[run.toolCallId] ?? '',
+          children: childrenOf(run.toolCallId),
+        }),
       )
     }
     rest.forEach((run) =>
-      blocks.push({ kind: 'tool', id: `tool:${run.toolCallId}`, run, content: contents[run.toolCallId] ?? '' }),
+      blocks.push({
+        kind: 'tool',
+        id: `tool:${run.toolCallId}`,
+        run,
+        content: contents[run.toolCallId] ?? '',
+        children: childrenOf(run.toolCallId),
+      }),
     )
   }
 
   // 没能挂到任何 assistant 条目上的工具（例如刷新后只拿到运行状态）单独成块。
   for (const run of tools) {
     if (placed.has(run.toolCallId)) continue
-    blocks.push({ kind: 'tool', id: `tool:${run.toolCallId}`, run, content: contents[run.toolCallId] ?? '' })
+    blocks.push({
+      kind: 'tool',
+      id: `tool:${run.toolCallId}`,
+      run,
+      content: contents[run.toolCallId] ?? '',
+      children: childrenOf(run.toolCallId),
+    })
   }
 
   return blocks

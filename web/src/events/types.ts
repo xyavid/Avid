@@ -137,6 +137,12 @@ export interface EventData {
   network?: string
   sandbox_state?: SandboxState
   sandbox_notes?: string[]
+  /**
+   * 子 agent 标记（阶段 30c）：这条事件来自 subagent 的子运行。
+   * `task` 是子任务描述、`index` 是批内序号；run_status 同样可能带它——
+   * 那种状态不改父运行的轮次/用量显示，工具卡事件由时间线折进 subagent 卡。
+   */
+  subagent?: { task: string; index: number }
 }
 
 export function isDurable(event: EventEnvelope): boolean {

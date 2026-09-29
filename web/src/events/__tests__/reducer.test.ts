@@ -300,3 +300,58 @@ describe('usage 快照收敛（阶段 22）', () => {
     expect(rebuilt.usage).toEqual(snapshot)
   })
 })
+
+describe('subagent 事件嵌套（阶段 30c）', () => {
+  const subStarted = ev('tool_call_started', 10, {
+    tool_call_id: 'call-sub', tool: 'subagent', arguments: { tasks: [] },
+  })
+  const childStarted = ev('tool_call_started', 11, {
+    tool_call_id: 'call-child', tool: 'read_file', arguments: { path: 'a.py' },
+    subagent: { task: '统计', index: 0 },
+  })
+  const childFinished = ev('tool_call_finished', 12, {
+    tool_call_id: 'call-child', tool: 'read_file', arguments: { path: 'a.py' },
+    status: 'ok', content_chars: 3, duration_ms: 4,
+    subagent: { task: '统计', index: 0 },
+  })
+  const subFinished = ev('tool_call_finished', 13, {
+    tool_call_id: 'call-sub', tool: 'subagent', arguments: { tasks: [] },
+    status: 'ok', content_chars: 10, duration_ms: 50,
+  })
+
+  it('子运行的工具卡指认到开着的那张 subagent 卡', () => {
+    let view = applyEvent(emptyView(), subStarted)
+    view = applyEvent(view, childStarted)
+
+    const child = view.tools.find((run) => run.toolCallId === 'call-child')
+    expect(child?.parentToolCallId).toBe('call-sub')
+    expect(child?.subagentTask).toBe('统计')
+
+    view = applyEvent(view, childFinished)
+    expect(view.tools.find((run) => run.toolCallId === 'call-child')?.status).toBe('ok')
+  })
+
+  it('subagent 卡结束后不再有开着的批', () => {
+    let view = applyEvent(emptyView(), subStarted)
+    view = applyEvent(view, childStarted)
+    view = applyEvent(view, subFinished)
+
+    expect(view.subagentCallId).toBeNull()
+    // 结束之后到达的子事件（不该发生，但防御性地不挂到任何卡）：
+    const late = applyEvent(view, ev('tool_call_started', 14, {
+      tool_call_id: 'call-late', tool: 'glob', arguments: {},
+      subagent: { task: '迟到的', index: 1 },
+    }))
+    expect(late.tools.find((run) => run.toolCallId === 'call-late')?.parentToolCallId).toBeUndefined()
+  })
+
+  it('子运行的状态事件不改父视图的轮次/用量', () => {
+    let view = applyEvent(emptyView(), ev('run_status', 5, { round: 2, tokens: 100 }))
+    view = applyEvent(view, ev('run_status', 6, {
+      round: 1, tokens: 7, subagent: { task: '统计', index: 0 },
+    }))
+
+    expect(view.round).toBe(2)
+    expect(view.tokens).toBe(100)
+  })
+})

@@ -96,6 +96,7 @@ export function Timeline({
                 content={block.content}
                 density={density}
                 onInspect={onInspectTool}
+                subRuns={block.children}
               />
             ),
           )}

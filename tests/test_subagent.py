@@ -245,3 +245,160 @@ def test_run_subagent_returns_no_summary_for_empty_text(monkeypatch):
     monkeypatch.setattr(agent_module, "agent_loop", lambda *a, **k: "   ")
 
     assert run_subagent("随便", config=CONFIG) == "(no summary)"
+
+
+# ---------- 取消传导、事件嵌套与 usage 并账（阶段 30c） ----------
+
+
+def test_check_cancelled_consults_the_external_probe():
+    from avid.runtime.loop import RunCancelled
+
+    state = RunState(cancel_probe=lambda: "外部要求停止")
+
+    with pytest.raises(RunCancelled, match="外部要求停止"):
+        state.check_cancelled()
+
+
+def test_probe_none_means_no_external_source():
+    RunState().check_cancelled()  # 不抛
+
+
+def test_adopt_child_usage_sums_tokens_and_counts_calls():
+    from avid.ai.usage import Usage
+
+    parent = RunState()
+    child = RunState()
+    child.record_usage(Usage(5, 2, 7))
+    child.record_usage(Usage(1, 1, 2))
+
+    parent.adopt_child_usage(child)
+
+    assert parent.child_tokens == 9
+    assert parent.child_calls == 1
+    assert parent.tokens == 9  # 运行总开销 = 主循环 + 子 agent
+
+
+def test_usage_report_carries_subagent_totals():
+    from avid.ai.usage import Usage
+
+    parent = RunState()
+    assert parent.usage_report()["subagent"] == {"calls": 0, "tokens": 0}
+
+    child = RunState()
+    child.record_usage(Usage(5, 2, 7))
+    parent.adopt_child_usage(child)
+
+    assert parent.usage_report()["subagent"] == {"calls": 1, "tokens": 7}
+
+
+def test_run_subagent_wires_probe_observer_and_state(monkeypatch):
+    """run_subagent 自建子 RunState：probe/observer 落在它身上，引用交给 on_state。"""
+    from avid.runtime import loop as agent_module
+    from avid.runtime.loop import RunCancelled
+
+    seen = {}
+
+    def fake_loop(messages, *, state=None, **kwargs):
+        seen["state"] = state
+        state.check_cancelled()  # probe 在这里生效
+        return "不该到这里"
+
+    monkeypatch.setattr(agent_module, "agent_loop", fake_loop)
+
+    kept = []
+    with pytest.raises(RunCancelled, match="父已取消"):
+        run_subagent(
+            "任务",
+            config=CONFIG,
+            observer=lambda event: None,
+            cancel_probe=lambda: "父已取消",
+            on_state=kept.append,
+        )
+
+    assert kept and kept[0] is seen["state"]
+    assert seen["state"].cancel_probe() == "父已取消"
+
+
+def test_subagent_tags_child_events_and_adopts_usage(monkeypatch):
+    """子事件带 subagent 标记进父事件流；结束后子 token 并进父台账。"""
+    import avid.runtime.events as runtime_events
+    from avid.ai.usage import Usage
+    from avid.runtime import loop as agent_module
+
+    def fake_loop(messages, *, state=None, **kwargs):
+        state.record_usage(Usage(5, 2, 7))
+        state.emit(runtime_events.RUN_STATUS, round=1, tokens=7, activity="model")
+        return "ok"
+
+    monkeypatch.setattr(agent_module, "agent_loop", fake_loop)
+
+    parent = RunState()
+    collected = []
+    parent.observer = collected.append
+
+    result = subagent({"tasks": [task("统计", "数一下")]}, state=parent)
+
+    assert "摘要" in result or "ok" in result
+    tagged = [event for event in collected if event.data.get("subagent")]
+    assert tagged, "子事件必须带 subagent 标记"
+    assert tagged[0].data["subagent"] == {"task": "统计", "index": 0}
+    assert parent.child_tokens == 7
+    assert parent.child_calls == 1
+
+
+def test_parent_cancel_surfaces_quickly(monkeypatch):
+    """父取消后 collect 提前收敛返回，不再等慢子任务自然结束。"""
+    from avid.runtime import loop as agent_module
+
+    started = threading.Event()
+
+    def fake_loop(messages, *, state=None, **kwargs):
+        started.set()
+        time.sleep(5)  # 比测试耐心长得多
+        return "太慢"
+
+    monkeypatch.setattr(agent_module, "agent_loop", fake_loop)
+
+    parent = RunState()
+
+    def cancel_soon():
+        assert started.wait(2)
+        time.sleep(0.05)
+        parent.cancel("用户停止")
+
+    threading.Thread(target=cancel_soon, daemon=True).start()
+
+    began = time.monotonic()
+    result = subagent({"tasks": [task("慢", "p")]}, state=parent)
+    elapsed = time.monotonic() - began
+
+    assert elapsed < 3, f"取消后 {elapsed:.1f}s 才返回"
+    assert "取消" in result
+
+
+def test_deadline_reaches_child_checkpoints(monkeypatch):
+    """墙钟到点：超时文案照回，同时子任务在下个检查点被 probe 停掉（不再是孤儿）。"""
+    from avid.runtime import loop as agent_module
+    from avid.runtime.loop import RunCancelled
+
+    raised = []
+
+    def fake_loop(messages, *, state=None, **kwargs):
+        time.sleep(0.3)  # 超过 timeout
+        try:
+            state.check_cancelled()
+        except RunCancelled as exc:
+            raised.append(str(exc))
+            raise
+        return "不该到这里"
+
+    monkeypatch.setattr(agent_module, "agent_loop", fake_loop)
+
+    result = run({"tasks": [task("慢", "p")]}, timeout=0.1)
+    assert "timed out" in result
+
+    for _ in range(50):  # 等孤儿线程走到检查点
+        if raised:
+            break
+        time.sleep(0.05)
+    assert raised and "墙钟" in raised[0]

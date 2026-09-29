@@ -26,6 +26,11 @@ export interface ToolCallCardProps {
   content?: string
   density?: Density
   defaultExpanded?: boolean
+  /**
+   * subagent 卡专属：这批发出的子任务里、由子 agent 自己执行的工具调用
+   * （阶段 30c）。折叠在卡内做紧凑清单，不进时间线顶层。
+   */
+  subRuns?: ToolRun[]
 }
 
 const STATUS_TONE = {
@@ -147,6 +152,7 @@ export const ToolCallCard = memo(function ToolCallCard({
   density = 'comfy',
   defaultExpanded = false,
   onInspect,
+  subRuns,
 }: ToolCallCardProps) {
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState(defaultExpanded)
@@ -193,6 +199,20 @@ export const ToolCallCard = memo(function ToolCallCard({
       </div>
       {run.status === 'denied' && run.reason ? <p role="alert" className="text-xs text-danger">{t('tools.deniedReason', { reason: run.reason })}</p> : null}
       <Body run={run} text={text} density={density} />
+      {subRuns && subRuns.length > 0 ? (
+        <div className="rounded-card border-hair border-ink/15 px-2 py-1">
+          <p className="text-xs text-ink-muted">{t('tools.subagent.activity', { count: subRuns.length })}</p>
+          <ul className="list-none text-xs">
+            {subRuns.map((child) => (
+              <li key={child.toolCallId} className="flex items-center gap-2 py-0.5">
+                <span className="min-w-0 truncate font-mono">{child.tool}</span>
+                <Badge tone={STATUS_TONE[child.status]}>{t(STATUS_KEY[child.status])}</Badge>
+                <span className="font-mono text-ink-muted">{t('tools.duration', { ms: child.durationMs })}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </section>
   )
 })

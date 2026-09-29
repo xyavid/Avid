@@ -682,10 +682,12 @@ class RunRegistry:
             if isinstance(message, dict):
                 record.injected[id(message)] = "nudge"
             return
-        if event.type == events.RUN_STATUS:
+        if event.type == events.RUN_STATUS and "subagent" not in event.data:
             # 轮次与 token 的权威在 state（循环里只写 state.round / state.tokens），
             # 而 GET /runs/{id} 读的是 RunRecord——不在这里回填，REST 视图会一直
             # 报 round=0 / tokens=0，只有 SSE 的 run_status 是真值。
+            # 带 subagent 标记的是子运行的状态：子轮次不该覆盖父运行的显示
+            # （阶段 30c），它照常进事件流，由前端折进 subagent 工具卡。
             if "round" in event.data:
                 record.round = int(event.data["round"])
             if "tokens" in event.data:

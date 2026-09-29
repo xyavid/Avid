@@ -167,6 +167,7 @@ export const DICTIONARY: Record<Locale, Entry> = {
     'tools.diff.removed': '-{count}',
     'tools.empty': '（没有输出）',
     'tools.deniedReason': '被拒绝：{reason}',
+    'tools.subagent.activity': '子任务过程（{count} 次工具调用）',
     'tools.skill.summary': '技能 {name}（{chars} 字符）',
     'tools.attachment': '（{type} 附件）',
     'tools.inspector.content': '全文',

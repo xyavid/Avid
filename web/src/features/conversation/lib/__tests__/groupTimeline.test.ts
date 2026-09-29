@@ -71,3 +71,37 @@ describe('groupTimeline：空回合不占卡片，但工具卡留在原位', () 
     expect(blocks[0]).toMatchObject({ kind: 'entry', id: 'answer' })
   })
 })
+
+describe('subagent 子调用折叠（阶段 30c）', () => {
+  const subRun: ToolRun = {
+    ...readRun,
+    toolCallId: 'call-sub',
+    tool: 'subagent',
+  }
+  const childRun: ToolRun = {
+    ...readRun,
+    toolCallId: 'call-child',
+    parentToolCallId: 'call-sub',
+    subagentTask: '统计',
+  }
+  const assistant = entry({
+    id: 'e1',
+    text: '派活了',
+    toolCalls: [{ toolCallId: 'call-sub', tool: 'subagent', arguments: {} }],
+  })
+
+  it('子调用不进时间线顶层，挂到 subagent 卡的 children', () => {
+    const blocks = groupTimeline([assistant], [subRun, childRun])
+
+    const toolBlocks = blocks.filter((block) => block.kind === 'tool')
+    expect(toolBlocks).toHaveLength(1)
+    const sub = toolBlocks[0] as Extract<(typeof toolBlocks)[number], { kind: 'tool' }>
+    expect(sub.run.toolCallId).toBe('call-sub')
+    expect(sub.children).toEqual([childRun])
+  })
+
+  it('孤儿子调用（没有所属卡时）不单独出现', () => {
+    const blocks = groupTimeline([], [childRun])
+    expect(blocks.filter((block) => block.kind === 'tool')).toHaveLength(0)
+  })
+})

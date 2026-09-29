@@ -68,6 +68,12 @@ export interface RunView {
   startedAt: number | null
   finishedAt: number | null
   lastEventAt: number
+  /**
+   * 正在执行的 subagent 工具调用 id（阶段 30c）。subagent 是独占工具，批内子事件
+   * 严格落在它的 started/finished 之间——子运行的工具卡靠它指认归属。null = 没有
+   * subagent 卡开着。
+   */
+  subagentCallId: string | null
 }
 
 export function emptyView(sessionId: string | null = null): RunView {
@@ -93,6 +99,7 @@ export function emptyView(sessionId: string | null = null): RunView {
     startedAt: null,
     finishedAt: null,
     lastEventAt: 0,
+    subagentCallId: null,
   }
 }
 
@@ -234,10 +241,15 @@ export function applyEvent(view: RunView, event: EventEnvelope): RunView {
       else entries.push(entry)
       return { ...next, entries, thinkingText }
     }
-    case 'tool_call_started':
-      return upsertTool(next, {
-        toolCallId: String(event.data.tool_call_id ?? ''),
-        tool: String(event.data.tool ?? ''),
+    case 'tool_call_started': {
+      const toolCallId = String(event.data.tool_call_id ?? '')
+      const tool = String(event.data.tool ?? '')
+      const marker = event.data.subagent as { task: string; index: number } | undefined
+      let view = next
+      if (tool === 'subagent') view = { ...view, subagentCallId: toolCallId }
+      return upsertTool(view, {
+        toolCallId,
+        tool,
         arguments: (event.data.arguments as Record<string, unknown>) ?? {},
         status: 'running',
         truncated: false,
@@ -245,11 +257,17 @@ export function applyEvent(view: RunView, event: EventEnvelope): RunView {
         durationMs: 0,
         seq: event.seq ?? 0,
         at: event.ts,
+        // 子运行的调用：指认到开着的那张 subagent 卡（独占工具保证同时只有一张）。
+        subagentTask: marker?.task,
+        parentToolCallId: marker ? view.subagentCallId ?? undefined : undefined,
       })
-    case 'tool_call_finished':
-      return upsertTool(next, {
+    }
+    case 'tool_call_finished': {
+      const tool = String(event.data.tool ?? '')
+      const marker = event.data.subagent as { task: string; index: number } | undefined
+      const view = upsertTool(next, {
         toolCallId: String(event.data.tool_call_id ?? ''),
-        tool: String(event.data.tool ?? ''),
+        tool,
         arguments: (event.data.arguments as Record<string, unknown>) ?? {},
         status: (event.data.status as ToolStatus) ?? 'ok',
         truncated: Boolean(event.data.truncated),
@@ -257,7 +275,11 @@ export function applyEvent(view: RunView, event: EventEnvelope): RunView {
         durationMs: Number(event.data.duration_ms ?? 0),
         seq: event.seq ?? 0,
         at: event.ts,
+        subagentTask: marker?.task,
+        parentToolCallId: marker ? next.subagentCallId ?? undefined : undefined,
       })
+      return tool === 'subagent' ? { ...view, subagentCallId: null } : view
+    }
     case 'tool_call_denied':
       return upsertTool(next, {
         toolCallId: String(event.data.tool_call_id ?? ''),
@@ -270,6 +292,10 @@ export function applyEvent(view: RunView, event: EventEnvelope): RunView {
         reason: String(event.data.reason ?? ''),
         seq: event.seq ?? 0,
         at: event.ts,
+        subagentTask: (event.data.subagent as { task?: string } | undefined)?.task,
+        parentToolCallId: event.data.subagent
+          ? next.subagentCallId ?? undefined
+          : undefined,
       })
     case 'approval_requested':
       return {
@@ -326,6 +352,9 @@ export function applyEvent(view: RunView, event: EventEnvelope): RunView {
     // 注入的提醒（todo_reminder / stop_nudge）**不画进时间线**：它们说的是内核做了什么，
     // 不是对话内容。事件照旧在流里（可观察、可回放），只是没有对应的条目视图。
     case 'run_status':
+      // 子运行的状态事件不碰父视图的轮次/用量/活动显示（阶段 30c）：它由
+      // subagent 工具卡消费；父运行的这些值只来自父循环自己的 run_status。
+      if (event.data.subagent) return next
       return {
         ...next,
         round: Number(event.data.round ?? next.round),

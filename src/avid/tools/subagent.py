@@ -14,6 +14,7 @@ import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from ..ai.client import chat_completion
@@ -22,6 +23,7 @@ from ..policy.permission import DEFAULT_MODE
 from .registry import tool
 
 if TYPE_CHECKING:  # 运行时导入会成环（state.py 要 import 本模块所在的包）
+    from ..runtime.events import RunEvent, RunObserver
     from ..runtime.hooks import HookRegistry
     from ..runtime.state import RunState
 
@@ -43,6 +45,9 @@ SUBAGENT_TIMEOUT_SECONDS = 300.0
 
 MAX_PARALLEL = 4
 
+#: collect 轮询的间隔：父取消后最多再等这么久就返回（子任务自会在检查点停）。
+CANCEL_POLL_SECONDS = 0.1
+
 
 def _no_summary(text: str) -> str:
     """空摘要给个明确占位，别让汇总结果里出现空白块。"""
@@ -61,6 +66,9 @@ def run_subagent(
     security: Any = None,
     workspace_root: str | None = None,
     hooks: "HookRegistry | None" = None,
+    observer: "RunObserver | None" = None,
+    cancel_probe: "Callable[[], str | None] | None" = None,
+    on_state: "Callable[[RunState], None] | None" = None,
 ) -> str:
     """跑一个子 agent，返回它的结论摘要。
 
@@ -73,10 +81,34 @@ def run_subagent(
     会让**最严一档被静默绕过**（父运行 manual、子 agent 却按默认值放行），漏 ``security``
     会让子 agent 自己重算一份规格（沙箱可能不是同一个、审计会分成两条）。因此有一条
     专门的用例逐个字段盯着。
+
+    阶段 30c 起子运行由本函数**自建并持有引用**（不再让 agent_loop 默认创建）：
+
+    * ``observer`` 前传——子运行的轮次与工具事件进父事件流（调用方负责打标记），
+      否则前端只有一张工具卡，里面发生了几轮、调了什么工具全看不见；
+    * ``cancel_probe`` 注入外部取消源（父运行取消 / 批墙钟），子循环在检查点感知；
+    * ``on_state`` 把子 RunState 交给调用方——返回后调用方据此把子 token 并进
+      父台账（``RunState.adopt_child_usage``）。
     """
     # 延迟导入：runtime/state.py 要 import 本包来拿工具表，顶部导入会成环。
     from ..runtime.loop import agent_loop
+    from ..runtime.state import RunState
     from . import SUB_HANDLERS, SUB_TOOLS
+
+    child_state = RunState.for_run(
+        auto_approve=auto_approve,
+        ask=ask,
+        observer=observer,
+        permission_mode=permission_mode,
+        ledger=ledger,
+        security=security,
+        workspace_root=workspace_root,
+        hooks=hooks,
+    )
+    if cancel_probe is not None:
+        child_state.cancel_probe = cancel_probe
+    if on_state is not None:
+        on_state(child_state)
 
     messages = [{"role": "user", "content": prompt}]
     text = agent_loop(
@@ -86,13 +118,7 @@ def run_subagent(
         registry=SUB_HANDLERS,
         config=config or load_config(),
         chat=chat,
-        auto_approve=auto_approve,
-        ask=ask,
-        permission_mode=permission_mode,
-        ledger=ledger,
-        security=security,
-        workspace_root=workspace_root,
-        hooks=hooks,
+        state=child_state,
     )
 
     return _no_summary(text)
@@ -124,14 +150,27 @@ def _bad(message: str) -> None:
     raise ValueError(message)
 
 
-def _collect(future: Any, deadline: float, timeout: float) -> str:
-    """单个子任务的结果；失败或超时只影响它自己。"""
-    try:
-        return str(future.result(timeout=max(0.0, deadline - time.monotonic())))
-    except FutureTimeoutError:
-        return f"Subagent timed out after {timeout:.0f} seconds."
-    except Exception as exc:  # 一个子任务失败不该拖垮其它子任务
-        return f"Subagent failed: {exc}"
+def _collect(
+    future: Any, deadline: float, timeout: float, *, state: "RunState"
+) -> str:
+    """单个子任务的结果；失败或超时只影响它自己。
+
+    父运行取消时**提前收敛**：不再等慢子任务自然结束（子循环已通过 probe 在检查点
+    停下，这里只是让父循环尽快回到自己的取消检查点）。轮询间隔是
+    ``CANCEL_POLL_SECONDS``，正常完成的路径不受影响（``future.result`` 一次等到）。
+    """
+    remaining = deadline - time.monotonic()
+    while True:
+        if state.cancelled:
+            return "运行已取消，本次子任务未等待完成。"
+        try:
+            return str(future.result(timeout=min(max(remaining, 0.0), CANCEL_POLL_SECONDS)))
+        except FutureTimeoutError:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return f"Subagent timed out after {timeout:.0f} seconds."
+        except Exception as exc:  # 一个子任务失败不该拖垮其它子任务
+            return f"Subagent failed: {exc}"
 
 
 def _render(tasks: list[dict[str, str]], results: list[str]) -> str:
@@ -210,6 +249,51 @@ def subagent(
     # 自己追加的回调不会漏回父运行。
     hooks = state.hooks.copy()
 
+    deadline = time.monotonic() + timeout
+
+    def probe_for(description: str) -> "Callable[[], str | None]":
+        """子循环的外部取消源：父运行取消 ∨ 批墙钟到点。只报告，不打断。"""
+
+        def check() -> str | None:
+            if state.cancelled:
+                return state.cancel_reason or "cancelled"
+            if time.monotonic() >= deadline:
+                return f"subagent 批墙钟（{timeout:.0f} 秒）已到"
+            return None
+
+        return check
+
+    def observer_for(index: int, description: str) -> "RunObserver | None":
+        """给子事件打上 subagent 标记后转给父观察者。
+
+        标记让前端把子轮次/子工具折叠进本批的工具卡，而不是当成父运行的散卡；
+        svc 的回填也据此跳过（子轮次不该覆盖父运行的 round/tokens 显示）。
+        """
+        parent_observer = state.observer
+        if parent_observer is None:
+            return None
+
+        def observe(event: "RunEvent") -> None:
+            parent_observer(
+                replace(
+                    event,
+                    data={
+                        **event.data,
+                        "subagent": {"task": description, "index": index},
+                    },
+                )
+            )
+
+        return observe
+
+    child_states: dict[int, "RunState"] = {}
+
+    def remember(index: int) -> "Callable[[RunState], None]":
+        def on_state(child_state: "RunState") -> None:
+            child_states.setdefault(index, child_state)
+
+        return on_state
+
     executor = ThreadPoolExecutor(max_workers=min(len(tasks), MAX_PARALLEL))
     try:
         futures = [
@@ -224,14 +308,24 @@ def subagent(
                 security=security,
                 workspace_root=workspace_root,
                 hooks=hooks,
+                observer=observer_for(index, task["description"]),
+                cancel_probe=probe_for(task["description"]),
+                on_state=remember(index),
             )
-            for task in tasks
+            for index, task in enumerate(tasks)
         ]
-        deadline = time.monotonic() + timeout
-        results = [_collect(future, deadline, timeout) for future in futures]
+        results = [
+            _collect(future, deadline, timeout, state=state) for future in futures
+        ]
     finally:
-        # wait=False：超时的子任务没法杀线程，但不能因此阻塞返回。
+        # wait=False：超时的子任务没法杀线程，但不能因此阻塞返回。与改动前的差别：
+        # 孤儿线程带着 probe——墙钟已到或父已取消，它们会在**下一个检查点**停，
+        # 而不是带着不知情的循环跑完整场。
         executor.shutdown(wait=False, cancel_futures=True)
+
+    # 用量并账：子任务哪怕超时/取消，花掉的 token 也是事实。
+    for child_state in child_states.values():
+        state.adopt_child_usage(child_state)
 
     logger.info("subagent 派发 %d 个，全部返回", len(tasks))
     return _render(tasks, results)

@@ -13,7 +13,7 @@ from __future__ import annotations
 import threading
 import uuid
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from ..ai.usage import Usage, hit_ratio
 from ..policy.permission import (
@@ -103,6 +103,11 @@ class RunState:
     # 取消：由另一个线程置位，循环在两个检查点读取（设计文档 §7.4）。
     cancelled: bool = False
     cancel_reason: str | None = None
+    # 外部取消源（阶段 30c）：subagent 的子运行用它感知父运行的取消与批墙钟——
+    # 子循环自建 RunState，布尔字段不会跨线程共享，所以外部的"该停了"以回调形式
+    # 注入，返回取消原因（None = 没人要求停）。父运行的 cancelled 只置位不打断，
+    # probe 也一样：停止仍然只发生在检查点。
+    cancel_probe: "Callable[[], str | None] | None" = None
 
     # 轮次与终止
     round: int = 0
@@ -121,6 +126,10 @@ class RunState:
     # 累计用量：整个运行所有轮次 total_tokens 之和。它**不是**上下文占用——
     # 占用看下面的 `last_usage.prompt_tokens`（同一份上下文会被反复计费）。
     tokens: int = 0
+    # 子 agent 的用量并账（阶段 30c）：tokens 并进上面的总数，calls 记派了几批。
+    # 没有 adopt_child_usage 之前，前端显示的"本次运行开销"漏掉全部子 agent 消耗。
+    child_calls: int = 0
+    child_tokens: int = 0
 
     # ---------------- usage 台账（阶段 22）----------------
     #
@@ -278,11 +287,21 @@ class RunState:
         self.cancel_reason = reason or "cancelled"
 
     def check_cancelled(self) -> None:
-        """循环的两个检查点调用它；命中抛 ``RunCancelled``。"""
+        """循环的两个检查点调用它；命中抛 ``RunCancelled``。
+
+        先看自己的置位，再问外部取消源（子运行的父运行/墙钟）——两者都不要求
+        立刻打断，粒度同样是"到下一个检查点为止"。
+        """
         if self.cancelled:
             from .loop import RunCancelled
 
             raise RunCancelled(self.cancel_reason or "cancelled")
+        if self.cancel_probe is not None:
+            reason = self.cancel_probe()
+            if reason:
+                from .loop import RunCancelled
+
+                raise RunCancelled(reason)
 
     # ---------------- 并发安全的计数（阶段 25）----------------
 
@@ -340,6 +359,16 @@ class RunState:
         if self.compact_pending:
             self.last_compaction_tokens = usage.prompt_tokens
             self.compact_pending = False
+
+    def adopt_child_usage(self, child: "RunState") -> None:
+        """把一个子 agent 的用量并进本运行台账（subagent 工具在收齐结果后调用）。
+
+        超时/取消的子任务同样并账：已经花掉的 token 是事实，不因"没等到结果"而消失。
+        """
+        with self._counters_lock:
+            self.child_calls += 1
+            self.child_tokens += child.tokens
+            self.tokens += child.tokens
 
     def mark_compacted(self, step: str) -> None:
         """一次压缩真的发生了（``policy/compaction`` 给出了报告）。
@@ -399,4 +428,5 @@ class RunState:
                 "last_compaction_tokens": self.last_compaction_tokens,
                 "last_step": self.last_compaction_step,
             },
+            "subagent": {"calls": self.child_calls, "tokens": self.child_tokens},
         }
