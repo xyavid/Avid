@@ -28,6 +28,7 @@ from typing import Any
 
 import httpx
 
+from .registry import tool
 from .search_config import SearchConfig, SearchConfigError, load_search_config
 
 #: Httpx 客户端超时（连接更快，整体留足）。
@@ -172,6 +173,30 @@ def _format(query: str, data: Any) -> str:
     return text
 
 
+@tool(
+    name="web_search",
+    description="检索公开网页并返回「标题 / 链接 / 摘要」清单。"
+    "【只在判断需要联网才能拿到信息时调用】：涉及最新动态、外部事实、别人写的文档或"
+    "本机代码里没有的答案时才用；能从工作区文件、既有上下文或自己的知识得出答案的，"
+    "不要调用。检索服务来自 Tavily，需要设置 TAVILY_API_KEY，"
+    "没配置或调用失败时会返回一句「错误：」说明与下一步。"
+    "结果是网页片段而非全文：需要正文时用 bash 取回后再读，引用前先核对链接。",
+    properties={
+        "query": {
+            "type": "string",
+            "description": "要检索的查询语句，用自然语言写清要找什么；越具体结果越准。",
+        },
+        "max_results": {
+            "type": "integer",
+            "description": "期望返回的结果条数，默认 5，上限 20；条数越多上下文越长。",
+            "minimum": 1,
+            "maximum": 20,
+        },
+    },
+    required=("query",),
+    # 出网检索；每次都独立请求，互不依赖。
+    concurrency="safe",
+)
 def web_search(args: dict[str, Any], *, client: httpx.Client | None = None) -> str:
     """按 ``args["query"]`` 检索公开网页，返回纯文本结果清单。
 

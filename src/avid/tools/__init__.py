@@ -1,6 +1,8 @@
-"""工具注册表：把定义（TOOLS）与实现（TOOL_IMPLS）绑定在一起。
+"""工具注册表：定义与实现都来自 registry 的**单点声明**，这里只做派生。
 
-两者的 name 必须一一对应；定义形式的完整性由 tests/test_tools_contract.py 校验。
+一个工具的全部事实（schema / 实现 / 并发分类 / 是否需要 state）在它自己的模块里用
+``@tool`` 装饰器声明（见 ``registry.py``）；本模块只负责触发加载并派生出循环与执行
+环节消费的几张表。新增工具不再改这里。
 """
 
 from __future__ import annotations
@@ -8,51 +10,16 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from ..policy.todo import todo_write
-from .files import edit_file, glob_files, read_file, write_file
-from .schemas import (
-    BASH,
-    EDIT_FILE,
-    GLOB,
-    LOAD_SKILL,
-    READ_FILE,
-    SUBAGENT,
-    TODO_WRITE,
-    WEB_SEARCH,
-    WRITE_FILE,
-)
-from .shell import bash
-from .skill import load_skill
-from .subagent import subagent
-from .web_search import web_search
+from .registry import ToolSpec, ensure_loaded, specs
 
 # 参数放宽为 ...：多数工具是 (args)，需要运行状态的少数几个是 (args, *, state)。
-# 后者由 execution.STATEFUL_TOOLS 显式列出，契约测试校验它不漏不错。
 ToolImpl = Callable[..., Any]
 
-TOOLS: list[dict[str, Any]] = [
-    BASH,
-    READ_FILE,
-    WRITE_FILE,
-    EDIT_FILE,
-    GLOB,
-    TODO_WRITE,
-    SUBAGENT,
-    LOAD_SKILL,
-    WEB_SEARCH,
-]
+ensure_loaded()
 
-TOOL_IMPLS: dict[str, ToolImpl] = {
-    "bash": bash,
-    "read_file": read_file,
-    "write_file": write_file,
-    "edit_file": edit_file,
-    "glob": glob_files,
-    "todo_write": todo_write,
-    "subagent": subagent,
-    "load_skill": load_skill,
-    "web_search": web_search,
-}
+TOOLS: list[dict[str, Any]] = [spec.schema() for spec in specs()]
+
+TOOL_IMPLS: dict[str, ToolImpl] = {spec.name: spec.impl for spec in specs()}
 
 # 子 agent 的工具集：去掉 subagent 本身，结构上不可能递归派生。
 SUB_TOOLS: list[dict[str, Any]] = [
@@ -61,3 +28,13 @@ SUB_TOOLS: list[dict[str, Any]] = [
 SUB_HANDLERS: dict[str, ToolImpl] = {
     name: impl for name, impl in TOOL_IMPLS.items() if name != "subagent"
 }
+
+__all__ = [
+    "SUB_HANDLERS",
+    "SUB_TOOLS",
+    "TOOLS",
+    "TOOL_IMPLS",
+    "ToolImpl",
+    "ToolSpec",
+    "specs",
+]

@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any
 
 from . import workspace
+from .registry import tool
 
 if TYPE_CHECKING:  # 只用于标注：tools 不在运行时依赖 runtime 的实例类型
     from ..runtime.state import RunState
@@ -136,6 +137,29 @@ def _kill_group(process: subprocess.Popen) -> None:
             process.kill()
 
 
+@tool(
+    name="bash",
+    description="在工作区根目录执行一条 shell 命令，返回合并后的 stdout/stderr 与退出码。"
+    "适合运行测试、构建、git、批量文本处理。每次调用都是独立的新 shell——"
+    "需要切换目录时在同一条命令里用 cd。读写单个文件请优先用专用工具。",
+    properties={
+        "command": {
+            "type": "string",
+            "description": "要执行的 shell 命令，通过 bash -lc 运行。",
+        },
+        "timeout_seconds": {
+            "type": "integer",
+            "description": "超时秒数，默认 30，上限 300；超时后进程被终止。",
+            "minimum": 1,
+            # 与 shell.MAX_TIMEOUT 一致（test_tools_contract 有一条断言钉住两者相等）：
+            # 实现里的 clamp 现在是第二道防线，schema 才是给模型的第一道。
+            "maximum": 300,
+        },
+    },
+    required=("command",),
+    # 起子进程：工作目录、超时、输出、刷屏都与同批的其它调用互相影响。
+    concurrency="exclusive",
+)
 def bash(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     command = args.get("command")
     if not isinstance(command, str) or not command.strip():

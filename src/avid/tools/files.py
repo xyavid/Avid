@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..policy.permission import APPROVAL_NONE
+from .registry import tool
 from .workspace import relative, resolve
 
 if TYPE_CHECKING:  # 只用于标注：tools 不在运行时依赖 runtime 的实例类型
@@ -123,6 +124,29 @@ def _read_window(handle: Any, offset: int, limit: int) -> tuple[list[str], bool]
     return window, hit_limit
 
 
+@tool(
+    name="read_file",
+    description="读取工作区内文本文件的内容，按行返回。默认从第 1 行起最多读 2000 行，"
+    "超过 20000 字符的部分会被截断；两种情况都会在末尾提示，可用 offset / limit 继续读。",
+    properties={
+        "path": {
+            "type": "string",
+            "description": "文件路径，相对工作区根目录；工作区内的绝对路径也可。",
+        },
+        "offset": {
+            "type": "integer",
+            "description": "起始行号，从 1 开始，默认 1。",
+            "minimum": 1,
+        },
+        "limit": {
+            "type": "integer",
+            "description": "本次最多读取的行数，默认 2000。",
+            "minimum": 1,
+        },
+    },
+    required=("path",),
+    concurrency="safe",
+)
 def read_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     raw = str(args.get("path", ""))
     path, error = resolve(raw, root=_root(state), outside_ok=_read_outside_ok(state))
@@ -163,6 +187,23 @@ def read_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     return text
 
 
+@tool(
+    name="write_file",
+    description="把内容整体写入工作区内的文件：文件已存在则覆盖，缺失的父目录会自动创建。"
+    "只改几行请用 edit_file，不要为了局部修改而整体重写。",
+    properties={
+        "path": {
+            "type": "string",
+            "description": "文件路径，相对工作区根目录；工作区内的绝对路径也可。",
+        },
+        "content": {
+            "type": "string",
+            "description": "要写入的完整文件内容，UTF-8 编码。",
+        },
+    },
+    required=("path", "content"),
+    concurrency="exclusive",
+)
 def write_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     raw = str(args.get("path", ""))
     path, error = resolve(raw, root=_root(state), outside_ok=_grant(state, "write"))
@@ -190,6 +231,28 @@ def write_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     return f"{'已覆盖' if existed else '已新建'} {raw}（{lines} 行，{len(content)} 字符）"
 
 
+@tool(
+    name="edit_file",
+    description="把文件中的 old_string 精确替换为 new_string，只替换一次。"
+    "old_string 必须在文件中恰好出现一次：出现 0 次或多次都不做修改并报错，"
+    "多次时需要附带更多上下文让它唯一。",
+    properties={
+        "path": {
+            "type": "string",
+            "description": "文件路径，相对工作区根目录；工作区内的绝对路径也可。",
+        },
+        "old_string": {
+            "type": "string",
+            "description": "要被替换的原文，必须与文件内容逐字符一致且在文件中唯一。",
+        },
+        "new_string": {
+            "type": "string",
+            "description": "替换后的文本；传空字符串表示删除这段内容。",
+        },
+    },
+    required=("path", "old_string", "new_string"),
+    concurrency="exclusive",
+)
 def edit_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     raw = str(args.get("path", ""))
     path, error = resolve(raw, root=_root(state), outside_ok=_grant(state, "write"))
@@ -232,6 +295,23 @@ def edit_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     return f"已替换 {raw} 中的 1 处文本"
 
 
+@tool(
+    name="glob",
+    description="按 glob 模式在工作区内查找文件，返回相对路径列表，例如 **/*.py、src/**/*.md。"
+    "只匹配文件名，不搜索文件内容；* 不匹配以点开头的文件。",
+    properties={
+        "pattern": {
+            "type": "string",
+            "description": "glob 模式，例如 **/*.py。",
+        },
+        "path": {
+            "type": "string",
+            "description": '起始目录，相对工作区根目录，默认 "."。',
+        },
+    },
+    required=("pattern",),
+    concurrency="safe",
+)
 def glob_files(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     pattern = str(args.get("pattern", "")).strip()
     if not pattern:

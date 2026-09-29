@@ -4,12 +4,13 @@
 段内的并发安全工具一起跑，遇到独占工具就落一道**屏障**——它自己单独跑，前后两段
 绝不与它重叠。切分与调度在 ``runtime/execution.py``，这里只回答"谁安全"。
 
-为什么安全性由工具层声明，而不是执行层猜：
+分类的**声明**在每个工具自己的 ``@tool(concurrency=…)`` 里（registry 单点），本模块
+把它聚合成两张表。为什么安全性由工具层声明，而不是执行层猜：
 
 * 安全性是**工具自身**的属性（只读文件 vs 改文件 vs 起子进程 vs 改共享状态），
   只有定义它的地方知道；执行层拿到的只是名字与 JSON 参数。
-* 放在注册表的邻居旁边，新增工具时**必须表态**——`tests/test_tools_contract.py`
-  断言下面两张表与 `TOOL_IMPLS` 构成一个**划分**，漏写一个名字契约测试就红。
+* 挂在装饰器上且为**必填**参数，新增工具时**必须表态**——漏表态在登记时就报 TypeError；
+  ``tests/test_tools_contract.py`` 另外断言两张表与注册表构成一个**划分**。
 * 不能放 ``policy/``：``runtime/execution.py`` 对策略层零运行时依赖（A13 门禁）。
 
 判定口径：**只读、不写共享可变状态、不产生副作用**才算并发安全。哪怕"只是读文件"
@@ -20,33 +21,16 @@
 
 from __future__ import annotations
 
+from .registry import specs
+
 #: 并发安全：只读外部状态，不改任何东西。同一段里可以任意多个同时跑。
 CONCURRENCY_SAFE: frozenset[str] = frozenset(
-    {
-        # 读工作区里的文件内容；不写盘。
-        "read_file",
-        # 列文件名；不写盘。
-        "glob",
-        # 按注册表读技能全文；注册表是只读快照。
-        "load_skill",
-        # 出网检索；每次都独立请求，互不依赖。
-        "web_search",
-    }
+    spec.name for spec in specs() if spec.concurrency == "safe"
 )
 
 #: 独占：会写盘、起进程、改共享状态或再开一层并发。批内充当屏障，单独跑。
 EXCLUSIVE: frozenset[str] = frozenset(
-    {
-        # 改工作区文件。
-        "write_file",
-        "edit_file",
-        # 起子进程：工作目录、超时、输出、刷屏都与同批的其它调用互相影响。
-        "bash",
-        # 共享可变状态（待办清单）。
-        "todo_write",
-        # 自己已经有线程池：并进并发段会变成嵌套并发，线程数与预算都失控。
-        "subagent",
-    }
+    spec.name for spec in specs() if spec.concurrency == "exclusive"
 )
 
 

@@ -29,6 +29,7 @@ from functools import partial
 from typing import Any
 
 from ..tools import ToolImpl, workspace
+from ..tools.registry import specs
 from ..tools.safety import is_concurrency_safe
 from ..tools.validate import bad_arguments, validate_arguments
 from . import events
@@ -48,21 +49,11 @@ POST_BLOCKED_CONTENT = "错误：工具结果被 PostToolUse hook 拦截，内�
 # `validate_structure` 会直接判非法）。所以这几行写的是事实，不是伪造的工具结果。
 CANCELLED_CONTENT = "错误：运行已取消，本次调用未执行。"
 
-# 需要读 RunState 的工具。文件类工具进去是因为它们要读运行级工作区根与能力账本
-# （``state.workspace_root`` / ``state.outside_allowed`` / ``state.security`` 的 deny 规则），
-# 而这些决定都由权限层做。
-# 契约测试校验这张表里的名字都在注册表里、且这些 handler 确实接受 state 关键字。
+# 需要读 RunState 的工具**不再手抄清单**：registry 登记时从实现签名推断（有 `state=`
+# 即需要），这里派生。契约测试仍校验"表里的名字都在注册表里、且 handler 真的接受
+# state 关键字"——推断错了（或签名漏了 state）就在这里红。
 STATEFUL_TOOLS: frozenset[str] = frozenset(
-    {
-        "read_file",
-        "write_file",
-        "edit_file",
-        "glob",
-        "bash",
-        "todo_write",
-        "load_skill",
-        "subagent",
-    }
+    spec.name for spec in specs() if spec.stateful
 )
 
 
