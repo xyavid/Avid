@@ -9,28 +9,18 @@ from typing import Any
 import httpx
 
 from .config import Config, model_info_enabled
+
 # Re-exported: providers and this facade share one vocabulary of types and errors.
 from .protocol import (
     DEFAULT_MAX_TOKENS,
     DeltaCallback,
-    LLMError,
-    PromptTooLongError,
     Reply,
     Turn,
-    iter_sse_events,
 )
-from .providers import openai_compat
-# Re-exported for tests and callers that take the transport names from this facade.
-from .transport import (
-    CONNECT_TIMEOUT_SECONDS,
-    TIMEOUT_SECONDS,
-    RetryPolicy,
-    _timeout,
-    shared_client,
-)
-# The explicit alias marks Usage as a deliberate re-export from this module.
-from .usage import Usage as Usage
-from .usage import normalize_usage
+from .protocol import LLMError as LLMError
+from .protocol import PromptTooLongError as PromptTooLongError
+from .protocol import iter_sse_events as iter_sse_events
+from .providers import openai_compat as openai_compat
 
 # OpenAI-compatible public names kept here for existing tests and direct callers.
 from .providers.openai_compat import (  # noqa: F401
@@ -44,6 +34,17 @@ from .providers.openai_compat import (  # noqa: F401
     parse_turn,
     post,
 )
+
+# Re-exported for tests and callers that take the transport names from this facade.
+from .transport import CONNECT_TIMEOUT_SECONDS as CONNECT_TIMEOUT_SECONDS
+from .transport import TIMEOUT_SECONDS as TIMEOUT_SECONDS
+from .transport import RetryPolicy as RetryPolicy
+from .transport import _timeout as _timeout
+from .transport import shared_client
+
+# The explicit alias marks a deliberate re-export from this module.
+from .usage import Usage as Usage
+from .usage import normalize_usage as normalize_usage
 
 # Process-wide cache of probed model windows, re-exported so tests can clear it.
 _MODEL_WINDOWS: dict[tuple[str, str], int | None] = {}

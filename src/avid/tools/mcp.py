@@ -8,17 +8,17 @@ shape as a built-in tool.
 
 from __future__ import annotations
 
+import itertools
 import json
 import logging
 import os
+import queue
 import subprocess
 import threading
-import itertools
-import queue
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from . import workspace
 from .registry import ToolImpl
@@ -212,8 +212,6 @@ class McpServer:
                 continue  # the next turn re-tests the deadline
             if message is None:
                 raise McpError(f"server {self.spec.name} 在等待 {method} 响应时退出")
-            if not isinstance(message, dict):
-                continue
             if message.get("id") != request_id:
                 continue  # a server-initiated notification or request, ignored in v0
             if "error" in message:
@@ -271,7 +269,8 @@ def _schema_of(server_name: str, tool: dict[str, Any]) -> dict[str, Any]:
     """
     raw = tool.get("inputSchema")
     raw = raw if isinstance(raw, dict) else {}
-    properties = raw.get("properties") if isinstance(raw.get("properties"), dict) else {}
+    schema_properties = raw.get("properties")
+    properties = schema_properties if isinstance(schema_properties, dict) else {}
     required = [
         item
         for item in raw.get("required") or []

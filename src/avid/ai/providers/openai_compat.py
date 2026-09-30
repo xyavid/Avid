@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -11,7 +10,6 @@ from typing import Any
 import httpx
 
 from ..config import Config
-from ..usage import Usage
 from ..protocol import (
     DEFAULT_MAX_TOKENS,
     DeltaCallback,
@@ -26,6 +24,7 @@ from ..protocol import (
     usage_of,
 )
 from ..transport import RetryPolicy, send, send_stream, shared_client
+from ..usage import Usage
 
 
 def build_payload(config: Config, prompt: str) -> dict[str, Any]:

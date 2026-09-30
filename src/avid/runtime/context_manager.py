@@ -246,6 +246,7 @@ class ContextManager:
         """Render the system prompt alone, without compaction or tail, for baseline arms."""
         if self._system is None:
             self._freeze_system([])
+        assert self._system is not None  # _freeze_system always assigns
         return self._system
 
     def _freeze_system(self, injected: list[str]) -> None:

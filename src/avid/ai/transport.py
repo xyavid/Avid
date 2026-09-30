@@ -6,7 +6,7 @@ import random
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass
 from typing import Any
 
 import httpx

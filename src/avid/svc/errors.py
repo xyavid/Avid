@@ -143,8 +143,6 @@ __all__ = [
     "SessionExists",
     "SessionNotFound",
     "SessionReadError",
-    "TaskCorrupt",
-    "TaskNotFound",
     "TooManyStreams",
     "WorkspaceExists",
 ]

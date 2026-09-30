@@ -100,8 +100,8 @@ def ensure_loaded() -> None:
     if _LOADED:
         return
     _LOADED = True
-    from . import files, shell, skill, subagent, web_search  # noqa: F401
     from ..policy import todo  # noqa: F401  (todo_write lives in the policy layer)
+    from . import files, shell, skill, subagent, web_search  # noqa: F401
 
 
 def specs() -> tuple[ToolSpec, ...]:

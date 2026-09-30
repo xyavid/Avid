@@ -7,7 +7,7 @@ import logging
 import threading
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -546,10 +546,8 @@ class RunRegistry:
                         # is guaranteed to set the event, so no wakeup is lost.
                         wake.clear()
                 if waiting:
-                    try:
+                    with suppress(TimeoutError):
                         await asyncio.wait_for(wake.wait(), timeout=heartbeat)
-                    except TimeoutError:
-                        pass
                     continue
 
                 if stale:
