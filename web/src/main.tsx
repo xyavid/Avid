@@ -1,14 +1,14 @@
+/** 浏览器入口：只做挂载，不做装配（路由、状态域、Provider 等新结构定了再说）。 */
+
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import { App } from './App'
-// 顺序有意义：构件类先，tokens（含 @tailwind utilities）后，工具类才能覆盖构件类。
-import './ui/glass.css'
-import './ui/tokens.css'
 
 const container = document.getElementById('root')
-if (!container) {
-  throw new Error('缺少 #root 容器')
+if (container === null) {
+  // 静默失败会让"白屏"变成一个要翻控制台才能定位的问题。
+  throw new Error('#root 不存在：index.html 的挂载点与入口对不上')
 }
 
 createRoot(container).render(

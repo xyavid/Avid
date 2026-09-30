@@ -1,25 +1,16 @@
-import { QueryClientProvider } from '@tanstack/react-query'
-import { RouterProvider } from 'react-router-dom'
-import { useState } from 'react'
+/**
+ * 占位壳。
+ *
+ * 阶段 32 把旧前端（页面 / 组件 / 样式 / 静态资源）整体删除后，这里是重建的落点。
+ * 它**故意不含任何视觉设计**：不写内联样式、不引样式表、不建目录树——视觉语言与
+ * 布局方案未定之前，任何一层先落地都会变成下一轮要拆的东西。
+ */
 
-import { LocaleProvider } from './lib/i18n'
-import { ToastProvider } from './ui/primitives'
-import { createQueryClient } from './state/queryClient'
-import { useApplyTextScale } from './state/useApplyTextScale'
-import { router } from './router'
-
-/** 三域在这里各就各位：权威域（QueryClient）、界面域（uiStore）、活动域（runStore）。 */
 export function App() {
-  const [client] = useState(createQueryClient)
-  useApplyTextScale()
-
   return (
-    <QueryClientProvider client={client}>
-      <LocaleProvider>
-        <ToastProvider>
-          <RouterProvider router={router} />
-        </ToastProvider>
-      </LocaleProvider>
-    </QueryClientProvider>
+    <main>
+      <h1>Avid</h1>
+      <p>前端已清空重建（阶段 32）。页面设计与视觉语言待定。</p>
+    </main>
   )
 }

@@ -11,7 +11,8 @@ export default defineConfig({
       '/api': {
         target: 'http://127.0.0.1:8765',
         changeOrigin: true,
-        // SSE 不能被代理缓冲：关掉压缩是让它逐帧到达的最省事做法。
+        // SSE 不能被代理缓冲：`ws: false` 是不让它走 WebSocket 升级（走普通 HTTP 流），
+        // 后端再配合禁用中间层压缩，增量才会逐帧到达。
         ws: false,
       },
     },
@@ -19,20 +20,12 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: false,
-    // 位图纹理禁止进仓（C17）：小资源也一律走独立文件，便于 gate:size 统计。
+    // 小资源也一律走独立文件：体积门禁（阶段 32 已删）曾据此统计字节，新的体积门禁
+    // 定下来之前保留这条，避免静态资源悄悄内联进 JS。
     assetsInlineLimit: 0,
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom', 'react-router-dom'],
-          query: ['@tanstack/react-query'],
-          markdown: ['react-markdown', 'remark-gfm'],
-        },
-      },
-    },
   },
   test: {
-    // 默认 node（纯函数用例跑得最快）；需要 DOM 的组件用例在文件头用
+    // 默认 node（纯函数用例跑得最快）；需要 DOM 的用例在文件头用
     // `// @vitest-environment jsdom` 单独切换，不必让全部用例都背 jsdom 的启动成本。
     environment: 'node',
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
