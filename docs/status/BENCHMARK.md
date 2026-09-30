@@ -132,6 +132,18 @@ stress job 跑 `pytest -q -m stress`（`.github/workflows/ci.yml:25-37`）。
 **抓不到的**：e2e（`test:e2e` **不进 CI**——它需要真实模型与起着的内核）、效果类指标（没有）、
 a11y 与视觉回归（没有用例）、性能回归（只有 stress 的复杂度下限与体积上限）。
 
+### 3.5 前缀缓存命中率：`benchmarks/cache_hit/`（2026-09-30，阶段 31）
+
+回答「system 首轮冻结这件事换来了多少 provider 侧缓存命中」。离线臂（免模型）证明一次运行内
+发给模型的 system prompt 逐字节稳定（N 次调用 1 个哈希）而 tail 每轮变化——缓存能命中的前提；
+`--live` 臂用真模型逐轮记录 `cache_read` / `prompt` token 与比率。
+
+实测（deepseek-v4.1-flash，自建网关，4 轮只读对话，`--live`）：命中自第 2 轮开始**持续命中**，
+第 2 轮起命中率中位数 **0.808**（0.865 / 0.808 / 0.758）；该网关不上报 `cache_write`，且首轮回零
+是缓存生效延迟。结论是布尔量落 `artifact.json`，退出码 1 表示有结论不成立；换网关 / 换模型后
+重跑同一条命令即可复测（`uv run --env-file .env python benchmarks/cache_hit/run.py --live`）。
+
+
 ## 4. 数字口径冲突：必须消歧的三处
 
 这三处冲突**就是「没有基准」的直接后果**——同一指标在不同时间点的文件里各写各的，

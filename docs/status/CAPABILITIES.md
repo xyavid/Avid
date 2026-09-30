@@ -25,7 +25,7 @@
 | TODO 清单与提醒 | 已落地 | 模型调 `todo_write` | `src/avid/policy/todo.py`、`src/avid/runtime/state.py:179-187` |
 | 待办清单面板 | 已落地（阶段 27） | 输入条正上方常驻；从条目里最后一次 `todo_write` 推导，零新接口 | `web/src/features/conversation/components/TodoPanel.tsx`、`web/src/features/conversation/lib/todos.ts` |
 | 子 agent 并行派发 | 已落地 | 模型调 `subagent`（≤4 个子任务） | `src/avid/tools/subagent.py` |
-| 技能系统 | 已落地 | `skills/*/SKILL.md` + `load_skill`；`GET /api/skills` | `src/avid/policy/skills.py` |
+| 技能系统 | 已落地 | `skills/*/SKILL.md` + `load_skill`；`always: true` 的技能正文常驻系统提示；`GET /api/skills` | `src/avid/policy/skills.py` |
 | 流式模型调用 | 已落地 | Web 运行路径（`?deltas=1` 订阅） | `src/avid/ai/client.py` 的 `stream_completion`、`src/avid/svc/runs.py` |
 | 本地 Web 界面 | 已落地 | `avid web --port 8765` | `src/avid/web/`、`web/src/` |
 | CLI | 已落地 | `avid`、`avid web`、`avid workspace` | `src/avid/cli.py` |
@@ -126,7 +126,7 @@
 | 重复调用提醒 | 同名同参（键序无关）第 3、5 次各追加一次建议性提醒，只提醒不阻断 | `src/avid/runtime/hooks.py:334-384` |
 | 工具输出上限 | `MAX_TOOL_OUTPUT_CHARS = 8000`，超限首尾节选，全文落盘 | `hooks.py:99, 287-331` |
 | 注入点 | `UserPromptSubmit` 注入的上下文并进**系统提示词**（每轮重建、不落库），不改写用户消息 | `loop.py:67-99, 178-181` |
-| 系统提示 | `AGENT_INSTRUCTIONS` + 工作目录 + 技能目录；运行级工具清单由循环按**本次真正发出的**工具算出 | `src/avid/policy/skills.py:115-129`、`loop.py:174` |
+| 系统提示 | 默认文案（身份 / 工具契约 / 外部内容防线 / todo 约定，`policy/prompt.py`）+ 环境（工作目录、OS/架构/Python、当天日期、本次真正发出的工具清单）+ `<工作区根>/AGENTS.md` 引导块（缺失/为空即无块，超 16k 字符截断注明）+ always 技能正文 + 技能目录；SYSTEM 块首轮冻结保住 provider 前缀缓存 | `src/avid/policy/prompt.py`、`src/avid/runtime/context_manager.py` |
 
 **Hook 四事件与默认注册**（`src/avid/runtime/hooks.py:89, 389-395`，注册顺序有意义）：
 
@@ -228,10 +228,10 @@
 | `pdf` | 读取与提取 PDF 内容——先判断有没有文本层，再决定用解析还是 OCR | `skills/pdf/SKILL.md` |
 
 机制：扫描 `<工作区根>/skills/*/SKILL.md`；frontmatter 只认单行 `key: value`（不引 YAML 依赖），
-`name` 缺省取目录名、`description` 缺省取正文首个非空行；**解析发生在每次运行**（`RunState.for_run`
-里重新扫描），不在 import 时（`src/avid/policy/skills.py:9-12, 40-99`、`src/avid/runtime/state.py:112-123`）。
+`name` 缺省取目录名、`description` 缺省取正文首个非空行；frontmatter 另认 `always: true`（true/yes/1/on），标记的技能正文（剥 frontmatter）常驻进系统提示，上限在 `policy/prompt.py`：单篇 8k 字符截断注明、总量 16k 超限按名字序跳过；**解析发生在每次运行**（`RunState.for_run`
+里重新扫描），不在 import 时（`src/avid/policy/skills.py`、`src/avid/runtime/state.py:112-123`）。
 
-分发：系统提示里只放 `- name: description` 的目录；正文由模型调 `load_skill` 按需读取，按注册表
+分发：系统提示里只放**非 always** 技能的 `- name: description` 目录（always 的正文已常驻，不再列目录，避免诱导一次多余的 `load_skill`）；其余正文由模型调 `load_skill` 按需读取，按注册表
 key 查而不当作文件路径，未命中返回可用清单（`skills.py:108-140`）。Web 的 `GET /api/skills` 与
 系统提示同源，服务端缓存 5 秒（`src/avid/svc/__init__.py:80`）。
 

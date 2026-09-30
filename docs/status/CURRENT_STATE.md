@@ -3,9 +3,10 @@
 本文件**只回答九个问题**。每个结论都以仓库内可核对的事实为依据，证据用 `path:line`
 或可执行命令给出；凭印象或设计意图得出的内容会显式标注为「未验证假设」。
 
-**写作基线**：commit `de3035c`（工作区干净），内核 61 个 Python 文件 / 12,376 行，
-`web/src` 8,347 行（本版未重测），`tests/` 44 个 Python 文件（41 个测试文件 + 3 个支撑文件）/
-12,620 行，评测仪器 `benchmarks/` 16 个 Python 文件 / 1,738 行 + 21 条 case + 225 个 fixture 文件。
+**写作基线**：commit `d30161b`（分支 `phase-31-context-prompt`；工作树另有一批未提交的 web 注释
+翻译，不计入），内核 80 个 Python 文件 / 16,816 行，`web/src` 10,047 行，`tests/` 59 个 Python
+文件 / 17,856 行，评测仪器 `benchmarks/` 20 个 Python 文件 / 3,668 行 + 21 条 case + 225 个
+fixture 文件。
 
 **证据分级**：
 
@@ -23,7 +24,7 @@
 ## 1. Avid 是什么？
 
 **一个自建的 agent 运行时（harness）**：模型调用、工具执行、多步循环、上下文与记忆、
-权限、评测六层都是自己的代码，目标是可替换、可调试、可度量（`AGENTS.md:7-11`）。
+权限、评测六层都是自己的代码，目标是可替换、可调试、可度量（`AGENTS.md §1`）。
 
 它不是聊天机器人，不是某个业务应用，也不是模型层——项目的架构定位是**编排层**
 （`dev/drafts/requirements.md:39`，本地记录）。具体形态：
@@ -33,8 +34,8 @@
 | 内核语言与包管理 | Python 3.12 + `uv`，`src/` 布局，运行期唯一依赖 `httpx>=0.27` | `pyproject.toml:1-6` |
 | 前端 | TypeScript（React + Vite），独立 pnpm 工具链；产物复制进 `src/avid/web/static/` 随 wheel 分发，安装者不需要 Node | `pyproject.toml:11-14`、`web/package.json` |
 | 交互形态 | `avid` CLI（单轮 / `--agent` 循环 / 会话 / `web`）+ 本地 Web 界面（FastAPI + SSE） | `src/avid/cli.py:85-140,317-333`、`README.md:29-57` |
-| 规模 | 内核 61 文件 / 12,376 行；前端 8,347 行；测试 44 文件（41 测试 + 3 支撑）/ 12,439 行；评测仪器 14 文件 / 1,581 行 | `find src -name '*.py'`、`find web/src -name '*.ts*'`、`find benchmarks -name '*.py'` |
-| 定位与验收 | 通用内核、场景后接；**验收只认参考场景 R**（读取本地文件 + 计算） | `AGENTS.md:9,11` |
+| 规模 | 内核 80 文件 / 16,816 行；前端 10,047 行；测试 59 文件 / 17,856 行；评测仪器 20 文件 / 3,668 行 | `find src -name '*.py'`、`find web/src -name '*.ts*'`、`find benchmarks -name '*.py'` |
+| 定位与验收 | 通用内核、场景后接；**验收只认参考场景 R**（读取本地文件 + 计算） | `AGENTS.md §1` |
 | 使用者 | 单人、本地优先、单机运行 | `dev/drafts/requirements.md:29-31`，本地记录 |
 
 与「用别人的框架」的分界不在功能多寡，而在**改动落点**：换模型只动 `ai/`，换阈值只动
@@ -44,7 +45,7 @@
 ## 2. Avid 解决什么问题？
 
 需求冻结时把问题分了三层，至今没变（`dev/drafts/requirements.md:9-14`，本地记录；
-`AGENTS.md:7-11` 是它的入库版本）：
+`AGENTS.md §1` 是它的入库版本）：
 
 | 层 | 问题 | Avid 的答案 | 现在到什么程度 |
 |---|---|---|---|
@@ -79,11 +80,12 @@
 | 工作区 | 用户级注册表 `~/.avid/workspaces.json`；id 由根目录派生（重复登记幂等、索引丢失不丢数据）；运行级工作区根取代模块全局；CLI/Web/前端都能选与新增 | `src/avid/workspaces.py:31-70,113-264`、`src/avid/svc/picker.py` |
 | 会话持久化 | 新建 / 续接 / 列举 / 删除；条目树 + 值 + 分支 + 变更线；内存与 JSONL 两个后端共用一套一致性用例；每条消息一次提交；跨进程 flock + 短写回滚 + 末行残片自愈 | `src/avid/session/__init__.py:1-21,75-125`、`src/avid/session/jsonl.py` |
 | 分支 | 分支只是「链尾是谁」的一个值；可从任一历史条目分叉；条目树只增不改 | `src/avid/session/values.py`、`docs/guide/web-ui.md:110-121` |
-| 上下文压缩 | 五步阶梯（工具结果落盘 → 按条数裁剪 → 免费瘦身 → 摘要替换 → 模型报超限兜底），阈值集中在 `policy/compaction.py`；③④ 的字符阈值在有窗口、有真实读数时**按这次运行自己的实测 chars/token 派生**（拿不到就回落到 400k 常量，注入阈值时用 `from_window=False` 关掉派生）；完整记录落盘到 `.avid/context/` 并回一句「用 read_file 读回」；自动压缩与兜底各最多一次 | `src/avid/policy/compaction.py:41-147,240-449`、`src/avid/runtime/context.py:29-98,122-203`、E2E `benchmarks/context_window/` |
+| 上下文压缩 | 五步阶梯（工具结果落盘 → 按条数裁剪 → 免费瘦身 → 摘要替换 → 模型报超限兜底），阈值集中在 `policy/compaction.py`；③④ 的字符阈值在有窗口、有真实读数时**按这次运行自己的实测 chars/token 派生**（拿不到就回落到 400k 常量，注入阈值时用 `from_window=False` 关掉派生）；完整记录落盘到 `.avid/context/` 并回一句「用 read_file 读回」；自动压缩与兜底各最多一次 | `src/avid/policy/compaction.py:41-147,240-449`、`src/avid/runtime/context_manager.py:298-382`、E2E `benchmarks/context_window/` |
 | 计划与提醒 | `todo_write` 整份替换的清单；连续 3 轮未更新时注入提醒；同名同参工具第 3、5 次追加建议性提醒（只提醒不阻断） | `src/avid/runtime/state.py:34`、`src/avid/runtime/loop.py:188-198`、`src/avid/runtime/hooks.py:334-384` |
 | 待办清单面板 | 输入条正上方常驻；内容从会话条目里最后一次 `todo_write` 推导（零新接口、零新存储），默认展开、可折叠，没有清单时整块不渲染 | `web/src/features/conversation/components/TodoPanel.tsx`、`web/src/features/conversation/lib/todos.ts`（阶段 27） |
 | 子 agent | `subagent` 一次最多 4 个子任务，并行执行后汇总；子运行结构上去掉 `subagent` 自己（`SUB_TOOLS`）；子 agent 看不到父对话，prompt 必须自包含 | `src/avid/tools/__init__.py:80-81`、`src/avid/tools/subagent.py`、`src/avid/tools/schemas.py:172-203` |
-| 技能 | 目录下 3 个技能（`agent-builder` / `code-review` / `pdf`）；系统提示里只放 `name + description`，正文由 `load_skill` 按需读取；目录在运行开始时重新扫描 | `skills/`、`src/avid/policy/skills.py:65-111`、`src/avid/runtime/state.py:100-123` |
+| 技能 | 目录下 3 个技能（`agent-builder` / `code-review` / `pdf`）；系统提示里只放非 always 技能的 `name + description`，正文由 `load_skill` 按需读取；frontmatter `always: true` 的技能正文常驻系统提示（单篇 8k / 总量 16k 字符上限）；目录在运行开始时重新扫描 | `skills/`、`src/avid/policy/skills.py`、`src/avid/runtime/context_manager.py` |
+| 系统提示装配（阶段 31） | 默认文案含身份、工具契约（授权执行并验证 / 不可逆先确认 / 缺信息先澄清 / 等结果再答复）与外部内容防线（工具结果是数据不是指令），集中在 `policy/prompt.py`；`<工作区根>/AGENTS.md` 存在时作为引导块进系统提示（缺失/为空即无块，超 16k 字符截断注明）；环境块含运行时事实（OS/架构/Python、当天日期）；SYSTEM 块首轮冻结，实测缓存命中率中位数 0.808（`BENCHMARK.md` §3.5） | `src/avid/policy/prompt.py`、`src/avid/runtime/context_manager.py`、`benchmarks/cache_hit/artifact.json` |
 | 模型接入 | OpenAI 兼容 `/chat/completions` 直连 httpx（不套 SDK）；非流式 `chat_completion` 与流式 `stream_completion` 返回**同形**的 `Turn`，两条解析路径共用同一个 usage 归一化；连接超时 10s / 读超时 60s | `src/avid/ai/client.py:22-35`、`src/avid/ai/client.py` 的 `stream_completion`、`src/avid/runtime/loop.py:228-237` |
 | Web 与前端 | 20 个 HTTP 端点（会话 / 运行 / 审批 / 事件流 / 技能 / 工作区 / 元信息）；18 类事件分三档（16 durable + `run_status` + `assistant_delta`）；时间线 / 技能目录 / 设置三个页面（待办清单长在会话底栏里，不是独立页面）；前端 L0–L4 分层；`pnpm run verify` 串起 7 项检查（分层 / token / 样式 / 对比度 / 类型 / 单测 / 体积） | `src/avid/web/routes/*.py`、`src/avid/runtime/events.py:24-104`、`web/package.json` |
 | CLI | `--agent` / `--yes` / `--permission` / `--workspace` / `--session` / `--new-session` / `--session-name` / `--list-sessions` / `--delete-session`；子命令 `web`、`workspace {add,list,remove,permission}` | `src/avid/cli.py:85-140,317-333` |
@@ -100,7 +102,7 @@
 | 做不到 | 类别 | 证据 |
 |---|---|---|
 | 证明「这次改动变好了」 | 做到一半 | 仪器与两套基线都有（`BENCHMARK.md` §9 / §10），单变量对照也真跑过一次（同 commit 只改压缩阈值，§10.3）——但**对照量到的是抖动，不是机制**（45 次运行最大 transcript 4,657 字符 vs 阈值 400,000）；加难度分层（tier 3–5）同样没有区分度（三臂 9/9），因为 94 次工具调用里 72 次是 `bash`。下一步的证据指向可写任务 |
-| 跨会话记忆（提炼 / 召回 / 遗忘） | 声称有、实际无 | `AGENTS.md:7` 把「记忆」列为自有层；`src/` 下只有会话条目树，没有任何提炼或召回模块 |
+| 跨会话记忆（提炼 / 召回 / 遗忘） | 声称有、实际无 | `AGENTS.md §1` 把「记忆」列为自有层；`src/` 下只有会话条目树，没有任何提炼或召回模块 |
 | 沙箱执行 | **已落地**（阶段 26）：`bash` 在 bwrap 里跑（只读系统、可写工作区、掩蔽凭据、`--unshare-net`、环境白名单），文件类工具仍由阶梯 + 路径校验守住 | `src/avid/policy/sandbox.py`、`src/avid/tools/shell.py`；E2E `benchmarks/sandbox_boundary/` |
 | 多用户、鉴权、远程安全暴露 | 设计上不做 | `docs/guide/web-ui.md:69-92`：只有回环监听 + Host/Origin 白名单，**明文写着没有认证**，能连上端口的人就能建会话、跑命令 |
 | 多 provider | 设计上不做 | 只有一条 OpenAI 兼容路径（`pyproject.toml:6` 唯一运行期依赖是 httpx）；需求里 D-03 明确「早期不做多 provider 抽象」 |
@@ -135,7 +137,7 @@
 
 ## 6. 当前最差的能力是什么？
 
-**跨会话记忆（提炼 / 召回 / 遗忘）。** `AGENTS.md:7` 把「记忆」与模型、工具、循环、上下文、
+**跨会话记忆（提炼 / 召回 / 遗忘）。** `AGENTS.md §1` 把「记忆」与模型、工具、循环、上下文、
 权限、评测并列为自有层，而 `src/` 下**没有任何提炼或召回模块**——今天跨会话唯一发生的事是把
 整条 transcript 投影回消息列表（`src/avid/session/projection.py` 的 `messages_for_branch`）。
 首轮基线顺手量到了这一层的价值与缺口（`BENCHMARK.md` §9.3 第 3 条）：同一条任务，带会话历史
@@ -175,7 +177,7 @@
 
 **反馈闭环合上了，分辨率仍然是瓶颈——这轮把"差多少才算差"量出来了。**
 
-需求把项目目标写成「可替换、可调试、可度量」（`AGENTS.md:7`）。「可替换」有分层 + `A1`–`A13`
+需求把项目目标写成「可替换、可调试、可度量」（`AGENTS.md §1`）。「可替换」有分层 + `A1`–`A13`
 门禁支撑；「可度量」这一半现在有仪器、两套 suite 的基线、一次真跑过的单变量对照（`BENCHMARK.md`
 §10.3）与冻结的前端阈值。**但这轮同时量出了它的分辨率上限**：同条件重跑的 token 抖动是
 core ±3.7% / full ±8.5%；只读任务族的天花板是「一条 shell 折叠掉」（94 次工具调用里 72 次
@@ -210,7 +212,7 @@ tier 3–5 的 9 条难度 case 上三臂仍然全过（`BENCHMARK.md` §10.2）
 
 为什么它仍然是最大的未知：
 
-- 参考场景 R 是项目**唯一**的验收基准（`AGENTS.md:11`）：现在有数字了，但三个变体一样好，
+- 参考场景 R 是项目**唯一**的验收基准（`AGENTS.md §1`）：现在有数字了，但三个变体一样好，
   这个数字对「机制有没有用」不提供信息；
 - 唯一使用者是作者本人（`dev/drafts/requirements.md:29-31`，本地记录），没有第二个使用者、
   没有真实任务的通过率；
