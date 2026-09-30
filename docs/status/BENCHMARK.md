@@ -25,7 +25,7 @@
 | 有性能基线（当前值 + 可重复的测量命令）吗？ | **效果类有**（§9 / §10 的命令与数字）；**性能类仍然没有**（耗时口径未定、机器未固定） |
 | 有「改动前后对比」机制吗？ | **有，而且本轮真跑过一次**：同 commit、同 suite，只差 `--context-chars`（§10.3）。结论是机制没被触达，差值只是抖动——这条对照因此还给出了抖动尺子（full ±10% / core ±4%） |
 | 有防退化的复杂度门禁吗？ | **有**：3 条 stress 用例（§3.1） |
-| 有体积/资源上限吗？ | **有且已冻结**：`web/budget.json` 的 `frozen_at` 已填，首屏 JS gzip 实测 184,160 B / 460,800 B（§3.2） |
+| 有体积/资源上限吗？ | **没有**（阶段 32 作废）：前端体积预算 `web/budget.json` 随旧前端一并删除，原先冻结的首屏 JS gzip 量的是已经不存在的产物（§3.2） |
 | 有测试规模的数字吗？ | 有静态计数（§3.3）与**本轮实测的收集数**（1015 收集 / 1010 passed / 5 deselected）；但测试项数是**实现规模**，不是能力或效果指标 |
 
 一句话概括现状：**仓库现在既有仪器也有尺子**——两套 suite 的基线、可复核的抖动幅度、以及
@@ -39,13 +39,13 @@
 | 评测 / 基准目录 | `ls -d eval evals benchmarks bench` | **`benchmarks`** 存在（commit `569992e` 起）；其余四个仍 `No such file or directory` |
 | 通过率 / 准确率 / 任务集 | `grep -rniE '通过率\|pass rate\|pass@\|准确率\|accuracy\|任务集' src/avid --include='*.py'` | 内核零命中；评测集在 `benchmarks/cases/v0/`（12 条）与 `benchmarks/avidbench/`（runner），不在 wheel 里 |
 | 成本 / token 台账 | `grep -rn 'usage\|total_tokens' src/avid --include='*.py'` | 仍只有运行内计数；**但 AvidBench 现在把每次运行的 tokens 落盘**（`benchmarks/runs/*/*/result.json`），首个基线见 §9 |
-| 前端性能测量脚本 | `ls web/scripts/`；`grep -rln 'performance\.now\|console\.time' web/src web/scripts web/e2e` | 只有 5 个门禁/构建脚本（`check-layers` / `check-style` / `check-tokens` / `copy-dist` / `gate-size`），无 `perf:*`；计时 API 零命中 |
-| 前端 a11y / 视觉回归用例 | `grep -rniE 'axe\|accessibility\|toHaveScreenshot\|snapshot' web/e2e` | 零命中——`web/playwright.config.ts` 写了截图约定，但**没有一条截图断言** |
+| 前端性能测量脚本 | `ls web/scripts/`；`grep -rln 'performance\.now\|console\.time' web/src web/scripts` | 只剩 `copy-dist.mjs`（产物交付链）；旧前端的 6 个门禁/构建脚本（`check-layers` / `check-style` / `check-tokens` / `check-contrast` / `gate-size` / `measure-glass`）已随阶段 32 删除；`web/src` 只有 5 个文件，计时 API 零命中 |
+| 前端 a11y / 视觉回归用例 | `ls web/e2e` | **目录已删除**（阶段 32）：10 个 Playwright spec 与 4 张视觉基线 PNG 一并删掉，`web/playwright.config.ts` 与 `@playwright/test` 依赖也不在了——不是「零命中」，是没有这份测试了 |
 | 覆盖率 / pre-commit / 任务入口 | `ls Makefile justfile .pre-commit-config.yaml` | 三者都不存在；`pyproject.toml` 也无 coverage 配置 |
 
-「不存在」还间接体现在：`dev/plan/roadmap.md` 自认「已明确的必经项（尚未成为阶段）：加入评测集」，
-`docs/design/frontend-architecture.md:988` 的未验证假设清单第 1 条写着「全部性能目标值——
-未做任何实测；阈值待第一次测量前冻结」（两处均为本地记录，仅作线索）。
+「不存在」还间接体现在：`dev/plan/roadmap.md` 自认「已明确的必经项（尚未成为阶段）：加入评测集」
+（本地记录，仅作线索）。前端侧原有一条同类线索——设计文档未验证假设清单里的「全部性能目标值
+未做任何实测」——那条清单所在的章节已随阶段 32 的前端清空删除。
 
 ## 3. 仓库内确实存在的数字
 
@@ -65,41 +65,21 @@ stress job 跑 `pytest -q -m stress`（`.github/workflows/ci.yml:25-37`）。
 （平方级、每会话全量重放），不是几个百分点的抖动。写用例时优先断言机制（"一次都没 open"），
 时间只是第二道保险。」* 它是**防退化下限**，不是性能指标——别把它当基准读。
 
-### 3.2 前端体积预算：`web/budget.json`（**已冻结**，2026-09-19）
+### 3.2 前端体积预算：**预算文件已随前端删除，数字作废**（阶段 32）
 
-| 键 | 值 | 含义 |
-|---|---|---|
-| `entry_gzip_bytes` | 460800 | 首屏入口 JS 逐块 gzip 上限 |
-| `chunk_gzip_bytes` | 358400 | 单个异步块上限 |
-| `exempt_gzip_bytes` | 204800 | 豁免上限 |
-| `font_bytes` | 61440 | 字体体积上限 |
-| `texture_bytes` | 32768 | 位图纹理上限 |
-| `frozen_at` | `2026-09-19T10:04Z · commit de3035c · WSL2 / node v24.15.0` | **已冻结**——测量环境写在该字段里 |
-| `EXEMPT` | `[]` | 空 |
+`web/budget.json`（`entry_gzip_bytes` / `chunk_gzip_bytes` / `font_bytes` / `texture_bytes` /
+`frozen_at` / `EXEMPT`）连同 `web/scripts/gate-size.mjs`（npm 脚本 `gate:size`）已在阶段 32 删除，触发它删除的是同一件事：
+**旧前端整体被清空重建**。
 
-**首次实测（本轮）**：`pnpm -C web build && pnpm -C web run gate:size`。测量后工作区保持干净
-（`dist/` 与静态产物都在 `.gitignore` 里）。
+- 它量的产物不存在了：首屏 JS 4 个 chunk、样式表、字体与纹理都是被删掉的那份前端的 bundle，
+  现在 `web/src` 只有 5 个文件，构建产物与旧数字没有对应关系。
+- 因此本文此前记录的冻结值与历次实测（首屏 JS gzip 184,160 B / 188,165 B、样式表 5,630 B /
+  5,553 B、字体 0 B 等）**一律作废**，不得再作为上限或基线引用；`frozen_at` 记的测量环境
+  （commit `de3035c`）也随之失去意义。
+- **新前端的体积门禁与基线待新前端定稿后重新测量并重冻**：视觉语言与布局未确认，
+  现在测任何数字都只是骨架的体积，不构成预算。重冻时要同时写清测量命令、环境与「为什么是这个上限」（§8）。
 
-| 项 | 实测 | 上限 |
-|---|---|---|
-| 首屏 JS gzip 合计（4 块） | **184,160 B**（raw 579,261 B） | 460,800 B |
-| 单块最大（`vendor`） | 63,912 B gzip（raw 195,814 B） | 358,400 B |
-| 字体 0 个文件 | 0 B | 0 B |
-| 样式表（.css） | 5,630 B gzip | 16,384 B |
-| 位图纹理 0 个 | 0 B | 32,768 B |
-| 外部字体请求 | 未命中 | — |
-
-逐块 gzip：`index` 57,580 / `query` 15,170 / `vendor` 63,912 / `markdown` 47,498。
-
-**阶段 26 重测**（commit `fb1870e` 之后、本机 WSL2 / node v24.15.0）：首屏 JS gzip
-**188,165 B**（raw 591,992 B）/ 460,800 B，单块最大仍是 `vendor` 63,912 B，样式表
-**5,553 B** / 16,384 B。涨的 4,005 B 来自安全分层的界面（三预设选择器 + `full` 二次确认
-对话框 + 常驻沙箱标记 + 两处新 i18n 文案 + 一个 `SandboxState` 类型）。**上限才是我要守的
-东西**——这段只标明这一版的实测值，不重冻阈值（阈值没动，见 `web/budget.json` 的 `note`）。
-
-**为什么现在可以冻结**：实测 184,160 B 与本地过程文档里最后一次记录的 184,311 B 相差 0.08%
-（§5）——两套独立来源互相印证，不再有「五个版本、阈值还变过一次」的歧义（§4）。改上限必须
-同时改 `frozen_at` 的说明并写「为什么改」（§8）。
+本节不再是「仓库内确实存在的数字」，保留标题只为记下这次作废的原因。
 
 ### 3.3 测试规模（**静态计数**，不是 pytest 收集数）
 
@@ -110,8 +90,8 @@ stress job 跑 `pytest -q -m stress`（`.github/workflows/ci.yml:25-37`）。
 | `parametrize` | **32** 处 | `grep -c parametrize` 逐个文件求和 |
 | 内核测试代码量 | 13,560 行（`tests/*.py`） | `wc -l tests/*.py` |
 | 评测仪器规模 | 16 个 Python 文件 / 1,738 行，外带 **21 条 case**（v0 12 + v1 9）与 **225 个 fixture 文件**（`benchmarks/`，**不进 wheel**） | `find benchmarks -name '*.py' \| wc -l`、`wc -l` |
-| 前端 vitest | **92** 条，12 个文件（全在 `__tests__/` 下） | `pnpm -C web run test` 实测；静态计数同为 92 |
-| 浏览器 e2e | **37** 条 `test(`，9 个 spec | 逐文件计数（静态，本版未重测） |
+| 前端 vitest | **2** 条，1 个文件（`web/src/App.test.tsx` 的骨架 smoke） | `pnpm -C web run test`；阶段 32 前的 92 条 / 12 个文件随旧前端一并删除 |
+| 浏览器 e2e | **0**：`web/e2e/**` 已在阶段 32 删除（原 9 个 spec / 37 条 `test(`） | `ls web/e2e` → 不存在 |
 | `skip` / `xfail` / `skipif` | **0** | `grep` 零命中——没有靠跳过兜绿的用例；评测的 `eval` marker 是「默认不跑」，不是 skip |
 
 **口径警告**：674 是**函数数**；pytest 的收集数会被 `parametrize` 展开，所以上表把两者分开列，
@@ -126,11 +106,11 @@ stress job 跑 `pytest -q -m stress`（`.github/workflows/ci.yml:25-37`）。
 | `mypy` | CI kernel job | `src/avid` 的类型错误 |
 | `pytest -q` | CI kernel job | 627 个测试函数展开后的全部普通用例（不含 stress） |
 | `pytest -q -m stress` | CI **独立 job** | §3.1 的 3 条复杂度门禁 |
-| `pnpm run verify` | CI web job | `check:layers` + `check:tokens` + `lint` + `typecheck` + `test` + `gate:size` |
-| `pnpm exec tsc -b` | CI web job | 类型（`verify` 已含 `typecheck`，所以 CI 多跑一次——注释未同步，见 `ARCHITECTURE.md` §8） |
+| `pnpm -C web run build` + `typecheck` + `test` | CI web job | 打包链能跑、类型自洽、用例非空转（阶段 32 起；`verify` 与它串起的六项门禁脚本已随旧前端删除） |
 
-**抓不到的**：e2e（`test:e2e` **不进 CI**——它需要真实模型与起着的内核）、效果类指标（没有）、
-a11y 与视觉回归（没有用例）、性能回归（只有 stress 的复杂度下限与体积上限）。
+**抓不到的**：效果类指标（没有）；前端 a11y、视觉回归与体积回归——测试、基线、预算文件与门禁
+脚本都已随阶段 32 的前端清空删除，这不是「没有用例」而是「没有那份前端」；性能回归只剩 stress
+的复杂度下限。
 
 ### 3.5 前缀缓存命中率：`benchmarks/cache_hit/`（2026-09-30，阶段 31）
 
@@ -143,18 +123,16 @@ a11y 与视觉回归（没有用例）、性能回归（只有 stress 的复杂�
 是缓存生效延迟。结论是布尔量落 `artifact.json`，退出码 1 表示有结论不成立；换网关 / 换模型后
 重跑同一条命令即可复测（`uv run --env-file .env python benchmarks/cache_hit/run.py --live`）。
 
+## 4. 数字口径冲突：必须消歧的两处
 
-## 4. 数字口径冲突：必须消歧的三处
-
-这三处冲突**就是「没有基准」的直接后果**——同一指标在不同时间点的文件里各写各的，
-没有单一权威来源。本文件不裁决谁对，只标出必须重测的项：
+这些冲突**就是「没有基准」的直接后果**——同一指标在不同时间点的文件里各写各的，
+没有单一权威来源。本文件不裁决谁对，只标出必须重测的项。前端原有的两条冲突（浏览器 e2e 计数、
+首屏 JS gzip）已随阶段 32 的 e2e 与预算文件删除一并作废，不再列出：
 
 | 指标 | 各文件写的值 | 出处（均为本地记录，除注明） | 本文件处置 |
 |---|---|---|---|
 | 内核测试规模 | `822 passed + 3 deselected`；`869`；`863`；`844`；`835`；`832`；`711` | `dev/review/fix-progress.md:103`；`dev/plan/roadmap.md` 各阶段条目 | **本轮已重测并只认一个口径**：1015 收集 / 1010 passed / 5 deselected（commit `7c70cc4`，本机）。历史值不再引用；以后只认「pytest 收集数 + 环境」这一种写法 |
 | 内核测试耗时 | `711 tests in 8.99s` | `dev/review/architecture-review.md:7`、`dev/review/tests.md:14` | 仅历史值；本机与 CI 环境不同，不可比 |
-| 浏览器 e2e | `40 项全通过`、`38`、`36`、`35`；静态 **37** | `dev/plan/roadmap.md:192,179,169,150`；静态计数见 §3.3 | 静态与记录不一致（差额未解释）。以**重测**为准 |
-| 首屏 JS gzip | 5 个值（见 §3.2） | `dev/review/*`、`dev/plan/roadmap.md` | **本轮消歧**：实测 184,160 B，与本地记录的最后值 184,311 B 差 0.08%；阈值同轮冻结（§3.2） |
 
 ## 5. 历次散落实测（本地过程文档记录，**仓库内不可复核**）
 
@@ -170,7 +148,9 @@ a11y 与视觉回归（没有用例）、性能回归（只有 stress 的复杂�
 | `Transcript.estimate_chars` | 600 条 1.12 ms/次；增量化后约省 3.3 ms/轮 | `dev/review/architecture-review.md`、`fix-progress.md`（P2-4） |
 | fsync / fdatasync | 1.26 ms / 1.27 ms 每次提交 | `dev/review/architecture-review.md`、`fix-progress.md`（P2-3） |
 | `bash -lc` 每次调用 | 0.41 s | `dev/review/fix-progress.md`（P2-2） |
-| 首屏 JS gzip | 184,311 B / 460,800 | `dev/review/fix-progress.md`（P2-8）——**本轮实测 184,160 B，两套来源差 0.08%，已冻结（§3.2）** |
+
+前端侧原有一条同类记录（首屏 JS gzip 184,311 B / 460,800），它量的是已删除的旧前端产物，
+已随 `web/budget.json` 一并作废（§3.2），不再列出。
 
 ## 6. 为什么上面这些都不是「基准」
 
@@ -192,7 +172,7 @@ a11y 与视觉回归（没有用例）、性能回归（只有 stress 的复杂�
 | 主指标 | **通过率**（通过 / 总数）——单一数字，别用复合分 |
 | 次指标 | 失败分类计数（能力不足 / 预算不足 / 工具错误 / 权限拒绝 / 模型错误）、每任务轮数与 token |
 | 环境 | 必须记录：commit、模型名与版本、机器、日期、是否联网、超时设置 |
-| 冻结 | 首次测量后把基线值与测量环境写死；`web/budget.json` 的 `frozen_at` 同轮填上，之后只许改注释不许静默改阈值 |
+| 冻结 | 首次测量后把基线值与测量环境写死，之后只许改注释不许静默改阈值 |
 | 执行 | 独立 marker（如 `-m eval`），**默认不跑**（真模型调用有成本与抖动）；提交前可一键跑；不进 CI 全量 |
 | 对比 | 同一任务集、同一环境跑改动前后两次，**差值写入本文件**——这才叫「改动前后有可对比的评测数字」 |
 
@@ -208,7 +188,7 @@ a11y 与视觉回归（没有用例）、性能回归（只有 stress 的复杂�
 | 主指标 | **做到了**：`resolved` 是布尔量（全部确定性 grader 通过），无复合分 |
 | 次指标 | **做到了**：轮数 / tokens / 工具调用 / 工具失败 / 拒绝 / 压缩 / 审批 / 墙钟 + 失败分类（能力 / 预算 / 模型 / 权限 / 基础设施 / 取消） |
 | 环境 | **做到了**：`result.json` 与 `summary.txt` 记录 commit、模型名、日期、limits 与注入项（`overrides`）；机器仍只记在本文件里，未进结果文件 |
-| 冻结 | **做了**：`web/budget.json` 的 `frozen_at` 已填并带测量环境（§3.2）；两套 suite 的基线与「跨 suite 不可比」的规则写进 §10.4 |
+| 冻结 | **做了**：两套 suite 的基线与「跨 suite 不可比」的规则写进 §10.4。前端体积预算不在冻结之列——`web/budget.json` 已随旧前端删除，原数字作废（§3.2） |
 | 执行 | **做到了**：`-m eval` / `-m eval_smoke` 两个 marker，默认不进 `pytest`，不进 CI；另有 `--suite` / `--context-chars` 两个开关 |
 | 对比 | **做到了**：同一 suite、同一 commit，只改压缩阈值跑了三档（§10.3）。**结论是没有量到机制，只量到抖动**——这比"没跑过对照"有用：它给出了一把尺子（full ±10% / core ±4%） |
 
@@ -352,4 +332,5 @@ a11y 与视觉回归（没有用例）、性能回归（只有 stress 的复杂�
   就新建 `cases/v2` 并各自记一行基线。`--suite` 是唯一选择器。
 - **不设通过率门禁**：评测要真模型、有抖动、默认不跑；把某次运行的通过率写成 CI 阈值，等于把
   一次测量当成结论。留下的门禁只有"仪器可用"（跑不完、`error` / `llm_error` 态）。
-- **前端阈值**：见 §3.2（同轮实测并冻结）。
+- **前端体积阈值**：`web/budget.json` 已随阶段 32 的前端清空删除，原冻结数字作废——新的门禁与
+  基线要等新前端定稿后重新测量并重冻（§3.2）。

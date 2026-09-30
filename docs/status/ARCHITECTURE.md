@@ -9,7 +9,7 @@
 | 已有文档 | 它负责什么 | 本文件怎么用它 |
 |---|---|---|
 | `docs/design/runtime-architecture.md` | 内核四层怎么推出来的、每处边界的代价、判据 9 的措辞修正、阶段 A/B/12/13/18 落地记录 | 引用其 §3 分层表与 §6 不变量 I1–I6，不重写 |
-| `docs/design/frontend-architecture.md` | Web 层与前端怎么选型、事件三档为什么这么分、L0–L4、性能预算、17 条未验证假设 | 引用其 §0 决策速览、§3.1 分层表、§11 不变量 I1–I15 |
+| `docs/design/frontend-architecture.md` | API 方案选择与交付形态（§4）、传输与事件协议（§5）、前后端接口约定（§6）、内核为浏览器提供的接口（§7）。**前端侧的分层、视觉语言、性能与不变量章节已在阶段 32 随旧前端删除**，本文件不再引用它们 | 引用其 §4–§7，不重写；前端现状见 `CAPABILITIES.md` §11 |
 | `docs/design/workspace-permission.md` | 工作区、三轴预设、四级 deny 阶梯、沙箱与审计的决策表与文案 | 只写它在整体里占哪一层 |
 | `docs/design/architecture-criteria.md` | 12 组检查点（分析时用的尺子） | 只标注哪些检查点被覆盖 |
 | `docs/guide/web-ui.md` | 页面 ↔ 接口对应、SSE 消费规则、验证命令 | 引用，不复制端点表 |
@@ -23,8 +23,9 @@
 `src/avid/` 下七个包（`ai` / `runtime` / `policy` / `session` / `svc` / `web` / `tools`）
 加两个顶层模块（`cli.py` / `workspaces.py`），再加仓库根的前端目录 `web/`。依赖方向自上而下
 （详细断言见 §4）。这张表是 `docs/design/runtime-architecture.md:47-68`
-（内核四层）与 `docs/design/frontend-architecture.md:87-106`（Web 两层）的合并视图，
-并补上两份设计文档成文后才出现的 `session/`、`workspaces.py`：
+（内核四层）与 `docs/design/frontend-architecture.md` §4（交付形态：分离开发、单进程交付）
+的合并视图，并补上两份设计文档成文后才出现的 `session/`、`workspaces.py`
+（前端分层那一节已随阶段 32 的前端清空删除，表中前端行只记现存的契约种子）：
 
 | 层 | 单元 | 一句话职责 | 它拥有什么数据 | 允许依赖 |
 |---|---|---|---|---|
@@ -42,14 +43,17 @@
 | 会话 | `session/` | 条目树 / 值 / 分支 / 变更线 / 两后端 / 投影 | **磁盘上的会话真相**（JSONL） | 无（零 avid 内部依赖） |
 | 能力 | `tools/*` | 9 个工具的 schema 与实现 | 无（写文件系统、进程与外部检索 API） | policy.todo、ai（`subagent`） |
 | 顶层 | `workspaces.py` | 用户级工作区注册表（**索引，非权威**） | `~/.avid/workspaces.json` | 无 |
-| 前端 | `web/`（仓库根，源码在 `web/src/`） | 全部浏览器代码 | 界面域状态（localStorage） | `web/src/api/`（唯一网络出口） |
+| 前端 | `web/`（仓库根，源码在 `web/src/`） | 全部浏览器代码；**阶段 32 清空重建后只有骨架 5 个文件**（`main.tsx` / `App.tsx` / `App.test.tsx` 与 `api/types.ts`、`events/types.ts` 两份契约种子），无页面 | 界面域状态（localStorage）——待新前端重新确立 | 无（旧的「网络出口只能在 `web/src/api/`」是已删除的分层规则；现存代码不含任何网络调用） |
 | 评测仪器 | `benchmarks/`（仓库根，**不进 wheel**） | AvidBench：case 加载、工作区物化、变体装配、判定器、报表与轨迹落盘 | 只读 case / fixture 与 `runs/` 结果（本地，不入库） | `avid` 的**任意层**——它是叶子消费者，只经既有注入点驱动内核（A14）；产品代码反向不许依赖它 |
 
 边界依据（每条来自设计文档，不在此重推）：`web/`↔`svc/` 隔离**传输形态**；`svc/`↔内核隔离
-**多一个调用方**（内核不知道有几个调用方）；前端↔内核隔离**语言与部署单元**，契约是唯一耦合面；
+**多一个调用方**（内核不知道有几个调用方）；前端↔内核隔离**语言与部署单元**，契约是唯一耦合面
+——阶段 32 清空前端后这条更清楚：两侧的耦合只剩 `web/src/api/types.ts` 与
+`web/src/events/types.ts` 两份契约种子，由 `tests/test_wire_contract.py` 与
+`tests/test_event_contract.py` 钉住；
 `session/` 零内部依赖，隔离**持久化格式**（路径与时钟构造期注入）；`workspaces.py` 只做索引，
 隔离**跨工作区的目录知识**——放进 `session/` 会让会话存储承担它不该有的知识
-（`frontend-architecture.md:104-106`、`session/__init__.py:19-20`、`runtime-architecture.md:1221`）。
+（`session/__init__.py:19-20`、`runtime-architecture.md:1221`）。
 `benchmarks/` 是**叶子消费者**：它必须能 import 内核的任意一层（否则量不到真实行为），反过来
 产品代码一行都不许 import 它——这条由 A14 钉住，因此「无环」不靠自觉。
 
@@ -95,7 +99,7 @@ Web:  POST /api/sessions/{id}/runs                │
                     │                                   │
                     ▼                                   ▼
         <工作区>/.avid/sessions/*.jsonl        RunRecord.events（内存重放缓冲）
-        （durable 的真相；事件不落这里）         → SSE → 前端 reducer
+        （durable 的真相；事件不落这里）         → SSE → 浏览器消费方（前端重建中）
 ```
 
 要点（每条都有代码证据）：
@@ -123,7 +127,7 @@ Web:  POST /api/sessions/{id}/runs                │
 | 工作区注册表 | `~/.avid/workspaces.json`（**索引**，非权威） | 只由用户显式动作写 | 用户级 |
 | 运行记录与事件缓冲 | `svc/runs.py` 的 `RunRegistry`（内存） | 唯一发射线程分配 `seq` | 进程内；终态保留 600s / 最多 200 个 run |
 | 待决审批 | `svc/approvals.py`（内存） | 审批队列；超时/取消/结束/重启四条路径全收敛 `deny` | 一次运行，超时 120s |
-| 界面域状态 | 浏览器 localStorage | 前端 | 用户清除 |
+| 界面域状态 | 浏览器 localStorage | 前端 | 用户清除（**旧前端的三域设计已随阶段 32 删除，新前端未定**） |
 
 `RunState` 的字段即「一次运行的全部可变量」（`src/avid/runtime/state.py`）：`auto_approve`、
 `permission_mode`（三轴预设名）、**`security`（`RunSecurity`：三轴 + 阶梯 + 沙箱 + 审计）**、
@@ -147,12 +151,12 @@ Web:  POST /api/sessions/{id}/runs                │
 | A6 | 事件名字面量只允许出现在 `runtime/events.py`（其余用常量） | `:132-141` |
 | A10 | `on_message` 的接线只允许在 4 个文件（循环、recorder、CLI、svc） | `:144-154` |
 | A11 | `web/`、`svc/` 里不出现 `append_message` / `.commit(`——recorder 是唯一写入者 | `:157-162` |
-| A12 | 前端在 `src/api/` 之外不直连第三方 URL（`__tests__/` 夹具豁免） | `:168-177` |
-| C22 / 对比度 / 体积 | 前端侧：字体声明即加载 + 层级只用 `--z-*`（`check:tokens`）；token 表里声明的对比度配对按 alpha 合成 ≥4.8（`check:contrast`）；首屏 JS / 样式表 / 字体 / 纹理字节（`gate:size`，预算见 `web/budget.json`） | `web/scripts/*.mjs`，命令与口径见 `web/README.md` |
+| A12 | 前端在 `src/api/` 之外不直连第三方 URL（`__tests__/` 夹具豁免）。阶段 32 后 `web/src` 只有 5 个文件、不含 URL，这条因此近乎空集合断言——`test_frontend_sources_exist` 是它的前提，防止目录被删后假通过 | `:168-182` |
+| 前端样式与体积门禁 | **已随阶段 32 的前端清空一并删除**：`check:tokens` / `check:contrast` / `gate:size` 检查的目录结构、token 表与产物都不存在，`web/budget.json` 的冻结体积也一并作废。现存前端脚本只有 `web/scripts/copy-dist.mjs`（产物交付链），新门禁待新前端定稿后重建 | `web/README.md` |
 | A13 | `runtime/` → `policy/` 的边**双向**钉住（见下表） | `:245-276` |
 | A14 | **产品代码不许 import `benchmarks`**；仪器留在 `src/` 之外，`runs/` 不入库 | `:311-328` |
 | 事件契约 | 内核 `EVENT_TYPES` 与前端联合类型成员集合相等；三档声明一致；心跳/兜底常量三处同一个对象 | `tests/test_event_contract.py` |
-| 线格式契约 | 22 对 pydantic DTO ↔ 前端 TS interface 的字段名双向相等；真实载荷覆盖每个声明字段 | `tests/test_wire_contract.py` |
+| 线格式契约 | 26 对 pydantic DTO ↔ 前端 TS interface 的字段名双向相等（比对表 `PAIRS` 逐对参数化）；真实载荷覆盖每个声明字段 | `tests/test_wire_contract.py` |
 | 会话门面 | `session.__all__` 恰好是那份清单；内部件不进 `__all__` 但可子模块导入 | `tests/test_session_facade.py` |
 | 工具契约 | 定义与实现一一对应；`STATEFUL_TOOLS` == 真接受 `state=` 的 handler；审批规则只点名已注册工具；`--agent` help 与注册表一致 | `tests/test_tools_contract.py` |
 
@@ -187,7 +191,7 @@ Web:  POST /api/sessions/{id}/runs                │
   （durable）带同一份 `RunState.usage_report()`；`GET /api/runs/{id}` 与分支列表的
   `BranchOut.usage` 读的是同一份计算（`runtime-architecture.md` §20）。加它没有新增事件类型。
 - **客户端可见的时间常量只有一个出处**（`events.py:108-118`）：`/api/meta` 公布的
-  `stream.heartbeat_seconds`、SSE 生成器的心跳、前端据此设的超时必须是同一个数，否则
+  `stream.heartbeat_seconds`、SSE 生成器的心跳、客户端据此设的超时必须是同一个数，否则
   「客户端等得比心跳久」这类错位只能靠人发现。
 
 ## 6. 不变量与守护者
@@ -203,16 +207,17 @@ Web:  POST /api/sessions/{id}/runs                │
 | I5 | 自动压缩 ≤1 次、兜底 ≤1 次 | `RunState.compacted` / `RunState.retried`，各只有一个写入点 |
 | I6 | 工具失败不中断循环 | `execution.execute_batch`（失败转文本） |
 
-「循环不 import 会话层」这一条在 `loop.py:139` 的 docstring 与
-`docs/design/frontend-architecture.md:821`（记作「既有 I7」）里被称作 **I7**，但内核设计文档
+「循环不 import 会话层」这一条在 `loop.py:139` 的 docstring 里被称作 **I7**，但内核设计文档
 §6 的表只列了 I1–I6——引用时按本条说明，不要把它当成 §6 的第七行。
 
-Web 与前端十五条来自 `docs/design/frontend-architecture.md:810-828`（I1 条目提交后不可变、
-I2 一条消息只出现一次、I3 一个会话至多一个活动 run（**仅进程内**）、I4 durable `seq` 严格单调、
-I5 不丢：要么重放要么显式 `resync`、I6 未决审批默认拒绝、I7 内核不 import Web 框架、
-I8 内核不 import 会话之外的东西来持久化、I9 取消不丢消息也不产生伪造工具结果、
-I10 前端不复制内核判断、I11 对象身份由服务端生成、I12 乱序收敛（delta 必须先 flush 再渲染
-durable）、I13 权威终止以注册表 + 已提交条目为准、I14 列表必须有界、I15 delta 不落盘）。
+Web 与前端的不变量原先逐条记在 `docs/design/frontend-architecture.md` 的不变量一章（I1–I15）；
+那一章已在阶段 32 随旧前端一并删除，这里不复制一份。其中与内核、传输有关的几条仍有实现与
+门禁守护：
+条目提交后不可变、durable `seq` 严格单调、不丢（要么重放要么显式 `resync`）、未决审批默认拒绝、
+内核不 import Web 框架、取消不丢消息也不产生伪造工具结果、权威终止以运行注册表 + 已提交条目为准、
+列表必须有界、delta 不落盘（见上文 §4 的 A1/A2/A11/A14 与 §5 的重放纪律）。
+前端专属的两条——不复制内核判断、乱序收敛（delta 先 flush 再渲染 durable）——随旧前端作废，
+待新前端定稿后重新提出。
 
 ## 7. 失败与恢复
 
@@ -253,20 +258,18 @@ durable）、I13 权威终止以注册表 + 已提交条目为准、I14 列表�
 
 **文档漂移**（写文档时发现，改代码或改文档都可以，但要处置）：
 
-1. `docs/design/frontend-architecture.md:3` 仍写「状态：设计，未实施（本文写作时仓库代码零改动）」，
-   而 F3/F4 已落地（`features.deltas = 1`、`features.branches = 1`）——状态行未同步。
-2. 同一文档 §5.2 的 durable 事件示例表漏了 `tool_result_message`（`runtime/events.py:29` 有它）。
-3. `.github/workflows/ci.yml` 的注释仍写「verify 里没有 tsc」，而 `web/package.json` 的 `verify`
-   现在含 `typecheck`——CI 因此多跑一次 tsc。
-4. `docs/design/runtime-architecture.md:55` 的分层表仍带删除线行 `~~runtime/transcript.py~~`
+1. `docs/design/runtime-architecture.md:55` 的分层表仍带删除线行 `~~runtime/transcript.py~~`
    并注明归 `ai/`；§3 的层表也未收 `session/`/`svc/`/`web/`/`workspaces.py`（它们分别记在
    §16.3 与 §19.1）。
-5. 同一文档 §16.6 的「未做」清单仍列着「文件锁（两个进程可能同时写同一会话文件时）」，
+2. 同一文档 §16.6 的「未做」清单仍列着「文件锁（两个进程可能同时写同一会话文件时）」，
    而它已落地（旁挂 `.lock` 的 flock）——触发条件达成了，段落没回写。
-6. `web/src/state/runStore.ts` 的 `useRunSelector` 零消费者——按判据 §2 的删除测试，没有
-   调用点的抽象不该留。
 
-**失效信号**（架构在什么条件下不再成立，逐条来自两份设计文档的「适用条件与失效信号」）：
+阶段 32 清空前端后，原先记在这里的四条已经消失，不再列出：前端设计文档的状态行未同步、
+该文档 §5.2 的 durable 事件示例表漏 `tool_result_message`（表已在这次清理中重写并列全）、
+`ci.yml` 注释里「verify 里没有 tsc」的旧说法（`verify` 已不存在）、
+`web/src/state/runStore.ts` 的零消费者抽象（文件已删除）。
+
+**失效信号**（架构在什么条件下不再成立，逐条来自设计文档的「适用条件与失效信号」）：
 
 - 单进程、单线程运行、工具同步、一次运行一个会话、单工作区——这是成立条件。
 - 出现多用户或远程访问（要鉴权与工作区隔离）、需要跨进程恢复运行中的 run、需要真正的实时
@@ -281,8 +284,8 @@ durable）、I13 权威终止以注册表 + 已提交条目为准、I14 列表�
 
 | 判据 | 覆盖 |
 |---|---|
-| 1 变化优先 | 部分——变化清单与优先级在 `runtime-architecture.md` §1 与 `frontend-architecture.md` §1 |
-| 2 具体先行 | 部分——删除测试结论在两份设计文档 §2 |
+| 1 变化优先 | 部分——变化清单与优先级在 `runtime-architecture.md` §1（前端侧的那份变化清单随旧前端删除，不再引用） |
+| 2 具体先行 | 部分——删除测试结论在 `runtime-architecture.md` §2 |
 | 3 耦合 | ✓ §1 边界依据、§4 依赖门禁 |
 | 4 边界与决定权 | ✓ §1 分层表 + §3 所有权表 |
 | 5 数据所有权与状态生命周期 | ✓ §3 |
@@ -290,7 +293,7 @@ durable）、I13 权威终止以注册表 + 已提交条目为准、I14 列表�
 | 7 失败与恢复 | ✓ §7 |
 | 8 并发与一致性 | ✓ §5（重放/淘汰）、§7（锁与取消） |
 | 9 依赖与不可靠边界 | 部分——外部依赖只有 LLM API 与文件系统；不可靠边界处置见 §7 |
-| 10 边界代价与权衡 | 未覆盖——代价论证在两份设计文档的 §10 |
+| 10 边界代价与权衡 | 未覆盖——代价论证在 `runtime-architecture.md` §10 |
 | 11 可逆性与决策强度 | 未覆盖——见 `runtime-architecture.md` §10.2 |
 | 12 运行与演进 | ✓ §8 失效信号 |
 
@@ -302,8 +305,8 @@ durable）、I13 权威终止以注册表 + 已提交条目为准、I14 列表�
 | 会话持久化的取舍与偏差 | 同上 §16 |
 | 任务图（**已下线，阶段 27**）的数据结构与状态机设计 | 同上 §17（开头有下线横幅） |
 | 工作区与安全分层（三轴 / 阶梯 / 沙箱 / 审计） | `docs/design/workspace-permission.md`；阶段 18 的落地记录见 `runtime-architecture.md` §19，阶段 26 见 `docs/status/CAPABILITIES.md` §3.1 与 `benchmarks/sandbox_boundary/README.md` |
-| Web 层选型、事件三档、L0–L4、性能预算、未验证假设 | `docs/design/frontend-architecture.md` |
-| 页面 ↔ 接口对应、SSE 消费规则、验证命令 | `docs/guide/web-ui.md` |
+| Web 的 API 方案、交付形态、事件三档与前后端接口约定 | `docs/design/frontend-architecture.md` §4–§7（前端分层、视觉语言、性能与不变量章节已在阶段 32 随旧前端删除） |
+| Web 服务的接口、SSE 消费规则与信任边界 | `docs/guide/web-ui.md`（前端页面 ↔ 接口的对应关系待新前端定稿后补） |
 | 能力清单与参数细节 | `docs/status/CAPABILITIES.md` |
 | 性能与效果数字现状 | `docs/status/BENCHMARK.md` |
 | 未来方向 | `docs/status/ROADMAP.md` |

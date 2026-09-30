@@ -4,7 +4,7 @@
 不回答「好不好、缺什么」——那两问在 `CURRENT_STATE.md`（§3 能 / §4 不能 / §5 最可靠 / §6 最差）。
 
 **更新时机**：能力增删、工具参数或语义变更、端点增删、门禁变化时。改这里时同步检查
-`CURRENT_STATE.md` §3 的十六个要点是否还成立。
+`CURRENT_STATE.md` §3 的要点是否还成立。
 
 **证据分级**：仓库内 = `path:line` 或命令，可复核；本地记录 = `dev/` 下的过程文档（不入库），
 只作线索，不作依据；未验证 = 显式标注。
@@ -23,11 +23,11 @@
 | 会话持久化与分支 | 已落地 | `--session`/`--new-session`/`--list-sessions`/`--delete-session`、Web 分支选择器 | `src/avid/session/` |
 | 上下文压缩（五步阶梯） | 已落地 | 自动（每轮 `context.prepare`） | `src/avid/policy/compaction.py`、`src/avid/runtime/context.py` |
 | TODO 清单与提醒 | 已落地 | 模型调 `todo_write` | `src/avid/policy/todo.py`、`src/avid/runtime/state.py:179-187` |
-| 待办清单面板 | 已落地（阶段 27） | 输入条正上方常驻；从条目里最后一次 `todo_write` 推导，零新接口 | `web/src/features/conversation/components/TodoPanel.tsx`、`web/src/features/conversation/lib/todos.ts` |
+| 待办清单面板 | **已下线**（阶段 32） | 旧前端在输入条正上方常驻显示 `todo_write` 的清单；实现它的 `web/src/features/conversation/**` 随旧前端整体删除，界面不再有这一块。`todo_write` 工具本身未变（见 §2） | — |
 | 子 agent 并行派发 | 已落地 | 模型调 `subagent`（≤4 个子任务） | `src/avid/tools/subagent.py` |
 | 技能系统 | 已落地 | `skills/*/SKILL.md` + `load_skill`；`always: true` 的技能正文常驻系统提示；`GET /api/skills` | `src/avid/policy/skills.py` |
 | 流式模型调用 | 已落地 | Web 运行路径（`?deltas=1` 订阅） | `src/avid/ai/client.py` 的 `stream_completion`、`src/avid/svc/runs.py` |
-| 本地 Web 界面 | 已落地 | `avid web --port 8765` | `src/avid/web/`、`web/src/` |
+| 本地 Web 界面 | 内核侧已落地；前端阶段 32 清空重建中 | `avid web --port 8765`（路由 / pydantic DTO / SSE 编帧 / 静态资源服务都未变） | `src/avid/web/`；`web/src/` 现存 5 个文件，见 §11 |
 | CLI | 已落地 | `avid`、`avid web`、`avid workspace` | `src/avid/cli.py` |
 | 可观测（trace / 事件流 / 运行时状态） | 已落地 | stderr trace、`GET /api/runs/{id}/events`、`GET /api/runs/{id}` | `src/avid/runtime/events.py` |
 | 评测与基准（AvidBench v0.1） | 已落地（第一层） | `python -m benchmarks.run`、`pytest -m eval` / `-m eval_smoke` | `benchmarks/README.md`、`benchmarks/avidbench/`、`BENCHMARK.md` §9 |
@@ -209,12 +209,12 @@
 
 六个任务工具（`create_task` / `update_task` / `can_start` / `claim_task` / `complete_task` /
 `get_task`）与它们的存储（`<工作区根>/.tasks/{id}.json`、`TaskStore`）、应用服务
-（`svc/tasks.py`）、只读接口（`GET /api/tasks{,/{id}}`）与前端页面（`/tasks`、
-`features/tasks/**`）在阶段 27 一并删除；工具数 15 → 9。
+（`svc/tasks.py`）、只读接口（`GET /api/tasks{,/{id}}`）与前端页面（`/tasks`）在阶段 27
+一并删除；工具数 15 → 9。
 
 删除理由与当时的实现记录见 `docs/design/runtime-architecture.md` §17（该章开头有下线横幅）。
 一句话：它的**唯一消费者**是那个只读页面，而"这次对话拆成了哪几步、走到第几步"由 `todo_write`
-承接，前端从会话条目推导成输入条上方的待办清单（见下面 §8 之后的前端一节）。
+承接。旧前端曾把它推导成输入条上方的待办清单，那块面板已随阶段 32 的前端清空一并删除（见 §11）。
 旧的 `<工作区根>/.tasks/` 数据不迁移、不删除，只是不再被读。
 
 ---
@@ -297,7 +297,7 @@ key 查而不当作文件路径，未命中返回可用清单（`skills.py:108-1
 | `POST /api/runs/{id}/approvals/{aid}` | 答复审批（幂等；换结论 409、过期 410、未知 404） |
 | `GET /api/runs/{id}/events` | SSE 事件流（`?after=` > `Last-Event-ID` > 0；`?deltas=1` 订阅增量） |
 
-**事件分三档**（`src/avid/runtime/events.py:52-73`，共 18 类）：
+**事件分三档**（`src/avid/runtime/events.py:52-73`，共 19 类）：
 
 | 档 | 数量 | 事件 | 语义 |
 |---|---|---|---|
@@ -324,37 +324,43 @@ durable、事件总数上限 4096、终态记录保留 600s 或最多 200 个 ru
 
 ## 11. 前端
 
-`web/src` 按 L0–L4 分层（`docs/design/frontend-architecture.md:205-227`）：
+**阶段 32 已把旧前端整体删除重建，现在只有骨架。** 视觉风格与布局方案尚未确认，本次不实现任何
+页面设计；本节只记现状与仍然生效的契约。
 
-| 层 | 目录 | 约束 |
-|---|---|---|
-| L0 | `ui/tokens.css`、`ui/glass.css`、`ui/primitives/`、`ui/glass/` | 不得出现业务名词；玻璃面 / 高光边 / 投影三档 / 圆角四档只在这里定义 |
-| L1 | `ui/patterns/` | 只接受 props；不读 store、不发请求 |
-| L2 | `features/*`（8 个：approvals、branches、composer、conversation、inspector、sessions、settings、skills） | 可依赖 L0/L1；**feature 之间不得互相 import** |
-| L3 | `layouts/AppShell` | 不得直接读运行 store |
-| L4 | `routes/`（会话、技能目录、设置） | 唯一允许把查询结果与活动状态拼在一起的地方 |
+`web/src/` 现存 5 个文件：
 
-状态分三域：REST 权威域（查询缓存）、活动域（事件流 + 纯 reducer）、界面域（localStorage）。
-
-**用量指示器（阶段 22）**：`features/composer/components/UsageMeter` 挂在输入条那一行、
-发送按钮左侧，显示「上下文已用 36%」+ 迷你进度条 + 「缓存命中 78%」；占用率按
-≤60% / 60–85% / >85% 三档上色。悬浮明细（`UsageDetail`）给三块估算的堆叠条与清单
-（系统提示词 / 工具定义 / 对话消息，每块带 `~`）、以及缓存读写、命中率与压缩的真实读数。
-内核没在 `features` 里声明 `usage` 时它不渲染（旧内核上不留空读数）。
-实时值取活动域的 `RunView.usage`，落盘值取 `useBranches` 返回的分支 `usage`；
-合并规则是 `pickUsage`（活动域优先、查询域兜底），可空字段一律显示 `—`。
-
-**门禁脚本**（`web/package.json`，`verify` = 前六条串行）：
-
-| 脚本 | 检查什么 |
+| 文件 | 作用 |
 |---|---|
-| `check:layers` | 网络出口只能在 `src/api/`；feature 不互 import；L1 只接受 props；前端不直连第三方 URL |
-| `check:tokens` | 字体族必须有 `@font-face` 或显式系统栈；`z-index` 只能用 `var(--z-*)`；CSS 引用的文件必须存在 |
-| `lint` | 10 条样式禁令（hex/rgb 字面量、`dark:`、内联样式、裸表单元素、空 catch、fetch 必须有超时与 signal、i18n key 完整性、JSX 文本不得硬编码等） |
-| `typecheck` | `tsc -b --noEmit` |
-| `test` | vitest |
-| `gate:size` | 首屏 JS 逐块 gzip 上限、字体/纹理体积、不得回带 Google Fonts；上限来自 `web/budget.json` |
-| `copy:dist` | 把 `web/dist/**` 复制进 `src/avid/web/static/` 并写构建戳。`avid web` 服务的是这一份（不是 `web/dist`）——源码比产物新时启动会打一条 ⚠ 告警指出该跑它 |
+| `main.tsx` | 挂载点 |
+| `App.tsx` | 骨架根组件（无页面） |
+| `App.test.tsx` | vitest 骨架 smoke，2 条用例（挂载与「设计未定」的显式声明） |
+| `api/types.ts` | REST 契约种子：与 `src/avid/web/schemas.py` 的 pydantic DTO 逐字段对应 |
+| `events/types.ts` | 事件契约种子：`EVENTS:BEGIN/END` 块与 `runtime/events.py` 的 `EVENT_TYPES` 集合相等 |
+
+两份 types 是**契约种子，不是普通源码**：`tests/test_wire_contract.py` 逐字段比对 pydantic DTO
+与 interface，`tests/test_event_contract.py` 要求事件名集合两侧相等。删掉它们或改字段名，
+Python 侧的契约门禁就会失败——改动这两份文件等于改内核契约，不是前端内部事务。
+
+**脚本与依赖**：`web/package.json` 只剩 `dev` / `build` / `preview` / `copy:dist` / `typecheck` /
+`test` 六个；运行期依赖只剩 `react` / `react-dom`，`tailwind.config.js` 里的设计 token 已清空。
+`pnpm run verify`、`check:layers`、`check:tokens`、`lint`、`check:contrast`、`gate:size`、
+`test:e2e` 都已不存在。
+
+**阶段 32 删除的**：`web/src/**` 123 文件 / 10,433 行（`ui/` 20、`features/` 59、`routes/` 8、
+`layouts/` 5、`lib/` 12、`state/` 4，以及 `api/`、`events/` 里除两份 types 以外的全部、
+`App`/`main`/`router`）；`web/e2e/**`（Playwright 10 个 spec + 4 张视觉基线 PNG）；
+`web/scripts/` 的 6 个门禁脚本（`check-layers` / `check-tokens` / `check-style` /
+`check-contrast` / `gate-size` / `measure-glass`）；`web/budget.json`；`web/playwright.config.ts`
+与 `@playwright/test` 依赖。
+
+**保留的**：`web/scripts/copy-dist.mjs`（唯一剩下的脚本，产物交付链：把 `web/dist/**` 复制进
+`src/avid/web/static/` 并写构建戳，`avid web` 服务的是这一份而不是 `web/dist`——源码比产物新时
+启动会打一条 ⚠ 告警指出该跑它）、`web/.npmrc`、`web/postcss.config.js`。
+
+**待新前端定稿后重新确立的**：页面结构与分层（旧的 L0–L4 是**那份已被删掉的**前端的结构，
+不再成立，也不要预先建空目录）、网络出口约定、设计 token 与对比度门禁、体积预算与新基线、
+e2e 与视觉回归。内核侧与传输适配 `src/avid/web/**`（FastAPI 路由 / pydantic DTO / SSE 编帧 /
+静态资源服务）阶段 32 未改动，端点与事件表见 §10。
 
 ---
 
@@ -413,9 +419,8 @@ durable、事件总数上限 4096、终态记录保留 600s 或最多 200 个 ru
 - **交付**：`uv build` 出 wheel，前端产物作为静态资源随 wheel 分发；安装者不需要 Node。
 - **静态门禁**：`ruff`（规则集显式钉住，不跟默认值漂）、`mypy`（`files = ["src/avid"]`）。
 - **CI 三个 job**（`.github/workflows/ci.yml`）：内核（ruff + mypy + `pytest -q`）、
-  stress（`pytest -q -m stress`）、前端（`pnpm run verify` + `tsc -b`）。
-- **已知小漂移**：`ci.yml` 的注释仍写「verify 里没有 tsc」，而 `web/package.json` 的 `verify`
-  现在已含 `typecheck`，因此 CI 多跑一次 tsc（不影响结果，只多花时间）。
+  stress（`pytest -q -m stress`）、前端（`build` + `typecheck` + `test`——`verify` 与它串起的
+  六项门禁脚本已随旧前端删除，见 §11；这个 job 现在只守打包链能跑、类型自洽、用例非空转）。
 
 ---
 
@@ -423,5 +428,6 @@ durable、事件总数上限 4096、终态记录保留 600s 或最多 200 个 ru
 
 长期记忆、沙箱执行、多 provider、多用户与鉴权、中断后恢复运行、SQLite 后端、
 **成本估算**（token 用量台账本身已落地，阶段 22——占用、缓存读写与命中率、压缩次数，
-按分支落盘）、跨进程的「一个会话一个活动 run」互斥、前端虚拟列表与 subagent 子事件转发
+按分支落盘）、跨进程的「一个会话一个活动 run」互斥、subagent 子事件转发、前端虚拟列表
+（旧前端已整体删除，虚拟化要等新前端定稿）
 ——逐条证据与分类见 `CURRENT_STATE.md` §4，数字现状见 `BENCHMARK.md`。

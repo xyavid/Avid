@@ -1,7 +1,8 @@
-# Web 界面与 API
+# Web 服务与 API
 
-Avid 的浏览器界面：会话时间线、审批队列、待办清单、技能目录、设置。
-设计依据见 `docs/design/frontend-architecture.md`；本文件只写**怎么用**与**接口对应关系**。
+Avid 的本地 Web 服务：内核与浏览器之间**交换什么**——端点、载荷、事件分档、错误与信任边界。
+接口面设计依据见 `docs/design/frontend-architecture.md`（该文件现在只承载内核 ↔ 浏览器接口面）。
+页面与视觉设计已随旧前端在阶段 32 删除，新的前端设计待确认，本文件不描述页面。
 
 ## 1. 启动
 
@@ -14,9 +15,8 @@ uv run --env-file .env avid web --port 8765
 # → http://127.0.0.1:8765
 
 # 可选：指定这个进程绑定的工作地点（缺省就是当前目录的）。**启动不写盘**：
-# 注册表只由 `avid workspace add` / POST /api/workspaces 改。界面按工作区分组
-# （导航列）列出绑定值 + 已登记的候选；新建会话**必须**选一个——点哪个文件夹的 ＋
-# 就归哪个（省略一律 400 workspace_required，绑定值只做预选）。
+# 注册表只由 `avid workspace add` / POST /api/workspaces 改。新建会话不带 workspace
+# 时一律 400 workspace_required，绑定值只做预选。
 uv run --env-file .env avid web --port 8765 --workspace /path/to/project
 ```
 
@@ -37,34 +37,72 @@ pnpm -C web run copy:dist        # dist → src/avid/web/static + 构建戳（`a
 uv run avid web --port 8765      # 静态资源与 API 同源
 ```
 
-`GET /api/meta` 的 `build` 字段返回构建戳（`git_sha` + `built_at`），UI 的「设置」
-页会显示它；从 checkout 直接跑而没有产物时显示「从 checkout 运行（未打包产物）」。
+`web/` 现在只有 `dev` / `build` / `preview` / `copy:dist` / `typecheck` / `test` 六个脚本；
+旧前端的门禁脚本（分层 / token / 样式 / 对比度 / 体积）已随前端删除。
 
-## 2. 页面与接口对应关系
+`GET /api/meta` 的 `build` 字段返回构建戳（`git_sha` + `built_at`）；从 checkout 直接跑而
+没有产物时这个字段没有戳值。
 
-| 页面 / 交互（URL） | 主要接口 | 数据流 |
-|---|---|---|
-| 导航列（`/sessions` 左侧） | `GET /api/workspaces`（文件夹）+ `GET /api/sessions`（里面的会话）、`POST /api/sessions`、`PATCH /api/sessions/{id}`、`DELETE /api/sessions/{id}` | 查询流（TanStack Query）；两份查询在客户端按 `workspace.id` 归拢成树，服务端接口不变 |
-| 工作区文件夹（导航列的一项） | `GET /api/workspaces` + `GET /api/sessions` | 点标题折叠/展开；点 ＋ 在该工作区建会话（id 随 `POST /api/sessions` 发出，**必填**，缺了是 400 `workspace_required`）；点 🗑 移除该工作区（`DELETE /api/workspaces/{id}`，见 §3.2） |
-| 🔍（导航列右上角） | 不新增接口 | 纯客户端按**会话名**过滤：只留命中的会话、没有命中的工作区整组隐藏、命中项不受 5 条上限约束；Esc 或 × 清除 |
-| 「新增工作区…」（导航列右上角 ＋） | `POST /api/workspaces/pick`（弹宿主机文件夹选择器）→ `POST /api/workspaces`（登记） | 命令流；成功后刷新候选并**展开新工作区**。取消 → 什么都不做；已在列表里 → 409 `workspace_exists` + 展开已有的那个，不重复添加 |
-| 权限模式选择器 + 沙箱标记（输入条旁） | 不新增接口；读 `GET /api/meta` 的 `capabilities.sandbox` | 随 `POST /api/sessions/{id}/runs` 的 `permission`（+ `full_access_ack`）发出；缺省取会话所属工作区的 `default_permission`。沙箱状态常驻的只有图标，文字在悬停气泡里 |
-| 会话时间线（`/sessions/{id}`） | `GET /api/sessions/{id}/entries`（分页，带 `branch`）、`GET /api/runs/{id}/events`（SSE） | 历史来自条目（权威），实时来自事件 |
-| 提交一次运行（输入条） | `POST /api/sessions/{id}/runs`（`branch` 决定接哪条链尾） | 命令流 → 201 `{run_id}` |
-| 分支选择器（会话头部下方） | `GET /api/sessions/{id}/branches`、`POST /api/sessions/{id}/branches` | 查询流 + 命令流；「切换」只是本地选择——服务端没有「当前分支」，它只有一组链尾值 |
-| 从此处分支（条目动作行） | `POST /api/sessions/{id}/branches` `{at: entry_id}` | 命令流；成功后自动切到新链 |
-| 停止 | `POST /api/runs/{id}/cancel` | 命令流；在下一个检查点生效 |
-| 审批队列（时间线内） | `GET /api/runs/{id}/approvals`、`POST /api/runs/{id}/approvals/{aid}` | 命令流 + 事件流（`approval_requested`/`approval_resolved`） |
-| 运行状态条 / 对账 | `GET /api/runs/{id}` | 权威终止以注册表 + 已提交条目为准 |
-| 会话头部 | 不新增接口 | 只有标题、状态徽标、轮次/token 与两张常驻 ID 胶带——**没有工具按钮**（见 §6） |
-| 回到最新（时间线内的悬浮按钮） | 不新增接口 | 只在向上滚动、不在底部时出现，点了贴底并自己消失 |
-| 检查器（全文 / diff / 原始 JSON） | 不新增接口 | 就地切换，不进 URL 历史 |
-| 导航列（收起 / 展开） | 不新增接口 | 收起为 64px 图标轨；只收技能目录 / 设置两个工作面——**「会话」不是导航项**，会话列表本身就长在它下面（按工作区分组），点「会话」只会跳到空占位页。收起态头部的展开按钮只在宽档渲染 |
-| 会话里的待办清单（输入条上方） | 不新增接口 | 从条目推导：最后一次 `todo_write` 的调用参数就是当前计划；没提交过就整块不渲染 |
-| 技能目录（`/skills`） | `GET /api/skills` | 与 system prompt 同源 |
-| 设置（`/settings`） | `GET /api/meta`、`GET /api/health` | 只读；改配置仍走 CLI / 环境变量 |
+## 2. 端点与数据
 
-健康探针：`GET /api/health`。未知 `/api/*` 一律返回 JSON 404，**不回落到 SPA 外壳**。
+| 方法与路径 | 语义 | 数据 / 字段 | 主要错误 |
+|---|---|---|---|
+| `GET /api/meta` | 版本、特性表、能力面与构建戳 | `api_version`；`features`（`deltas` / `branches` / `usage` / `workspace_picker` / `workspace_delete` / `full_access` 等——客户端按特性分支，不按版本号分支）；`event_types`；`capabilities`（`tools` / `skills` / `model` / `workspace` / `workspace_picker` / `sandbox`）；`stream`（`heartbeat_seconds` / `terminal_fallback_seconds` / `replay_buffer_size`）；`build`（`git_sha` / `built_at`） | — |
+| `GET /api/sessions` | 会话列表（元信息 + 条数 + `active_run_id`） | 名字是会话文件里的一个值、条数要读全部条目，所以这个端点当前是 O(会话数 × 文件大小) | — |
+| `POST /api/sessions` | 新建会话 | `{id?, name?, workspace}`；`workspace` 必填，缺 → 400 `workspace_required`（进程绑定的工作地点只做预选）；未知字段 422（`extra="forbid"`） | 400 / 409 已存在 |
+| `GET /api/sessions/{id}` | 元信息 + 统计 + `active_run_id` + `branch` | | 404 |
+| `PATCH /api/sessions/{id}` | 改名（= 值写入） | `{name}` | 404 |
+| `DELETE /api/sessions/{id}` | 销毁（要求无活动 run） | 204 | 404 / 409 |
+| `GET /api/sessions/{id}/entries` | 条目分页 | `branch`（默认 `main`）/ `order`（`asc`\|`desc`，默认 `desc`）/ `limit` / `cursor_seq`；响应带 `has_more`、`next_cursor`、`truncated_tail` | 404 |
+| `GET /api/sessions/{id}/branches` | 分支列表 | `name` / `tip_entry_id` / `entry_count` / `is_default` / `usage`（该分支最近一次运行的用量快照，按**分支**记账） | 404 |
+| `POST /api/sessions/{id}/branches` | 从某个条目开一条命名分支 | `{name?, at?}`；`at` = 分叉点条目 id，缺省 = 从零开一条空分支；未给名字时自动取 `b2`、`b3`…（跳过已占用的）；201 | 400 `invalid_request`（分叉点未知）/ 409 `branch_exists`（重名）/ 409 `session_busy`（活动 run 期间拒绝分叉） |
+| `POST /api/sessions/{id}/runs` | 起一次运行 | `{prompt, auto_approve?, branch?, permission?, full_access_ack?}`；`branch` 默认 `main`，决定接哪条链尾；`permission` 缺省取会话所属工作区的默认权限（再缺省才是 `manual`）；201 `{run_id, session_id, status}` | 409 已有活动 run / 422（`full` 缺 `full_access_ack`） |
+| `GET /api/runs/{run_id}` | 运行状态与统计 | `status` / `round` / `tokens` / `usage` / `error` / `cancel_requested` / `pending_approvals`；权威终止以运行注册表 + 已提交条目为准 | 404 |
+| `GET /api/runs/{run_id}/events` | **SSE**，支持 `Last-Event-ID` 与 `?after=`；`?deltas=1` 才投递 delta | 分档见 §3；并发上限 24 条，见 §2.1 | 404 / 503 `too_many_streams` |
+| `POST /api/runs/{run_id}/cancel` | 请求取消：**在下一个检查点生效**，不承诺立即停止 | 202 `{run_id, status, cancel_requested}` | 404 / 409 已结束 |
+| `GET /api/runs/{run_id}/approvals` | 当前待决审批 | 刷新与第二个标签页靠它恢复（SSE 重放也会重发 `approval_requested`） | 404 |
+| `POST /api/runs/{run_id}/approvals/{aid}` | 答复 | `{decision: "allow"｜"deny"}`；重复投递返回 200 `{accepted:false, already}`，**不二次批准** | 404 / 409 已决 / 410 已过期 |
+| `GET /api/workspaces` | 已登记的工作区候选列表 | `id` / `root` / `name` / `default_permission` / `created_at` / `last_used_at` / `is_default` | — |
+| `POST /api/workspaces` | 登记一个工作区（写 `~/.avid/workspaces.json`） | `{path, name?, permission?}`；`permission` 只有 `manual` / `auto`——工作区默认权限不接受 `full`，非法值 422 | 409 `workspace_exists`（含进程绑定的那个）/ 400 `workspace_invalid`（路径不存在） |
+| `POST /api/workspaces/pick` | 由**服务端**在宿主机弹一次文件夹选择器 | `{path}`；`path: null` = 用户取消（不是错误）。浏览器拿不到目录的绝对路径（`webkitdirectory` 只给相对路径、File System Access API 只给 handle），所以这一步只能由跑在本机的后端做；它按 `AVID_PICKER_CMD` → tkinter → zenity/kdialog → Windows（WSL 互操作）→ osascript 依次探测，`capabilities.workspace_picker` 报告实际用的是哪一个（`null` = 这台机器没有可用的） | 409 已有对话框开着 / 503 没有可用后端（消息里给出 `avid workspace add <路径>`） |
+| `DELETE /api/workspaces/{id}` | 从候选列表里摘掉一项，**不删会话数据**（目录、`.avid/sessions` 与会话文件一行不改） | 204 | 409 `workspace_bound`（想摘的是进程绑定的那个，它永远在候选里） |
+| `GET /api/skills` | 技能目录（name + 一行描述，与 system prompt 同源） | | — |
+| `GET /api/health` | 就绪探针 | `status` / `api_version` / `uptime_ms` | — |
+
+未知 `/api/*` 一律返回 JSON 404，**不回落到 SPA 外壳**。
+
+**分支是命名的链尾**：一个值 `avid.branch.tip.<name>` 指向某条条目，链本身由 `parent_id`
+还原。因此分叉不复制条目——新链与旧链在分叉点之前是同一批条目。服务端没有「当前分支」，
+只有一组链尾值，`branch` 由调用方在每次读条目、起运行时给出。
+
+**`permission` 是三轴预设**（阶段 26），不是一道信任边界的三个刻度：
+
+| 档 | 值 | approval | sandbox | network |
+|---|---|---|---|---|
+| 手动 | `manual` | 问人 | 工作区 | 无出网 |
+| 自动 | `auto` | 确定性分类器（判不准即拒） | 工作区 | 无出网 |
+| 完全访问 | `full` | 不问 | **已禁用** | 不限 |
+
+- 优先级：本次请求的 `permission` > 工作区默认权限（`avid workspace permission <id> <mode>`）> `manual`。
+- `full` 必须带 `full_access_ack: true`，缺了服务端 422；显式授权是请求体的一部分，不是客户端界面的一部分。
+- `manual` 与 `auto` 的沙箱逐字相同：沙箱能保证的区内常规动作不问（否则 approval 与 sandbox 就退化成一件事）；越界、危险命令、`.env` 这类 ask 档、`subagent` 才会进入 REVIEW。
+- 沙箱是否可用是服务端实测的事实：`GET /api/meta` 的 `capabilities.sandbox` 带 backend / available / network / reason / landlock_abi。
+
+**工作区**是一个本地目录，同时是权限边界、会话归属与干活的地点：
+
+- 进程绑定的工作地点**不写进注册表**，所以注册表里有什么只取决于登记过什么，不取决于起过几次服务。
+- 会话的归属是**创建时的静态事实**，写在会话 header 里；注册表被删掉也不影响已有会话的归属查询。
+- 工作区的默认权限只能取 `manual` / `auto`：`full` ≠ default，它在 DTO 类型、CLI choices 与注册表三处都不存在。
+
+**用量读数**（`features.usage` 声明时才存在，口径单点在 `RunState.usage_report()`）：
+
+- 占用用 provider 上报的真实 `prompt_tokens`，不是本地估算；会话头部的累计 `tokens`（这次运行一共花了多少）与这里的「现在占了多少」是两个数。
+- 窗口按 `AVID_CONTEXT_WINDOW` → 内置模型名小表 → 问一次 provider 的 `/models`（`context_length` / `max_model_len` 等；进程内缓存、失败静默、`AVID_MODEL_INFO=off` 关掉）依次取值；三条都没有就只报 tokens、不给百分比。显式配置写成 `128k` 这类非数字会直接报错，不静默回落。
+- 系统提示词 / 工具定义 / 对话消息三块是**估算**：系统提示词与工具定义从不发给前端（前端只有对话条目），所以内核在发请求前记下三者的字符数，再由 `usage_report()` 按字符占比把真实的 `prompt_tokens` 分给三块——三块之和恰好等于真实总数（余数归对话消息）；没有分块数据时（旧快照、这一轮没记字符数）这三块不出现。
+- 缓存以 provider usage 为准：OpenAI 的 `prompt_tokens_details.cached_tokens`、DeepSeek 的 `prompt_cache_hit_tokens`、Anthropic 的 `cache_read_input_tokens` / `cache_creation_input_tokens`、Gemini 的 `cachedContentTokenCount` 都会归一化；这家没有写入缓存计数（OpenAI 系）时那一项不出现，不当成 0。命中率分母是含命中部分的输入总量。
+- 压缩后读数是压缩发生**之后**下一轮的真实 `prompt_tokens`；压缩后没再调用模型就没有这一项。
+- 端点不认 `stream_options.include_usage` 时整块读数缺失。
+- 实时值随每轮 `run_status` 事件到达；落盘值随 `GET /api/sessions/{id}/branches` 的 `usage` 给该分支最近一次运行的读数。
 
 ## 2.1 信任边界（这不是鉴权，但也不是"随便谁都能打"）
 
@@ -90,302 +128,54 @@ uv run avid web --port 8765      # 静态资源与 API 同源
 跑命令（命令以本进程权限执行）。所以不要把 `--host` 指到公网；需要多人/远程使用时
 应当放在带认证的反向代理之后，而不是直接暴露。
 
-## 3. 事件分档（前端消费规则）
+## 3. 事件分档（消费规则）
 
-| 档 | 是否带 `id`/`seq` | 是否重放 | 前端怎么处理 |
+| 档 | 是否带 `id`/`seq` | 是否重放 | 消费规则 |
 |---|---|---|---|
-| durable | 是 | 是 | 按 `(run_id, seq)` 幂等去重；渲染前 flush 待处理 delta |
+| durable | 是 | 是 | 按 `(run_id, seq)` 幂等去重；终止类事件之前，待处理的 delta 必须先收敛 |
 | transient | 否 | 否 | 只更新轮次 / token / 活动工具等状态 |
-| delta | 否 | 否 | 默认不投递（`?deltas=1` 才订阅）；rAF 合并，≤1 次提交/帧 |
+| delta | 否 | 否 | 默认不投递（`?deltas=1` 才订阅）；可任意丢，最终内容由 durable 给全 |
 
 终止类事件（`run_finished` / `run_failed` / `run_cancelled`）渲染前 **cancel** 待处理
-delta，durable 事件渲染前 **flush**——两者不混用（不变量 I12）。
+delta，durable 事件渲染前 **flush**——两者不混用：flush 是「把已有内容落上去」，
+cancel 是「别让旧内容盖住最终结果」。
 
-客户端按 `GET /api/meta` 的 `features` 分支、不按版本号分支：`features.deltas = 1` 时
-`useRunStream` 才带 `?deltas=1` 订阅，delta 经 rAF 合并器落到一个乐观条目上，随后的
-durable `assistant_message` 带完整内容并把它替换掉。**delta 不落盘、不重放**，所以刷新
-后正在流式的那一轮会以「等待中」出现，随后由 durable 补齐（内核只把 delta 推给当场
-订阅的消费者，`?deltas=1` 不写 `id:` 行，浏览器重连自然停在最后一个 durable 点）。
+客户端按 `GET /api/meta` 的 `features` 分支、不按版本号分支：`features.deltas = 1` 时才
+带 `?deltas=1` 订阅。**delta 不落盘、不重放**，所以刷新后正在流式的那一轮会以「等待中」
+出现，随后由 durable 补齐（内核只把 delta 推给当场订阅的消费者，`?deltas=1` 的帧不写
+`id:` 行，浏览器重连自然停在最后一个 durable 点）。
 
-## 3.1 分支（F4）
-
-分支是**命名的链尾**：一个值 `avid.branch.tip.<name>` 指向某条条目，链本身由
-`parent_id` 还原。因此分叉不复制条目——新链与旧链在分叉点之前是同一批条目。
-
-- 「切换分支」只改前端的 `branch` 状态并重取该链的条目（服务端不知道谁在「当前」分支）。
-- 「从此处分支」= `POST /branches {at: entry_id}`，之后 `POST /runs {branch}` 让这次
-  运行接在新链尾上。`features.branches = 1` 时才显示这些入口。
-- 活动 run 期间服务端拒绝分叉（409 `branch_exists` / `session_busy`），界面先把入口禁用。
-- 重名分支 409 `branch_exists`；未知分叉点 400 `invalid_request`；未给名字时自动取
-  `b2`、`b3`…（跳过已占用的）。
-
-## 3.2 工作区与权限模式（阶段 18）
-
-**新增工作区**（导航列右上角的 ＋）：点击后由**服务端**在宿主机上弹出系统文件夹选择器——
-浏览器拿不到目录的绝对路径（`webkitdirectory` 只给相对路径、File System Access API 只给
-handle），所以这一步只能由跑在本机的后端做。后端按 `AVID_PICKER_CMD` → tkinter →
-zenity/kdialog → Windows（WSL 互操作）→ osascript 依次探测，`GET /api/meta` 的
-`capabilities.workspace_picker` 会报告实际用的是哪一个（`null` = 这台机器没有可用的，
-此时按钮的报错里会给出 `avid workspace add <路径>` 这条替代做法）。
-
-三种结果都有明确反馈：**取消什么都不做**（取消不是故障，不弹错误）；**已在列表里**
-（含进程绑定的那个）→ 409 `workspace_exists`，提示"已经在了"并切到它，**不重复添加**；
-**路径不存在** → 400 `workspace_invalid`。成功后新工作区立刻出现在候选列表里、
-注册表里也写下来了（`~/.avid/workspaces.json`），并成为当前选中的那个。
-
-**工作区**是一个本地目录，同时是权限边界、会话归属与干活的地点。界面上它就是一个
-**文件夹**：导航列按工作区分组，展开后是它的会话（每行右侧是相对时间），一个工作区里
-会话多于 5 条时给「展开其余 N 个会话」。
-
-- **建会话 = 在某个文件夹上点 ＋**。没有"先选下拉再点新建"这一步：归属永远是点出来的
-  那一下，不会出现"下拉忘了改"的错建。点完会展开那个文件夹并跳到新会话。
-- **默认展开**：装着当前会话的那个文件夹；没有当前会话时展开第一个有会话的；都没有就
-  展开第一个（空文件夹也要露出"还没有会话 + ＋"，否则新机器上界面看着像空的）。
-- 进程绑定的工作地点**不写进注册表**，所以"注册表里有什么"只取决于你登记过什么，
-  不取决于你起过几次服务。
-- **搜索**（🔍）在客户端按**会话名**过滤，不发任何请求：只留命中的会话，没有命中的
-  工作区整组不显示，命中项一律展开且不受"前 5 条"限制。匹配的是界面上显示的那个名字
-  （没名字的会话按「未命名会话」匹配），**不匹配工作区名**——搜 "Avid" 把整个文件夹的
-  几百条会话全捞出来只会更难找。查询**不持久化**（刷新即清空），"刷新后还留着一个把
-  列表藏掉一半的过滤条件"是坑不是贴心。没有匹配时给「没有名字含「X」的会话」。
-- **移除工作区 = 从导航列里摘掉这一项**（文件夹标题行最右的 🗑，`DELETE /api/workspaces/{id}`，
-  能力位 `features.workspace_delete`）。它**不动磁盘上的任何东西**：目录、`.avid/sessions`
-  与会话文件一行不改，所以它下面的会话仍然列举得到、打得开——界面上它们归到
-  **「未归属的会话」**组（分组规则见 `features/sessions/lib/navTree.ts`：归属在候选列表里
-  找不到就进这一组，不再让它凭空消失）。想加回来：用右上角的 ＋ 重新选同一个文件夹
-  （同一个目录永远同一个 id，条目是**墓碑**不是第二份）。进程绑定的工作地点没有这个按钮：
-  它永远在候选列表里（服务端会回 409 `workspace_bound`），画一个按下去没用的按钮只会骗人。
-会话卡与详情显示归属名字。归属是**创建时的静态事实**，写在会话 header 里，
-所以注册表被删掉也不影响已有会话的归属查询。
-
-**权限模式**决定"谁来回答 REVIEW"，三档是**三轴预设**（阶段 26）：
-
-| 档 | 值 | approval | sandbox | network |
-|---|---|---|---|---|
-| 手动 | `manual` | 问人 | 工作区 | 无出网 |
-| 自动 | `auto` | 确定性分类器（判不准即拒） | 工作区 | 无出网 |
-| 完全访问 | `full` | 不问 | **已禁用** | 不限 |
-
-- 优先级：本次请求的 `permission` > 工作区默认权限（`avid workspace permission <id> <mode>`）> `manual`。
-  工作区默认权限**不接受 `full`**（它在 DTO 类型、CLI choices、注册表三处都不存在）。
-- `manual` 与 `auto` 的沙箱逐字相同：**沙箱能保证的区内常规动作不问**（否则
-  approval 与 sandbox 就退化成一件事）。越界、危险命令、`.env` 这类 ask 档、`subagent`
-  才会进入 REVIEW。
-- **选 `full` 要先过二次确认**：弹出对话框、确认按钮写「我明白，关闭沙箱」，取消则什么都不
-  发生。确认后 `buildStartRunInput` 统一补 `full_access_ack: true`（服务端缺它就 422）。
-- 输入条常驻一个**沙箱标记**，但常驻的只有一枚**图标**（四档四种形状：可用 / 未探测 /
-  已禁用 / 不可用，颜色另分）。`沙箱：工作区（无出网）` / `沙箱：已禁用` /
-  `沙箱：不可用（原因）` 这句事实改由**悬停或聚焦时的气泡**给出。数据来自 `GET /api/meta`
-  的 `capabilities.sandbox`（服务端实测的后端可用性）与当前模式，所以"这台机器上沙箱到底
-  在不在"仍然是一个看得见的事实，只是不再常驻占掉输入条一行（窄窗口里那格文字曾经被挤成
-  三行）。
-- 界面上的选择**不持久化**：它是这次会话视图的瞬时状态，缺省值来自服务端。理由是
-  "上次选了 full，下次打开浏览器继续关沙箱"属于安全默认值问题。
-
-呈现上输入条旁的选择器**只有控件本身**：没有上方标签、控件方框里也没有说明行——控件里写着的
-就是当前档的名字。把鼠标停在它上面（或键盘聚焦它），**当前档**那一句说明会以气泡浮现在控件
-**外面（上方）**，切换到别的档提示跟着变；鼠标移开气泡就消失（未悬停时气泡内容根本不挂载，
-所以它不吃方框里的任何空间，也就不必再为它预留一行高度）。方框因此按控件自身内容收宽
-（调用点用 `w-fit`，不再是给说明行留位的固定宽度）。浮层用 `ui/primitives/Tooltip.tsx`（Radix），
-它的 `id` 传给气泡容器并**同时**成为控件的 `aria-describedby`，所以读屏器在聚焦时读得到；
-稳定锚点 `#permission-mode-hint` 也保留了下来。可访问名仍由 `aria-label="权限模式"` 提供，
-`getByLabel('权限模式')` 照常定位得到。
-
-## 3.3 用量指示器：上下文占用与缓存命中（阶段 22）
-
-权限模式那一行、发送按钮左侧常驻一行读数（**内核在 `/api/meta` 的 `features` 里声明
-`usage` 时才出现**——能力表没有这一项时整个指示器不画，旧内核上不会留一个永远空着的
-「用量 —」，判据同 `features.deltas`）：
-
-```
-上下文已用 36%  ▰▰▰▰▰▱▱▱▱▱▱▱▱  ·  缓存命中 78%
-```
-
-常驻的只有两个百分比：**占用率**（最近一轮真实 `prompt_tokens` / 模型窗口）带一条迷你
-进度条，以及**缓存命中率**（命中读 / 输入总量）。占用率按三档上色——**≤60% 中性、
-60–85% 警示、>85% 危险**；阈值只是展示约定，改它就是改这一节。
-
-鼠标停上去（或键盘 Tab 到它）是明细卡片：占用率与 `tokens / 窗口`、**三块文本的堆叠条
-与清单**（系统提示词 / 工具定义 / 对话消息）、以及缓存读写、命中率、压缩次数、压缩后读数
-与最近一次压缩的步骤名。
-
-口径与「看不到就显示 `—`」的规则（都出自 `RunState.usage_report()` 这一处计算）：
-
-- **占用**用 provider 上报的真实值，不是本地估算。同一份上下文会被反复计费，所以会话头部的
-  累计 `tokens`（这次运行一共花了多少）与这里的"现在占了多少"是两个数。
-- **窗口**按 `AVID_CONTEXT_WINDOW` → 内置模型名小表 → **问一次 provider 的 `/models`**
-  （`context_length` / `max_model_len` 等；进程内缓存、失败静默、`AVID_MODEL_INFO=off` 关掉）
-  依次取值。三条都没有就只报 tokens、不显示百分比，并在行尾标注「窗口未知」（错的分母比
-  没有分母更糟）。显式配置写成 `128k` 这类非数字会直接报错，不静默回落。
-- **三块细分是估算，且只有占比**：系统提示词与工具定义从不发给前端（前端只有对话条目），
-  所以内核在发请求前记下三者的**字符数**，再由 `usage_report()` 按字符占比把**真实的**
-  `prompt_tokens` 分给三块——三块之和恰好等于真实总数（余数归对话消息），界面上每块带 `~`
-  并在卡片里注明「分块按字符占比估算」。不用"每 token 多少字符"的绝对系数：那类系数在中英
-  混排下必然偏，而占比只用三块之间的相对量。没有分块数据时（旧快照、这一轮没记字符数）
-  堆叠条与清单整段不出现。
-- **缓存**以 provider usage 为准：OpenAI 的 `prompt_tokens_details.cached_tokens`、DeepSeek
-  的 `prompt_cache_hit_tokens`、Anthropic 的 `cache_read_input_tokens` /
-  `cache_creation_input_tokens`、Gemini 的 `cachedContentTokenCount` 都会归一化。这家没有
-  写入缓存计数（OpenAI 系）时明细里那一行不出现，不当成 0。命中率分母是含命中部分的输入总量。
-- **压缩后读数**是压缩发生**之后**下一轮的真实 `prompt_tokens`；压完没再调用模型就是 `—`。
-- 端点不认 `stream_options.include_usage` 时整块读数缺失，显示「用量 —」而不是「上下文 0」。
-
-实时值来自事件流（每轮 `run_status` 带一份快照），落盘值来自分支列表
-（`GET /api/sessions/{id}/branches` 的 `usage`，按**分支**记账）。刷新页面、切换会话、
-重启 `avid web` 之后显示的是该分支最近一次运行的读数，运行中的实时值优先；切换分支时各显示
-各的链，没跑过的分支显示「—」。
+> **§3.1–§3.3 已于阶段 32 随旧前端一并删除。** 分支视图、工作区与权限模式、用量指示器
+> 这三节的主体是界面行为与呈现；其中的接口事实（端点名、字段名、事件名、状态码）已并入 §2。
 
 ## 4. 验证
 
-前端的 `pnpm -C web run verify` 覆盖四道门禁 + 类型检查 + 单测 + 体积（`check:layers`
-→ `check:tokens` → `lint` → `typecheck`（`tsc -b --noEmit`）→ `vitest run` →
-`gate:size`）。Playwright 的 `test:e2e` **不在**其中：它要一个活的内核进程与真实模型
-（`AVID_E2E=1`），不适合放进每次提交都跑的门禁，按需单独执行（见下）。**它也不进 CI**：
-CI 里没有模型与密钥、而脚本模型服务又不在仓库里（`dev/` 不入库），所以"把 e2e 接进 CI"
-的第一步是先把那个服务变成受审的仓库文件——见 §5 的「明确未做」。
-
 ```bash
 # 内核侧
-uv run pytest -q                                   # 全部（含事件契约 A7 与边界 A1–A12）
-uv run pytest -q tests/test_run_events.py          # B1/B2/B3 事件序列、游标补齐、resync、delta 通道
-uv run pytest -q tests/test_llm.py                 # B9 流式与非流式逐字段等价
-uv run pytest -q tests/test_approvals.py           # B4–B7 审批挂起/幂等/超时/取消
-uv run pytest -q tests/test_web_api.py             # B10–B16 端点契约、分页、SSE 分帧、分支端点
-uv run pytest -q tests/test_branches.py            # F4 分叉语义：前缀共享、分支隔离、活动 run 拒绝
-uv run pytest -q tests/test_web_boundaries.py      # A1–A6/A10–A12 grep 门禁
+uv run pytest -q                                   # 全部（含事件契约与边界 grep 门禁）
+uv run pytest -q tests/test_run_events.py          # 事件序列、游标补齐、resync、delta 通道
+uv run pytest -q tests/test_llm.py                 # 流式与非流式逐字段等价
+uv run pytest -q tests/test_approvals.py           # 审批挂起/幂等/超时/取消
+uv run pytest -q tests/test_web_api.py             # 端点契约、分页、SSE 分帧、分支端点
+uv run pytest -q tests/test_branches.py            # 分叉语义：前缀共享、分支隔离、活动 run 拒绝
+uv run pytest -q tests/test_web_boundaries.py      # grep 门禁：内核不 import 框架、web 不写会话
+uv run pytest -q tests/test_wire_contract.py       # REST 线格式与 TS 契约种子逐字段一致
 
-# 前端侧
-pnpm -C web run verify                             # layers + tokens + lint + vitest + 体积门禁
-pnpm -C web run check:layers                       # 网络出口唯一、feature 不互相 import
-pnpm -C web run check:tokens                       # 字体声明即加载、层级只用 --z-*
-pnpm -C web run lint                               # 样式/token/档位/模糊预算/裸元素/i18n key 完整性
-pnpm -C web run check:contrast                     # token 表里声明的对比度配对（按 alpha 合成）
-pnpm -C web test                                   # reducer / coalescer / SSE 解析 / 定时与缩放规则单测
-pnpm -C web build && pnpm -C web run gate:size     # 首屏 JS / 样式表 / 字体 / 纹理字节
-
-# 浏览器（49 条：45 条功能 + 4 条视觉基线；需先 pnpm -C web exec playwright install chromium）
-# 前置：**一个脚本模型内核**（不需要模型与密钥）。那个服务在仓库里没有——
-# `dev/` 是过程目录、不入库；自备一个能注入 `chat` / `stream_completion` 的装配即可，
-# 形状见 web/e2e/README.md「用脚本模型跑」。
-AVID_PORT=8877 AVID_E2E_STREAM=1 uv run --extra web python <你的脚本模型服务.py>
-AVID_BASE_URL=http://127.0.0.1:8877 AVID_E2E=1 pnpm -C web test:e2e
+# 前端侧（`web/` 现在只有这六个脚本）
+pnpm -C web typecheck                              # tsc -b --noEmit
+pnpm -C web test                                   # vitest（目前只有一条骨架 smoke 用例）
+pnpm -C web build                                  # tsc -b + vite build → dist/
+pnpm -C web run copy:dist                          # dist → src/avid/web/static + 构建戳
 
 # 手验
 curl -s localhost:8765/api/meta | head -c 300   # 其中的 build.git_sha 是那种产物的提交戳
 curl -s -o /dev/null -w '%{http_code} %{content_type}\n' localhost:8765/api/nope   # 404 application/json
 ```
 
-## 5. 明确未做（与本轮范围对应）
+**浏览器 e2e 与视觉基线已随前端删除，待新门禁重建**：Playwright 用例、a11y（axe）门禁、
+`web/e2e/` 与 `web/scripts/` 下的分层 / token / 样式 / 对比度 / 体积脚本、`budget.json`
+都不在了，`pnpm -C web run verify` 与 `test:e2e` 也随之不存在。
 
-- **成本与延迟台账**：只记 token 用量、缓存读写与压缩读数（阶段 22），**不按价格表折算
-  金额**，也不给每次模型调用记时延。折算成本要一张随 provider 与缓存档位变动的价格表，
-  那是另一件事；触发条件见 `runtime-architecture.md` §20.4。
-
-- **前端写文件 / Web 终端 / 桌面壳**：不做（§5.5）；人类要改文件，走
-  `/api/runs` 让 agent 调用工具，权限闸门与审计因此不被绕过。
-- **流式渲染库（streamdown 类）**：不做——delta 只到「乐观条目 + rAF 合并」这一层，
-  Markdown 在 durable 消息到达时整条渲染。失效信号是接入 delta 后帧率不达标。
-- **Playwright 用例**（功能 45 条 + 视觉基线 4 条）：脚手架在 `web/e2e/`，需要
-  `pnpm -C web exec playwright install chromium` 与 `AVID_E2E=1` 才跑；前置是一个脚本模型
-  内核（**不在仓库里**，见上），细节见 `web/e2e/README.md`。
-  已落地的是首屏、四条路由、提交→审批→完成、检查器、布局（含中档抽屉）、消息卡片（含两枚
-  角色标记）、交互反馈、待办清单、分支旅程、流式收敛、工作区/权限选择器、背景插画，以及
-  4 张视觉基线（阶段 23b，容差按实测的 3 像素）。**仍未做**：a11y（axe）、降级路径的用例；
-  **e2e 入 CI**——它有一条具体的前置（把脚本模型服务移进仓库），以及一条跨环境问题（视觉基线
-  在别的字体栈上会红，需要 Playwright 官方容器钉环境）。两条都记在 `web/e2e/README.md`。
-
-## 6. 布局与交互约定（别改回去）
-
-**会话头部**：只放标题、状态徽标、轮次/token 与两张常驻 ID 胶带；胶带在**流式布局**里
-（不是绝对定位）——绝对定位时第二张胶带会压住左侧内容（4 种宽度组合下都实测相交）；
-窄卡片下 `flex-wrap` 让胶带换行。**头部不再有工具按钮**：「上下文占用」条只在压缩发生过
-之后才有值、显示的不是实时占用，已删；↓ 与时间线里的「回到最新」重复，只留后者；
-「检查器」「待决审批」两颗没有实际作用（检查器由条目的「查看」打开、由它自己的关闭按钮
-收起，审批条本来就在同屏内），也删了。回归用例：`e2e/layout.spec.ts` 断言头部按钮数为 0、
-胶带不压标题，并验时间线里的「回到最新」真的能贴底。
-
-**导航列**：宽档默认 320px，收起是 64px 图标轨；**收起态头部竖排**（图标 + 图标），
-因为「44px 图标 + 文字按钮」并排放不进 64px，会溢出并压到会话卡上（`e2e/layout.spec.ts`
-里有几何断言）。一级切换只有导航列一处入口——⌘K 命令面板因与导航列完全重合已删除。
-导航项只有**技能目录 / 设置**：会话列表按工作区分组后就长在它们下面，再给一个
-「会话」入口等于把同一件事说两遍。`/sessions` 路由保留，作为根路径与未知路径的落点，
-页面上是**指路文案**（`sessions.choose`）而不是「还没有会话」——导航列里可能正列着一堆
-会话，那句话说出口就是错的（「还没有会话」是空工作区文件夹的文案 `sessions.emptyIn`）。
-
-**中档（960–1279px）**：导航列恒定 64px 图标轨，会话列表走**左侧抽屉**（点轨道头部的
-「会话列表」按钮）。没有做成「就地展开成 320px」：那会吃掉 1/3 屏宽，且展开态经
-`uiStore` 持久化后会长期占用，而抽屉不改变内容宽度。抽屉里选中会话后会自己收起
-（`AppShell` 的 `nav` 是收 `close` 回调的渲染函数）——否则刚选中的内容会被 75vh 的
-覆盖层挡住。
-
-这个抽屉入口的条件必须是 `isMid && !isWide`，**不能只写 `isMid`**：`useViewport` 里
-`isMid` 的语义是「≥960」（`isWide` 是「≥1280」），宽档同样成立，只写 `isMid` 会让它在
-「收起」旁边多出一枚图标按钮，点开只是把右侧已经可见的列表再盖一层。回归用例：
-`e2e/layout.spec.ts` 的「中档宽度」与「宽档：抽屉入口不出现」两条。
-
-外壳的高度链是**视口高度**：`AppShell` 外层 `h-dvh overflow-hidden`，内层行 `h-full min-h-0`，
-再往下每一级 flex 容器都带 `min-h-0`。这样「时间线是唯一滚动容器」才成立：
-`ConversationView` 的 `h-full` 有确定的高度参照，输入条永远留在视口内，页面自身不滚动。
-
-用 `min-h-screen` 代替 `h-dvh` 会让容器高度由内容决定，`flex-1` / `h-full` 全部失去参照，
-消息区会把整页撑高、输入条被推到视口之外（`web/e2e/layout.spec.ts` 就是这条的回归用例）。
-非会话工作面（技能目录 / 设置）由各自的 route 容器 `scroll-area` 承担滚动。
-
-**底栏是待办清单在上、输入条在下**：`ConversationView` 底部那一块（`border-t-bold`）里，
-待办清单（`TodoPanel`）贴在输入条正上方——"这次对话拆成了哪几步、走到第几步"是边说边要看的
-上下文，不该为了看它离开对话。清单从条目推导（最后一次 `todo_write` 的参数，零新接口、
-零新存储），默认展开、可折叠（`uiStore.todoExpanded`），没有清单时整块不渲染。它那份上边距
-写在面板自己身上而不是底栏上——否则"没有清单"也会在输入条上方留一条空档。回归用例
-`e2e/todos.spec.ts`。
-
-交互反馈同理只有一处定义：**行动型按键本身就有方框**（时间线的「复制 / 从此处
-分支」两枚图标按钮、工具卡收起、处理中展开、待办清单折叠、审批原因、关闭检查器、导航折叠、会话项删除），
-用的是与「改名」相同的 `secondary` 样式——玻璃面 + 1px 高光边（`--glass-edge`）、
-`--r-chip` 圆角、`--lift-1` 投影。悬停由 `ui/glass.css` 统一抬升一档投影并加一点亮度，
-按住时投影收掉（**不位移**：新语言的高度由投影承担）；键盘聚焦有全局 `:focus-visible`
-焦点环；禁用保留方框但不抬升。会话列表的会话标题同样用 `secondary`（与「改名 / 删除」
-同族），并且 `w-full`——方框铺满卡片内容区，长会话名在框内换行而不撑破卡片。按钮变体只有 primary / secondary / danger 三种，每个都自带方框——原先无框的
-`ghost` 变体在最后一个调用点也加上框之后已删除。
-
-**primary 的实心底只有一处来源**：token `--avid-accent-deep-rgb`，经 `tailwind.config.js`
-的 `accent-deep` 绑成 `bg-accent-deep`（`text-card` 配它 ≥4.8）。这条绑定曾经漏掉——类名写对了
-但没进 Tailwind 的色板表，于是规则一条都没生成，按钮只剩半透明玻璃面 + 近白字，白字白底
-等于看不见。`e2e/interaction.spec.ts` 现在直接断言主按钮的 computed 底色与 token 一致、
-且与字色的对比度 ≥ 4.5，这类"名字写对、规则没生成"的空洞不会再靠肉眼发现。
-
-**时间线的动作行常驻可见**（复制 / 从此处分支两枚图标按钮），不做悬停显形：显隐只是额外一层谜
-——「有这功能」本身得先被猜到，而方框与高度档本来就一直在。条目级的「查看原始 JSON」
-已删除；检查器由**工具卡**的「查看」打开（工具输出才是真正需要看全文 / diff / 原文的
-东西），`interaction.spec.ts` 里有一条断言它不再出现在条目动作行里，`conversation.spec.ts`
-的检查器用例顺带证明检查器本身没被一起拆掉。
-
-所有取值来自 `ui/tokens.css`，所以「换主题」与「整体缩放」都不需要改组件——`e2e/interaction.spec.ts`
-的断言也是**从 token 拼期望值**的（不写字面量），换视觉语言不必改测试。
-「长什么样」由 `web/e2e/visual.spec.ts` 的视觉基线守（4 种表面）。
-
-消息同理：用户消息与模型回复是**同一族玻璃卡**（半透明玻璃面 + 1px 高光边 +
-`--lift-2` 柔和投影），只有方向与角色标记不同。角色标记是两枚 lucide 图标：模型 `Bot`、
-用户 `User`（`strokeWidth 1.75`，`aria-hidden`）——两枚必须不同形，标记的职责就是区分
-作者。**卡片不再轮换形状**：旧语言那三种手绘圆角随涂鸦机制删除，`messages.spec.ts`
-反过来断言「所有消息卡片同形」（它会抓住任何「顺手加回一点随机形状」的改动）。
-
-**时间线里只放三样东西**：用户输入、Avid 的回答、工具调用。三样东西**不渲染**：
-
-- **用户消息里没有内核的注入**：`UserPromptSubmit` 注入的上下文（工作区根、可用工具）
-  并进**系统提示词**，用户消息就是用户写的那句话。以前它被拼在 user content 前面，
-  界面无从分辨（那就是一条普通 user 消息），于是把内核写的环境信息画成用户说的话。
-- **正文为空的 assistant 回合**（只声明工具调用、没有说话）。真实会话里这种回合占比很高
-  （实测一份 21 条条目的会话里有 8 条），渲染出来就是一个只有角色名的空框；这次调用本来
-  就由工具卡承担。跳过它的是 `conversation/lib/groupTimeline`，**不是**把条目删掉——
-  工具卡挂在「声明它的那个条目」上，条目一删就掉到时间线末尾。形状计数只对真正渲染出来
-  的卡片递增，否则连续跳过两个空回合会让相邻卡片撞上同一个形状。
-- **内核注入的提醒**（`todo_reminder` / `stop_nudge`）。它们的 `role` 确实是 `user`，
-  文本是内核写的，所以**不能**当成用户消息画在右侧。事件照旧在流里（可观察、可回放），
-  只是没有条目视图。
-
-判别注入提醒必须靠**结构化标记**，不能靠文本：Stop nudge 的文本由 Stop hook 任意给定
-（测试里就是「还有一步」），没有稳定前缀。标记落在条目的 `type` 上——`SessionRecorder`
-把这类消息写成 `NOTICE_ENTRY`（`"notice"`），投影照旧带上它（续接时模型看到的历史必须
-与当时逐字一致），前端 `viewFromEntries` 见到 `type !== 'message'` 就跳过。
-回归用例：`groupTimeline.test.ts`、`reducer.test.ts`、`test_session_conformance.py`
-的 notices 一条、`test_web_api.py` 的线格式一条。
+> **§5–§6 已于阶段 32 随旧前端一并删除。** §5 是与当时范围对应的「明确未做」清单（成本与
+> 延迟台账、前端写文件 / Web 终端 / 桌面壳、流式渲染库、Playwright 用例），§6 是布局与交互
+> 约定——都是那份已被删除的前端的内部设计与呈现约定。

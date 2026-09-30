@@ -2,8 +2,10 @@
 
 自建的 agent 运行时（harness）：模型调用、工具执行、多步循环、上下文与记忆、权限、评测各层都掌握在自己手里，做到可替换、可调试、可度量。
 
-**当前进度**：内核（模型调用、循环、工具、会话持久化、事件层）与
-**本地 Web 界面**（会话时间线、审批队列、待办清单、技能目录、设置）都已跑通。
+**当前进度**：内核（模型调用、循环、工具、会话持久化、事件层）与**本地 Web 服务**
+（FastAPI 路由、pydantic DTO、SSE 事件流、静态资源服务）都已跑通。
+**前端在阶段 32 已整体删除重建**：`web/src/` 现在只有 5 个文件的骨架（入口、占位壳与两份
+契约种子），页面设计与视觉语言待定，本次不实现（见 `docs/status/CAPABILITIES.md` §11）。
 
 正式文档在 `docs/`，收录标准见 `docs/README.md`；开发过程文档在 `dev/`，只留本地、不入库。协作约定见 `AGENTS.md`。
 
@@ -65,13 +67,18 @@ uv run --env-file .env avid web --port 8765      # API + SSE + 静态资源
 开发期前端热更新：另起 `pnpm -C web install && pnpm -C web dev`（Vite 代理 `/api`）。
 交付形态是「分离开发、单进程交付」：`pnpm -C web build && pnpm -C web run copy:dist`
 把产物复制进 `src/avid/web/static/`，随 wheel 分发，安装者不需要 Node。
+现在能打开的是重建后的骨架页，不是可用界面。
 
-页面与接口的对应关系、事件分档规则与验收命令见 `docs/guide/web-ui.md`。
+Web 服务的接口、SSE 消费规则与信任边界见 `docs/guide/web-ui.md`；前端页面与接口的对应关系
+待新前端定稿后补。
 
 ## 开发
 
 ```bash
 uv run pytest              # 内核与 API 全部测试，不联网
-pnpm -C web run verify     # 前端门禁：层禁令、token、i18n、体积、单测
-AVID_E2E=1 pnpm -C web test:e2e   # 浏览器冒烟（需先 playwright install chromium）
+pnpm -C web run typecheck  # 前端类型检查（骨架）
+pnpm -C web run test       # 前端单测（目前只有 2 条骨架 smoke）
 ```
+
+前端原有的分层 / token / 样式 / 对比度 / 体积门禁与浏览器 e2e 已随阶段 32 的清空一并删除
+（`web/` 现在只剩 `copy:dist` 这一个脚本），新的门禁待前端设计定稿后重建。
