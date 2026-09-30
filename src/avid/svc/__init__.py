@@ -1,13 +1,4 @@
-"""应用服务层（F1）：内核的第二个调用方。
-
-与 ``cli.py`` 平级：``cli.py`` 把内核接到 stdin/stdout，这里把内核接到 HTTP。
-两者都不改内核的调度（不变量：内核不知道有几个调用方）。
-
-装配顺序有意义：**一个** ``JsonlSessionRepo`` 同时给运行注册表与会话读视图，
-否则「运行中刷新页面」会因为同一个会话被两次 open 而失败。本模块不 import
-FastAPI（A4），也不 import ``web/``；能力的输出（工具名、技能目录、模型名）
-在这里汇总，``web/routes/meta.py`` 只负责加构建戳与线格式。
-"""
+"""Application services: one assembly of the run registry, session and workspace services."""
 
 from __future__ import annotations
 
@@ -41,55 +32,48 @@ from .runs import (
 from .sessions import SessionService
 from .workspaces import WorkspaceService, bound_workspace, single_workspace
 
-# 破坏性变更时 +1。客户端只在**不兼容**时失败收敛；加可选事件不改它（§6.3）。
+# Bump on a breaking wire change; clients branch on the feature table, not on this number.
 API_VERSION = 1
 
-# 特性表：客户端按特性分支，不按版本号分支。声明的是**实际可用**的能力。
+# Capability flags: 1 means the running build actually serves that feature.
 FEATURES: dict[str, int] = {
     "approvals": 1,
     "cancel": 1,
     "sessions": 1,
     "entries": 1,
-    "deltas": 1,  # F3：内核按 SSE 流式解析，delta 经事件流投递（需 ?deltas=1 订阅）
-    "branches": 1,  # F4：分支列表 / 分叉 / 在指定分支上运行
-    "workspaces": 1,  # 阶段 18：工作区注册表 + 按工作区建会话
-    "permission_modes": 1,  # 阶段 18：POST /runs 接受 permission（现为 manual/auto/full）
-    "security_layers": 1,  # 阶段 26：三轴正交 + 四级 deny + 沙箱；run_started 带三轴快照
-    "full_access": 1,  # 阶段 26：full 需要 full_access_ack（显式授权），且不能作默认
-    "workspace_picker": 1,  # 新增工作区：POST /workspaces/pick 弹宿主机文件夹选择器
-    "workspace_delete": 1,  # 删除工作区：DELETE /workspaces/{id} 只摘索引，会话归未归属组
-    "usage": 1,  # 阶段 22：分支带用量快照；run_status / run_finished 带统一 usage schema
+    # Deltas arrive on the event stream and require opting in when subscribing.
+    "deltas": 1,
+    "branches": 1,
+    "workspaces": 1,
+    # The run endpoint accepts a permission mode: manual, auto or full.
+    "permission_modes": 1,
+    # Orthogonal permission axes, the four-level deny ladder and the sandbox.
+    "security_layers": 1,
+    # Full access needs an explicit acknowledgement and is never the default.
+    "full_access": 1,
+    # Creating a workspace can open a host folder picker.
+    "workspace_picker": 1,
+    # Deleting a workspace only drops its registry entry; its sessions stay readable.
+    "workspace_delete": 1,
+    # Branches carry a usage snapshot reported in one shared schema.
+    "usage": 1,
 }
 
-# 事件流相关常量对客户端可见（`/api/meta` 公布它们，前端据此设超时与对账阈值）。
-# 定义在 `runtime/events.py`：SSE 生成器、runs 注册表、meta 必须用同一个数。
-
-# 同时打开的 SSE 事件流上限（阶段 30d 起只是护栏，不再是线程池的影子）。
-#
-# 曾经的 24 是一道接缝的创可贴：订阅走同步生成器 + `iterate_in_threadpool`，一条
-# 连接长期占住 anyio 默认线程池（40）里的一个线程，40 条流同时开着 REST 就没有
-# 线程可用（审查里的 P2-13）。当时的选择是封顶而不是改异步——"收益（本地单用户
-# 工具）不抵风险"。阶段 30d 把订阅路径换成了 asyncio 事件桥（`subscribe_async`），
-# 等待发生在事件循环里，连接不再占线程；上限随之放开到 256，语义从"线程池余量"
-# 降级为纯粹的失控护栏（恶意客户端开几千条流仍会被 503 挡住）。
+# Ceiling on concurrently open event streams; subscribers beyond it are rejected, not queued.
+# Subscribers wait on the event loop instead of holding a worker thread, so this is a guard rail.
 MAX_CONCURRENT_STREAMS = 256
 
-# 技能目录在进程内缓存的时长。`GET /api/meta` 会被界面反复取，而"扫技能目录"是
-# 磁盘 IO（读每个 SKILL.md 的全文）——实测 5.1 ms/次，以前每条 SSE 连接也要付一次
-# （只为拿心跳常量）。TTL 很短：改了技能目录最多晚这么久生效，而 system prompt 的
-# 权威仍然是磁盘（`RunState.for_run` 每次运行重新扫描）。
+# How long the skill listing is cached in process, since the meta endpoint is polled often.
+# The window stays short because a changed skill directory should take effect soon after.
 SKILLS_CACHE_SECONDS = 5.0
 
 
 class StreamSlots:
-    """SSE 连接的并发额度（见 `MAX_CONCURRENT_STREAMS` 的说明）。
-
-    计数与释放都在生成器的 `finally` 里：连接断掉、迭代器被关闭、正常结束都会归还。
-    额度耗尽时 `acquire()` 返回 False——路由据此回 503，而不是排队占线程。
-    """
+    """Concurrency budget for open event streams; acquisition fails instead of queueing."""
 
     def __init__(self, limit: int = MAX_CONCURRENT_STREAMS) -> None:
         self.limit = limit
+        # Counting happens under a lock because acquisition and release run on different threads.
         self._lock = threading.Lock()
         self._active = 0
 
@@ -112,7 +96,7 @@ class StreamSlots:
 
 
 class Services:
-    """一组进程内服务。一个 Web 应用装配一份。"""
+    """The set of in-process services one transport application assembles."""
 
     def __init__(
         self,
@@ -128,15 +112,9 @@ class Services:
         max_events: int = MAX_EVENT_BUFFER,
         registry: WorkspaceRegistry | None = None,
     ) -> None:
-        """任何装配都先绑定一个**工作地点**，但**不写盘**（注册表只由用户显式动作写入）。
+        """Bind a working location for the process without writing to the registry.
 
-        * ``root``：直接给会话库路径（测试用）；工作地点由路径形状推出来。
-        * ``workspace_root``：给工作区根（`avid web --workspace`），目录必须存在。
-        * 都不给：取进程默认根（正常就是 cwd）——**没有"没有工作地点"的进程**。
-
-        绑定值可能是**未登记**的：它照常出现在 `GET /api/workspaces`（`is_default=true`）、
-        也照常可被 `POST /api/sessions` 解析（id 由根目录派生）。启动写盘会让"看一眼注册表"
-        与"起过服务"变成不可区分的两件事，而用户只想知道自己登记过哪些。
+        The bound value may stay unregistered, and it is still listed and still resolvable.
         """
         self.registry = registry or WorkspaceRegistry()
         if root is not None:
@@ -144,7 +122,7 @@ class Services:
             sessions_root: Path | None = Path(root)
         elif workspace_root is not None:
             default = bound_workspace(workspace_root)
-            sessions_root = None  # 用 `<root>/.avid/sessions`
+            sessions_root = None  # None means the store is derived as <root>/.avid/sessions.
         else:
             default = bound_workspace(workspace.WORKSPACE_ROOT)
             sessions_root = None
@@ -165,21 +143,18 @@ class Services:
             max_events=max_events,
         )
         self.sessions = SessionService(self.workspaces, self.runs)
-        # 事件流的并发额度：进程级一份（每个进程一个线程池）。
+        # The stream budget is process-wide because it protects a process-wide resource.
         self.streams = StreamSlots()
         self.started_at = now_ms()
+        # Cached skill listing and the monotonic time it was read, refreshed after the cache window.
         self._skills: list[dict[str, str]] | None = None
         self._skills_at = 0.0
 
-    # ---------------- 兼容访问器 ----------------
+    # Compatibility accessors for call sites that predate multi-workspace mode.
 
     @property
     def repo(self) -> JsonlSessionRepo:
-        """进程绑定的工作地点的会话仓库（旧访问点；新代码请用 `workspaces.repo_for`）。
-
-        多工作区模式没有"唯一仓库"这种东西，所以显式报错而不是随便挑一个——
-        "挑错了库"正是阶段 18 要消灭的那类静默错误。
-        """
+        """Repository of the process-bound workspace; multi-workspace setups have no single one."""
         if self.workspaces.default is None:
             raise RuntimeError(
                 "多工作区模式没有单一会话仓库；"
@@ -187,10 +162,10 @@ class Services:
             )
         return self.workspaces.repo_for(self.workspaces.default)
 
-    # ---------------- 能力面 ----------------
+    # Capability surface reported to clients.
 
     def meta(self) -> dict[str, Any]:
-        """版本、特性表、能力面。**不含**构建戳（那是 web/ 的静态资源事实）。"""
+        """Version, feature table and capability surface, without the build stamp of assets."""
         return {
             "api_version": API_VERSION,
             "features": dict(FEATURES),
@@ -199,22 +174,18 @@ class Services:
                 "tools": [item["function"]["name"] for item in TOOLS],
                 "skills": self.skills(),
                 "model": self.model_name(),
-                # 进程绑定的工作地点根；它总是存在（`Services` 必绑定一个），
-                # 所以这里只是给界面的文本提示，**候选列表**一律走
-                # GET /api/workspaces，避免同一概念两种拼写。
+                # Root of the process-bound workspace; candidates come from the workspaces endpoint.
                 "workspace": (
                     self.workspaces.default.root
                     if self.workspaces.default is not None
                     else str(workspace.WORKSPACE_ROOT)
                 ),
-                # 这台机器上会用到哪个选择器后端（null = 没有可用的）。诊断用：
-                # 点了"新增工作区"没弹窗时，先看这里。
+                # Backend this machine would use for the folder picker, or None when there is none.
                 "workspace_picker": available_backend(),
-                # 沙箱后端探测结果（backend/available/network/reason/landlock_abi）。
-                # 点开界面就能看出"这台机器上 manual 与 auto 的边界是什么"，
-                # 而不是让用户从"命令为什么被拒"去反推。
+                # Sandbox backend probe: backend, availability, network policy and reason.
                 "sandbox": default_backend_summary(),
             },
+            # Event-stream thresholds published so clients match the server's timings.
             "stream": {
                 "heartbeat_seconds": STREAM_HEARTBEAT_SECONDS,
                 "terminal_fallback_seconds": TERMINAL_FALLBACK_SECONDS,
@@ -223,12 +194,9 @@ class Services:
         }
 
     def skills(self) -> list[dict[str, str]]:
-        """技能目录：name + 一行描述，与 system prompt 同源（同一个 SkillLoader）。
-
-        带一个很短的进程内缓存（`SKILLS_CACHE_SECONDS`）：这是只读端点，不该每次
-        都扫一遍磁盘。
-        """
+        """Skill names with a one-line description, from the loader that also builds the prompt."""
         now = time.monotonic()
+        # Re-scan only after the short cache window so this read-only endpoint stays cheap.
         if self._skills is None or now - self._skills_at > SKILLS_CACHE_SECONDS:
             root = self.workspaces.default.root if self.workspaces.default else None
             loader = SkillLoader(default_skills_dir(root)).scan()
@@ -241,7 +209,7 @@ class Services:
 
     @staticmethod
     def model_name() -> str | None:
-        """没配模型也要能打开界面——返回 None，让前端提示去配 .env。"""
+        """Configured model name, or None when unconfigured so the UI can still load."""
         try:
             return load_config().model
         except ConfigError:

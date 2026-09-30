@@ -1,22 +1,4 @@
-"""工具执行环节：解析参数 → 拦截 → 执行 → 回填。
-
-循环不认识工具协议，只知道"给我一批 ``tool_calls``，还我一批结果"。
-
-失败一律**回文本、不抛异常**——这是本项目的既有约定（与 pi 的"工具抛异常 +
-``isError: true``"相反，见 `docs/design/runtime-architecture.md` §8.2 D2）。
-
-工具执行的三个事实（开始 / 结束 / 被拒）在这里变成事件：hook 的 context 里本来
-就有它们，只是此前没有任何消费者（设计文档 §1.2、§5.3）。``tool_call_id`` 是
-新加进 context 的，前端据此把「调用声明 / 开始 / 结束」缝在同一条卡片上。
-
-**批内并发（阶段 25）**：一次批按源顺序切成若干执行段——段内的**并发安全**工具一起
-跑，遇到**独占**工具就落一道屏障（它自己单独跑）。分类见 ``tools/safety.py``，
-切分见 ``plan_segments``，调度见 ``execute_batch``。三条不变量：
-
-* 结果条数与顺序 = assistant 源顺序，与**完成顺序**无关（循环据此写 transcript）；
-* 独占调用与前后段在时间上不重叠；
-* 单个调用失败/被拒不影响同批其余（与"工具失败不中断循环"同一条约定）。
-"""
+"""Tool execution: parse arguments, gate the call, run it and report the outcome as text."""
 
 from __future__ import annotations
 
@@ -38,20 +20,15 @@ from .state import RunState
 
 logger = logging.getLogger("avid.runtime.execution")
 
-# 拦截时回传给模型的兜底文案。回调可以把 context["denied_content"] 设成
-# 更有用的内容（permission_hook 就会），这里只在回调没设时使用。
+# Fallback text when a blocking hook does not set a more useful denied_content of its own.
 DENIED_CONTENT = "Permission denied."
-# PostToolUse 拦截后回给模型的文本：说清"结果被拦了"，否则模型会以为自己拿到了空输出。
+# Text returned when PostToolUse blocks a result, so the model does not read it as empty output.
 POST_BLOCKED_CONTENT = "错误：工具结果被 PostToolUse hook 拦截，内容未进入上下文。"
-# 取消后没派发出去的调用：回一条**真实**的"未执行"，而不是假装跑过。
-# 为什么必须有它：循环会把每条 outcome 变成一条 tool 消息；少一条，assistant 消息里
-# 就会留下没有回应的 ``tool_calls``，transcript 结构不合法（压缩管线的
-# `validate_structure` 会直接判非法）。所以这几行写的是事实，不是伪造的工具结果。
+# A real "not executed" answer is required: every declared call needs one response, otherwise the
+# assistant message keeps an unanswered call and the transcript becomes structurally invalid.
 CANCELLED_CONTENT = "错误：运行已取消，本次调用未执行。"
 
-# 需要读 RunState 的工具**不再手抄清单**：registry 登记时从实现签名推断（有 `state=`
-# 即需要），这里派生。契约测试仍校验"表里的名字都在注册表里、且 handler 真的接受
-# state 关键字"——推断错了（或签名漏了 state）就在这里红。
+# Tools needing the run state, derived from the registry instead of a hand-maintained list.
 STATEFUL_TOOLS: frozenset[str] = frozenset(
     spec.name for spec in specs() if spec.stateful
 )
@@ -59,11 +36,14 @@ STATEFUL_TOOLS: frozenset[str] = frozenset(
 
 @dataclass(frozen=True)
 class ToolOutcome:
+    """One tool call id paired with the content handed back to the model."""
+
     tool_call_id: str
     content: str
 
 
 def _as_text(value: Any) -> str:
+    """Render a result as text, JSON-encoding anything that is not already a string."""
     if isinstance(value, str):
         return value
     return json.dumps(value, ensure_ascii=False, default=str)
@@ -80,18 +60,7 @@ def execute_one(
     parameters: dict[str, Any] | None = None,
     parallel: int = 1,
 ) -> str:
-    """执行一次工具调用，返回要回传给模型的内容。
-
-    前几步失败（参数不是合法 JSON、参数不是对象、工具不存在、参数不合 schema）都不
-    触发事件——那是协议错误，不是策略问题。
-
-    ``parameters`` 是这次调用所用工具的 schema 节点（``tool()`` 产出的 ``parameters``），
-    由循环按它发给模型的那份 ``tools`` 传下来；结构校验因此与模型看到的定义同源。
-    直调路径（单测、复用某个工具）不传就不校验，行为与改动前一致。
-
-    ``parallel`` 是这段里**同时**在跑的调用数（1 = 独占/串行）。它只进事件与日志，
-    不改变任何执行语义——前端据此把"这一步在并发"画出来。
-    """
+    """Run one tool call and return text for the model; failures return text rather than raising."""
     try:
         arguments = json.loads(raw_arguments)
     except json.JSONDecodeError as exc:
@@ -100,11 +69,13 @@ def execute_one(
     if not isinstance(arguments, dict):
         return bad_arguments("参数必须是 JSON 对象")
 
+    # Argument and protocol failures return without events; only policy outcomes are observable.
     impl = registry.get(name)
     if impl is None:
         return f"未知工具：{name}"
 
     if parameters is not None:
+        # Validation runs against the schema node sent to the model, so the two cannot disagree.
         problem = validate_arguments(parameters, arguments)
         if problem is not None:
             return problem
@@ -118,17 +89,16 @@ def execute_one(
         "round": round_index,
         "tool_call_id": tool_call_id,
         "auto_approve": state.auto_approve,
-        # 权限层的运行级上下文：模式决定"哪些动作打问号"，账本让"同意一次"生效，
-        # 工作区根是越界判定的基准。根在**调用时**解析，测试的 monkeypatch 才有效。
+        # Run-level facts the permission layer reads; the workspace root is resolved at call time.
         "permission_mode": state.permission_mode,
-        # 运行级安全规格（三轴 + 阶梯 + 沙箱 + 审计）：裁决与审计都由策略层读它，
-        # 执行层只负责把事实传下去——所以这里没有一条对 policy 的 import。
+        # The security spec travels as data, which is why this module imports nothing from policy.
         "security": state.security,
         "approval_ledger": state.ledger,
         "workspace_root": state.workspace_root or str(workspace.WORKSPACE_ROOT),
-        # 策略注入点：hook 回调据此发起审批，而不必自己去读 stdin（§7.2）。
+        # The approval callback is injected here so hooks never read stdin themselves.
         "ask": state.ask,
     }
+    # parallel reports how many calls share this segment; it changes no execution semantics.
     state.emit(
         events.TOOL_CALL_STARTED,
         tool=name,
@@ -150,11 +120,11 @@ def execute_one(
             reason=before.get("denied_reason") or "",
             parallel=parallel,
         )
-        # 文案由拦截它的回调决定；回调没说就用兜底值。
+        # Whichever hook blocked the call decides the message; the fallback applies only
+        # when none is set.
         return str(before.get("denied_content") or DENIED_CONTENT)
 
-    # 这一条通过了权限：把"连续被拒"的连击清零（见 MAX_CONSECUTIVE_DENIALS）。
-    # 只在放行那一刻记，工具自身失败不算被拒——那是模型看得见的另一回事。
+    # This call passed the gate, so the denial streak resets; a failing tool is not a denial.
     state.note_allowed()
 
     try:
@@ -162,7 +132,7 @@ def execute_one(
             content = _as_text(impl(arguments, state=state))
         else:
             content = _as_text(impl(arguments))
-    except Exception as exc:  # 工具失败回传模型，循环不中断
+    except Exception as exc:  # A tool failure goes back to the model and never breaks the loop
         content = (
             f"工具执行失败：{name}（{exc}）；"
             "不要用同样的参数重复调用，先检查参数与环境。"
@@ -175,19 +145,16 @@ def execute_one(
         "tool_call_id": tool_call_id,
         "content": content,
         "truncated": False,
-        # PostToolUse 的截断回调要落盘到**这次运行**的工作区，并用运行标识命名文件
-        # （否则两次运行会互相覆盖）。与 PreToolUse 的 workspace_root 同源。
+        # Spills must land in this run's workspace and carry the run tag, or runs collide.
         "workspace_root": state.workspace_root or str(workspace.WORKSPACE_ROOT),
         "run_tag": state.run_tag,
-        # 重复调用计数归运行所有：回调原地读写这个 dict，下一轮就能看出"同名同参又来了"。
+        # Repeat counting lives on the run state; the next round sees the updated counts.
         "repeat_calls": state.repeat_calls,
-        # 并发时同批多个调用会同时进 PostToolUse：计数走原子自增，不在这里读改写。
+        # PostToolUse may run concurrently, so counting goes through the atomic increment.
         "bump_repeat": state.note_repeat,
     }
     if state.hooks.trigger("PostToolUse", after) == BLOCK:
-        # PostToolUse 的 BLOCK 语义：工具**已经跑过**了，拦的是"结果进上下文"
-        # （例如输出里带凭据）。以前这个返回值被直接丢掉——注册了拦截的回调等于
-        # 静默失效，而且失败方向是"内容照样进了上下文"（审查里的 P3-6）。
+        # A blocked PostToolUse keeps the tool's real execution but swaps what enters the context.
         after["content"] = str(after.get("denied_content") or POST_BLOCKED_CONTENT)
         after["blocked"] = True
         logger.info("  ✗ 结果被 PostToolUse 拦截 %s", name)
@@ -213,16 +180,7 @@ def _call_name(call: dict[str, Any]) -> str:
 def plan_segments(
     tool_calls: list[dict[str, Any]], max_parallel: int
 ) -> list[list[int]]:
-    """把一次批切成执行段（下标分组），**保序**且每个调用恰好出现一次。
-
-    切法：连续的并发安全调用归一段；独占调用各自单独成段（屏障）。``max_parallel``
-    为 1 时每段只有一个调用——那就是改动前的逐个串行。
-
-    为什么不做同资源推断（"先写 a 再读 a 所以串行"）：模型生成一次批时还看不到自己
-    产生的 id/产物，跨调用的数据依赖本来就没法在批内表达；真正的依赖要靠模型分轮次
-    （或把顺序写进提示词）。这里只保证**类别顺序**：写类把批拦腰切开，于是"写在前、
-    读在后"的相对顺序天然成立，而不是靠猜。
-    """
+    """Split a batch into ordered segments: safe calls share one, exclusive calls stand alone."""
     segments: list[list[int]] = []
     current: list[int] = []
     for index, call in enumerate(tool_calls):
@@ -235,6 +193,8 @@ def plan_segments(
         segments.append([index])
     if current:
         segments.append(current)
+    # Cross-call data dependencies cannot be expressed in one assistant batch, so only category
+    # order is enforced: a write splits the batch, which keeps earlier reads ahead of it.
     return segments
 
 
@@ -247,24 +207,13 @@ def execute_batch(
     schemas: dict[str, dict[str, Any]] | None = None,
     max_parallel: int = 1,
 ) -> list[ToolOutcome]:
-    """执行一批工具调用，返回**按 assistant 源顺序**排列的结果。
-
-    ``schemas`` 是本次运行发给模型的工具定义（名字 → ``parameters`` 节点），
-    只用于调用前的参数校验；缺哪个名字就不校哪个。
-
-    ``max_parallel`` 默认 1 = 改动前的逐个串行（benchmarks、bare 循环因此不受影响）。
-    大于 1 时按 ``plan_segments`` 分段：段内用线程池并发，段间严格串行。取消在两个
-    粒度上检查——**每段派发前**（整段跳过）与**每个调用开工前**（段已派出、调用还在
-    排队时取消）。没开工的调用回一条真实的"未执行"文本；已经开工的不打断——Python
-    线程杀不掉，假装打断只会让结果与事实不符。
-    """
+    """Execute a batch and return outcomes in assistant source order, never completion order."""
     limit = max(1, int(max_parallel))
     outcomes: list[ToolOutcome | None] = [None] * len(tool_calls)
     schemas = schemas or {}
 
     def run(index: int, *, width: int) -> str:
-        # 段是整批发出去的，取消可能发生在某个调用**排队期间**：那就不再开工。
-        # 先查再干活——没跑过的调用不发事件、也不计入 tool_calls。
+        # A segment is dispatched as a whole, so cancellation can land while a call is still queued.
         if state.cancelled:
             return CANCELLED_CONTENT
         call = tool_calls[index]
@@ -282,7 +231,7 @@ def execute_batch(
                 parameters=schemas.get(name),
                 parallel=width,
             )
-        except Exception as exc:  # 兜底：执行环节自己也不许把异常漏给同批的兄弟
+        except Exception as exc:  # Execution must not leak an exception to its batch siblings
             logger.exception("工具调用 %s 抛出未预期异常，按失败回传", name)
             content = f"工具执行失败：{name}（{exc}）；不要用同样的参数重复调用。"
         logger.info("  ← %s 字符", len(content))
@@ -295,7 +244,7 @@ def execute_batch(
 
     for segment in plan_segments(tool_calls, limit):
         if state.cancelled:
-            # 不再派发新的调用；剩下的回一条"未执行"。条数必须补齐（见 CANCELLED_CONTENT）。
+            # Nothing is dispatched and the rest answer "not executed", keeping the batch complete.
             for index in segment:
                 store(index, CANCELLED_CONTENT)
             continue
@@ -305,13 +254,13 @@ def execute_batch(
         width = min(len(segment), limit)
         logger.info("并行执行 %d 个调用（并发上限 %d）", len(segment), width)
         with ThreadPoolExecutor(max_workers=width) as pool:
-            # partial 而不是闭包 lambda：并发段在循环里，闭包会捕获循环变量（B023）。
+            # partial rather than a lambda: a closure would capture the segment loop variable.
             results = list(pool.map(partial(run, width=width), segment))
         for index, content in zip(segment, results, strict=True):
             store(index, content)
 
-    # 段是覆盖全批的一个划分，所以走完之后每个下标都该有结果。
+    # Segments partition the batch, so every index must have received an outcome.
     missing = [index for index, item in enumerate(outcomes) if item is None]
-    if missing:  # pragma: no cover - 划分正确就不可能到；真到了说明切分坏了
+    if missing:  # pragma: no cover - a correct partition cannot leave a gap
         raise AssertionError(f"批内调用 {missing} 没有结果，段划分不完整")
     return [item for item in outcomes if item is not None]

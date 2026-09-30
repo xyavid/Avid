@@ -1,26 +1,10 @@
-"""stdio MCP 客户端：外部工具生态的入口（阶段 30e）。
+"""stdio MCP client: the entry point for the external tool ecosystem.
 
-MCP（Model Context Protocol）用 newline-delimited JSON-RPC over stdio 通信：一个
-server 是一个子进程，``initialize`` 握手后 ``tools/list`` 列出它提供的工具，调用走
-``tools/call``。本模块把每个远端工具包装成与内置工具同形的 ``(schema, impl)``，由
-``tools.build_toolset`` 并进一次运行的工具集——循环、执行环节、前端工具卡都不感知
-"MCP"的存在。
+It speaks newline-delimited JSON-RPC over stdio, and each remote tool is wrapped into the same
+shape as a built-in tool.
 
-信任模型（与沙箱叙事的一致性）：
-
-* server 进程**不经 bwrap**——它本来就是宿主上的独立进程，配置文件
-  （``<工作区>/.avid/mcp.json``）本身就是用户的信任声明，运行时假装"沙箱过了"只会
-  撒谎。调用仍过同一道 PreToolUse 权限闸门（manual 每工具问一次、auto 判不准即拒、
-  full 放行，见 ``policy/engine.review_facts``）。
-* server 崩溃/卡死只影响它自己的工具：失败回「错误：」文本（与其它工具同一约定），
-  run 不中断；起不来的 server 在装配时记 warning 后跳过。
-* 子 agent 不带 MCP 工具（SUB_TOOLS 是内置子集）——嵌套层拿外部工具的授权语义
-  还没想清楚，v0 不开。
-
-生命周期：``McpManager`` 由运行入口（svc/_run、cli）创建并 ``start_all``，进程随 run
-起停（``finally`` 里 ``close``）。工具声明全部 EXCLUSIVE：MCP 工具的并发语义只有
-server 自己知道，外面按最保守处理。
 """
+
 
 from __future__ import annotations
 
@@ -46,23 +30,23 @@ HANDSHAKE_TIMEOUT_SECONDS = 10.0
 DEFAULT_CALL_TIMEOUT_SECONDS = 120.0
 PROTOCOL_VERSION = "2024-11-05"
 
-#: close() 之后给 server 的体面退场时间，超时强杀。
+#: Grace period given to a server on close before it is killed.
 TERMINATE_GRACE_SECONDS = 5.0
 
 
 class McpError(RuntimeError):
-    """一次 MCP 交互失败（进程没了、握手坏了、响应不合约定、超时）。"""
+    """A failed MCP interaction: a dead process, a broken handshake, a bad reply or a timeout."""
 
 
 def mcp_config_path(workspace_root: str | None) -> Path:
-    """工作区级配置：``<工作区根>/.avid/mcp.json``。"""
+    """Returns the workspace-level configuration path, ``<root>/.avid/mcp.json``."""
     base = Path(workspace_root) if workspace_root else Path(workspace.WORKSPACE_ROOT)
     return base / ".avid" / "mcp.json"
 
 
 @dataclass(frozen=True)
 class ServerSpec:
-    """配置文件里的一条 server 声明。"""
+    """One server declaration from the configuration file."""
 
     name: str
     command: str
@@ -72,7 +56,7 @@ class ServerSpec:
 
 
 def _load_specs(workspace_root: str | None) -> tuple[list[ServerSpec], list[str]]:
-    """读配置 → server 声明。文件缺失是常态（返回空）；坏配置是 warning 不是异常。"""
+    """Reads the configuration into server declarations, warning rather than raising on errors."""
     path = mcp_config_path(workspace_root)
     if not path.exists():
         return [], []
@@ -118,12 +102,12 @@ def _load_specs(workspace_root: str | None) -> tuple[list[ServerSpec], list[str]
 
 
 def tool_name_of(server: str, tool: str) -> str:
-    """MCP 工具的仓内名字：``mcp__<server>__<tool>``。"""
+    """Returns an MCP tool's in-repo name, ``mcp__<server>__<tool>``."""
     return f"{MCP_TOOL_PREFIX}{server}__{tool}"
 
 
 class McpServer:
-    """一条 stdio server 连接：握手一次，之后逐个调用。"""
+    """One stdio server connection: handshaken once, then called one request at a time."""
 
     def __init__(self, spec: ServerSpec, *, cwd: str | None = None) -> None:
         self.spec = spec
@@ -135,10 +119,8 @@ class McpServer:
         self._tools: list[dict[str, Any]] = []
         self._lock = threading.Lock()
 
-    # ---- 生命周期 ----
-
     def start(self) -> None:
-        """起进程 + 握手 + 列工具。任何一步失败都收敛成 McpError。"""
+        """Starts the process, handshakes and lists tools, converging every failure on McpError."""
         env = {**os.environ, **self.spec.env}
         try:
             self._proc = subprocess.Popen(
@@ -170,7 +152,7 @@ class McpServer:
             },
             timeout=HANDSHAKE_TIMEOUT_SECONDS,
         )
-        # 协议要求：握手完成后客户端发这条通知，server 才算进入工作状态。
+        # The protocol requires this notification before the server starts serving.
         self._notify("notifications/initialized", {})
         listing = self._request("tools/list", {}, timeout=HANDSHAKE_TIMEOUT_SECONDS)
         tools = listing.get("tools") if isinstance(listing, dict) else None
@@ -179,6 +161,7 @@ class McpServer:
         self._tools = [item for item in tools if isinstance(item, dict) and item.get("name")]
 
     def _read_stdout(self) -> None:
+        """Reads reply lines into the queue, ignoring anything that is not JSON."""
         assert self._proc is not None and self._proc.stdout is not None
         for line in self._proc.stdout:
             line = line.strip()
@@ -190,17 +173,17 @@ class McpServer:
                 logger.debug("mcp server %s 发来非 JSON 行，忽略", self.spec.name)
                 continue
             self._incoming.put(message)
-        self._incoming.put(None)  # EOF：等待方据此报"进程已退出"
+        self._incoming.put(None)  # EOF, on which a waiter reports that the process exited
 
     def _drain_stderr(self) -> None:
+        """Keeps the stderr pipe drained so the server cannot block on a full pipe."""
         assert self._proc is not None and self._proc.stderr is not None
         for line in self._proc.stderr:
             self._stderr.put(line.rstrip("\n"))
             logger.debug("mcp server %s: %s", self.spec.name, line.rstrip("\n"))
 
-    # ---- 协议 ----
-
     def _send(self, payload: dict[str, Any]) -> None:
+        """Writes one message as a single line, raising McpError if the process is gone."""
         if self._proc is None or self._proc.poll() is not None:
             raise McpError(f"server {self.spec.name} 已退出")
         assert self._proc.stdin is not None
@@ -211,10 +194,11 @@ class McpServer:
             raise McpError(f"向 server {self.spec.name} 写请求失败：{exc}") from exc
 
     def _notify(self, method: str, params: dict[str, Any]) -> None:
+        """Sends a notification, which carries no id and expects no reply."""
         self._send({"jsonrpc": "2.0", "method": method, "params": params})
 
     def _request(self, method: str, params: dict[str, Any], *, timeout: float) -> Any:
-        """发一个请求并等它的响应。独占调用保证每连接同时只有一个在飞。"""
+        """Sends a request and waits for its reply, with only one in flight per connection."""
         request_id = next(self._ids)
         self._send({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
         deadline = time.monotonic() + timeout
@@ -225,30 +209,30 @@ class McpServer:
             try:
                 message = self._incoming.get(timeout=remaining)
             except queue.Empty:
-                continue  # 下一圈由 remaining 判定超时
+                continue  # the next turn re-tests the deadline
             if message is None:
                 raise McpError(f"server {self.spec.name} 在等待 {method} 响应时退出")
             if not isinstance(message, dict):
                 continue
             if message.get("id") != request_id:
-                continue  # server 主动发的通知/请求：v0 不处理，只丢回队列旁
+                continue  # a server-initiated notification or request, ignored in v0
             if "error" in message:
                 error = message["error"]
                 detail = error.get("message") if isinstance(error, dict) else str(error)
                 raise McpError(f"server {self.spec.name} 拒绝 {method}：{detail}")
             return message.get("result")
 
-    # ---- 对上（toolset）的形状 ----
-
     @property
     def alive(self) -> bool:
+        """Reports whether the server process is still running."""
         return self._proc is not None and self._proc.poll() is None
 
     def tools(self) -> list[dict[str, Any]]:
+        """Returns the tool declarations listed at handshake time."""
         return list(self._tools)
 
     def call(self, tool: str, arguments: dict[str, Any]) -> str:
-        """调一个远端工具，返回给人读的文本。失败抛 McpError（impl 层收敛成文案）。"""
+        """Calls one remote tool, returning readable text and raising McpError on failure."""
         result = self._request(
             "tools/call", {"name": tool, "arguments": arguments}, timeout=self.spec.timeout
         )
@@ -266,6 +250,7 @@ class McpServer:
         return text
 
     def close(self) -> None:
+        """Terminates the server within the grace period and kills it if that is not enough."""
         proc = self._proc
         if proc is None:
             return
@@ -279,11 +264,10 @@ class McpServer:
 
 
 def _schema_of(server_name: str, tool: dict[str, Any]) -> dict[str, Any]:
-    """远端工具声明 → 与内置工具同形的 function calling 信封。
+    """Converts a remote tool declaration into a function-calling envelope.
 
-    MCP 的 inputSchema 是 JSON Schema：保留它的 properties/required，补上我们
-    契约要求的 ``additionalProperties: False``；required 里指向不存在参数的条目
-    剔掉（validate 会按 properties 校验）。
+    Properties and required list are kept, with the additionalProperties flag added and
+    unknown required names dropped.
     """
     raw = tool.get("inputSchema")
     raw = raw if isinstance(raw, dict) else {}
@@ -309,7 +293,7 @@ def _schema_of(server_name: str, tool: dict[str, Any]) -> dict[str, Any]:
 
 
 class McpManager:
-    """一次运行的 MCP 工具来源：装配、托底、收尾都在这里。"""
+    """The MCP tool source for one run: it assembles, backstops and closes the servers."""
 
     def __init__(self, workspace_root: str | None) -> None:
         self.workspace_root = workspace_root
@@ -317,8 +301,7 @@ class McpManager:
         self._started = False
 
     def start_all(self) -> list[str]:
-        """起配置里声明的全部 server。失败的记 warning 并跳过——不起 server 不该
-        拦住一次运行（run 里还有 9 个内置工具可干活的）。幂等：重复调用只返回上次结果。"""
+        """Starts every declared server, skipping failures with a warning; idempotent."""
         if self._started:
             return []
         self._started = True
@@ -340,7 +323,7 @@ class McpManager:
         return warnings
 
     def toolset(self) -> tuple[list[dict[str, Any]], dict[str, ToolImpl]]:
-        """(schemas, impls)：与内置注册表同形，直接并进运行的工具清单。"""
+        """Returns schemas and handlers in the built-in shape, ready to merge into the tool set."""
         schemas: list[dict[str, Any]] = []
         impls: dict[str, ToolImpl] = {}
         for server in self._servers:
@@ -352,9 +335,11 @@ class McpManager:
 
     @staticmethod
     def _impl(server: McpServer, tool: str) -> ToolImpl:
+        """Wraps one remote tool as a handler, turning an McpError into error text."""
+
         def call(arguments: dict[str, Any], *, state: Any = None) -> str:
-            # ``state`` 收下不用：与其它 stateful 工具同签名，权限裁决已在
-            # PreToolUse 闸门完成（engine → ask/ledger），这里只负责协议交互。
+            # ``state`` is accepted and unused, matching the other stateful signatures; the
+            # permission verdict is already made by the gate, so this only speaks the protocol.
             try:
                 return server.call(tool, arguments if isinstance(arguments, dict) else {})
             except McpError as exc:
@@ -363,13 +348,15 @@ class McpManager:
         return call
 
     def processes_alive(self) -> int:
+        """Counts the servers whose process is still running."""
         return sum(1 for server in self._servers if server.alive)
 
     def close(self) -> None:
+        """Closes every server, swallowing an OSError so shutdown itself cannot fail."""
         for server in self._servers:
             try:
                 server.close()
-            except OSError:  # 进程已经在退出，别让收尾本身失败
+            except OSError:  # the process is already exiting, so do not fail the shutdown
                 logger.debug("MCP server %s 收尾失败", server.spec.name, exc_info=True)
         self._servers = []
 

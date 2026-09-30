@@ -1,21 +1,4 @@
-"""Anthropic Messages API（原生协议，不走 OpenAI 兼容端点）。
-
-为什么值得单开一条路：Anthropic 的 thinking 块与 cache_control 语义只有原生 API
-给全，OpenAI 兼容端点是降级视图。请求从**仓库内部的 OpenAI 形状 messages**转换
-过来，响应转回同形的 :class:`Turn`——循环与压缩管线不感知协议差异（转换边界
-只有这一个模块）。
-
-口径要点：
-
-* system 是请求顶层的 ``system`` 字段，不进 messages；
-* ``role:"tool"`` 消息合并成**一条** user 消息里的 ``tool_result`` 块（Anthropic 要求
-  消息按角色交替，多条工具结果必须同块承载）；
-* assistant 的 tool_calls 变回 ``tool_use`` 块，``arguments``（JSON 字符串）解析成
-  ``input`` 对象；
-* ``max_tokens`` 是 Anthropic 的**必填**字段，调用方给 None 时用
-  :data:`DEFAULT_MAX_TOKENS`（足够一次完整回复，不算配额压迫）；
-* usage 直接交给 ``ai/usage.py`` 的 anthropic 方言（input+read+write 的口径在那边）。
-"""
+"""Anthropic Messages API: convert OpenAI-shaped messages to and from the native protocol."""
 
 from __future__ import annotations
 
@@ -38,12 +21,13 @@ from ..protocol import (
 )
 from ..transport import RetryPolicy, send, send_stream, shared_client
 
-#: Anthropic 必填 max_tokens，调用方不指定时的兜底值。
+#: Anthropic requires max_tokens; this value is used when the caller passes none.
 DEFAULT_MAX_TOKENS = 16384
 
+#: Anthropic API version sent on every request.
 ANTHROPIC_VERSION = "2023-06-01"
 
-# stop_reason → OpenAI 兼容口径。未知的原样透传（小写化），比猜一个错值诚实。
+# stop_reason to the OpenAI-compatible vocabulary; unknown values pass through lowercased.
 _STOP_REASONS = {
     "end_turn": "stop",
     "stop_sequence": "stop",
@@ -53,6 +37,7 @@ _STOP_REASONS = {
 
 
 def messages_url(config: Config) -> str:
+    """Return the Messages endpoint, tolerating a base URL that already ends with /v1."""
     base = config.base_url.rstrip("/")
     if base.endswith("/v1"):
         base = base[:-3]
@@ -75,6 +60,7 @@ def _text_of(raw: Any) -> str:
 
 def _tool_use_block(call: dict[str, Any]) -> dict[str, Any]:
     function = call.get("function") or {}
+    # Malformed argument JSON falls back to an empty input object instead of failing the call.
     try:
         args = json.loads(function.get("arguments") or "{}")
     except json.JSONDecodeError:
@@ -88,11 +74,12 @@ def _tool_use_block(call: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """OpenAI 形状 messages → Anthropic 形状。tool 结果随到随并进下一条 user 消息。"""
+    """Convert OpenAI-shaped messages to Anthropic shape, buffering tool results together."""
     out: list[dict[str, Any]] = []
     pending_results: list[dict[str, Any]] = []
 
     def flush_results() -> None:
+        # Consecutive tool results must share one user message, so they are buffered first.
         if pending_results:
             out.append({"role": "user", "content": list(pending_results)})
             pending_results.clear()
@@ -117,7 +104,7 @@ def build_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
             blocks.extend(_tool_use_block(call) for call in message.get("tool_calls") or [])
             out.append({"role": "assistant", "content": blocks})
             continue
-        # user：连续的 user 合并（Anthropic 要求角色交替）。
+        # Consecutive user messages are merged: Anthropic requires alternating roles.
         flush_results()
         text = _text_of(message.get("content"))
         if out and out[-1].get("role") == "user" and isinstance(out[-1]["content"], str):
@@ -136,6 +123,7 @@ def build_request(
     tools: list[dict[str, Any]] | None = None,
     max_tokens: int | None = None,
 ) -> dict[str, Any]:
+    """Build the Messages request body, falling back to the default max_tokens."""
     request: dict[str, Any] = {
         "model": config.model,
         "max_tokens": max_tokens if max_tokens is not None else DEFAULT_MAX_TOKENS,
@@ -144,6 +132,7 @@ def build_request(
     if system:
         request["system"] = system
     if tools:
+        # OpenAI's parameters field becomes Anthropic's input_schema.
         request["tools"] = [
             {
                 "name": item["function"]["name"],
@@ -172,6 +161,7 @@ def _call_of(block: dict[str, Any]) -> dict[str, Any]:
 
 
 def parse_turn(data: dict[str, Any]) -> Turn:
+    """Parse a non-streaming Messages response into a Turn."""
     texts: list[str] = []
     reasonings: list[str] = []
     calls: list[dict[str, Any]] = []
@@ -204,6 +194,7 @@ def chat(
     max_tokens: int | None = DEFAULT_MAX_TOKENS,
     client: httpx.Client | None = None,
 ) -> Turn:
+    """Send one non-streaming Messages request and return the parsed Turn."""
     request = build_request(
         config, messages, system=system, tools=tools, max_tokens=max_tokens
     )
@@ -223,18 +214,12 @@ def chat(
         raise LLMError(f"响应不是合法 JSON：{response.text[:200]}") from exc
 
 
-# ---------------- 流式 ----------------
-
-# 累加器按 content_block 的 index 记块：Anthropic 的流是「先声明块，再往里增量」。
+# Streaming blocks are keyed by content_block index, which arrives before the deltas filling it.
 _BLOCK_KINDS = {"text": "text", "thinking": "thinking", "tool_use": "tool"}
 
 
 class _Accumulator:
-    """message_start/content_block_*/message_delta 事件流 → 同形 Turn。
-
-    `feed` 返回这一帧产生的 (正文增量, 思维链增量)，供 on_delta/on_reasoning 回调；
-    两者与 to_turn 的产物同源，流式与非流式因此天然同形（B9）。
-    """
+    """Fold the Messages event stream into a Turn, returning per-frame text and reasoning deltas."""
 
     def __init__(self) -> None:
         self.model = ""
@@ -315,6 +300,7 @@ class _Accumulator:
                     }
                 )
         text = "".join(texts)
+        # Usage arrives split across message_start and message_delta, so both halves are merged.
         usage_input = {**self.input_usage, "output_tokens": self.output_tokens}
         return Turn(
             message=assistant_message(text, calls),
@@ -338,6 +324,7 @@ def stream(
     on_reasoning: DeltaCallback | None = None,
     client: httpx.Client | None = None,
 ) -> Turn:
+    """Send one streaming Messages request and return the assembled Turn."""
     request = build_request(
         config, messages, system=system, tools=tools, max_tokens=max_tokens
     )
@@ -352,6 +339,7 @@ def stream(
         )
         with contextlib.closing(response):
             if response.status_code != 200:
+                # A streamed response must be read before its body can be inspected.
                 response.read()
                 if prompt_too_long(response.status_code, response.text):
                     raise PromptTooLongError(

@@ -1,25 +1,4 @@
-"""会话持久化（阶段 12）。
-
-对外只暴露**真实消费者用到的那些名字**（外加错误码这类契约名）：
-
-* 数据面：`Entry` / `NewEntry` / `EntryWrite`、提交后的 `CommittedEntry` /
-  `CommittedValueSet`，以及查询用的 `EntryQuery` / `BranchScan`
-* 仓库：`MemorySessionRepo` / `JsonlSessionRepo`（同一套一致性用例跑两个后端）
-* 写入与投影：`SessionRecorder` 是唯一写入者；`messages_for_branch` /
-  `entries_to_messages` / `repair_incomplete_batches` 是读出来的投影
-* 值：`session_name` / `branch_tip` / `branch_usage` / `entry_label` 这些地址构造器
-* 错误：`SessionError` 一族（调用方按它们分支）
-
-**存储内部件不在门面里**：`JsonlStorage` / `MemoryStorage` / `JsonlHeader` /
-`PreparedCommit` / `CommittedWrite` / `StorageBackedSession` / `SessionBranch` /
-`ValueAddress` …都还在各自的子模块（`avid.session.jsonl`、`.memory`、`.session`、
-`.types`、`.values`），需要时按子模块路径导入。以前门面列了 68 个名字，其中 26 个
-在 `src/` 与 `tests/` 里从没被用过——于是"改内部实现"看上去都像公开接口变更。
-
-本包**不 import** `avid` 的其它子包：它只认识条目、值与 JSON，
-路径与时钟在构造期注入。依赖方向由 CLI 一个人接线（不变量 I7）。
-`tests/test_session_facade.py` 钉住这份清单：改它就是公开接口变更。
-"""
+"""Session persistence facade: the names real consumers import, pinned as public API by a test."""
 
 from __future__ import annotations
 
@@ -75,7 +54,7 @@ from .values import (
 )
 
 __all__ = [
-    # 错误（契约名：调用方按它们分支）
+    # Error names that callers branch on.
     "SessionError",
     "SessionNotFoundError",
     "SessionExistsError",
@@ -90,7 +69,7 @@ __all__ = [
     "SessionBranchExistsError",
     "SessionUnknownTargetError",
     "SessionInvalidMessageError",
-    # 数据面
+    # Data plane.
     "Entry",
     "NewEntry",
     "EntryWrite",
@@ -102,7 +81,7 @@ __all__ = [
     "SessionMetadata",
     "JsonlSessionMetadata",
     "STORAGE_VERSION",
-    # 值
+    # Value addresses.
     "DEFAULT_BRANCH",
     "USAGE_NS",
     "branch_tip",
@@ -111,16 +90,16 @@ __all__ = [
     "session_name",
     "set_value",
     "value",
-    # 仓库
+    # Repositories.
     "MemorySessionRepo",
     "JsonlSessionRepo",
-    # 写入与投影
+    # Writer and read-side projections.
     "SessionRecorder",
     "MutationLine",
     "messages_for_branch",
     "entries_to_messages",
     "repair_incomplete_batches",
-    # 校验与 id
+    # Validation and ids.
     "validate_message",
     "validate_session_id",
     "UuidV7Generator",

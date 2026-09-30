@@ -1,22 +1,4 @@
-"""Gemini generateContent（原生协议，不走 OpenAI 兼容端点）。
-
-为什么值得单开一条路：Gemini 的 function calling 与 usageMetadata（含
-cachedContentTokenCount / thoughtsTokenCount）在原生 API 下才是完整语义。
-请求从**仓库内部的 OpenAI 形状 messages** 转换过来，响应转回同形的
-:class:`Turn`——循环与压缩管线不感知协议差异。
-
-Gemini 与 OpenAI 形状的两处结构性差异，转换规则如下：
-
-* **工具调用没有 id**，只有函数名。Turn 里给每次 functionCall 合成稳定 id
-  （``call_0``、``call_1``…按出现顺序）；反向转换（role:"tool" 的结果消息）
-  用先前 assistant 消息里的 id→名字表把 ``tool_call_id`` 还原成函数名——
-  ``functionResponse`` 靠名字回给，这是 Gemini 的原生匹配方式。
-* **连续同角色内容合并**成一个 contents 条目（工具结果与紧随的用户消息、
-  多条工具结果），避免对角色交替的任何赌注。
-
-usage 直接交给 ``ai/usage.py`` 的 gemini 方言（promptTokenCount 含缓存命中，
-与 OpenAI 口径一致）。
-"""
+"""Gemini generateContent: convert OpenAI-shaped messages to and from the native protocol."""
 
 from __future__ import annotations
 
@@ -40,7 +22,7 @@ from ..protocol import (
 )
 from ..transport import RetryPolicy, send, send_stream, shared_client
 
-# finishReason → OpenAI 兼容口径。未知的原样透传（小写化）。
+# finishReason to the OpenAI-compatible vocabulary; unknown values pass through lowercased.
 _FINISH_REASONS = {
     "STOP": "stop",
     "MAX_TOKENS": "length",
@@ -52,7 +34,9 @@ _FINISH_REASONS = {
 
 
 def generate_url(config: Config, *, streaming: bool = False) -> str:
+    """Return the generateContent or streamGenerateContent URL for the configured model."""
     base = config.base_url.rstrip("/")
+    # Streaming uses ?alt=sse so the response is an ordinary SSE line stream.
     action = "streamGenerateContent?alt=sse" if streaming else "generateContent"
     return f"{base}/models/{config.model}:{action}"
 
@@ -66,7 +50,7 @@ def _text_of(raw: Any) -> str:
 
 
 def _parts_of(message: dict[str, Any]) -> list[dict[str, Any]]:
-    """一条 OpenAI 形状消息 → Gemini parts（tool 消息除外，见 build_contents）。"""
+    """Convert one OpenAI-shaped message to Gemini parts, excluding tool-result messages."""
     parts: list[dict[str, Any]] = []
     text = _text_of(message.get("content"))
     if text:
@@ -89,15 +73,12 @@ def _parts_of(message: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def build_contents(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """OpenAI 形状 messages → Gemini contents。
-
-    id→名字表随 assistant 消息累积：tool 消息的 ``tool_call_id`` 在这里还原成
-    函数名（``functionResponse`` 按名字匹配）。连续同角色合并成一条 contents。
-    """
+    """Convert OpenAI-shaped messages to Gemini contents, resolving tool_call_id to a name."""
     out: list[dict[str, Any]] = []
     id_to_name: dict[str, str] = {}
 
     def append(role: str, parts: list[dict[str, Any]]) -> None:
+        # Consecutive same-role entries are merged into one contents item.
         if not parts:
             return
         if out and out[-1]["role"] == role:
@@ -108,6 +89,7 @@ def build_contents(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for message in messages:
         role = message.get("role")
         if role == "assistant":
+            # functionResponse matches by name, so the id-to-name table grows from assistant turns.
             for call in message.get("tool_calls") or []:
                 id_to_name[str(call.get("id", ""))] = str(
                     (call.get("function") or {}).get("name", "")
@@ -121,13 +103,13 @@ def build_contents(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     {
                         "functionResponse": {
                             "name": name,
-                            # response 必须是 JSON 对象，文本结果包一层 result。
+                            # The response field must be a JSON object, so text is wrapped.
                             "response": {"result": _text_of(message.get("content"))},
                         }
                     }
                 ],
             )
-        else:  # user
+        else:  # Every other role is a user message.
             append("user", _parts_of(message))
     return out
 
@@ -140,6 +122,7 @@ def build_request(
     tools: list[dict[str, Any]] | None = None,
     max_tokens: int | None = DEFAULT_MAX_TOKENS,
 ) -> dict[str, Any]:
+    """Build the generateContent request body from config, messages, system and tools."""
     request: dict[str, Any] = {"contents": build_contents(messages)}
     if system:
         request["systemInstruction"] = {"parts": [{"text": system}]}
@@ -159,7 +142,7 @@ def _finish_of(finish_reason: Any) -> str:
 
 def _call_of(index: int, name: str, args: Any) -> dict[str, Any]:
     return {
-        # 合成稳定 id：仓库内部按 id 配对 tool 消息，转回 Gemini 时按名字还原。
+        # Gemini sends no call id, so a synthetic one is derived from the call order.
         "id": f"call_{index}",
         "type": "function",
         "function": {
@@ -175,7 +158,7 @@ def _parts_into(
     reasonings: list[str],
     calls: list[dict[str, Any]],
 ) -> tuple[str, str]:
-    """吃一条 parts，返回 (正文增量, 思维链增量)。"""
+    """Consume one parts list, appending to the accumulators and returning this frame's deltas."""
     text_piece = ""
     thinking_piece = ""
     for part in parts:
@@ -194,7 +177,7 @@ def _parts_into(
 
 
 class _Accumulator:
-    """流式 chunks（或一整个非流式响应）→ 同形 Turn。"""
+    """Fold streaming chunks, or one whole non-streaming response, into a Turn."""
 
     def __init__(self) -> None:
         self.model = ""
@@ -235,6 +218,7 @@ class _Accumulator:
 
 
 def _raise_for_status(response: httpx.Response, url: str) -> None:
+    # Context overflow is recoverable for the caller; every other failure is a plain LLMError.
     if response.status_code == 200:
         return
     if prompt_too_long(response.status_code, response.text):
@@ -253,6 +237,7 @@ def chat(
     max_tokens: int | None = DEFAULT_MAX_TOKENS,
     client: httpx.Client | None = None,
 ) -> Turn:
+    """Send one non-streaming generateContent request and return the parsed Turn."""
     request = build_request(
         config, messages, system=system, tools=tools, max_tokens=max_tokens
     )
@@ -264,6 +249,7 @@ def chat(
         data = response.json()
     except ValueError as exc:
         raise LLMError(f"响应不是合法 JSON：{response.text[:200]}") from exc
+    # The non-streaming path reuses the streaming accumulator so both shapes stay identical.
     acc = _Accumulator()
     acc.feed(data)
     return acc.to_turn()
@@ -280,6 +266,7 @@ def stream(
     on_reasoning: DeltaCallback | None = None,
     client: httpx.Client | None = None,
 ) -> Turn:
+    """Send one streaming generateContent request and return the assembled Turn."""
     request = build_request(
         config, messages, system=system, tools=tools, max_tokens=max_tokens
     )

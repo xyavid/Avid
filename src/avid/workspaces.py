@@ -1,16 +1,4 @@
-"""工作区：一个本地目录，同时承担三件事——干活的地点、权限边界、会话归属。
-
-**注册表不是权威。** 会话数据始终在各自工作区的 ``<root>/.avid/sessions/`` 下，
-工作区 id 由根目录派生，所以删掉注册表不丢任何会话，重复登记同一个目录也是幂等的。
-注册表只回答一个问题：**这台机器上有哪些工作区可选**（``avid workspace list``、
-Web 的新建会话选择器）。
-
-id 由根目录派生（``w-`` + sha1(绝对路径)[:12]）而不是随机分配，正是为了让
-"注册表丢失"与"重复登记"这两件事都不产生第二份真相。
-
-文件放在用户级 ``~/.avid/workspaces.json``（``AVID_HOME`` 可覆盖，测试用它隔离），
-因为"列出候选工作区"这个动作必须能在一个工作区之外发生。
-"""
+"""User-level registry of the workspace directories that are selectable on this machine."""
 
 from __future__ import annotations
 
@@ -35,19 +23,20 @@ from .runtime.events import now_ms
 
 logger = logging.getLogger("avid.workspaces")
 
-# 用户级目录的定义在 `policy/userdirs.py`（叶子模块：注册表、审计、掩蔽源文件三处共用，
-# 而它们互相不能 import）。名字在这里保留，既有调用方与测试不必改。
+# Re-exported for existing callers; policy/userdirs.py is the single definition of the Avid home dir.
 AVID_HOME_ENV = userdirs.AVID_HOME_ENV
 REGISTRY_FILE = "workspaces.json"
+# Stamped into every file so the on-disk shape is self-describing.
 REGISTRY_VERSION = 1
+# Session stores live under each workspace root, so losing the registry loses no session.
 SESSION_DIR = ".avid/sessions"
 
-# 常用占位名，避免 root 是文件系统根时显示成空串。
+# Fallback display name for a root that has no directory name of its own (the filesystem root).
 _UNNAMED = "workspace"
 
 
 class WorkspaceError(Exception):
-    """工作区操作失败。消息面向使用者，直接可读。"""
+    """A workspace operation failed; the message is written for the user to read directly."""
 
 
 class WorkspaceNotFound(WorkspaceError):
@@ -59,7 +48,7 @@ class WorkspaceRegistryCorrupt(WorkspaceError):
 
 
 def home_dir() -> Path:
-    """用户级 Avid 目录（委托 ``policy/userdirs.py``，那里是唯一定义）。"""
+    """The user-level Avid directory, delegated to policy/userdirs.py where it is defined."""
     return userdirs.avid_home()
 
 
@@ -68,7 +57,7 @@ def registry_path() -> Path:
 
 
 def derive_id(root: str | Path) -> str:
-    """由根目录派生稳定 id：同一目录永远得到同一个 id。"""
+    """Derives a stable id from the resolved absolute path, so one directory always has one id."""
     resolved = str(Path(root).expanduser().resolve())
     digest = hashlib.sha1(resolved.encode("utf-8")).hexdigest()[:12]
     return f"w-{digest}"
@@ -76,14 +65,16 @@ def derive_id(root: str | Path) -> str:
 
 @dataclass(frozen=True)
 class Workspace:
+    """A registered directory with its display name, timestamps and default permission mode."""
+
     id: str
     root: str
     name: str
     created_at: int
     last_used_at: int
     default_permission: str = DEFAULT_MODE
-    # 已从候选列表里摘掉（墓碑）。条目不删，因为 id 是路径的派生值：删了条目就再没有
-    # "这个 id 对应哪个目录"的记录，它下面的会话会连列举和打开都做不到（见 `remove`）。
+    # Hidden entries are tombstones, never deletions: the id is a path digest, so the entry is the
+    # only record tying the sessions under that path to a workspace.
     hidden: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -99,11 +90,7 @@ class Workspace:
 
 
 def _default_mode(permission: str) -> str:
-    """工作区默认权限的白名单：**不接受 full**（full ≠ default）。
-
-    持久化一个"以后每次运行都关沙箱"的默认值，等于把显式授权变成静默授权——
-    产品规则里最硬的一条，所以它在这里、在服务层、在 CLI/前端的选择器里各挡一次。
-    """
+    """Validates a workspace default, refusing full because a persisted grant would be silent."""
     problem = full_grant_error(permission, source="workspace_default")
     if problem is not None:
         raise WorkspaceError(problem)
@@ -111,6 +98,7 @@ def _default_mode(permission: str) -> str:
 
 
 def _parse(raw: Any) -> Workspace | None:
+    """Rebuilds one registry entry, defaulting missing or unknown fields instead of failing."""
     if not isinstance(raw, dict):
         return None
     root = raw.get("root")
@@ -122,7 +110,7 @@ def _parse(raw: Any) -> Workspace | None:
     try:
         permission, note = migrate_mode(mode)
         if note:
-            # **打出来**，不静默改：安全设置变了，用户有权知道变了什么、变成了什么。
+            # Report an upgraded security setting instead of rewriting it silently.
             logger.warning("工作区 %s：%s", root, note)
     except (ValueError, FullAccessError):
         logger.warning("工作区 %s 的默认权限 %r 不认识，按默认处理", root, mode)
@@ -134,21 +122,21 @@ def _parse(raw: Any) -> Workspace | None:
         created_at=int(created) if isinstance(created, int) else now_ms(),
         last_used_at=int(used) if isinstance(used, int) else now_ms(),
         default_permission=permission,
-        # 老文件里没有这个字段 = False（没删过）。写坏的（非布尔）当没删过处理。
+        # A missing field means never removed, and a malformed value is read the same way.
         hidden=raw.get("hidden") is True,
     )
 
 
 class WorkspaceRegistry:
-    """已知工作区的索引。读宽容、写拒绝——损坏的文件不会被静默覆盖。"""
+    """Index of known workspaces; reads tolerate a corrupt file while writes refuse to overwrite it."""
 
     def __init__(self, path: str | Path | None = None, *, now: Callable[[], int] = now_ms):
         self.path = Path(path) if path is not None else registry_path()
+        # Injectable clock so tests can pin created_at and last_used_at.
         self._now = now
 
-    # ---------------- 读写 ----------------
-
     def _read(self) -> list[Workspace]:
+        """Reads every entry, raising rather than silently discarding a corrupt file."""
         if not self.path.exists():
             return []
         try:
@@ -173,6 +161,7 @@ class WorkspaceRegistry:
             "workspaces": [ws.to_dict() for ws in workspaces],
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        # Write a sibling temp file and replace it, so an interrupted write cannot truncate the registry.
         temp = self.path.with_suffix(".tmp")
         temp.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
@@ -180,29 +169,19 @@ class WorkspaceRegistry:
         os.replace(temp, self.path)
 
     def list(self, *, include_hidden: bool = False) -> list[Workspace]:
-        """按最近使用倒序。文件损坏时**不阻断运行**：返回空表并留一条日志。
-
-        ``include_hidden=True`` 才有墓碑（已删除的工作区）。服务层列举**会话**时必须带上
-        它们，否则删一个工作区就等于让里面的会话从界面上消失；而候选列表只给可见的。
-        """
+        """Lists most-recently-used first, logging and returning empty when the file is corrupt."""
         try:
             items = self._read()
         except WorkspaceRegistryCorrupt as exc:
             logger.warning("%s", exc)
             return []
+        # Listing sessions needs the tombstones too, or removing a workspace would hide its sessions.
         if not include_hidden:
             items = [ws for ws in items if not ws.hidden]
         return sorted(items, key=lambda ws: (-ws.last_used_at, ws.id))
 
-    # ---------------- 查询 ----------------
-
     def find(self, selection: str | None, *, include_hidden: bool = False) -> Workspace | None:
-        """按 id 或路径查；``None``/空串返回 None。
-
-        墓碑（已删除）默认**查不到**：所有"这算不算已登记"的判断（登记时的重复检查、
-        按工作区建会话）都该看候选列表，而不是看文件里还剩什么。需要按 id 操作墓碑本身
-        的路径（改默认权限、再次删除）走 `get`。
-        """
+        """Finds by id first and by resolved path second; tombstones are invisible unless asked for."""
         if not selection:
             return None
         text = str(selection).strip()
@@ -227,7 +206,7 @@ class WorkspaceRegistry:
         return None
 
     def get(self, selection: str) -> Workspace:
-        """按 id/路径取一条记录，**含墓碑**：写操作要能作用在已删除的那条上。"""
+        """Returns one record including tombstones, so write paths can target a removed workspace."""
         found = self.find(selection, include_hidden=True)
         if found is None:
             raise WorkspaceNotFound(
@@ -236,8 +215,6 @@ class WorkspaceRegistry:
             )
         return found
 
-    # ---------------- 写 ----------------
-
     def add(
         self,
         root: str | Path,
@@ -245,7 +222,7 @@ class WorkspaceRegistry:
         name: str | None = None,
         permission: str | None = None,
     ) -> Workspace:
-        """登记一个目录。同一个目录重复登记是幂等的（id 由路径派生）。"""
+        """Registers a directory, updating the existing entry when the derived id is already known."""
         path = Path(root).expanduser()
         if not path.exists():
             raise WorkspaceError(f"目录不存在：{path}")
@@ -254,7 +231,8 @@ class WorkspaceRegistry:
         resolved = path.resolve()
         mode = _default_mode(permission or DEFAULT_MODE)
 
-        items = self._read()  # 损坏时抛错：不覆盖可能是好的数据
+        # Read through the raising path: never overwrite a file that may still hold good data.
+        items = self._read()
         stamp = self._now()
         for index, ws in enumerate(items):
             if ws.id == derive_id(resolved):
@@ -265,7 +243,7 @@ class WorkspaceRegistry:
                     default_permission=(
                         _default_mode(permission) if permission else ws.default_permission
                     ),
-                    # 重新登记同一个目录 = 撤销删除：墓碑复用，不产生第二个条目。
+                    # Re-registering the same directory undoes a removal by reusing the tombstone.
                     hidden=False,
                 )
                 items[index] = updated
@@ -287,17 +265,12 @@ class WorkspaceRegistry:
         mode = _default_mode(permission)
         found = self.get(selection)
         updated = self._update(found.id, default_permission=mode)
+        # get() proved the record exists, so the update cannot miss it.
         assert updated is not None
         return updated
 
     def remove(self, selection: str) -> Workspace:
-        """从候选列表里摘掉：立**墓碑**（``hidden=True``），条目与磁盘数据都留着。
-
-        为什么不是把条目从文件里删掉：会话库在 ``<root>/.avid/sessions``，而工作区 id 是
-        路径的派生值——条目一旦没了，"这个 id 对应哪个目录"就再没有记录，删掉一个工作区
-        就等于让里面的会话连列举、打开都做不到。界面要的是「归到未归属的会话」，不是消失。
-        重新登记同一个目录即可撤销（`add` 会把 ``hidden`` 清回 False）。
-        """
+        """Hides a workspace from candidate lists, keeping the entry and the sessions under its root."""
         found = self.get(selection)
         items = self._read()
         for index, ws in enumerate(items):
@@ -315,14 +288,8 @@ class WorkspaceRegistry:
                 return items[index]
         return None
 
-    # 会话库路径见模块函数 `sessions_root()`（不读实例状态，不做 staticmethod）。
-
 
 def sessions_root(workspace: Workspace | str) -> Path:
-    """一个工作区的会话库固定落在它自己的 ``.avid/sessions/`` 下。
-
-    模块函数而不是 `WorkspaceRegistry` 的 staticmethod（P3-4）：它不读实例状态，
-    挂在类上只会让人以为"要先有个注册表才能算这个路径"。
-    """
+    """Returns the session store of a workspace, which always sits under its own root."""
     root = workspace.root if isinstance(workspace, Workspace) else str(workspace)
     return Path(root) / SESSION_DIR

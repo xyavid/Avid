@@ -1,9 +1,4 @@
-"""会话端点：列表、新建、元信息、改名、销毁、分支、条目分页。
-
-分页纪律在服务端（不变量 I14）：默认 ``limit=100``、硬上限 500、游标
-``cursor_seq`` 排他。``/api/sessions`` 的 O(会话数 × 文件大小) 代价是已知的，
-触发条件写在与 ``cli.py`` 相同的注释里（会话名冗余进 JSONL header）。
-"""
+"""Session endpoints: listing, creation, metadata, rename, deletion, branches and entry pages."""
 
 from __future__ import annotations
 
@@ -54,7 +49,7 @@ def delete_session(request: Request, session_id: str) -> Response:
 
 @router.get("/sessions/{session_id}/branches", response_model=BranchListOut)
 def list_branches(request: Request, session_id: str) -> dict:
-    """分支列表。新建会话还没有任何分支值，但 main 会作为隐式默认出现。"""
+    """Lists branches, where main is reported as the implicit default of a fresh session."""
     return current_services(request).sessions.list_branches(session_id)
 
 
@@ -64,7 +59,7 @@ def list_branches(request: Request, session_id: str) -> dict:
     status_code=status.HTTP_201_CREATED,
 )
 def create_branch(request: Request, session_id: str, body: CreateBranchIn) -> dict:
-    """在某条目处开新分支（fork）。活动 run 期间 409，重名 409。"""
+    """Forks a new branch at the given entry; an active run or a duplicate name is a conflict."""
     return current_services(request).sessions.create_branch(
         session_id, name=body.name, at=body.at
     )
@@ -79,6 +74,7 @@ def list_entries(
     limit: int | None = Query(default=None, ge=1),
     cursor_seq: int | None = Query(default=None, ge=0),
 ) -> dict:
+    """Pages one branch's entries, with an exclusive cursor and the page size capped in the service."""
     return current_services(request).sessions.entries(
         session_id,
         branch=branch,

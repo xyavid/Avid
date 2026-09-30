@@ -1,14 +1,4 @@
-"""会话的数据结构与协议。
-
-命名对照参考实现（``earendil-works/pi`` 的 ``harness/session``）：
-
-* 文件格式里用 camelCase（``parentId`` / ``storageVersion`` / ``createdAt``），
-  与 pi 的 JSONL 同形；Python 侧一律 snake_case。
-* ``Entry`` 只保留 ``message`` 一种。pi 的 ``compaction`` / ``branch_summary`` /
-  ``custom`` 三种要等各自的真实写入者出现（见阶段 12 的取舍 A7/A8）。
-* pi 给每个方法都传一个宿主 ``Context``；Avid 没有这层抽象，能力（根目录、
-  时钟、id 生成器）在构造期注入，因此下面所有签名都没有 context 参数。
-"""
+"""Session data structures: the entry and value records plus the protocols both backends share."""
 
 from __future__ import annotations
 
@@ -17,33 +7,28 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar
 
-if TYPE_CHECKING:  # 仅用于标注：运行时由 values.py 提供，避免循环导入
+if TYPE_CHECKING:  # annotation only: values.py supplies the runtime object, which avoids a cycle
     from .values import ValueAddress
 
+# Result type of a mutation callback, so one grant can produce whatever the caller needs.
 T = TypeVar("T")
 
-# 条目判别字段。现在有两种；格式版本号（storage_version）为新类型留位。
+# Entry discriminator; the format version leaves room for further entry types.
 EntryType = str
 MESSAGE_ENTRY: EntryType = "message"
-# 内核注入给模型的提醒（TODO 提醒 / Stop nudge）：它**是**模型当时看到的历史，所以照旧
-# 进投影；但它不是对话内容，渲染侧不该把它当成用户说的话。单靠文本分不出来——nudge 的
-# 文本由 Stop hook 任意给定（测试里是「还有一步」），所以判别必须结构化。
+# Kernel-injected notice (todo reminder / stop nudge): shown to the model, but not conversation.
 NOTICE_ENTRY: EntryType = "notice"
 
 Order = Literal["asc", "desc"]
 BranchOrder = Literal["newestFirst", "oldestFirst"]
 
-# 存储格式版本。读到别的版本要显式报错，而不是猜着读。
+# Storage format version; a file carrying any other value is rejected rather than guessed at.
 STORAGE_VERSION = 1
 
 
 @dataclass(frozen=True)
 class Entry:
-    """一条已经提交的会话条目。
-
-    ``parent_id`` 把条目串成链：分支头只是"链尾是谁"的一个值，
-    链本身由 parent 关系还原。提交后视为不可变——不变量 I1 由存储层守护。
-    """
+    """One committed entry; parent_id chains entries and a branch tip is an id at a chain end."""
 
     id: str
     parent_id: str | None
@@ -55,7 +40,7 @@ class Entry:
 
 @dataclass(frozen=True)
 class NewEntry:
-    """尚未提交的条目：seq 与 timestamp 由提交时统一分配。"""
+    """An uncommitted entry: seq and timestamp are assigned by the commit that stores it."""
 
     id: str
     parent_id: str | None
@@ -81,9 +66,10 @@ class ValueDeleteWrite:
     key: str
 
 
+# One write inside a transaction: either an entry, a value set or a value delete.
 Write = EntryWrite | ValueSetWrite | ValueDeleteWrite
 
-# ---- 提交后形态：seq / timestamp 已分配，是落盘与重放的单位 ----
+# Committed writes carry the seq and timestamp assigned at commit time; they are the disk unit.
 
 
 @dataclass(frozen=True)
@@ -121,7 +107,7 @@ class StoredValue:
 
 @dataclass(frozen=True)
 class EntryQuery:
-    """会话级查询：按 seq 全局扫描，默认从新到旧。"""
+    """Session-level query: one global scan by seq, newest first by default."""
 
     type: EntryType | None = None
     order: Order = "desc"
@@ -131,11 +117,7 @@ class EntryQuery:
 
 @dataclass(frozen=True)
 class BranchScan:
-    """分支扫描：``start`` 是链尾，沿 parent_id 往回走。
-
-    ``start`` 允许为空——那是会话级调用（"从分支头开始"）；存储层拿到空 start
-    会报错，因为存储只认具体条目。
-    """
+    """Branch scan: start is the chain tip and the walk follows parent_id back through the chain."""
 
     start: str | None = None
     type: EntryType | None = None
@@ -146,19 +128,14 @@ class BranchScan:
 
 @dataclass(frozen=True)
 class SessionStats:
-    """会话统计。只有条数：**运行用量不在这里**。
-
-    阶段 22 把用量落在会话**值**里（`values.py` 的 `USAGE_NS`，按分支一个地址），
-    理由是它要按分支查、且与"会话整体有多少条消息"无关；塞进统计会逼着每次读统计
-    都反查分支。pi 把 usage 放这里，Avid 的取舍见 `runtime-architecture.md` §20.2。
-    """
+    """Session totals: message count only, because runtime usage is stored per branch as a value."""
 
     message_count: int
 
 
 @dataclass(frozen=True)
 class CommitResult:
-    """一次提交的结果。``stats`` 是**落地之后**的统计。"""
+    """The outcome of one commit; stats describes the state after the writes landed."""
 
     first_seq: int
     seqs: tuple[int, ...]
@@ -168,7 +145,7 @@ class CommitResult:
 
 @dataclass(frozen=True)
 class PreparedCommit:
-    """已分配 seq / timestamp 并通过校验、但还没落地的提交。"""
+    """A commit with seq and timestamp assigned and validated, but not yet written."""
 
     writes: tuple[CommittedWrite, ...]
     first_seq: int
@@ -178,31 +155,32 @@ class PreparedCommit:
 
 @dataclass(frozen=True)
 class SessionMetadata:
-    """会话元信息。列表只需要它就够，不必把会话读进来。"""
+    """Session metadata; a listing needs only this and never opens the session."""
 
     id: str
     created_at: int
     storage_version: int = STORAGE_VERSION
     parent_session_id: str | None = None
-    # 归属工作区（阶段 18）：创建时的静态事实，header 只写一次，之后不可变。
-    # 老会话读回为 None，由所在仓库的归属补上（位置即归属）。
+    # Owning workspace, fixed at creation; files without it inherit their location.
     workspace: str | None = None
 
 
 @dataclass(frozen=True)
 class JsonlSessionMetadata(SessionMetadata):
-    """文件后端额外暴露的东西：路径与修改时间，供列表与删除定位。"""
+    """File-backend metadata: the path and modification time that listing and deletion need."""
 
     path: Path = field(default_factory=Path)
     modified_at: int = 0
 
 
 class IdGenerator(Protocol):
+    """Source of unique session and entry ids."""
+
     def next(self) -> str: ...
 
 
 class Storage(Protocol):
-    """会话数据面的最小契约。内存后端与文件后端实现同一组方法。"""
+    """Minimal session data-plane contract implemented by the memory and the file backend."""
 
     def commit(self, writes: Sequence[Write]) -> CommitResult: ...
 
@@ -222,6 +200,8 @@ class Storage(Protocol):
 
 
 class Branch(Protocol):
+    """One named chain of entries; the tip is a value and appending writes entry and tip as one."""
+
     name: str
 
     def get_tip_id(self) -> str | None: ...
@@ -236,6 +216,8 @@ class Branch(Protocol):
 
 
 class Session(Protocol):
+    """An opened session: reads, branch management, exclusive mutations and values."""
+
     metadata: SessionMetadata
     id_generator: IdGenerator
 
@@ -279,6 +261,8 @@ class Session(Protocol):
 
 
 class SessionRepo(Protocol):
+    """Creation, opening, listing and deletion of sessions."""
+
     def create(
         self,
         *,
@@ -297,7 +281,7 @@ class SessionRepo(Protocol):
 
 
 class SessionMutation(Protocol):
-    """一次独占的读-改-写能力：commit 至多一次，end 之后一切失效。"""
+    """One exclusive read-modify-write grant: at most one commit, and nothing works after end."""
 
     def commit(self, writes: Sequence[Write]) -> CommitResult: ...
 
@@ -312,4 +296,5 @@ class SessionMutation(Protocol):
     def end(self) -> None: ...
 
 
+# A callback that receives one exclusive mutation grant and returns its own result.
 MutationCallback = Callable[[SessionMutation], T]

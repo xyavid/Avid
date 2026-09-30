@@ -1,13 +1,4 @@
-"""物化状态：两个后端共用的那一份"会话现在长什么样"。
-
-内存后端直接拿它当存储；文件后端在 open 时把事务行重放进来，在 commit 时
-先在这里分配 seq、校验，再写文件。**校验只在这里写一次**，所以两个后端对
-"什么算合法提交"的判断不可能分叉（一致性套件跑的就是这一点）。
-
-提交的顺序是有讲究的：先 ``prepare_commit`` 分配 + 校验，再由调用方落盘，
-最后才 ``apply``。任何一步失败，状态都还停在提交前——这就是不变量 I2
-"全有或全无"的实现位置。
-"""
+"""Materialised session state: the entries, values and stats that both backends share in memory."""
 
 from __future__ import annotations
 
@@ -38,12 +29,7 @@ from .values import ValueAddress
 
 
 def _copy_entry(entry: Entry) -> Entry:
-    """读路径交给调用方的副本：message 深拷贝，内部状态不再能被就地改写。
-
-    ``Entry`` 是 frozen dataclass，但 frozen 只挡住属性赋值，挡不住
-    ``entry.message["content"] = ...``。不变量 I1（只增不改）以前只对文件成立，
-    内存里拿到的对象与内部状态是同一份——这层拷贝把它补齐。
-    """
+    """The read path hands out a deep copy, so callers cannot mutate the state held here."""
     return replace(entry, message=copy.deepcopy(entry.message))
 
 
@@ -52,13 +38,7 @@ def _copy_value(stored: StoredValue) -> StoredValue:
 
 
 class SessionState:
-    """条目的树 + 值的表 + 统计，全部物化在内存里。
-
-    读写互斥：``apply`` 会就地改这些容器，而读可能来自另一个线程（运行线程落库的
-    同时 HTTP 线程在读同一份状态）。以前只有存储层的 ``commit`` 加锁、读路径不加，
-    于是并发读写会抛 ``RuntimeError: dictionary changed size during iteration``。
-    锁放在这里而不是两个后端各一份：状态的所有权在它，且两个后端的行为必须一致。
-    """
+    """Entries, values and stats in memory, read and written under one reentrant lock."""
 
     def __init__(self, next_seq: int = 1) -> None:
         self._entries: dict[str, Entry] = {}
@@ -66,13 +46,13 @@ class SessionState:
         self._values: dict[tuple[str, str], StoredValue] = {}
         self._message_count = 0
         self._next_seq = next_seq
-        # 可重入：读方法之间会互相调用（例如 stats 读计数、scan 读 entries）。
+        # Reentrant because read methods call each other (stats and scans read the same maps).
         self._lock = threading.RLock()
 
-    # ---------- 提交 ----------
+    # Write path: prepare, validate, apply.
 
     def prepare_commit(self, writes: Sequence[Write], timestamp: int) -> PreparedCommit:
-        """分配连续 seq 与同一个 timestamp，并校验；不改动任何状态。"""
+        """Assigns consecutive seq values and one timestamp, then validates; state is untouched."""
         with self._lock:
             return self._prepare_commit(writes, timestamp)
 
@@ -88,7 +68,7 @@ class SessionState:
                 committed.append(CommittedValueSet(seq, write.namespace, write.key, write.value))
             elif isinstance(write, ValueDeleteWrite):
                 committed.append(CommittedValueDelete(seq, write.namespace, write.key))
-            else:  # pragma: no cover - 只有开发者会构造出别的类型
+            else:  # pragma: no cover - only a developer can construct another write type
                 raise SessionInvariantError(f"未知的写入类型：{type(write).__name__}")
         self.validate(committed)
         return PreparedCommit(
@@ -99,11 +79,12 @@ class SessionState:
         )
 
     def validate(self, writes: Sequence[CommittedWrite]) -> None:
-        """落盘前 / 重放时的同一套校验：seq 单调、id 不重复、parent 必须存在。"""
+        """Validation used before writing and on replay: monotonic seq, unique ids, live parents."""
         with self._lock:
             self._validate(writes)
 
     def _validate(self, writes: Sequence[CommittedWrite]) -> None:
+        # Every write must land strictly after the highest seq already applied.
         previous_seq = self._next_seq - 1
         seen_ids: set[str] = set()
         for write in writes:
@@ -128,7 +109,7 @@ class SessionState:
             seen_ids.add(entry.id)
 
     def apply(self, writes: Sequence[CommittedWrite]) -> SessionStats:
-        """把已经校验过的写入落地，返回落地后的统计。"""
+        """Lands writes that already passed validation and returns the resulting stats."""
         with self._lock:
             return self._apply(writes)
 
@@ -143,8 +124,7 @@ class SessionState:
                     type=write.entry.type,
                     message=write.entry.message,
                 )
-                # 拷贝一份存：写入方在提交后改写自己那份 dict 不该影响会话状态
-                # （I1 只增不改应当是双向的）。
+                # Store a copy: a writer changing its dict after commit must not change state.
                 entry = replace(entry, message=copy.deepcopy(entry.message))
                 self._entries[entry.id] = entry
                 self._by_seq.append(entry)
@@ -163,13 +143,13 @@ class SessionState:
         return self.stats
 
     def advance_next_seq(self, next_seq: int) -> None:
-        """header 里的高水位：只有重放后仍更大时才采用（快照重写的兼容位）。"""
+        """Adopts the header high-water mark, but only when it is ahead of the replayed seq."""
         if not isinstance(next_seq, int) or next_seq < 1:
             raise SessionInvariantError(f"非法的 seq 高水位：{next_seq!r}")
         with self._lock:
             self._next_seq = max(self._next_seq, next_seq)
 
-    # ---------- 读 ----------
+    # Read path: every accessor takes the same lock and copies out.
 
     @property
     def next_seq(self) -> int:
@@ -196,11 +176,7 @@ class SessionState:
             return None if stored is None else _copy_value(stored)
 
     def values_in(self, namespace: str) -> list[StoredValue]:
-        """某个 namespace 下的全部值，按 seq 升序。
-
-        只做命名空间级枚举，不做 prefix 扫描：分支列表是它的第一个使用者——分支头
-        就是 ``BRANCH_TIP_NS`` 下的一组值，除此之外没有别的办法回答「有哪些分支」。
-        """
+        """All values in a namespace, ordered by seq; branch names come from enumerating one."""
         with self._lock:
             found = [
                 _copy_value(item)
@@ -211,7 +187,7 @@ class SessionState:
             return found
 
     def scan_branch(self, query: BranchScan) -> list[Entry]:
-        """从 ``start`` 沿 parent_id 往回走，得到这条链。"""
+        """Walks back from start along parent_id and returns that chain."""
         with self._lock:
             return self._scan_branch(query)
 
@@ -221,12 +197,13 @@ class SessionState:
             return False
         if query.cursor_seq is None:
             return True
-        # cursor 是排他的：升序取它之后的，降序取它之前的。
+        # The cursor is exclusive: ascending takes later seqs, descending earlier ones.
         if query.order == "oldestFirst":
             return entry.seq > query.cursor_seq
         return entry.seq < query.cursor_seq
 
     def _scan_branch(self, query: BranchScan) -> list[Entry]:
+        # There is no session-level default here: a branch scan needs a concrete start entry.
         if query.start is None:
             raise SessionInvariantError("scan_branch 需要一个起点条目 id")
         start = self._entries.get(query.start)
@@ -241,9 +218,7 @@ class SessionState:
         while cursor is not None:
             if self._branch_match(cursor, query):
                 path.append(cursor)
-                # newestFirst 且已经够数：不必再往链的深处走。链可以很长（长会话的
-                # 分支扫描以前是 O(链长)，哪怕只要 1 条——`find_entry(limit=1)` 与
-                # 链尾残缺判定都走这条路）。
+                # newestFirst can stop once the page is full, which matters for long chains.
                 if newest_first and limit is not None and len(path) >= limit:
                     break
             if cursor.parent_id is None:
@@ -258,14 +233,14 @@ class SessionState:
         if newest_first:
             filtered = path
         else:
-            # oldestFirst 必须走到根才知道哪条最老，之后才谈得上 limit。
+            # oldestFirst must reach the root to know the oldest end, so the limit comes later.
             path.reverse()
             filtered = [item for item in path if self._branch_match(item, query)]
         page = filtered if limit is None else filtered[:limit]
         return [_copy_entry(item) for item in page]
 
     def scan_entries(self, query: EntryQuery) -> list[Entry]:
-        """按 seq 全局扫描。默认从新到旧。"""
+        """Global scan by seq, newest first by default."""
         with self._lock:
             return self._scan_entries(query)
 
@@ -278,7 +253,7 @@ class SessionState:
             if query.type is not None and entry.type != query.type:
                 continue
             if query.cursor_seq is not None:
-                # cursor 是**排他**的：它指向上一页的最后一条，下一页从它之后开始。
+                # The cursor is exclusive: the next page starts strictly after the previous one.
                 if descending and entry.seq >= query.cursor_seq:
                     continue
                 if not descending and entry.seq <= query.cursor_seq:

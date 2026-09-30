@@ -1,25 +1,4 @@
-"""上下文压缩管线：五步，代价由低到高。
-
-每轮都跑（零 API 调用）：
-
-* ① ``tool_result_budget`` —— 工具结果字符总量超预算就把当前最大的落盘
-* ② ``snip_compact`` —— 消息条数超上限就裁掉中间，保留头尾
-
-只在上下文超限时：
-
-* ③ ``micro_compact`` —— 把较早的工具结果落盘，保留最近若干条，仍然不调模型
-* ④ ``compact_history`` —— ③ 之后仍超限，才花一次模型调用换摘要，替换历史
-
-兜底：
-
-* ⑤ ``reactive_compact`` —— 模型报 ``prompt_too_long`` 时总结更早历史、保留最近若干条，重试一次
-
-三条硬保证：①②③ 不调用模型；④ 每次运行最多一次（由调用方 ``RunState.compacted`` 决定）；
-⑤ 最多一次。①②③ 的签名里没有 ``chat``，这在类型上就保证了它们碰不到模型 API。
-
-五步都只通过 ``Transcript`` 的方法读写，因此结构不变量由所有者保证，
-不需要"改完再事后校验"。
-"""
+"""Five-step context compaction ladder, ordered from the cheapest mechanism to the most expensive."""
 
 from __future__ import annotations
 
@@ -38,28 +17,26 @@ from ..ai.transcript import Transcript
 
 logger = logging.getLogger("avid.policy.compaction")
 
-# 阈值集中在这里，按实测调整只改这些数。
-TOOL_RESULT_CHAR_BUDGET = 200_000
+# Thresholds are centralized here so that tuning after measurement touches only these numbers.
+TOOL_RESULT_CHAR_BUDGET = 200_000  # characters of tool results allowed before spilling the largest
 TOOL_RESULT_KEEP_RECENT = 3
 MAX_MESSAGES = 50
 SNIP_KEEP_HEAD = 8
 SNIP_KEEP_TAIL = 24
-CONTEXT_CHAR_LIMIT = 400_000
+CONTEXT_CHAR_LIMIT = 400_000  # fallback conversation budget when no window reading is available
 MICRO_COMPACT_KEEP_RECENT = 3
-MICRO_COMPACT_TARGET_RATIO = 0.8
+MICRO_COMPACT_TARGET_RATIO = 0.8  # fraction of the limit that the spill loop aims to reach
 REACTIVE_KEEP_RECENT = 5
 
-# ③④ 的字符阈值与**真实窗口**的关系。有窗口、且拿到过一轮真实读数时按
-# 「窗口 × WINDOW_TRIGGER_RATIO × 实测 chars/token − 两块固定文本字符」现算
-# （见 derived_context_chars）；CONTEXT_CHAR_LIMIT 退居"窗口或读数拿不到"时的回落值。
+# Fraction of the model's real context window at which the two context-limit steps trigger.
 WINDOW_TRIGGER_RATIO = 0.8
-# 实测 chars/token 的可信区间。下界挡"读数报得太小 → 压得过狠"，上界挡
-# "读数报得太大 → 等于永不压缩"：读数不像话时不跟着跑。
+# Plausible band for measured chars per token: a reading outside it is ignored rather than followed.
 MIN_CHARS_PER_TOKEN = 0.5
 MAX_CHARS_PER_TOKEN = 6.0
 
-# 落盘目录必须在工作区内：read_file 有工作区边界校验，落到外面就再也读不回来了。
+# Spilled files must stay inside the workspace, since the read tool only reads there.
 SPILL_DIR = ".avid/context"
+# Marker for content that has already been spilled, so it is never spilled a second time.
 SPILL_PREFIX = "[已落盘]"
 
 SUMMARY_SYSTEM = (
@@ -70,21 +47,18 @@ SUMMARY_SYSTEM = (
     "只输出摘要正文。"
 )
 
-# 落盘文件名的组成：<kind>-<tag>-<seq>.ext
-#
-# 只用进程内自增序号是不够的：`_spill_seq` 重启归零，于是同一个工作区里两次运行
-# 都写 `tool-result-0001.txt`，后一次**静默覆盖**前一次——而旧摘要里还写着
-# "完整记录：.avid/context/tool-result-0001.txt，需要时用 read_file 读回"，
-# 那条恢复通道就断了。所以名字里要带一个跨进程、跨重启都不同的标识。
+# A per-process tag keeps spill filenames unique across restarts, so a summary's read-back path stays
+# valid instead of being silently overwritten by the next run.
 _PROCESS_TAG = f"{os.getpid():x}{int(time.time() * 1000) & 0xFFFFF:05x}"
+# In-process spill counter; it resets on restart, which is exactly why the tag above exists.
 _spill_seq = 0
 _SPILL_LOCK = threading.Lock()
 
 
 def _next_spill_path(root: Path, kind: str, suffix: str, tag: str = "") -> Path:
-    """下一个落盘路径。``tag`` 由 RunState 提供（每次运行一个），没有则用进程标识。"""
+    """Return the next spill path, tagged per run when the caller supplies one."""
     global _spill_seq
-    with _SPILL_LOCK:  # 并行 subagent 会同时压缩，序号必须原子地取
+    with _SPILL_LOCK:  # parallel subagents compact at once, so the sequence must be taken atomically
         _spill_seq += 1
         seq = _spill_seq
     return root / f"{kind}-{tag or _PROCESS_TAG}-{seq:04d}{suffix}"
@@ -92,7 +66,7 @@ def _next_spill_path(root: Path, kind: str, suffix: str, tag: str = "") -> Path:
 
 @dataclass(frozen=True)
 class CompactReport:
-    """一次压缩做了什么。循环据此打日志，统计压缩次数。"""
+    """What one compaction step did, logged and counted by the loop."""
 
     step: str
     detail: str
@@ -110,25 +84,9 @@ def derived_context_chars(
     chars: tuple[int, int, int] | None,
     ratio: float = WINDOW_TRIGGER_RATIO,
 ) -> tuple[int, float] | None:
-    """把"模型的窗口"折算成**对话消息**的字符阈值；前提不齐就返回 ``None``。
-
-    只做一件事：用**上一轮的真实读数**（``prompt_tokens``）与发出那次请求时记下的
-    三块字符数（系统提示 / 工具定义 / 对话消息）反推这次运行**自己的** ``chars/token``，
-    再把窗口乘成字符预算：
-
-        阈值 = 窗口 × ratio × chars/token −（系统提示 + 工具定义 的字符数）
-
-    为什么是实测反推、而不是一个固定的语言系数：同样字符数的中文与英文 token 数差几倍，
-    任何固定系数都会在其中一种语言上系统性偏掉（中英混排时更糟——这正是写死的
-    ``CONTEXT_CHAR_LIMIT`` 会"中文先撞上下文超限、大窗口又被过早压缩"的原因）。
-    ``chars/token`` 从**这次会话自己的真实文本**上量出来，语言换了它跟着换。
-
-    两块固定文本的字符数在这里减掉，是因为阈值只管对话消息；它们的 token 也按同一个
-    换算率折回字符，两边口径一致（占比分配见 ``RunState._split_context``，同一套假设）。
-
-    缺任一项——没窗口、没真实读数、没字符数、三块全零、窗口非正——都返回 ``None``：
-    宁可回落到 ``CONTEXT_CHAR_LIMIT``，也不拿半份读数算一个假阈值。
-    """
+    """Derive a conversation character budget from the model window and this session's token reading."""
+    # The rate is measured from this session's own text, so mixed languages need no fixed coefficient.
+    # Any missing prerequisite returns None so the caller falls back to CONTEXT_CHAR_LIMIT.
     if window is None or window <= 0:
         return None
     if chars is None:
@@ -139,21 +97,17 @@ def derived_context_chars(
     if prompt_tokens is None or prompt_tokens <= 0:
         return None
 
+    # Clamping keeps an implausible reading from compacting far too hard or never at all.
     per_token = min(
         max(total / prompt_tokens, MIN_CHARS_PER_TOKEN), MAX_CHARS_PER_TOKEN
     )
+    # The system prompt and tool definitions are subtracted: the budget covers messages only.
     limit = int(window * ratio * per_token) - (chars[0] + chars[1])
     return max(1, limit), per_token
 
 
-# ---------------- 落盘 ----------------
-
-
 def _spill_root(root: Path | None = None) -> Path:
-    """落盘目录：运行级工作区根优先，否则回落到进程默认根（调用时读取）。
-
-    延迟导入 tools 是因为 agent 侧要 import 本模块，顶部导入会成环。
-    """
+    """Return the spill directory under the run workspace root, falling back to the process root."""
     if root is not None:
         return Path(root) / SPILL_DIR
     from ..tools import workspace
@@ -161,12 +115,9 @@ def _spill_root(root: Path | None = None) -> Path:
     return Path(workspace.WORKSPACE_ROOT) / SPILL_DIR
 
 
+# The tool layer reuses this for output truncation, so the model needs one recovery procedure only.
 def spill(text: str, kind: str, root: Path | None = None, tag: str = "") -> str | None:
-    """写盘并返回工作区相对路径。落盘不是关键路径，失败就跳过、不抛。
-
-    公开给工具层的输出截断复用（``runtime.hooks.large_output_hook``）：同一个落盘目录、
-    同一套文件名与同一句「用 read_file 读回」的文案，模型不需要学两套恢复办法。
-    """
+    """Write text under the spill directory and return its workspace-relative path, or None on failure."""
     root = _spill_root(root)
     path = _next_spill_path(root, kind, ".txt", tag)
     try:
@@ -179,6 +130,7 @@ def spill(text: str, kind: str, root: Path | None = None, tag: str = "") -> str 
 
 
 def spill_notice(path: str, size: int, kind: str) -> str:
+    """Render the replacement text left where spilled content used to be."""
     return f"{SPILL_PREFIX} 原{kind}共 {size} 字符，已存至 {path}；需要时用 read_file 读回。"
 
 
@@ -189,6 +141,7 @@ def _is_spilled(content: str) -> bool:
 def _save_transcript(
     messages: list[dict[str, Any]], workdir: Path | None = None, tag: str = ""
 ) -> str:
+    """Write the full transcript as JSON and return its path, or a placeholder when saving failed."""
     root = _spill_root(workdir)
     path = _next_spill_path(root, "transcript", ".json", tag)
     try:
@@ -210,15 +163,12 @@ def _summarize(
         {"role": "user", "content": "请把以上对话压缩成要点摘要。"}
     ]
     try:
-        # 摘要调用同样不设 max_tokens：推理模型的思维链与摘要正文争同一份配额，
-        # 写死上限会让摘要变成空——而空摘要被上面当作"这一步没做成"，于是压缩静默
-        # 降级成"保留原历史"，看起来像"没到阈值"。上限交给服务商。
+        # No max_tokens is sent: reasoning tokens share that budget and a hard cap yields an empty
+        # summary, which would silently turn compaction into keeping the old history.
         turn = chat(config, request, system=SUMMARY_SYSTEM)
     except (LLMError, OSError, ValueError) as exc:
-        # 摘要失败不该让整个运行崩掉：调用超限、网络断、响应不是合法 JSON 都算
-        # "这一步没做成"，降级成保留原历史。**程序错误不许吞**——AssertionError /
-        # TypeError / AttributeError 是代码 bug，吞掉只会把 bug 藏进压缩路径
-        # （测试里的"不该调用模型"哨兵正是被原来那条 Exception 吞掉的）。
+        # A failed summary degrades to keeping the old history, but programming errors must not be
+        # swallowed or the bug hides inside the compaction path.
         logger.warning("compact: 摘要调用失败：%s", exc)
         return None
 
@@ -234,9 +184,6 @@ def _summary_message(summary: str, transcript: str) -> str:
     )
 
 
-# ---------------- ① tool_result_budget ----------------
-
-
 def tool_result_budget(
     transcript: Transcript,
     *,
@@ -245,20 +192,8 @@ def tool_result_budget(
     workdir: Path | None = None,
     tag: str = "",
 ) -> CompactReport | None:
-    """工具结果字符总量超预算：把最大的一项落盘。
-
-    两条经验规则，都是实测出来的：
-
-    * **最近 ``keep_recent`` 条永不落盘**——最大的那条往往正是模型刚读到、下一步
-      要用的，落掉它只会让模型重读，然后下一轮又被落掉。
-    * **每次调用最多落一项**——一轮剥掉一批会让模型丢掉刚建立的工作集，
-      实测会锁死成"读了被落、落了再读"的循环。这里只做温和的滴水，
-      真正的硬压缩交给 ③④。
-
-    另外注意：``budget`` 必须显著大于"``keep_recent`` 条结果的合计大小"，
-    否则永远够不到预算线，会变成每轮持续剥工作集。默认 200_000 相对
-    单条结果上限（工具的 20_000）× 3 有 3 倍以上余量。
-    """
+    """Spill the single largest tool result when the total exceeds the budget, never a recent one."""
+    # Only one result is spilled per call, and the budget must exceed the recent set or it never trips.
     before = transcript.tool_chars()
     if before <= budget:
         return None
@@ -292,9 +227,6 @@ def tool_result_budget(
     )
 
 
-# ---------------- ② snip_compact ----------------
-
-
 def snip_compact(
     transcript: Transcript,
     *,
@@ -302,7 +234,7 @@ def snip_compact(
     keep_head: int = SNIP_KEEP_HEAD,
     keep_tail: int = SNIP_KEEP_TAIL,
 ) -> CompactReport | None:
-    """消息条数超上限：裁掉中间，保留头尾。切口只在安全边界。"""
+    """Drop the middle of a transcript over the message cap, cutting only at safe boundaries."""
     before = len(transcript)
     if before <= max_messages:
         return None
@@ -310,6 +242,7 @@ def snip_compact(
     head_end = min(keep_head, before)
     tail_start = max(head_end, before - keep_tail)
 
+    # Walk each cut to a safe boundary so no tool call is separated from its result.
     while head_end < tail_start and not transcript.is_safe_boundary(head_end):
         head_end += 1
     while tail_start > head_end and not transcript.is_safe_boundary(tail_start):
@@ -331,9 +264,6 @@ def snip_compact(
     return CompactReport("snip_compact", f"裁掉中间 {dropped} 条", before, len(transcript))
 
 
-# ---------------- ③ micro_compact ----------------
-
-
 def micro_compact(
     transcript: Transcript,
     *,
@@ -343,7 +273,7 @@ def micro_compact(
     workdir: Path | None = None,
     tag: str = "",
 ) -> CompactReport | None:
-    """上下文超限：把较早的工具结果落盘，保留最近若干条。不调用模型。"""
+    """Spill older tool results until the context falls under the limit, without calling the model."""
     before = transcript.estimate_chars()
     if before <= limit:
         return None
@@ -378,9 +308,6 @@ def micro_compact(
     )
 
 
-# ---------------- ④ compact_history ----------------
-
-
 def compact_history(
     transcript: Transcript,
     *,
@@ -390,7 +317,7 @@ def compact_history(
     workdir: Path | None = None,
     tag: str = "",
 ) -> CompactReport | None:
-    """整理之后仍然超限：存完整记录，用一次模型调用换摘要，替换历史。"""
+    """Save the full transcript, summarize it with one model call, and replace the history."""
     before = transcript.estimate_chars()
     if before <= limit:
         return None
@@ -412,9 +339,6 @@ def compact_history(
     )
 
 
-# ---------------- ⑤ reactive_compact ----------------
-
-
 def reactive_compact(
     transcript: Transcript,
     *,
@@ -424,11 +348,12 @@ def reactive_compact(
     workdir: Path | None = None,
     tag: str = "",
 ) -> CompactReport | None:
-    """兜底：模型已经报超限，总结更早历史、保留最近若干条，供重试。"""
+    """Last resort once the model reports an overflow: summarize earlier history, keep the tail."""
     before = transcript.estimate_chars()
     messages = transcript.as_messages()
 
     tail_start = max(0, len(messages) - keep_recent)
+    # Move the cut back to a safe boundary so the kept tail never starts mid-exchange.
     while tail_start > 0 and not transcript.is_safe_boundary(tail_start):
         tail_start -= 1
 

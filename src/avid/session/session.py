@@ -1,19 +1,4 @@
-"""会话句柄：一条 id 对应一个 ``StorageBackedSession``。
-
-它负责的是**生命周期与写入顺序**：句柄什么时候还能用（open → closing → closed）、
-分支头与条目怎么同事务写、谁在什么时候能改状态。真正的数据落点交给 ``Storage``：
-内存后端是一份 ``SessionState``，文件后端是追加的 JSONL。本模块因此不认识
-路径、文件或 JSON——它只认识条目与值。
-
-与参考实现的三处对应关系：
-
-* ``SessionMutation`` 对应 pi 的 ``SessionMutation``：一次变更恰好提交一次，
-  ``end`` 之后能力作废。
-* ``append_message`` 对应 ``Branch.appendMessage``：读分支头 → 写条目 →
-  写新头，三步一个事务。
-* ``close`` 对应 pi 的 ``close``：先 seal 变更线（排队者立刻失败），再 drain
-  正在跑的作业，最后让存储关闭。
-"""
+"""Session handle: lifecycle and write ordering for one id, with storage holding the data."""
 
 from __future__ import annotations
 
@@ -64,19 +49,15 @@ from .values import (
 
 logger = logging.getLogger("avid.session")
 
+# Result type of a mutate callback, so one grant can produce whatever the caller needs.
 T = TypeVar("T")
 
+# Roles the session layer accepts; anything else cannot be stored or replayed.
 _ALLOWED_ROLES = ("user", "assistant", "tool")
 
 
 def validate_message(message: Any) -> None:
-    """在写入前拦住不可能落库的消息。
-
-    这不是 ``Transcript`` 的结构校验（那个管 tool_call 与结果的配对，属于一份
-    完整上下文）；这里只保证"这一条能安全地变成 JSON，并且两个后端对它的接受
-    程度完全一样"。所以校验放在会话层，而不是让 JSONL 后端靠 ``json.dumps``
-    兜底——否则内存后端会收下 JSONL 后端拒绝的东西，两个后端就分叉了。
-    """
+    """Rejects a message that could not be stored, so both backends accept exactly the same set."""
     if not isinstance(message, dict):
         raise SessionInvalidMessageError(
             f"消息必须是 dict，拿到 {type(message).__name__}"
@@ -101,11 +82,7 @@ def validate_message(message: Any) -> None:
 
 
 class SessionMutation:
-    """一次独占的读-改-写能力。
-
-    ``commit`` 至多一次：第二次调用直接报错，而不是把同一次作业写两遍。
-    ``end`` 之后能力作废——防止回调返回后还拿着它写。
-    """
+    """One exclusive read-modify-write grant: at most one commit, invalid once ended."""
 
     def __init__(self, storage: Storage, release: Callable[[], None]) -> None:
         self._storage = storage
@@ -148,22 +125,18 @@ class SessionMutation:
 
 
 class SessionBranch:
-    """一条命名的条目链。链尾是值 ``avid.branch.tip.<name>``。"""
+    """One named chain of entries; its tip is the value ``avid.branch.tip.<name>``."""
 
     def __init__(self, name: str, session: "StorageBackedSession") -> None:
         self.name = name
         self._session = session
 
     def get_tip_id(self) -> str | None:
-        """链尾条目 id；空分支（含还没写过的默认分支）返回 None。
-
-        不再 `required=True`：默认分支是隐式存在的空链，把"没有链尾值"当成错误会
-        让"空 main"这个合法状态变成异常。非默认分支的对象只能由 `create_branch`
-        或 `branch()`（要求存在）拿到，所以这里也不需要额外校验。
-        """
+        """Tip entry id, or None for an empty branch, which the default branch may legally be."""
         return self._session._branch_tip(self.name)
 
     def find_entries(self, query: BranchScan | None = None) -> list[Entry]:
+        # A query without an explicit start begins at this branch's tip.
         query = query or BranchScan()
         start = query.start if query.start is not None else self.get_tip_id()
         if start is None:
@@ -180,6 +153,7 @@ class SessionBranch:
 
     def find_entry(self, query: BranchScan | None = None) -> Entry | None:
         query = query or BranchScan()
+        # Only the first match is returned, so a caller-supplied limit is clamped to one.
         limit = 1 if query.limit is None else min(query.limit, 1)
         found = self.find_entries(
             BranchScan(
@@ -197,12 +171,12 @@ class SessionBranch:
     ) -> str:
         return self._session.append_message(self.name, message, entry_type=entry_type)
 
-    def __repr__(self) -> str:  # pragma: no cover - 只为日志可读
+    def __repr__(self) -> str:  # pragma: no cover - log readability only
         return f"<SessionBranch {self.name!r}>"
 
 
 class StorageBackedSession:
-    """一个打开的会话句柄。同名 id 同时只允许一个（由仓库保证）。"""
+    """One open session handle; the repository allows a single handle per id at a time."""
 
     def __init__(
         self,
@@ -225,7 +199,7 @@ class StorageBackedSession:
         self._close_lock = threading.Lock()
         self._state = "open"
 
-    # ---------------- 读 ----------------
+    # Reads: every accessor checks that the handle is still open.
 
     def get_entries(self, ids: Sequence[str]) -> dict[str, Entry]:
         self._assert_open()
@@ -265,6 +239,7 @@ class StorageBackedSession:
 
     def find_entry(self, query: EntryQuery | None = None) -> Entry | None:
         query = query or EntryQuery()
+        # Only the first match is returned, so a caller-supplied limit is clamped to one.
         limit = 1 if query.limit is None else min(query.limit, 1)
         found = self.find_entries(
             EntryQuery(
@@ -276,26 +251,16 @@ class StorageBackedSession:
         )
         return found[0] if found else None
 
-    # ---------------- 分支 ----------------
+    # Branches: a branch object is a view onto one named chain.
 
     def branch_names(self) -> list[str]:
-        """有值的分支名（按建分支的先后），默认分支永远排在第一个。
-
-        分支头就是 ``BRANCH_TIP_NS`` 下的一组值，所以「有哪些分支」只能靠枚举这个
-        命名空间回答。新建会话在第一次落库之前没有任何分支值，但读侧必须把 main
-        视作隐式默认——否则新会话会显示成「没有分支」，而它随时可以往 main 写。
-        """
+        """Branch names that hold a value, with the default branch always first."""
         self._assert_open()
         stored = [item.key for item in self.scan_values(BRANCH_TIP_NS)]
         return [DEFAULT_BRANCH, *(name for name in stored if name != DEFAULT_BRANCH)]
 
     def branch(self, name: str) -> SessionBranch | None:
-        """取一条分支。默认分支**隐式存在**（可能为空），其余分支没建过就是 None。
-
-        以前这里对空会话返回 None，而 `branch_names()` 同时宣称有 main——同一个问题
-        两个答案。空 main 是合法状态（第一条消息的 parent 是 None），所以给它一个
-        空分支对象，与 `branch_names()`、`messages_for_branch()` 的说法一致。
-        """
+        """Returns a branch view; the default branch is implicit and may be empty."""
         self._assert_open()
         self._assert_valid_branch(name)
         if self._storage.get_value(branch_tip(name)) is None and name != DEFAULT_BRANCH:
@@ -303,7 +268,7 @@ class StorageBackedSession:
         return self._branch_object(name)
 
     def create_branch(self, name: str, at: str | None = None) -> SessionBranch:
-        """建一条分支。已存在就报错——悄悄重建会把原来那条链丢掉。"""
+        """Creates a branch, refusing a name that already exists so no chain is silently dropped."""
         self._assert_open()
         self._assert_valid_branch(name)
 
@@ -324,11 +289,7 @@ class StorageBackedSession:
         *,
         entry_type: EntryType = MESSAGE_ENTRY,
     ) -> str:
-        """往分支尾追加一条消息，返回条目 id。分支头与条目同一次提交。
-
-        ``entry_type`` 区分「对话消息」与「内核注入的提醒」（见 ``NOTICE_ENTRY``）：
-        两者都要进投影（模型当时确实看到了它们），差别只在渲染侧。
-        """
+        """Appends a message at the branch tip, returning the entry id; the tip commits with it."""
         self._assert_open()
         validate_message(message)
         entry_id = self.id_generator.next()
@@ -336,12 +297,13 @@ class StorageBackedSession:
         def job(mutator: SessionMutation) -> None:
             tip = mutator.get_value(branch_tip(branch))
             if tip is None and branch != DEFAULT_BRANCH:
-                # 非默认分支必须显式建过：名字敲错时不该悄悄建一条新链。
+                # A non-default branch must exist first: a typo must not silently start a new chain.
                 raise SessionInvariantError(
                     f"未知分支：{branch}（先 create_branch 建它再写入）"
                 )
-            # 默认分支还没有分支头值时，第一条消息的 parent 就是 None。
+            # On a branch with no tip value yet, the first entry has no parent.
             parent_id = None if tip is None else tip.value
+            # Entry and tip share one commit, so a branch never points at a missing entry.
             mutator.commit(
                 [
                     EntryWrite(
@@ -359,10 +321,10 @@ class StorageBackedSession:
         self.mutate(job)
         return entry_id
 
-    # ---------------- 写 ----------------
+    # Writes: every write goes through one mutation grant.
 
     def begin_mutation(self) -> SessionMutation:
-        """拿一次独占的写入能力。同一线程嵌套会报 ``SessionBusyError``。"""
+        """Takes one exclusive write grant; nesting it on one thread raises SessionBusyError."""
         self._assert_open()
         self._line.acquire()
         try:
@@ -398,10 +360,10 @@ class StorageBackedSession:
         else:
             self.set_value(address, label)
 
-    # ---------------- 生命周期 ----------------
+    # Lifecycle: one close per handle, and no job may be running during it.
 
     def close(self) -> None:
-        """关句柄：先拒绝新作业，再等正在跑的作业结束。"""
+        """Closes the handle: refuse new work, wait for the running job, then close the storage."""
         with self._close_lock:
             if self._state != "open":
                 return
@@ -425,9 +387,10 @@ class StorageBackedSession:
     def closed(self) -> bool:
         return self._state != "open"
 
-    # ---------------- 内部 ----------------
+    # Internals: branch resolution and open-state checks.
 
     def _branch_tip(self, name: str, *, required: bool = False) -> str | None:
+        # required makes a missing tip an error; the default branch may legally have none.
         self._assert_valid_branch(name)
         stored = self._storage.get_value(branch_tip(name))
         if stored is None:
@@ -437,6 +400,7 @@ class StorageBackedSession:
         return stored.value
 
     def _branch_object(self, name: str) -> SessionBranch:
+        # Branch views are cached per name so one handle keeps returning the same object.
         branch = self._branches.get(name)
         if branch is None:
             branch = SessionBranch(name, self)

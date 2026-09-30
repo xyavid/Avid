@@ -1,21 +1,11 @@
-"""文件类工具的实现：读、写、改、按模式查找。
+"""Implements the file tools: read, write, edit and glob.
 
-失败一律返回以"错误："开头的文本，而不是抛异常——工具回传文本，
-循环才能继续，模型才有机会自纠。
+Failures come back as text so the loop continues; reads outside the workspace are allowed and
+writes need a ledger grant.
 
-**边界是沙箱能力，不是工作区**：``bash`` 跑在沙箱里，沙箱以 ``--ro-bind / /`` 让读
-整个文件系统成为已有能力、只把工作区（与授予的路径）留成可写；文件工具不在沙箱里跑，
-所以这里按同一份口径执行——**读**区外不需要授权，**写**区外仍然需要账本里的 rw 授权。
-
-``state`` 是**可选**的运行级上下文：有它就用运行级工作区根、读区外放行、写区外查账本；
-没有它（直接调用工具、单元测试）回落到进程默认根且区外一律回绝——没有 run 级安全规格
-就连 deny/ask 阶梯都查不了，失败方向只能是关闭。授权由 ``policy.permission.gate`` 决定
-并写进账本，这里只读结果——工具不做权限决定。
-
-**受保护目标还有一道工具级兜底**：命中 deny 阶梯（凭据、``.git/hooks``…）的路径在这里
-再拒一次。它不是重复劳动——它是"权限层从未批准"时的失败关闭（直接调用工具、答复超时
-收敛为拒绝），与 ``拒绝访问工作区外的路径`` 同一性质。
 """
+
+
 
 from __future__ import annotations
 
@@ -26,7 +16,7 @@ from ..policy.permission import APPROVAL_NONE
 from .registry import tool
 from .workspace import relative, resolve
 
-if TYPE_CHECKING:  # 只用于标注：tools 不在运行时依赖 runtime 的实例类型
+if TYPE_CHECKING:  # annotation only: tools must not depend on runtime at run time
     from ..runtime.state import RunState
 
 MAX_READ_CHARS = 20000
@@ -35,13 +25,13 @@ MAX_GLOB_RESULTS = 200
 
 
 def _root(state: "RunState | None") -> Path | None:
-    """运行级工作区根；None 表示让 workspace 模块读进程默认根（调用时读取）。"""
+    """Returns the run's workspace root, or None to let the workspace module supply a default."""
     raw = getattr(state, "workspace_root", None)
     return Path(raw) if raw else None
 
 
 def _grant(state: "RunState | None", operation: str = "read"):
-    """返回限定 ro/rw 口径的授权查询器；没有状态时越界一律回绝。"""
+    """Returns a ro/rw grant query, or None without run state, so crossings always fail closed."""
     if state is None:
         return None
     access = "rw" if operation == "write" else "ro"
@@ -49,21 +39,17 @@ def _grant(state: "RunState | None", operation: str = "read"):
 
 
 def _read_outside_ok(state: "RunState | None") -> bool:
-    """区外读要不要授权：不要，但必须有 run 级安全规格。
+    """Reports whether reads outside the workspace are allowed, which they are with a spec.
 
-    沙箱把"读整个文件系统"当作已有能力（同 Codex ``workspace-write``：permits reading
-    files），所以读区外不查能力账本。仍然要求 ``security`` 存在，是因为受保护目标
-    （``~/.ssh``、``/etc/shadow``…）的 deny/ask 判定来自那份阶梯；没有它就只能关闭。
+    The security spec is still required, since it carries the deny ladder for protected paths.
     """
     return getattr(state, "security", None) is not None
 
 
-
 def _protected(state: "RunState | None", path: Path, operation: str) -> str | None:
-    """命中 deny/ask 阶梯且本次运行没有授权时，返回回绝文本。
+    """Returns refusal text when a path hits the ladder and this run holds no grant for it.
 
-    与 ``_grant`` 同一个道理：决定由 ``gate`` 做，这里只是**兜底**——没有授权就不放行，
-    所以"gate 没跑过"或"答复超时"都不会变成一次静默放行。
+    The gate decides and this is only the fallback, so a gate that never ran cannot allow.
     """
     security = getattr(state, "security", None)
     if security is None:
@@ -72,9 +58,9 @@ def _protected(state: "RunState | None", path: Path, operation: str) -> str | No
     if rule is None:
         return None
     if rule.verdict == "deny":
-        # deny 档：任何模式、任何批准都不放行（包括 full）。
+        # The deny tier admits no mode and no approval, not even full.
         return f"错误：{rule.reason}（{rule.tier} 策略禁止访问，任何批准都不能放行）"
-    # ask 档：full 整圈预授权，或账本里已经记着这一次批准。
+    # The ask tier is pre-authorized by full, or by an approval already recorded in the ledger.
     if security.approval == APPROVAL_NONE:
         return None
     if state is not None and state.ledger.outside_allowed(str(path), "rw" if operation == "write" else "ro"):
@@ -83,6 +69,7 @@ def _protected(state: "RunState | None", path: Path, operation: str) -> str | No
 
 
 def _int(value: Any, *, default: int, minimum: int) -> int:
+    """Parses an integer argument, falling back to the default and clamping to the minimum."""
     try:
         number = int(value)
     except (TypeError, ValueError):
@@ -91,7 +78,7 @@ def _int(value: Any, *, default: int, minimum: int) -> int:
 
 
 def _count_lines(path: Path) -> int:
-    """流式数行数：分块读、不驻留（`splitlines()` 会把整个文件变成一份行列表）。"""
+    """Counts a file's lines by streaming it, since splitting would materialize every line."""
     total = 0
     tail_ends_with_newline = True
     try:
@@ -102,15 +89,14 @@ def _count_lines(path: Path) -> int:
     except OSError:
         return total
     if total and not tail_ends_with_newline:
-        total += 1  # 最后一行没有换行也算一行
+        total += 1  # a final line without a newline still counts
     return total
 
 
 def _read_window(handle: Any, offset: int, limit: int) -> tuple[list[str], bool]:
-    """从第 ``offset`` 行起取最多 ``limit`` 行，返回 (窗口, 是否被行数截断)。
+    """Reads at most ``limit`` lines from ``offset``, returning the window and a cut flag.
 
-    只把窗口读进内存：以前 `read_text().splitlines()` 会把整个文件（几 GB 的日志
-    也一样）变成字符串加一份行列表，再切出两千行——读大文件等于把进程撑爆。
+    Only the window is held in memory, so a huge file is never materialized as a line list.
     """
     window: list[str] = []
     hit_limit = False
@@ -118,7 +104,7 @@ def _read_window(handle: Any, offset: int, limit: int) -> tuple[list[str], bool]
         if number < offset:
             continue
         if len(window) == limit:
-            hit_limit = True  # 当前这一行没进窗口：后面确实还有
+            hit_limit = True  # the current line stayed out, so more lines follow
             break
         window.append(line[:-1] if line.endswith("\n") else line)
     return window, hit_limit
@@ -148,11 +134,12 @@ def _read_window(handle: Any, offset: int, limit: int) -> tuple[list[str], bool]
     concurrency="safe",
 )
 def read_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
+    """Returns the requested window of a text file, with a notice when it was truncated."""
     raw = str(args.get("path", ""))
     path, error = resolve(raw, root=_root(state), outside_ok=_read_outside_ok(state))
     if error:
         return f"错误：{error}"
-    assert path is not None  # resolve 成功时必有路径（error 与 path 二选一）
+    assert path is not None  # resolve yields exactly one of a path or an error
     blocked = _protected(state, path, "read")
     if blocked:
         return blocked
@@ -172,7 +159,7 @@ def read_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
 
     if not window:
         if offset == 1:
-            return ""  # 空文件
+            return ""  # empty file
         return f"错误：offset {offset} 超出文件范围（共 {_count_lines(path)} 行）"
 
     text = "\n".join(window)
@@ -205,11 +192,12 @@ def read_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     concurrency="exclusive",
 )
 def write_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
+    """Writes a whole file, creating missing parents, and reports the new line count."""
     raw = str(args.get("path", ""))
     path, error = resolve(raw, root=_root(state), outside_ok=_grant(state, "write"))
     if error:
         return f"错误：{error}"
-    assert path is not None  # resolve 成功时必有路径
+    assert path is not None  # resolve yields exactly one of a path or an error
     blocked = _protected(state, path, "write")
     if blocked:
         return blocked
@@ -254,11 +242,12 @@ def write_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     concurrency="exclusive",
 )
 def edit_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
+    """Replaces one exactly-once occurrence of old_string, refusing anything ambiguous."""
     raw = str(args.get("path", ""))
     path, error = resolve(raw, root=_root(state), outside_ok=_grant(state, "write"))
     if error:
         return f"错误：{error}"
-    assert path is not None  # resolve 成功时必有路径
+    assert path is not None  # resolve yields exactly one of a path or an error
     blocked = _protected(state, path, "write")
     if blocked:
         return blocked
@@ -313,6 +302,7 @@ def edit_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     concurrency="safe",
 )
 def glob_files(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
+    """Lists files matching a glob pattern, capped at MAX_GLOB_RESULTS with a notice."""
     pattern = str(args.get("pattern", "")).strip()
     if not pattern:
         return "错误：缺少参数 pattern"
@@ -321,7 +311,7 @@ def glob_files(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     root, error = resolve(raw, root=_root(state), outside_ok=_read_outside_ok(state))
     if error:
         return f"错误：{error}"
-    assert root is not None  # resolve 成功时必有路径
+    assert root is not None  # resolve yields exactly one of a path or an error
     blocked = _protected(state, root, "read")
     if blocked:
         return blocked

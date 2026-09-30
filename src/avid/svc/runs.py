@@ -1,17 +1,4 @@
-"""运行注册表：把 ``agent_loop`` 包成一次可观察、可重放的运行（F1）。
-
-职责边界（设计文档 §3.1）：
-
-* **生命周期**：一个会话同时至多一个活动 run（不变量 I3，仅进程内）；工作线程
-  跑循环，注册表只做编排——它**不重写循环**，``LLMError`` 一类的内核异常
-  只捕获并映射成 ``run_failed{code}``（A5）。
-* **事件与重放**：唯一发射线程分配 ``seq``，有界缓冲保存 durable 与 transient
-  事件；游标落在缓冲之外时发 ``resync``，**不允许静默缺口**（I5）。
-* **审批**：把 ``ApprovalTable.request`` 注入 ``agent_loop(ask=...)``。
-* **取消**：只置位；循环在步骤边界抛出 ``RunCancelled``（I9）。
-
-它不 import FastAPI，也不 import ``web/``（A4）。
-"""
+"""In-process run registry: wraps the agent loop into an observable, replayable run."""
 
 from __future__ import annotations
 
@@ -54,26 +41,26 @@ from .workspaces import WorkspaceService
 
 logger = logging.getLogger("avid.svc.runs")
 
-# 每个 run 保留的有界重放缓冲。淘汰即 resync（I5）。
+# Bounded replay buffer per run; an eviction is what forces a resync (I5).
 REPLAY_BUFFER_SIZE = 512
 
-# 终态记录的保留窗口：重连与对账会按 run_id 回查，所以不能一结束就丢；但每条记录
-# 带着最长 buffer_size 条 durable 事件与期间的全部 delta，永久保留就是内存泄漏。
+# Terminal records are kept for a while because reconnect and reconciliation look them up by
+# run_id, but each record holds up to buffer_size durable events plus all the deltas of that
+# period, so keeping them forever would leak memory.
 TERMINAL_RETENTION_SECONDS = 600.0
 
-# 条数兜底：即便都在保留窗口内，也不让记录数无界。
+# Hard cap on retained records, independent of the retention window above.
 MAX_RETAINED_RUNS = 200
 
-# 事件总数上限（durable + transient + delta）。durable 的重放预算是 buffer_size，
-# 这个上限只用来挡住 delta 洪水：一次很长的回复会让缓冲涨到几十 MB（每条 delta
-# 都是一个 RunEvent）。delta 可任意丢，超出就丢最旧的前缀。
+# Cap on buffered events (durable + transient + delta). Durable replay is budgeted separately,
+# so this only absorbs a delta flood: the oldest prefix is dropped.
 MAX_EVENT_BUFFER = 4096
 
-# 条数兜底时**不允许**动刚结束的记录：订阅者可能还在消费它的缓冲（I5 不允许
-# 静默缺口）。只有结束超过这么久的才在兜底范围内。
+# The count-based sweep must leave just-finished records alone: a subscriber may still be
+# consuming their buffer, and a dropped buffer is exactly the silent gap I5 forbids.
 SWEEP_MIN_AGE_SECONDS = 30.0
 
-# 消息角色 → durable 消息事件
+# Message role -> durable message event.
 _MESSAGE_EVENTS = {
     "user": events.USER_MESSAGE,
     "assistant": events.ASSISTANT_MESSAGE,
@@ -83,7 +70,7 @@ _MESSAGE_EVENTS = {
 
 @dataclass
 class RunRecord:
-    """一次运行的实时视图。字段由注册表与运行线程读写。"""
+    """Live view of one run; the registry and the run thread both write its fields."""
 
     run_id: str
     session_id: str
@@ -91,7 +78,7 @@ class RunRecord:
     status: str = "running"  # running | awaiting_approval | finished | failed | cancelled
     round: int = 0
     tokens: int = 0
-    # 统一 usage schema 的最近一份快照（`RunState.usage_report()`）。None = 还没有读数。
+    # Latest snapshot in the unified usage schema; None means no reading has arrived yet.
     usage: dict[str, Any] | None = None
     text: str = ""
     error: dict[str, Any] | None = None
@@ -99,32 +86,32 @@ class RunRecord:
     cancel_reason: str | None = None
     finished_at: int | None = None
 
-    # 事件缓冲：durable 与 transient 都在里面；delta 不参与重放（I15）。
+    # Event buffer holding durable and transient events; deltas never take part in replay.
     events: list[RunEvent] = field(default_factory=list)
-    dropped: int = 0  # 从队首淘汰的条数；绝对下标 = dropped + 位置
-    # 缓冲里 durable 事件的**绝对下标**，升序。用它把"数 durable 条数"从每次
-    # 全量扫描变成 O(1) 记账——每个 delta 都会调一次 `_trim`，全量扫描会让
-    # 一次长回复退化成 O(n²)（实测 8000 分片 1.05 s，而且跑在读模型 SSE 的线程里）。
+    dropped: int = 0  # events evicted from the head; absolute index = dropped + position
+    # Absolute indices of the buffered durable events, ascending. Maintaining them keeps the
+    # durable count O(1): every delta calls _trim, so a full scan would make one long reply
+    # quadratic in the thread that reads the model SSE stream.
     durable_index: list[int] = field(default_factory=list)
-    # 已被淘汰的 durable 事件的最高 seq。用它判断「游标是否落在缓冲之外」，
-    # 比看队首更稳：队首可能是一条 transient 事件。
+    # Highest evicted durable seq, which answers "did the cursor fall out of the buffer" more
+    # reliably than the head of the list, whose first element may be a transient event.
     evicted_upto: int = 0
     next_seq: int = 1
 
     condition: threading.Condition = field(default_factory=threading.Condition)
     approvals: ApprovalTable | None = None
     state: RunState | None = None
-    # 本次运行的唯一落库者（由运行线程装配后写回）：`_finish` 要用它在宣告终态
-    # **之前**把用量快照写进会话值。
+    # Sole persistence point for this run, installed by the run thread: _finish writes the
+    # usage snapshot through it before announcing the terminal state.
     recorder: SessionRecorder | None = None
-    # 注入消息的标注：id(message) → "todo" | "nudge"。由 on_event 先标、on_message 后取。
+    # Tag for injected messages, id(message) -> kind; on_event tags them, on_message reads it.
     injected: dict[int, str] = field(default_factory=dict)
-    # 异步订阅者（阶段 30d）：(事件循环, 唤醒事件)。桥线程把 condition 的 notify
-    # 翻译成对它们的 call_soon_threadsafe；同步订阅者不在这里。
+    # Async subscribers as (event loop, wake event). A bridge thread turns the condition
+    # notify into call_soon_threadsafe; synchronous subscribers are not listed here.
     watchers: list[tuple[asyncio.AbstractEventLoop, asyncio.Event]] = field(
         default_factory=list
     )
-    # 每记录至多一条的桥线程（懒启动，终态且无人订阅时自灭）。
+    # At most one bridge thread per record, started lazily and gone once nobody is watching.
     bridge: threading.Thread | None = None
 
     @property
@@ -153,7 +140,7 @@ class RunRecord:
 
 
 class RunRegistry:
-    """进程内的运行注册表。每个会话至多一个活动 run。"""
+    """In-process run registry holding at most one active run per session."""
 
     def __init__(
         self,
@@ -169,8 +156,7 @@ class RunRegistry:
     ) -> None:
         self.workspaces = workspaces
         self.chat = chat
-        # 工具注册表可注入：测试要一个不真的执行 shell 的 bash 工具，
-        # 生产路径留空 = 用 tools/ 的默认注册表。
+        # The tool registry is injectable so tests can stub bash; empty means the real one.
         self.tool_registry = tool_registry
         self.buffer_size = buffer_size
         self.approval_timeout = approval_timeout
@@ -180,25 +166,22 @@ class RunRegistry:
         self._runs: dict[str, RunRecord] = {}
         self._active: dict[str, str] = {}
         self._lock = threading.RLock()
-        self._sessions: dict[str, Any] = {}  # run_id -> 运行期打开的会话句柄
-        # 每会话一把"句柄锁"：会话层只允许一个句柄，而读路径与运行路径会同时想开它。
-        # 所有 open/close 该会话的地方都先持这把锁（顺序恒为 句柄锁 → self._lock）。
+        self._sessions: dict[str, Any] = {}  # run_id -> session handle held during the run
+        # One handle lock per session: the session layer allows a single handle while the read
+        # path and the run path both want it, so every open/close takes this lock first, always
+        # in the order handle lock then self._lock.
         self._session_locks: dict[str, threading.RLock] = {}
-        # 正在等/持句柄锁的线程数：归零且该会话没有活动 run 时才允许把锁丢掉
-        # （新老两把锁同时存在会让"一个会话一个句柄"的互斥失效）。
+        # Threads waiting on or holding that handle lock. The lock is dropped only when the
+        # count reaches zero and the session has no active run: two live locks would break the
+        # one-handle-per-session exclusion.
         self._session_lock_users: dict[str, int] = {}
 
     @contextmanager
     def session_lock(self, session_id: str):
-        """串行化同一会话的句柄获取与释放。
-
-        不变量：**持锁期间才 open/close**。否则"读路径先开、运行线程后开"必然
-        撞上 ``SessionAlreadyOpenError``，而那会以两种都很难看的形式冒出来——
-        运行刚起就 failed，或读取返回 500「会话已关闭」。
-
-        退出时若无人在等/持有且该会话没有活动 run，就把这把锁从表里摘掉：
-        长期运行的服务访问过的会话数只增不减，锁本身也是泄漏。
-        """
+        """Serialize handle acquisition and release for one session."""
+        # Open and close only while holding it: otherwise a read path and the run thread race
+        # into SessionAlreadyOpenError, which shows up either as a run that fails immediately
+        # or as a 500 saying the session is closed.
         with self._lock:
             lock = self._session_locks.get(session_id)
             if lock is None:
@@ -211,6 +194,8 @@ class RunRegistry:
             with lock:
                 yield
         finally:
+            # Drop the lock once nobody waits or holds it and no run is active: a long-lived
+            # server otherwise accumulates one lock per session it has ever visited.
             with self._lock:
                 remaining = self._session_lock_users.get(session_id, 1) - 1
                 if remaining > 0:
@@ -220,7 +205,7 @@ class RunRegistry:
                     if session_id not in self._active:
                         self._session_locks.pop(session_id, None)
 
-    # ---------------- 生命周期 ----------------
+    # ---- Lifecycle ----
 
     def start(
         self,
@@ -233,12 +218,9 @@ class RunRegistry:
         permission: str | None = None,
         full_ack: bool = False,
     ) -> RunRecord:
-        """登记并起线程。已占用 → ``RunBusy``；会话不存在 → ``SessionNotFound``。
-
-        ``branch`` 决定这次运行追加到哪条链上：历史取该分支的链，新消息接在它的链尾。
-        ``permission`` 是这次运行的模式预设；缺省按**会话所属工作区的默认权限**。
-        ``full_ack`` 是 full 的显式授权；没给就起不来（DTO 已 422，这里是第二道）。
-        """
+        """Register a run and start its thread; raises RunBusy or SessionNotFound."""
+        # The branch decides which chain the run appends to, and the permission argument
+        # defaults to what the owning workspace allows; full_ack is the second gate for full.
         found = self.workspaces.find_session(session_id)
         if found is None:
             raise SessionNotFound(f"没有这个会话：{session_id}")
@@ -256,6 +238,7 @@ class RunRegistry:
                 record = RunRecord(
                     run_id=run_id, session_id=session_id, started_at=events.now_ms()
                 )
+
                 def emit_approval(type: str, **data: Any) -> None:
                     self.emit(record, type, **data)
 
@@ -266,8 +249,8 @@ class RunRegistry:
                     timeout=self.approval_timeout,
                 )
                 self._runs[run_id] = record
-                # 先占位（防第二个 run），句柄在**同一个句柄锁**内开好再放行——
-                # 于是"`_active` 可见"蕴含"句柄已就绪"，读路径不必再猜。
+                # Reserve the slot first so a second run is rejected, then open the handle
+                # inside the same handle lock: "_active is visible" then implies "handle ready".
                 self._active[session_id] = run_id
             try:
                 session = self.workspaces.repo_for(workspace).open(metadata)
@@ -311,7 +294,7 @@ class RunRegistry:
             return self._active.get(session_id)
 
     def active_session(self, session_id: str) -> Any | None:
-        """活动 run 正持有的会话句柄（供只读路径复用，避免二次 open）。"""
+        """Handle held by the active run, so read paths can reuse it instead of reopening."""
         run_id = self.active_run_id(session_id)
         if run_id is None:
             return None
@@ -331,10 +314,10 @@ class RunRegistry:
         logger.info("请求取消 %s", run_id)
         return record
 
-    # ---------------- 事件发射与订阅 ----------------
+    # ---- Event emission and subscription ----
 
     def emit(self, record: RunRecord, type: str, **data: Any) -> RunEvent:
-        """分配 seq 并入缓冲。durable 带 seq，transient/delta 不带（§5.2）。"""
+        """Assign a seq and append to the buffer; only durable types get one."""
         with record.condition:
             seq = record.next_seq if type in events.DURABLE_SET else None
             if seq is not None:
@@ -357,26 +340,18 @@ class RunRegistry:
     def _trim(
         record: RunRecord, size: int | None = None, max_events: int | None = None
     ) -> None:
-        """淘汰队首：durable 不超过 ``size``，事件总数不超过 ``max_events``。
-
-        调用方必须持有 condition。
-
-        只按 durable 算重放预算：设计里的缓冲是「最近 512 条 **durable** 事件」（§5.1），
-        而 delta 与 durable 走同一条实时队列。若按总条数淘汰 durable，一次长回复的上千
-        条 delta 会把 durable 挤出缓冲，重连的客户端就会平白收到 ``resync``（I5 的语义
-        被 delta 的多少左右，这显然不对）。
-
-        淘汰必须是**连续前缀**：``absolute_index`` 用 ``dropped + len(events)`` 定位实时
-        队列，非连续删除会让这个下标算错。``durable_index`` 是增量维护的，所以这里不用
-        扫全表。
-        """
+        """Evict from the head under the condition: durable within size, all events within max."""
+        # Only durable events count against the replay budget although deltas share this queue,
+        # or a long reply's deltas would push them out and hand a reconnecting client a spurious
+        # resync. Eviction stays a contiguous prefix, since absolute_index is computed as
+        # dropped + len(events) and durable_index is maintained incrementally without a scan.
         limit = size if size is not None else 0
         if limit > 0:
             overflow = len(record.durable_index) - limit
             if overflow > 0:
                 last_dropped_abs = record.durable_index[overflow - 1]
                 cut_abs = last_dropped_abs + 1
-                # 被丢掉的最高 durable seq：durable seq 单调，所以就是最后一个被丢的。
+                # Durable seqs are monotonic, so the last dropped durable event holds the max.
                 dropped_event = record.events[last_dropped_abs - record.dropped]
                 if dropped_event.seq is not None:
                     record.evicted_upto = max(record.evicted_upto, dropped_event.seq)
@@ -385,9 +360,9 @@ class RunRegistry:
                 del record.events[:cut]
                 record.dropped = cut_abs
 
-        # 事件总数上限：一次长回复的 delta 会把缓冲撑到几十 MB（每条都是一个 RunEvent）。
-        # delta 可任意丢，所以超出就丢最旧的前缀；被连带丢掉的 durable 必须同步
-        # ``evicted_upto``，否则跟随中的订阅者会看到静默缺口（I5）。
+        # Total-event cap: one long reply's deltas would otherwise grow the buffer to tens of
+        # MB. Deltas may be dropped, so the oldest prefix goes first, and any durable event
+        # dropped with it must advance evicted_upto or followers see a silent gap (I5).
         if max_events and len(record.events) > max_events:
             cut = len(record.events) - max_events
             head = record.dropped + cut
@@ -402,11 +377,9 @@ class RunRegistry:
     def _replay_from(
         self, record: RunRecord, after: int
     ) -> tuple[list[RunEvent], int, int]:
-        """订阅起点：返回 (要投的事件, 已投递游标, 缓冲下标)。
-
-        有缺口时以一条 durable ``resync`` 开头、不补发残存旧事件（I5）；否则回放
-        缓冲里的历史（delta 不重放，I15；游标之前的重复跳过）。
-        """
+        """Return the events to send, the delivered cursor and the buffer index."""
+        # A gap yields one durable resync instead of stale leftovers (I5); otherwise the buffer
+        # is replayed with deltas excluded (I15) and events at or before the cursor skipped.
         if self._has_gap(record, after):
             resync = self.emit(record, events.RESYNC, after=after, reason="buffer_evicted")
             with record.condition:
@@ -430,15 +403,13 @@ class RunRegistry:
     def _follow_snapshot_raw(
         record: RunRecord, delivered: int, index: int
     ) -> tuple[bool, list[RunEvent], int]:
-        """锁内算一份「这一步该投什么」：(是否出现缺口, fresh 事件, 新下标)。
-
-        同步版在同一次持锁里完成"快照 + 等待"；异步版在持锁里 clear 唤醒事件。
-        两个订阅路径都要求调用方**已持有** ``record.condition``。
-        """
+        """Work out under the lock what to deliver next: gap flag, fresh events, new index."""
+        # Both subscription paths require the caller to hold record.condition: the synchronous
+        # one waits inside the same critical section, the async one clears its wake event there.
         if record.evicted_upto > delivered:
             return True, [], index
         if index < record.dropped:
-            # 只丢了可丢弃的事件（delta / transient）：不补发，从现在继续。
+            # Only droppable events (deltas, transients) were lost: continue from now.
             return False, [], record.absolute_index()
         fresh = list(record.events[index - record.dropped :])
         return False, fresh, record.absolute_index()
@@ -452,19 +423,11 @@ class RunRegistry:
         heartbeat: float = STREAM_HEARTBEAT_SECONDS,
         stop: Callable[[], bool] | None = None,
     ) -> Iterator[RunEvent | None]:
-        """按游标补齐 + 实时跟随。``None`` 表示一次心跳。
-
-        ``after`` 是客户端已知的最大 durable ``seq``；游标落在缓冲之外时先发一条
-        durable ``resync``，客户端据此重建视图（I5）。delta 不重放（I15）。
-
-        **跟随期间**缓冲区翻页时同样要发 ``resync``：订阅时检查一次不够——慢消费者
-        还在跟的时候，缓冲可能已经把"还没投递给它"的 durable 事件淘汰掉了，那时的
-        静默缺口与订阅时的缺口一样违反 I5。
-
-        等待用 ``condition.wait``：这要求订阅者跑在**线程**里（web 路径经
-        ``iterate_in_threadpool`` 时一条连接占一个线程）。不占线程的版本见
-        ``subscribe_async``——重放与缺口语义同源，只有"怎么等"不同。
-        """
+        """Backfill from the cursor, then follow live; None marks one heartbeat."""
+        # after is the highest durable seq the client knows; a cursor outside the buffer gets a
+        # durable resync first so the client can rebuild (I5), and deltas are never replayed.
+        # The gap is re-checked while following, because a slow consumer can fall out of the
+        # buffer after subscribing; waiting uses condition.wait, so this runs in a thread.
         record = self.get(run_id)
         replayed, delivered, index = self._replay_from(record, after)
         for event in replayed:
@@ -476,16 +439,16 @@ class RunRegistry:
             with record.condition:
                 stale, fresh, index = self._follow_snapshot_raw(record, delivered, index)
                 if not fresh and not record.terminal and not stale:
-                    # 快照与等待必须**同一次持锁**完成：wait 原子地放锁、醒来后重新
-                    # 持锁，中间的任何 emit 都不会漏 notify。拆开就会留出"快照完、
-                    # 还没等"的窗口，错过的那次唤醒要等一整个心跳才补上。
+                    # Snapshot and wait must share one critical section: wait releases and
+                    # re-acquires the lock atomically, so an emit in between cannot lose its
+                    # notify to a whole heartbeat.
                     record.condition.wait(timeout=heartbeat)
                     stale, fresh, index = self._follow_snapshot_raw(
                         record, delivered, index
                     )
 
             if stale:
-                # 跟随期间丢了还没投递的 durable：显式告知后从队尾重新跟随。
+                # A durable event was evicted before delivery: say so, then follow from the tail.
                 logger.info("订阅 %s 的游标被缓冲淘汰，发 resync", run_id)
                 gap_from = delivered
                 resync = self.emit(
@@ -499,29 +462,27 @@ class RunRegistry:
             if not fresh:
                 if record.terminal:
                     return
-                yield None  # 心跳
+                yield None  # heartbeat
                 continue
             for event in fresh:
                 if event.type in events.DELTA_EVENT_TYPES and not deltas:
                     continue
                 if event.seq is not None:
                     if event.seq <= delivered:
-                        continue  # 重放边界上的重复：幂等，但不重复投递
+                        continue  # duplicate at the replay boundary: skip, do not redeliver
                     delivered = event.seq
                 yield event
                 if event.type in events.TERMINAL_EVENT_TYPES:
                     return
 
-    # ---------------- 异步订阅（阶段 30d） ----------------
+    # ---- Async subscription ----
     #
-    # 同步 subscribe 跑在线程里（每条 SSE 连接占 anyio 线程池一个线程），连接数一多
-    # 就把 REST 饿死——24 条流的上限就是这道接缝的创可贴。subscribe_async 把"等新
-    # 事件"从 condition.wait 换成 asyncio 事件：emit 侧由一条**每记录一条**的桥线程
-    # 用 call_soon_threadsafe 唤醒，事件循环里的订阅者因此不占任何线程池线程。
-    # 重放/缺口/resync 语义与同步版同源（_replay_from / _follow_snapshot_raw / _has_gap）。
+    # The synchronous subscriber occupies an anyio thread per SSE connection, so enough streams
+    # starve the REST path. The async one waits on an asyncio event instead: a single bridge
+    # thread per record wakes each subscriber loop, and replay, gap and resync stay identical.
 
     def _ensure_bridge(self, record: RunRecord) -> None:
-        """桥线程懒启动：第一条异步订阅出现时创建，终态且无人订阅时自灭。"""
+        """Start the bridge thread lazily; it exits once terminal with nobody watching."""
         if record.bridge is not None and record.bridge.is_alive():
             return
         record.bridge = threading.Thread(
@@ -534,14 +495,15 @@ class RunRegistry:
 
     @staticmethod
     def _bridge_loop(record: RunRecord) -> None:
-        """把 condition 的唤醒翻译成各订阅者事件循环上的 asyncio 事件。"""
+        """Translate condition wakeups into asyncio events on each subscriber's loop."""
         while True:
             with record.condition:
                 if not record.watchers:
                     if record.terminal:
                         record.bridge = None
                         return
-                    # 没人订阅就轻睡：注册/摘除都拿同一把锁并 notify，醒来重估。
+                    # Nobody watching: sleep briefly and re-evaluate, since registering and
+                    # removing a watcher both take this same lock and notify.
                     record.condition.wait(timeout=1.0)
                     continue
                 record.condition.wait(timeout=STREAM_HEARTBEAT_SECONDS)
@@ -549,7 +511,7 @@ class RunRegistry:
                 try:
                     loop.call_soon_threadsafe(wake.set)
                 except RuntimeError:
-                    continue  # 事件循环已关：订阅者自己的 finally 会摘除它
+                    continue  # loop already closed: the subscriber's finally detaches it
 
     async def subscribe_async(
         self,
@@ -559,11 +521,9 @@ class RunRegistry:
         deltas: bool = False,
         heartbeat: float = STREAM_HEARTBEAT_SECONDS,
     ) -> AsyncIterator[RunEvent | None]:
-        """``subscribe`` 的 asyncio 版：等待走事件桥，不占线程池线程。
-
-        ``None`` 同样表示一次心跳。结束（终态事件已投 / 生成器被关闭）时摘除
-        自己的 watcher；桥线程在终态且无人订阅后自行退出。
-        """
+        """Async subscription that waits on the bridge instead of occupying a thread."""
+        # None again marks a heartbeat. On the way out (terminal event delivered or generator
+        # closed) the subscriber detaches its own watcher, and the bridge exits afterwards.
         record = self.get(run_id)
         loop = asyncio.get_running_loop()
         wake = asyncio.Event()
@@ -582,8 +542,8 @@ class RunRegistry:
                     )
                     waiting = not fresh and not record.terminal and not stale
                     if waiting:
-                        # clear 与快照同锁：clear 之后 emit 的 notify 一定会置位
-                        # （emit 持同一把锁），不会漏唤醒。
+                        # Clearing under the same lock as the snapshot means a following emit
+                        # is guaranteed to set the event, so no wakeup is lost.
                         wake.clear()
                 if waiting:
                     try:
@@ -608,7 +568,7 @@ class RunRegistry:
                 if not fresh:
                     if record.terminal:
                         return
-                    yield None  # 心跳
+                    yield None  # heartbeat
                     continue
                 for event in fresh:
                     if event.type in events.DELTA_EVENT_TYPES and not deltas:
@@ -629,18 +589,14 @@ class RunRegistry:
 
     @staticmethod
     def _has_gap(record: RunRecord, after: int) -> bool:
-        """``after`` 之后是否已经有 durable 事件被缓冲淘汰。"""
+        """True when durable events after the cursor have already been evicted."""
         with record.condition:
             return record.evicted_upto > after
 
     def streaming_chat(self, record: RunRecord) -> Callable[..., Any]:
-        """生产路径的 chat：流式调用，并把正文增量接到事件流上。
-
-        只在**没有注入 chat** 时使用：测试注入的脚本模型不产生增量，也不需要。
-        摘要调用不走这里——``agent_loop`` 的 ``summarize`` 参数把两者分开，否则摘要
-        文本会与真正的回复粘成同一条乐观气泡。
-        """
-
+        """Production chat: stream the call and forward text deltas onto the event stream."""
+        # Only used when no chat was injected, since the scripted models in tests emit no
+        # deltas. Summary calls bypass it, or summary text would merge into the real reply.
         def chat(config: Any, messages: list[dict[str, Any]], **kwargs: Any) -> Any:
             return stream_completion(
                 config,
@@ -662,11 +618,9 @@ class RunRegistry:
         *,
         event_type: str = events.ASSISTANT_DELTA,
     ) -> None:
-        """delta 不进重放、不进会话：只让**当前**订阅者看到（I15）。
-
-        它仍走 ``record.events`` 这条实时队列（订阅者靠同一把 condition 被唤醒），但
-        游标补齐会跳过它，`_trim` 也不把它算进重放预算。
-        """
+        """Emit a delta: never replayed and never persisted, so only live subscribers see it."""
+        # It travels the record.events queue all the same (subscribers wake on the same
+        # condition), but cursor backfill skips it and _trim does not count it as durable.
         with record.condition:
             record.events.append(
                 RunEvent(
@@ -680,7 +634,7 @@ class RunRegistry:
             RunRegistry._trim(record, registry.buffer_size, registry.max_events)
             record.condition.notify_all()
 
-    # ---------------- 运行线程 ----------------
+    # ---- Run thread ----
 
     def _set_status(self, record: RunRecord, status: str) -> None:
         record.status = status
@@ -699,9 +653,10 @@ class RunRegistry:
         permission: str | None = None,
         full_ack: bool = False,
     ) -> None:
-        """运行线程。会话句柄由 ``start`` 在句柄锁内开好并传入，这里不再 open。"""
-        # 三轴（approval/sandbox/network）与沙箱状态进 run_started：刷新页面后重建界面
-        # 靠它，而不是靠内存里的 RunRecord——"这次运行关没关沙箱"是必须可见的事实。
+        """Run thread; start already opened the session handle under the handle lock."""
+        # The three axes and the sandbox state go into run_started: a refresh rebuilds the view
+        # from that event rather than from the in-memory record, so "was the sandbox off" stays
+        # a visible fact.
         safety = build_run_security(
             mode=permission or workspace.default_permission,
             root=workspace.root,
@@ -732,12 +687,12 @@ class RunRegistry:
             workspace=workspace.id,
             prompt_chars=len(prompt),
         )
-        # 记录器在 try 里建：`load_config` 失败时它不存在，`_finish` 也就没有可落的
-        # 用量（record.recorder 保持 None，落盘那一步自动跳过）。
+        # The recorder is built inside the try: if load_config fails it never exists, and
+        # _finish then has no usage to persist because record.recorder stays None.
         try:
             config = load_config()
             recorder = SessionRecorder(session, branch)
-            # 交给记录：`_finish` 要能在宣告终态之前把用量快照落盘。
+            # Hand it to the record so _finish can persist usage before announcing the end.
             record.recorder = recorder
             recorder.ensure_branch()
             history = messages_for_branch(session, recorder.branch)
@@ -749,26 +704,26 @@ class RunRegistry:
                 observer=lambda event: self._observe(record, event),
                 permission_mode=permission or workspace.default_permission,
                 workspace_root=workspace.root,
-                # 与 run_started 里那份**同一个规格**：事件说的和实际执行用的是同一组值。
+                # The very same spec as in run_started: the event and the enforcement agree.
                 security=safety,
-                # 占用率的分母跟着这次运行实际的模型配置走。
+                # The utilization denominator follows this run's actual model configuration.
                 context_window=config.context_window,
             )
             record.state = state
-            # 线程启动到这一刻之间有一段（装配记录器、读历史、扫描技能）：
-            # 这期间的取消写不进 state（record.state 还是 None），循环检查的却是
-            # state.cancelled——不补这一次，取消就被永久丢掉，运行照跑完。
+            # A cancel can land between thread start and this point, while record.state is
+            # still None; the loop checks state.cancelled, so an unreplayed cancel would be
+            # lost and the run would carry on to completion.
             if record.cancel_requested:
                 state.cancel(record.cancel_reason or "user")
 
-            # MCP 工具随这次运行起停（阶段 30e）：server 进程在这里创建，
-            # finally 里关闭。起不来的 server 记 warning 后跳过，不拦运行。
+            # MCP servers live for the duration of the run: started here, closed in finally.
+            # A server that fails to start is logged and skipped instead of blocking the run.
             mcp = McpManager(state.workspace_root)
             state.mcp = mcp
             for warning in mcp.start_all():
                 logger.warning("run %s: %s", record.run_id, warning)
 
-            # 没有注入 chat = 生产路径：主轮次流式、摘要非流式（见 agent_loop 的 summarize）。
+            # No injected chat means the production path: main rounds stream, summaries do not.
             streaming = chat is None
             mcp_schemas, mcp_impls = build_toolset(state)
             text = agent_loop(
@@ -779,7 +734,7 @@ class RunRegistry:
                 auto_approve=auto_approve,
                 on_message=self._message_sink(record, recorder),
                 state=state,
-                # 注入注册表（测试/bench）沿用旧口径：纯内置工具，不合 MCP。
+                # An injected registry (tests, benchmarks) keeps its old meaning: no MCP tools.
                 tools=TOOLS if self.tool_registry is not None else mcp_schemas,
                 registry=self.tool_registry if self.tool_registry is not None else mcp_impls,
             )
@@ -794,17 +749,17 @@ class RunRegistry:
             self._fail(record, "config_error", str(exc))
         except SessionError as exc:
             self._fail(record, "session_error", str(exc))
-        except Exception as exc:  # 程序错误也要变成可观察的终态，而不是静默死线程
+        except Exception as exc:  # Programming errors must end visibly, not as a dead thread.
             logger.exception("运行 %s 内部错误", record.run_id)
             self._fail(record, "internal", f"{type(exc).__name__}: {exc}")
         finally:
             if record.approvals is not None:
                 record.approvals.close("run_ended")
-            # MCP server 进程随 run 终结（阶段 30e）；record.state 在装配成功后就有
-            # 值，之前失败（比如读不到配置）则没有 MCP 可关。
+            # MCP processes end with the run; record.state exists once assembly succeeded, so a
+            # failure before that (an unreadable config, say) has nothing to close.
             if record.state is not None:
                 record.state.close_mcp()
-            # 先摘句柄再关：读路径正在用这个句柄时必须等它读完（否则读一半句柄被关掉）。
+            # Detach the handle before closing it: a reader still using it has to finish first.
             with self.session_lock(record.session_id):
                 with self._lock:
                     self._sessions.pop(record.run_id, None)
@@ -812,38 +767,35 @@ class RunRegistry:
                 if session is not None and not session.closed:
                     try:
                         session.close()
-                    except SessionError:  # 关闭失败不该掩盖运行结果
+                    except SessionError:  # A failed close must not mask the run's result.
                         logger.warning(
                             "关闭会话 %s 失败", record.session_id, exc_info=True
                         )
-            # 句柄已交还：记录里不再留它的引用。终态记录还要留一段时间（重连对账会
-            # 按 run_id 回查），留着 recorder 就等于留着一个已关闭的会话对象。
+            # The handle has been handed back, so the record keeps no reference to it: terminal
+            # records stay for a while and would otherwise pin a closed session object.
             record.recorder = None
 
     def _observe(self, record: RunRecord, event: RunEvent) -> None:
-        """内核观察者 → 注册表事件：补上 run_id/seq/ts，并标注注入消息。
-
-        注入的提醒**只在这里标注、不发事件**：循环紧接着就把它交给 ``on_message``，
-        由 ``_message_sink`` 发出唯一的那条事件（那里才拿得到 ``entry_id``）。以前两处
-        都发，同一条提醒会变成两条 durable 事件，而循环那条不带 ``entry_id``、sink 那条
-        不带 ``content``——前端于是画出一个有文字、一个空白的两枚通知。
-        """
+        """Turn a kernel observer event into a registry event, tagging injected messages."""
+        # Injected reminders are only tagged here and not emitted: the loop hands them to
+        # on_message right after, and _message_sink emits the single durable event because only
+        # it has the entry_id. Emitting in both places produced two notifications, one with
+        # text and one blank, since each side carried half of the payload.
         if event.type == events.STOP_NUDGE:
             message = event.data.get("message")
             if isinstance(message, dict):
                 record.injected[id(message)] = "nudge"
             return
         if event.type == events.RUN_STATUS and "subagent" not in event.data:
-            # 轮次与 token 的权威在 state（循环里只写 state.round / state.tokens），
-            # 而 GET /runs/{id} 读的是 RunRecord——不在这里回填，REST 视图会一直
-            # 报 round=0 / tokens=0，只有 SSE 的 run_status 是真值。
-            # 带 subagent 标记的是子运行的状态：子轮次不该覆盖父运行的显示
-            # （阶段 30c），它照常进事件流，由前端折进 subagent 工具卡。
+            # Round and token authority is state, while GET /runs/{id} reads RunRecord: without
+            # this backfill REST would keep reporting round=0 and tokens=0 and only SSE would be
+            # right. A subagent-marked status belongs to a child run and must not overwrite the
+            # parent's figures; it still flows on as an event for the front end to fold in.
             if "round" in event.data:
                 record.round = int(event.data["round"])
             if "tokens" in event.data:
                 record.tokens = int(event.data["tokens"])
-            # usage 同理：SSE 是实时的，但刷新页面后前端读的是 REST，两者必须一致。
+            # Usage likewise: SSE is live while a refresh reads REST, and the two must agree.
             if isinstance(event.data.get("usage"), dict):
                 record.usage = event.data["usage"]
         self.emit(record, event.type, **event.data)
@@ -851,16 +803,11 @@ class RunRegistry:
     def _message_sink(
         self, record: RunRecord, recorder: SessionRecorder
     ) -> Callable[[dict[str, Any]], None]:
-        """消息通道 → 落库 + durable 消息事件。
-
-        ``on_message`` 仍是消息的唯一出口（§7.1）。注入的 Stop nudge 由循环**先**发
-        ``on_event``，这里按对象身份认出它们，而不是解析文本前缀（§5.3）；
-        ``entry_id`` 来自 ``SessionRecorder``（唯一落库点，I2）。
-        """
+        """Message channel -> persistence plus one durable message event."""
 
         def sink(message: dict[str, Any]) -> None:
-            # 先认身份再落库：注入的 nudge 要按 NOTICE_ENTRY 存，渲染侧才不会把它画成
-            # 用户说的话（文本上认不出来——nudge 的文本由 Stop hook 任意给定）。
+            # Identify before persisting: injected nudges are stored as notices so the UI does
+            # not render them as words the user spoke, since their text comes from a hook.
             label = record.injected.pop(id(message), None)
             entry_id = recorder.on_message(message, notice=label is not None)
             if label == "nudge":
@@ -871,8 +818,8 @@ class RunRegistry:
                 return
             payload: dict[str, Any] = {"entry_id": entry_id, "message": message}
             if label is not None:
-                # 提醒类事件的唯一一次发射：循环那次只用于标注（见 _observe），
-                # 这里补上内容——事件类型不变，消费者照旧按 stop_nudge 分支。
+                # The one emission for reminder events: the loop's own only tags them, and the
+                # content is added here while the event type stays what consumers expect.
                 payload["content"] = str(message.get("content") or "")
             self.emit(record, type, **payload)
 
@@ -887,37 +834,33 @@ class RunRegistry:
             else "failed"
         )
         record.finished_at = events.now_ms()
-        # 终态也带上用量快照：run_finished 是 durable 的，订阅者据此在流里就拿到
-        # 最终读数（不必等 REST 对账）；取消与失败同样有占用，所以三种终态都带。
+        # Terminal states carry the usage snapshot too: run_finished is durable, so a subscriber
+        # gets the final reading without waiting for reconciliation, and cancel and failure use
+        # context just the same.
         if record.state is not None:
             record.usage = record.state.usage_report()
             data.setdefault("usage", record.usage)
-        # **先落盘再宣告终态**：客户端收到 run_finished 就会去重取分支列表
-        # （`refresh()`），那一读必须已经能看到这次的读数。写在宣告之后的话，
-        # 重取与落盘谁先到就是竞态，界面会停在上一次运行的数上。
-        #
-        # 这一步是慢操作（会话写入 + fsync），所以它必须在**任何状态翻转之前**：
-        # 见下面那段临界区。
+        # Persist before announcing: a client that sees run_finished refetches the branch list,
+        # and that read has to already include this run's numbers, or the UI stays on the
+        # previous run's figures. The write is slow (session write plus fsync), so it happens
+        # before any state flips, as in the block below.
         self._persist_usage(record)
         with record.condition:
-            # 状态与终态事件在同一段临界区里改。订阅者判断"还有没有后续事件"读的是
-            # `record.terminal`（在同一个 condition 下）：两者分开写的话，中间那一段
-            # 时间里订阅者会看到"已终态 + 缓冲里没有终态事件"，于是按"没有更多事件了"
-            # 直接返回——缺口是静默的（以前窗口只有一个赋值那么窄，但同样是错的）。
+            # Status and terminal event change inside one critical section. Subscribers decide
+            # whether more events are coming from record.terminal under the same condition, so
+            # splitting the two would show them a terminal status with no terminal event
+            # buffered and make them return as if the stream had ended: a silent gap.
             record.status = status
             self.emit(record, type, **data)
         logger.info("运行 %s 结束：%s", record.run_id, record.status)
         self._sweep()
 
     def _persist_usage(self, record: RunRecord) -> None:
-        """把这次的用量快照写进会话值（按分支，覆盖式）。
-
-        三种终态都写：取消与失败一样产生上下文占用，用户回到这个会话时该看到
-        "上一次跑到哪、用了多少"，而不是更早那次成功运行的旧数。
-
-        **没有读数就不写**：端点不认 ``stream_options.include_usage`` 时快照是全
-        null，写进去会让界面把"没有数据"当成"跑过一次但没用量"。
-        """
+        """Write this run's usage snapshot into the session values, per branch and replacing."""
+        # All three terminal states write, because cancel and failure consume context too and a
+        # user coming back should see where the last run stopped rather than an older success.
+        # No reading means no write: a provider that omits the usage option reports all-null, and
+        # storing that would make "no data" look like "ran once without usage".
         state = record.state
         recorder = record.recorder
         if recorder is None or state is None:
@@ -928,18 +871,16 @@ class RunRegistry:
         record.usage = report
         try:
             recorder.record_usage(report)
-        except SessionError:  # 落盘失败不该掩盖运行结果
+        except SessionError:  # A failed write must not mask the run's result.
             logger.warning("会话 %s 的 usage 落库失败", record.session_id, exc_info=True)
 
     def _sweep(self) -> None:
-        """回收终态运行记录与不再需要的句柄锁。
-
-        没有它，长驻的 ``avid web`` 会一直攒：每条记录带着最长 ``buffer_size`` 条
-        durable 事件与期间的全部 delta，每个访问过的会话还留一把锁。
-
-        两条规则：过了保留窗口就丢；超出条数上限时按结束时间从早到晚丢，但**不许动
-        刚结束的**——订阅者可能还在消费那条记录的缓冲，丢掉缓冲就是 I5 说的静默缺口。
-        """
+        """Reclaim terminal records and handle locks that are no longer needed."""
+        # Without it a long-lived server accumulates: each record holds up to buffer_size durable
+        # events plus all deltas of that period, and every session ever visited keeps a lock.
+        # Two rules: drop past the retention window, and once over the count cap drop
+        # oldest-first but never a just-finished record, whose buffer a subscriber may still be
+        # consuming, since dropping it is the silent gap I5 forbids.
         now = events.now_ms()
         with self._lock:
             victims = [
@@ -982,10 +923,10 @@ class RunRegistry:
         record.error = {"code": code, "message": message}
         self._finish(record, events.RUN_FAILED, code=code, message=message)
 
-    # ---------------- 会话定位 ----------------
+    # ---- Session lookup ----
 
     def find_metadata(self, session_id: str) -> SessionMetadata | None:
-        """会话元信息（跨工作区找）。会话本身不带工作区信息，所以只能逐个库扫。"""
+        """Session metadata, found across workspaces because sessions do not record one."""
         found = self.workspaces.find_session(session_id)
         return None if found is None else found[1]
 

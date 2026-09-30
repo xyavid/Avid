@@ -1,29 +1,4 @@
-"""Hook 机制：把循环的扩展点从代码里挪到注册表。
-
-四个事件，按循环的阶段排列：
-
-===============  ==========================================
-``UserPromptSubmit``  用户输入进入模型之前
-``PreToolUse``        每个工具调用执行之前
-``PostToolUse``       工具返回之后、结果写回 messages 之前
-``Stop``              模型不再请求工具、准备返回之前
-===============  ==========================================
-
-调用约定：
-
-* 回调签名 ``hook(context: dict) -> str | None``，返回 ``"block"`` 表示拦截。
-* 同一事件的所有回调**按注册顺序全部执行，不短路**——短路会让审计回调漏掉
-  被拒的那次调用，而那正是最需要记录的。
-* 回调之间靠同一个 ``context`` 字典传数据：前一个回调写入的字段，后一个回调
-  与循环本身都能读到。``trigger_hooks`` 会往 context 里写入 ``event``。
-* 回调抛异常按 ``"block"`` 处理（失败关闭），日志里带上回调名。
-
-**注册表是显式对象，不是模块级字典**（审查里的 P2-19）：`HookRegistry` 由
-`RunState` 持有、由循环的 `hooks` 参数注入，默认用进程级的 `DEFAULT_HOOKS`。
-以前是模块级的 `HOOKS` 字典 + `register_hook()`：任何 import 本模块的代码都能改它，
-一次注册会漏到同一进程里所有运行（含子 agent），测试也只能靠 monkeypatch 全局字典
-来隔离。现在"每个运行用哪份注册表"是一个能看见、能替换的值。
-"""
+"""Hook registry for the four loop events, plus the default callbacks behind the gates."""
 
 from __future__ import annotations
 
@@ -43,25 +18,20 @@ from ..policy.permission import (
 
 logger = logging.getLogger("avid.runtime.hooks")
 
-# 日志摘要里要打码的键名/写法。INFO 是默认日志级别，而工具参数里经常带凭据：
-# `bash` 的 `curl -H "Authorization: Bearer sk-…"`、`write_file` 写 .env 的内容……
-# 日志会被收集、转发、贴进 issue，所以"原样打印整份参数"不能接受。
+# Argument keys whose values are masked before they can reach the logs.
 _SECRET_KEYS = ("token", "api_key", "apikey", "authorization", "password", "secret", "key")
-# 两种写法都要盖住：`--token=xyz` / `API_KEY: xyz`，以及
-# `Authorization: Bearer xyz`（值前面还有一个 scheme 词）。
+# Inline credential forms: name=value and name: value, with an optional scheme word first.
 _SECRET_IN_TEXT = re.compile(
     r"(?i)((?:authorization|token|api[_-]?key|password|secret)\s*[=:]\s*)"
     r"(?:bearer\s+)?\S+"
 )
+# Bare bearer tokens need their own pattern, since the one above requires a key name.
 _SECRET_BEARER = re.compile(r"(?i)(bearer\s+)\S+")
-_BRIEF_LIMIT = 300
+_BRIEF_LIMIT = 300  # characters kept from a log summary before it is truncated
 
 
 def brief(arguments: Any, *, limit: int = _BRIEF_LIMIT) -> str:
-    """日志用的参数摘要：敏感键与内联凭据打码，并截断长度。
-
-    策略是"宁可多打一点码"：日志只用来定位问题，不需要完整的命令原文。
-    """
+    """Return a log-safe argument summary with credentials masked and the text truncated."""
 
     def redact(value: Any) -> Any:
         if isinstance(value, dict):
@@ -81,42 +51,31 @@ def brief(arguments: Any, *, limit: int = _BRIEF_LIMIT) -> str:
             )
         return value
 
+    # Masking is deliberately generous: the logs exist to locate problems, not to archive commands.
     text = json.dumps(redact(arguments), ensure_ascii=False, default=str)
     return text if len(text) <= limit else text[:limit] + "…（已截断）"
 
-# 事件名白名单。register_hook 对表外的事件名直接报错——事件名拼错会让权限
-# 校验静默消失，这类错误必须炸出来。
+# The four hook event names; anything else raises, because a typo would silently disable a gate.
 EVENTS: tuple[str, ...] = ("UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop")
 
+# Callback signature: return "block" to veto the step, or None to let it pass.
 Hook = Callable[[dict[str, Any]], "str | None"]
 
 ALLOW = "allow"
 BLOCK = "block"
 
-# 工具输出进入上下文前的预算上限。比工具自身的截断更严：工具层管
-# "单次输出别太大"，这一层管"塞进上下文的别太多"。超出时首尾各留一段，
-# 全文落盘（见 large_output_hook），所以"被截掉的部分"仍读得回来。
+# Cap on tool output entering the context; the overflow is spilled to disk as an excerpt.
 MAX_TOOL_OUTPUT_CHARS = 8000
 
 
 class HookRegistry:
-    """一个运行用的事件回调表。可注册、可触发、可整体替换。
-
-    默认那份是进程级的 `DEFAULT_HOOKS`（里面是下面那几个默认回调）；要隔离
-    （测试、或"这次运行不要默认回调"）就自己建一份，通过循环的 `hooks` 参数传进去。
-    """
+    """Callbacks for one run; isolating them lets a test or subagent replace the whole set."""
 
     def __init__(self) -> None:
         self._hooks: dict[str, list[Hook]] = {event: [] for event in EVENTS}
 
     def register(self, event: str, hook: Hook | None = None):
-        """注册回调。既可直接调用，也能当装饰器用。
-
-            registry.register("PreToolUse", my_hook)
-
-            @registry.register("PreToolUse")
-            def my_hook(context): ...
-        """
+        """Register a callback, or act as a decorator; an unknown event name raises."""
         if event not in EVENTS:
             raise ValueError(f"未知事件名 {event!r}；可用：{'、'.join(EVENTS)}")
         if hook is None:
@@ -125,25 +84,25 @@ class HookRegistry:
         return hook
 
     def registered(self, event: str) -> list[Hook]:
-        """某个事件上注册了哪些回调（按注册顺序）。诊断与测试用。"""
+        """Return the callbacks for one event in registration order, for diagnostics and tests."""
         return list(self._hooks.get(event, []))
 
     def trigger(self, event: str, context: dict[str, Any]) -> str:
-        """触发某事件的全部回调，返回 ALLOW 或 BLOCK。
-
-        ``context`` 会被原地修改；调用方在返回后读其中的字段决定下一步动作。
-        """
+        """Run every callback for an event in order and report whether any of them blocked."""
         if event not in EVENTS:
             raise ValueError(f"未知事件名 {event!r}；可用：{'、'.join(EVENTS)}")
 
+        # The event name travels in the context so one callback can serve both phases.
         context["event"] = event
         blocked = False
 
+        # Every callback runs even after one blocks, so an audit callback still sees the call.
         for hook in list(self._hooks.get(event, [])):
             name = getattr(hook, "__name__", repr(hook))
             try:
                 result = hook(context)
             except Exception:
+                # A raising callback counts as a block, so a broken gate fails closed.
                 logger.exception("回调 %s 在 %s 抛出异常，按 block 处理", name, event)
                 blocked = True
                 continue
@@ -154,51 +113,27 @@ class HookRegistry:
         return BLOCK if blocked else ALLOW
 
     def copy(self) -> "HookRegistry":
-        """复制一份（回调本身是共享的）：给子运行一份可独立追加的注册表。"""
+        """Return an independently extendable copy; the callback objects themselves stay shared."""
         clone = HookRegistry()
         for event, callbacks in self._hooks.items():
             clone._hooks[event] = list(callbacks)
         return clone
 
 
-# 进程级默认注册表：下面把默认回调注册进去。循环没有显式给注册表时用它。
+# Process-level default registry, used whenever a run does not pass its own.
 DEFAULT_HOOKS = HookRegistry()
-
-
-# ---------------- 默认回调 ----------------
 
 
 def permission_facts(
     name: str, arguments: dict[str, Any], root: str | None = None
 ) -> tuple[str | None, str | None]:
-    """算出危险类别与越界目标两个**事实**（``brokerize`` 的薄视图，供诊断与测试）。
-
-    完整的动作事实是 :class:`avid.policy.action.Action`；这个函数只保留"第一个危险类别
-    与第一个区外目标"这两个标量，让既有调用方与测试不必认识新类型。
-    """
+    """Return the first danger category and first outside path for a call, as a thin broker view."""
     action = brokerize(name, arguments, root=root)
     return action.danger, (action.outside[0] if action.outside else None)
 
 
 def permission_hook(context: dict[str, Any]) -> str | None:
-    """PreToolUse：Tool Broker → Policy Engine → 审计；拒绝时按档写明原因。
-
-    流水线只有三步，谁都不越界：
-
-    1. ``brokerize`` 把参数变成动作事实（归一化 / 目标 / 风险 / 读还是写）；
-    2. ``decide`` 拿三轴 + deny 阶梯 + 沙箱规格裁决（REVIEW 问人 / 交给分类器 / 直接放行）；
-    3. 裁决进审计——**放行也记**，否则"这次运行到底放行了什么"无从回溯。
-
-    硬拒绝、受保护资源、命中策略、危险命令、越界、降级对模型意味着完全不同的事
-    （"永远不许，换做法" / "这条命令危险，换非破坏性做法" / "这个路径在区外，别重复试"
-    / "这次不行，别重复提交"）。只回一句 "Permission denied." 会让模型分不清，
-    于是反复重试同一条命令。
-
-    运行级上下文由 ``execution.execute_one`` 注入：``security``（三轴 + 阶梯 + 沙箱 +
-    审计）、``approval_ledger``、``workspace_root``、``ask``、``auto_approve``。
-    没有 ``security``（直调 hook、老调用方）时按"没有沙箱"裁决——失败关闭，
-    决策层会把它当成降级，而不是当成"没有边界"。
-    """
+    """PreToolUse gate: broker the call, decide it, audit the verdict and explain any denial."""
     name = context.get("tool", "")
     arguments = context.get("arguments") or {}
     security = context.get("security")
@@ -208,7 +143,7 @@ def permission_hook(context: dict[str, Any]) -> str | None:
     ledger = context.get("approval_ledger")
 
     action = brokerize(name, arguments, root=context.get("workspace_root"))
-    # ``--yes`` 只换回答者，不改变"哪些动作会打问号"，也不关沙箱。
+    # Auto-approve only swaps the answerer; it does not change which calls are questioned.
     answerer = always_allow if context.get("auto_approve") else context.get("ask")
 
     decision = decide(
@@ -220,6 +155,7 @@ def permission_hook(context: dict[str, Any]) -> str | None:
         ask=answerer,
     )
 
+    # Allows are audited as well, otherwise nothing records what this run actually let through.
     if security is not None:
         security.audit_write(
             "decision",
@@ -246,6 +182,7 @@ def permission_hook(context: dict[str, Any]) -> str | None:
     if decision.allowed:
         return None
 
+    # Denials carry a per-category reason, because a generic message makes the model retry blindly.
     context["denied_kind"] = decision.kind
     context["denied_type"] = decision.type
     context["denied_code"] = decision.code or None
@@ -255,7 +192,7 @@ def permission_hook(context: dict[str, Any]) -> str | None:
 
 
 def log_hook(context: dict[str, Any]) -> str | None:
-    """PreToolUse + PostToolUse：审计一次调用的开始与结束。永不拦截。"""
+    """PreToolUse and PostToolUse logging of call start, call end and denials; never blocks."""
     tool = context.get("tool")
     if context.get("event") == "PreToolUse":
         logger.info("[hook] 调用 %s %s", tool, brief(context.get("arguments")))
@@ -270,20 +207,7 @@ def log_hook(context: dict[str, Any]) -> str | None:
 
 
 def large_output_hook(context: dict[str, Any]) -> str | None:
-    """PostToolUse：按上下文预算截断工具输出，并把全文落盘留一条恢复路径。
-
-    只留头部会让尾部**永久丢失**——而最近的输出往往正是要看的（报错行、汇总、退出码）。
-    所以超限时改成首尾各留一段，完整文本交给 ``policy.compaction.spill`` 写进工作区
-    （与压缩落盘同一个目录、同一套文件名、同一句「用 read_file 读回」）：模型看的是
-    节选，需要细节时能自己读回全文，不必重跑一次工具。
-
-    落盘失败（没有工作区、磁盘错）不改变结论：退回只留头部并按上限截断，绝不因为
-    落盘失败而丢掉整段结果或让这次调用失败。
-
-    ``workspace_root`` / ``run_tag`` 由 ``execution.execute_one`` 放进 PostToolUse 的
-    context（与 PreToolUse 同源）：落盘的目录必须是这次运行的工作区，文件名带运行标识，
-    两次运行才不会互相覆盖。
-    """
+    """PostToolUse budget: keep head and tail excerpts of oversized output and spill the rest."""
     content = context.get("content")
     if not isinstance(content, str) or len(content) <= MAX_TOOL_OUTPUT_CHARS:
         return None
@@ -303,12 +227,13 @@ def large_output_hook(context: dict[str, Any]) -> str | None:
     else:
         notice = f"\n…（hook 按上下文预算截断，原文 {original} 字符，上限 {MAX_TOOL_OUTPUT_CHARS}）"
 
-    # 连提示一起算进预算（提示本身超预算就只留提示），否则"上限 8000"会静默超出。
+    # A failed spill downgrades this to a head-only truncation; it never drops the result.
     if len(notice) >= MAX_TOOL_OUTPUT_CHARS:
         context["content"] = notice[:MAX_TOOL_OUTPUT_CHARS]
         context["truncated"] = True
         return None
 
+    # The notice is charged to the same budget, otherwise the cap would be silently exceeded.
     keep = MAX_TOOL_OUTPUT_CHARS - len(notice)
     head = keep // 2
     context["content"] = content[:head] + notice + content[original - (keep - head) :]
@@ -317,16 +242,7 @@ def large_output_hook(context: dict[str, Any]) -> str | None:
 
 
 def repeat_call_hook(context: dict[str, Any]) -> str | None:
-    """PostToolUse：同名同参的调用重复到第 3、5 次时给一句提醒，不阻断。
-
-    计数挂在 ``RunState.repeat_calls``（每运行一份；新的用户输入换一份新的 RunState，
-    计数自然清零），回调本身因此是可共享的纯函数。参数按规范化 JSON（键序无关）比较，
-    与 DSH 的 ``repeat-tool-reminder``、opencode 的 doom-loop 是同一个口径。
-
-    **只提醒、不阻断，也不走权限**：重复调用有时是合理的（轮询、等外部状态），把它变成
-    审批或直接拦截会挡住正常用法；先让模型自己看一眼上一次的结果。提醒追加在结果末尾
-    而不是替换内容——上一次的完整输出仍然可见。
-    """
+    """PostToolUse notice at the third and fifth identical call; it appends and never blocks."""
     tool = str(context.get("tool") or "")
     arguments = context.get("arguments")
     counts = context.get("repeat_calls")
@@ -334,13 +250,12 @@ def repeat_call_hook(context: dict[str, Any]) -> str | None:
     if not tool or arguments is None or not isinstance(counts, dict):
         return None
 
+    # Normalized JSON makes the comparison independent of key order and formatting.
     key = (
         f"{tool}:"
         f"{json.dumps(arguments, ensure_ascii=False, sort_keys=True, default=str)}"
     )
-    # 并发执行时同批里可能有多个调用同时到这里：优先用执行层给的**原子自增**
-    # （`RunState.note_repeat`）。直接构造 context 调本回调的场合只给 dict，回退到
-    # 就地累加——那条路径是单线程的（测试与复用方直调）。
+    # Concurrent calls bump the run's atomic counter; a direct caller falls back to a local dict.
     bump = context.get("bump_repeat")
     if callable(bump):
         times = bump(key)
@@ -350,6 +265,7 @@ def repeat_call_hook(context: dict[str, Any]) -> str | None:
     if times not in REPEAT_REMIND_AT or not isinstance(content, str):
         return None
 
+    # The reminder is appended, so the previous output stays visible in full.
     context["content"] = content + (
         f"\n\n[重复调用提醒] 同一次调用（{tool} + 相同参数）已经重复 {times} 次。"
         "先看上一次的结果再决定：换一种做法，或者如果已经做完就收尾。"
@@ -358,10 +274,7 @@ def repeat_call_hook(context: dict[str, Any]) -> str | None:
 
 
 def summary_hook(context: dict[str, Any]) -> str | None:
-    """Stop：把本次运行的轮数与工具使用情况汇总进日志。
-
-    当前不阻止退出；Stop 的拦截能力留给需要"再补一轮"的场景（测试里有用例）。
-    """
+    """Stop hook that logs the round and tool-usage summary; it does not block by default."""
     summary = (
         f"轮数={context.get('rounds', 0)} "
         f"工具调用={context.get('tool_calls', 0)} "
@@ -372,14 +285,12 @@ def summary_hook(context: dict[str, Any]) -> str | None:
     return None
 
 
-# 提醒阈值：只取 3、5 两档——它治的是"反复重试同一次失败调用"，前两档足够打断。
+# Reminder thresholds; the first two repetitions are ordinary retry behaviour.
 REPEAT_REMIND_AT: tuple[int, ...] = (3, 5)
 
-# 注册顺序有意义：permission_hook 先跑，log_hook 才能看到 denied_reason；
-# repeat_call_hook 先于 large_output_hook，提醒才算进上下文预算；
-# large_output_hook 先跑，log_hook 才能报出"已被截断"。
-# UserPromptSubmit 上没有默认回调：环境注入已是 ContextManager 的 environment 块，
-# 这个事件保留给用户 hook 做「拦截输入 / 注入自定义系统文本」用。
+# Registration order matters: permission_hook must run first so log_hook sees the denial reason,
+# and the repeat reminder must precede truncation so its text is charged to the output budget.
+# UserPromptSubmit keeps no default callback; user hooks may use it for input injection.
 DEFAULT_HOOKS.register("PreToolUse", permission_hook)
 DEFAULT_HOOKS.register("PreToolUse", log_hook)
 DEFAULT_HOOKS.register("PostToolUse", repeat_call_hook)

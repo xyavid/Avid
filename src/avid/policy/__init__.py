@@ -1,1 +1,1 @@
-"""策略层：阈值、规则与文案。这一层是高频变化发生的地方。"""
+"""Policy layer: thresholds, rules and user-facing wording for the permission gate."""

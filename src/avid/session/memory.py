@@ -1,10 +1,4 @@
-"""进程内后端：一份 ``SessionState`` 当作存储。
-
-它的价值是把"会话语义"与"文件格式"分开测——一致性套件先在它身上跑，再原样
-跑一遍 JSONL 后端，两者答案不一致就是 bug。会话关闭时它**不关存储**
-（``close_storage=False``）：内存后端靠同一份状态支持 close → open 续接，
-这是 pi 用 facade 达成、我们用显式开关达成的同一件事。
-"""
+"""In-process backend: one SessionState used as the storage, kept alive across session handles."""
 
 from __future__ import annotations
 
@@ -37,7 +31,7 @@ from .values import ValueAddress
 
 
 class MemoryStorage:
-    """进程内存储：校验 + 落地都在一把锁里完成，不存在"写了一半"。"""
+    """In-process storage: validation and application under one lock, so no commit is half-done."""
 
     def __init__(self, *, now=None) -> None:
         self._now = now or now_ms
@@ -91,7 +85,7 @@ class MemoryStorage:
 
 @dataclass
 class _Record:
-    """仓库记住的东西：元信息、存储、以及"现在有没有句柄拿着它"。"""
+    """What the repository remembers: metadata, storage, and whether a handle currently holds it."""
 
     metadata: SessionMetadata
     storage: MemoryStorage
@@ -99,7 +93,7 @@ class _Record:
 
 
 class MemorySessionRepo:
-    """``SessionRepo`` 的内存实现，行为与 ``JsonlSessionRepo`` 逐条对齐。"""
+    """The in-memory SessionRepo, behaviourally aligned with the file backend case by case."""
 
     def __init__(
         self,
@@ -108,7 +102,7 @@ class MemorySessionRepo:
         id_generator: IdGenerator | None = None,
         workspace: str | None = None,
     ) -> None:
-        # 与文件后端同形：会话归属由调用方告诉仓库，老会话按仓库归属补。
+        # Same shape as the file backend: the caller names the workspace this repository serves.
         self.workspace = workspace
         self._now = now or now_ms
         self._id_generator = id_generator or UuidV7Generator(self._now)
@@ -116,7 +110,7 @@ class MemorySessionRepo:
         self._pending: set[str] = set()
         self._closed = False
 
-    # ---------------- 生命周期 ----------------
+    # Lifecycle: create, open, list, delete, close.
 
     def create(
         self,
@@ -139,6 +133,7 @@ class MemorySessionRepo:
             )
             storage = MemoryStorage(now=self._now)
             record = _Record(metadata=metadata, storage=storage)
+            # The store outlives the handle, so closing and reopening resumes on the same state.
             session = StorageBackedSession(
                 metadata,
                 storage,
@@ -194,15 +189,10 @@ class MemorySessionRepo:
                 record.storage.close()
                 record.open = False
 
-    # ---------------- 内部 ----------------
+    # Internals: ownership and id reservation.
 
     def _assert_owned(self, metadata: SessionMetadata) -> None:
-        """归属护栏：与文件后端同义——metadata 说别的工作区就拒绝。
-
-        审查里的一致性问题：文件后端在 `open` 时校验 header 归属，内存后端什么都不
-        校验，于是"两个后端共用一套一致性用例"这条声明在这类路径上不成立。内存后端
-        没有落盘格式（因此没有 storage_version 可校验），但归属是有的。
-        """
+        """Ownership guard matching the file backend: another workspace in metadata is refused."""
         if (
             self.workspace
             and metadata.workspace

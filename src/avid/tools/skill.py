@@ -1,9 +1,8 @@
-"""load_skill：技能系统的第二层——按需取回某个技能的完整说明。
+"""load_skill: fetches the full text of one skill on demand.
 
-技能目录（只有名称与描述）常驻在 system prompt 里；完整说明动辄几十行，
-所以只在模型判断"这个技能用得上"时才通过本工具进上下文。
+The system prompt carries only names and descriptions, so a full text reaches the context
+only when the model asks for it here.
 
-注册表由 ``RunState`` 显式传入（原来是 ContextVar）。
 """
 
 from __future__ import annotations
@@ -12,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from .registry import tool
 
-if TYPE_CHECKING:  # 运行时导入会成环（state.py 要 import skill_loader）
+if TYPE_CHECKING:  # runtime import would be circular (state.py imports the skill loader)
     from ..runtime.state import RunState
 
 
@@ -28,10 +27,11 @@ if TYPE_CHECKING:  # 运行时导入会成环（state.py 要 import skill_loader
         }
     },
     required=("name",),
-    # 按注册表读技能全文；注册表是只读快照。
+    # Reads the registry snapshot only, which is why this call is concurrency safe.
     concurrency="safe",
 )
 def load_skill(args: dict[str, Any], *, state: "RunState") -> str:
+    """Returns the full text of the named skill, or an error line when the name is missing."""
     name = str(args.get("name", "")).strip()
     if not name:
         return "错误：缺少参数 name"

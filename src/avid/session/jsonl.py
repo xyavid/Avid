@@ -1,28 +1,4 @@
-"""文件后端：首行 header + 每次提交一行 JSON 事务。
-
-格式与 pi 的 JSONL 存储同形（camelCase 字段、单写裸对象 / 多写数组、
-header 里的高水位），差别只在存放位置：pi 用全局根目录加 ``--cwd--`` 编码，
-Avid 放在工作区内的 ``.avid/sessions/``（取舍 A2）——工作区边界已经由
-``tools/workspace.py`` 定义，而且阶段 8 的教训是落盘必须在工作区内，
-否则工具读不回来。
-
-三条关键行为：
-
-* **追加即提交**：一行 = 一次提交，写完 flush + fsync 才返回。中途被杀最多
-  丢掉最后一个事务，之前的记录永远有效（不变量 I1/I2）。
-
-  这条 fsync **是刻意保留的**（审查把它列为"每条消息一次 fsync 落在关键路径"）。
-  实测（WSL2，tmpfs 与仓库所在的 drvfs 各测 30 次）：`fsync` 1.26 ms/次、
-  `fdatasync` 1.27 ms/次（不比 fsync 便宜）。一次 100 条消息的运行因此多 ~0.13 s
-  的落盘延迟，相对模型往返（秒级）可以忽略；而批量/延迟 fsync 换来的是
-  "崩溃可丢 N 条"——用 I1/I2 的强度换 1.3 ms/条，删除测试下不成立。
-  重新考虑的触发条件：会话文件落在真网络盘/NFS 上，且单次运行出现可感的秒级
-  落盘开销时，再谈批量 fsync 与随之下降的持久性承诺。
-* **重放**：open 时把完整行逐条重放回 ``SessionState``，用同一套校验函数，
-  所以"运行时接受的"和"重放时接受的"不可能分叉。
-* **撕裂行**：文件末尾没有换行的那半行被忽略，并在下次打开时原子重写掉——
-  它是崩溃留下的残片，不是数据。
-"""
+"""File backend: a header line plus one JSON transaction per commit, fsynced before it returns."""
 
 from __future__ import annotations
 
@@ -72,26 +48,31 @@ from .values import BRANCH_TIP_NS, DEFAULT_BRANCH, SESSION_NAME_NS, ValueAddress
 
 logger = logging.getLogger("avid.session.jsonl")
 
+# Version of the transaction-line format; a header carrying any other value is rejected.
 FORMAT_VERSION = 1
 HEADER_KIND = "header"
+# Session file suffix; listing and id lookup both key off it.
 SUFFIX = ".jsonl"
 
-
-# ---------------- 编解码 ----------------
+# Codec: header and transaction lines to and from JSON.
 
 
 @dataclass(frozen=True)
 class JsonlHeader:
+    """Header of a session file: identity, creation time, high-water seq, owning workspace."""
+
     id: str
     storage_version: int
     created_at: int
     parent_session_id: str | None = None
+    # High-water seq stored in the header; it is only used when it is ahead of the replay.
     next_seq: int | None = None
-    # 归属工作区（阶段 18）。老会话没有这个键：读回为 None，由文件位置派生。
+    # Owning workspace, written once; files without it read back as None and inherit their location.
     workspace: str | None = None
 
 
 def encode_header(header: JsonlHeader) -> str:
+    # Wire keys are camelCase and optional fields are omitted entirely.
     record: dict[str, object] = {
         "v": FORMAT_VERSION,
         "kind": HEADER_KIND,
@@ -109,6 +90,7 @@ def encode_header(header: JsonlHeader) -> str:
 
 
 def parse_header(line: str) -> JsonlHeader:
+    # Every field is type-checked, so a corrupt header fails loudly instead of loading half of it.
     try:
         record = json.loads(line)
     except ValueError as exc:
@@ -177,6 +159,7 @@ def encode_write(write: CommittedWrite) -> dict[str, object]:
 
 
 def decode_write(record: object) -> CommittedWrite:
+    # A malformed or unknown record is an error; nothing is skipped silently.
     if not isinstance(record, dict):
         raise SessionStorageError("事务里的每一写都必须是 JSON 对象")
     seq = record.get("seq")
@@ -223,7 +206,7 @@ def decode_write(record: object) -> CommittedWrite:
 
 
 def encode_transaction(writes: Sequence[CommittedWrite]) -> str:
-    """一行 = 一次提交。单写裸对象、多写数组，与 pi 的写法一致。"""
+    """One line per commit: a bare object for a single write and an array for several."""
     records = [encode_write(write) for write in writes]
     payload: object = records[0] if len(records) == 1 else records
     return json.dumps(payload, ensure_ascii=False)
@@ -241,7 +224,7 @@ def parse_transaction(line: str) -> tuple[CommittedWrite, ...]:
 
 
 def _split_complete_lines(content: str) -> tuple[list[str], bool]:
-    """拆成完整行；末尾没有换行的那截视为撕裂残片。"""
+    """Splits the file into complete lines and flags trailing bytes that form a torn fragment."""
     if content.endswith("\n"):
         return content[:-1].split("\n"), False
     last_newline = content.rfind("\n")
@@ -250,27 +233,20 @@ def _split_complete_lines(content: str) -> tuple[list[str], bool]:
     return content[:last_newline].split("\n"), True
 
 
-# ---------------- 列表页摘要（不重放） ----------------
+# List-page summary: the facts that need no full replay.
 
-# 一个条目写恰好包含一次这个片段。消息正文里的同名字面量会被 JSON 转义成
-# `\"kind\"`，因此不会误计——这条耦合由 `test_summarize_matches_replay` 用
-# "正文里含该字面量"的用例钉住。
+# An entry write contains this fragment exactly once; the same text inside a message body is
+# JSON-escaped, so counting occurrences stays accurate.
 _ENTRY_MARKER = '"kind": "entry"'
 
-# 判断"链尾是否残缺"只需要链尾附近的几条：判据在遇到第一个非 tool 条目时就返回，
-# 所以正常情况下只需要链尾 + 它的几个工具结果。窗口大小直接决定解析代价（窗口里的
-# 每一行都要 JSON 解析，而一条工具结果可能很大），因此取 32——判不出来时返回 None，
-# 由调用方重放拿权威答案，不猜。
+# How many trailing lines a summary parses: the window bounds the cost, and an inconclusive
+# verdict returns None instead of guessing.
 TAIL_WINDOW_LINES = 32
 
 
 @dataclass(frozen=True)
 class FileSummary:
-    """列表页需要、且不必重放整个会话就能得到的三个事实。
-
-    ``truncated_tail`` 为 ``None`` 表示"尾部窗口内判不出来"（例如刚在别的分支上
-    追加了很多条目，默认分支的链尾落在窗口之外），调用方需要退回重放。
-    """
+    """The three facts a list page needs without replaying; truncated_tail None means undecided."""
 
     name: str | None
     message_count: int
@@ -278,11 +254,7 @@ class FileSummary:
 
 
 def _last_value(content: str, namespace: str) -> Any:
-    """该 namespace 的最后一次写入（delete 也算一次，返回 None）。
-
-    用 ``rfind`` 从后往前找候选行，再按行边界切开解析——不 splitlines 整个文件：
-    值写入很少，候选行通常只有一两行，而整个文件可能有几千行。
-    """
+    """Last write in a namespace, counting a delete as None, found by rfind over the file text."""
     marker = f'"{namespace}"'
     index = content.rfind(marker)
     while index != -1:
@@ -294,7 +266,7 @@ def _last_value(content: str, namespace: str) -> Any:
             writes = parse_transaction(content[line_start:line_end])
         except SessionStorageError:
             writes = ()
-            # 残片/坏行：跳过，交给 open 的修复路径
+            # A torn or corrupt line is skipped here; open holds the repair path.
         for write in reversed(writes):
             if not isinstance(write, (CommittedValueSet, CommittedValueDelete)):
                 continue
@@ -308,18 +280,14 @@ def _last_value(content: str, namespace: str) -> Any:
 
 
 def _tail_lines(content: str, window: int) -> list[str]:
-    """文件末尾最多 window 行；不 splitlines 整个文件。
-
-    ``rsplit`` 的 maxsplit=window 在"换行数 ≥ window"时会多出一个头部残段，
-    按 len(parts) == window + 1 判断并丢掉它——否则窗口里会混进一大截文件头。
-    """
+    """The last window lines only, dropping the extra leading fragment rsplit can yield."""
     text = content[:-1] if content.endswith("\n") else content
     parts = text.rsplit("\n", window)
     return parts[1:] if len(parts) == window + 1 else parts
 
 
 def _tail_state(lines: list[str]) -> tuple[dict[str, Any], bool, Any]:
-    """尾部窗口内：条目表（id → NewEntry）、是否见过默认分支的链尾值、链尾值。"""
+    """Over the tail window: the entry table, whether the default tip was seen, and that tip."""
     entries: dict[str, Any] = {}
     tip_seen = False
     tip: Any = None
@@ -353,13 +321,9 @@ def _tail_state(lines: list[str]) -> tuple[dict[str, Any], bool, Any]:
 
 
 def _tail_is_truncated(entries: dict[str, Any], tip_seen: bool, tip: Any) -> bool | None:
-    """默认分支的链尾是否有一批没有结果的 tool_calls。
-
-    与 ``svc.sessions._truncated_tail`` 同一判据（那一条是权威路径，走重放），
-    差别只在这里只看尾部窗口：窗口不够就返回 None。
-    """
+    """Whether the default branch tip still has tool calls without results; None if undecidable."""
     if not tip_seen:
-        return False  # 默认分支还没有链尾值：没有可残缺的东西
+        return False  # no tip value yet, so nothing can be truncated
     if not isinstance(tip, str) or tip not in entries:
         return None
     seen: set[str] = set()
@@ -367,7 +331,7 @@ def _tail_is_truncated(entries: dict[str, Any], tip_seen: bool, tip: Any) -> boo
     while cursor is not None:
         entry = entries.get(cursor)
         if entry is None:
-            return None  # 链走到窗口之外
+            return None  # the chain leaves the window, so the answer needs a replay
         message = entry.message or {}
         if message.get("role") == "tool":
             seen.add(str(message.get("tool_call_id")))
@@ -379,11 +343,7 @@ def _tail_is_truncated(entries: dict[str, Any], tip_seen: bool, tip: Any) -> boo
 
 
 def summarize_file(path: Path, *, window: int = TAIL_WINDOW_LINES) -> FileSummary:
-    """读一次文件，给出列表页要的三个事实，**不建 SessionState、不逐行重放**。
-
-    代价从"解析每一行 + 建对象"降到"一次读 + 子串计数 + 解析尾部窗口"：列表页
-    每次都要为每个会话付这笔钱，会话一多它就是首屏的主要成本。
-    """
+    """Reads the file once for the three list facts, building no state and replaying no line."""
     try:
         content = path.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
@@ -398,34 +358,29 @@ def summarize_file(path: Path, *, window: int = TAIL_WINDOW_LINES) -> FileSummar
 
 
 def _fsync_dir(path: Path) -> None:
-    """把目录项本身刷盘（rename 之后必须做）。Windows 打不开目录，直接跳过。"""
+    """Flushes the directory entry after a rename; Windows cannot open a directory, so skipped."""
     try:
         fd = os.open(path, os.O_RDONLY)
     except OSError:
         return
     try:
         os.fsync(fd)
-    except OSError:  # pragma: no cover - 取决于文件系统
+    except OSError:  # pragma: no cover - depends on the filesystem
         pass
     finally:
         os.close(fd)
 
 
 def _rollback(fd: int, size: int) -> None:
-    """尽力把文件截回写入前的大小；回滚失败也不能掩盖原始错误。"""
+    """Best-effort truncate back to the pre-write size; a failure must not hide the real error."""
     try:
         os.ftruncate(fd, size)
-    except OSError:  # pragma: no cover - 已无更好的补救
+    except OSError:  # pragma: no cover - nothing better is available
         logger.warning("回滚短写失败，文件可能残留半行", exc_info=True)
 
 
 def _fsync_write(path: Path, payload: str, *, append: bool) -> None:
-    """写一行并 fsync。
-
-    用一次 ``os.write`` 而不是文本句柄的缓冲写：写入长度必须**校验**，短写
-    （ENOSPC、信号打断）要回滚成"这一行没写过"，否则调用方以为提交成功、
-    内存里的 seq 已经推进，磁盘上却少半行——下次打开就永久读不了这个文件。
-    """
+    """Writes one line and fsyncs it, checking the byte count so a short write can roll back."""
     data = payload.encode("utf-8")
     flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if append else os.O_TRUNC)
     try:
@@ -453,7 +408,7 @@ def _fsync_write(path: Path, payload: str, *, append: bool) -> None:
 
 
 def _publish_atomically(path: Path, payload: str) -> None:
-    """先写临时文件再 rename：读到的要么是旧内容，要么是新内容。"""
+    """Writes a temporary file and renames it, so a reader sees old or new content, never both."""
     temp_path = path.with_name(path.name + ".tmp")
     try:
         _fsync_write(temp_path, payload, append=False)
@@ -461,13 +416,13 @@ def _publish_atomically(path: Path, payload: str) -> None:
     except OSError as exc:
         temp_path.unlink(missing_ok=True)
         raise SessionStorageError(f"会话发布失败：{path}（{exc}）") from exc
-    # rename 本身要落盘才算发布完成，否则掉电后目录项可能还指向旧文件。
+    # The rename must reach disk as well, or a power loss can leave the old directory entry.
     _fsync_dir(path.parent)
 
 
-# ---------------- 跨进程互斥 ----------------
+# Cross-process lock: POSIX flock here, msvcrt byte-range locking on Windows.
 
-try:  # POSIX
+try:  # POSIX: flock on the open lock fd
     import fcntl
 
     def _try_lock(fd: int) -> bool:
@@ -480,7 +435,7 @@ try:  # POSIX
     def _unlock(fd: int) -> None:
         fcntl.flock(fd, fcntl.LOCK_UN)
 
-except ImportError:  # pragma: no cover - Windows
+except ImportError:  # pragma: no cover - Windows: one locked byte stands in for flock
     import msvcrt
 
     def _try_lock(fd: int) -> bool:
@@ -496,24 +451,20 @@ except ImportError:  # pragma: no cover - Windows
 
 
 class SessionFileLock:
-    """一个会话文件的跨进程锁（旁挂 ``<会话文件>.lock``，不锁会话文件本身）。
+    """Cross-process lock for one session file, held in a sidecar lock file.
 
-    为什么不锁会话文件：撕裂行修复会 ``os.replace`` 换掉 inode，锁在旧 inode 上
-    会随之失效。旁挂文件全程不动，锁的生命周期与句柄一致。
-
-    锁文件**不删除**：删除会和"另一个进程刚打开同一路径"竞态（两个进程各持
-    不同 inode 上的锁）。留下一个 0 字节的旁挂文件是更小的代价。
+    A sidecar is used because a torn-tail repair replaces the session file's inode.
     """
 
     def __init__(self, session_path: Path) -> None:
+        # The sidecar stays behind on purpose: deleting it would race with another opener.
         self.path = session_path.with_name(session_path.name + ".lock")
         self._fd: int | None = None
-        # 同一存储可能被运行线程与 `repo.close()`（例如服务关停）同时关：没有这把
-        # 小锁时，两个线程都能通过 `_fd is None` 的检查，后到的那个会 `close(None)`。
+        # A run thread and a repository close can release at once, so the fd needs its own lock.
         self._mutex = threading.Lock()
 
     def acquire(self, label: str) -> None:
-        """拿到锁，或抛 ``SessionLockedError``。"""
+        """Takes the lock or raises SessionLockedError with the given label."""
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o644)
@@ -530,17 +481,15 @@ class SessionFileLock:
             fd, self._fd = self._fd, None
         if fd is None:
             return
-        with suppress(OSError):  # pragma: no cover - 平台不支持解锁时忽略
+        with suppress(OSError):  # pragma: no cover - unlocking is unsupported on some platforms
             _unlock(fd)
         os.close(fd)
 
 
 class JsonlStorage:
-    """一个会话文件。写入口只有 ``commit``，所以 I1（只追加）由它一个人守。
+    """One session file; commit is the only write path, under a lock held from open to close.
 
-    跨进程互斥由 ``SessionFileLock`` 在 ``create``/``open`` 时取得、``close`` 时
-    释放——**读之前**就要拿到，否则"读到别人正在写的半行 → 判为撕裂 → 原子重写"
-    会把对方刚提交的那一行覆盖掉。
+    Holding it that long keeps a torn-tail rewrite from clobbering a commit made meanwhile.
     """
 
     def __init__(
@@ -559,10 +508,11 @@ class JsonlStorage:
         self._file_lock = file_lock
         self._closed = False
 
-    # ---------------- 构造 ----------------
+    # Construction: create a fresh file, or replay an existing one, both under the file lock.
 
     @classmethod
     def create(cls, path: Path, header: JsonlHeader, *, now=None) -> "JsonlStorage":
+        """Creates a new session file under the lock, publishing its header atomically."""
         lock = SessionFileLock(path)
         lock.acquire(header.id)
         try:
@@ -575,6 +525,7 @@ class JsonlStorage:
 
     @classmethod
     def open(cls, path: Path, *, now=None) -> "JsonlStorage":
+        """Replays the file under the lock, dropping a torn or invalid last line and rewriting."""
         lock = SessionFileLock(path)
         lock.acquire(path.name)
         try:
@@ -593,17 +544,17 @@ class JsonlStorage:
                     writes = parse_transaction(line)
                     storage._state.validate(writes)
                     storage._state.apply(writes)
-                except Exception as exc:  # 解析、校验、应用失败都算这一行坏了
+                except Exception as exc:  # a parse, validation or apply failure all mean a bad line
                     if index == len(lines):
-                        # **末行**坏了：它是崩溃/短写留下的残片（或并发写留下的重复
-                        # seq），按残片丢掉并原子重写。丢掉中间某行则会静默丢历史，
-                        # 那种情况必须报错让人看。
+                        # A bad last line is a crash or short-write fragment: drop it and rewrite.
+                        # A bad middle line would silently drop history, so it must raise instead.
                         logger.warning("会话文件末行非法，按残片丢弃：%s（%s）", path, exc)
                         lines = lines[:-1]
                         repair_tail = True
                         break
                     raise SessionStorageError(f"{path} 第 {index} 行非法：{exc}") from exc
             if header.next_seq is not None:
+                # The header high-water mark matters only when it is ahead of the replayed seq.
                 storage._state.advance_next_seq(header.next_seq)
             if repair_tail:
                 logger.warning("会话文件末尾有残片（撕裂行或末行非法），已重写：%s", path)
@@ -613,9 +564,10 @@ class JsonlStorage:
             lock.release()
             raise
 
-    # ---------------- 数据面 ----------------
+    # Data plane: reads go to the state, and commit is the only writer.
 
     def commit(self, writes: Sequence[Write]) -> CommitResult:
+        """Allocates seq and timestamp, appends one fsynced line, then applies them to state."""
         self._assert_open()
         with self._lock:
             try:
@@ -627,10 +579,8 @@ class JsonlStorage:
                         append=True,
                     )
             except (TypeError, ValueError) as exc:
-                # 会话层只承诺抛 SessionError。这里会把两类"这一条写不进去"的失败
-                # 收敛掉：非 JSON 可序列化的值（json.dumps 抛 TypeError）、
-                # 无法用 UTF-8 编码的字符（代理对，UnicodeEncodeError 是 ValueError）。
-                # 它们以前会原样漏到调用方——按 SessionError 捕获的代码接不住。
+                # Only SessionError escapes upward: values that json cannot serialise and text that
+                # UTF-8 cannot encode are folded into it here.
                 raise SessionStorageError(
                     f"这一条无法写入会话（{type(exc).__name__}：{exc}）"
                 ) from exc
@@ -682,6 +632,7 @@ class JsonlStorage:
 
 
 def session_file_name(created_at: int, session_id: str) -> str:
+    """File name: a UTC timestamp with milliseconds plus the quoted id, so names sort by time."""
     stamp = datetime.fromtimestamp(created_at / 1000, tz=UTC).strftime(
         "%Y-%m-%dT%H-%M-%S"
     )
@@ -689,7 +640,7 @@ def session_file_name(created_at: int, session_id: str) -> str:
 
 
 class JsonlSessionRepo:
-    """``SessionRepo`` 的文件实现。列表只读 header，不把会话整个读进来。"""
+    """File implementation of SessionRepo; listing reads headers instead of replaying sessions."""
 
     def __init__(
         self,
@@ -700,24 +651,19 @@ class JsonlSessionRepo:
         workspace: str | None = None,
     ) -> None:
         self.root = Path(root)
-        # 本仓库服务哪个工作区。session/ 不推导工作区（它对 avid 内部零依赖），
-        # 由调用方告诉它；老会话文件没有 workspaceId 时据此归属。
+        # Which workspace this repository serves; the caller passes it, and files without a
+        # workspace entry inherit it from their location.
         self.workspace = workspace
         self._now = now or now_ms
         self._id_generator = id_generator or UuidV7Generator(self._now)
         self._open: dict[str, JsonlStorage] = {}
         self._pending: set[str] = set()
-        # 列表页摘要：(mtime_ns, size) → FileSummary。列表在一次运行期间会被反复取，
-        # 只有正在写的那一个会话会失效。
+        # List summaries keyed by id, with (mtime_ns, size) as the validity stamp.
         self._summaries: dict[str, tuple[tuple[int, int], FileSummary]] = {}
         self._closed = False
 
     def summarize(self, metadata: SessionMetadata) -> FileSummary:
-        """列表页的三个事实（名字 / 条数 / 链尾是否残缺），不打开句柄。
-
-        不重放整个会话，也不与运行线程抢句柄：列表是只读视图，以前却要
-        ``open()`` 一次（逐行重放 + 建对象 + 拿会话锁）。
-        """
+        """The three list facts for one session, without opening a handle or replaying it."""
         self._assert_open()
         path = self._locate(metadata)
         stamp = self._stamp(path)
@@ -732,13 +678,14 @@ class JsonlSessionRepo:
 
     @staticmethod
     def _stamp(path: Path) -> tuple[int, int] | None:
+        """Stat-based cache key; None (unreadable file) disables caching for this call."""
         try:
             stat = path.stat()
-        except OSError:  # 刚被删/读不了：不缓存，让调用方看到真实错误
+        except OSError:  # just deleted or unreadable: do not cache, surface the real error
             return None
         return (stat.st_mtime_ns, stat.st_size)
 
-    # ---------------- 生命周期 ----------------
+    # Lifecycle: create, open, list and delete.
 
     def create(
         self,
@@ -747,7 +694,7 @@ class JsonlSessionRepo:
         parent_session_id: str | None = None,
         workspace: str | None = None,
     ) -> StorageBackedSession:
-        """``workspace`` 缺省时用仓库自己的归属（由会话库位置派生）。"""
+        """Creates a session, defaulting the owning workspace to the repository's own."""
         self._assert_open()
         session_id = validate_session_id(
             self._id_generator.next() if id is None else id
@@ -783,8 +730,7 @@ class JsonlSessionRepo:
             raise SessionAlreadyOpenError(metadata.id)
         path = self._locate(metadata)
         storage = JsonlStorage.open(path, now=self._now)
-        # 跨工作区护栏：_locate 优先用 metadata.path，而 open 只校验 header.id，
-        # 于是把 A 工作区的 metadata 交给指向 B 的仓库会静默打开 A 的文件。
+        # metadata.path alone would let a repository open a file that belongs to another workspace.
         if (
             self.workspace
             and storage.header.workspace
@@ -808,7 +754,7 @@ class JsonlSessionRepo:
             storage_version=storage.header.storage_version,
             parent_session_id=storage.header.parent_session_id,
             path=path,
-            # 老文件没有 workspaceId：按仓库归属补上（位置即归属）。
+            # A file without a workspace entry belongs to the repository that found it.
             workspace=storage.header.workspace or self.workspace,
         )
         return self._publish(resolved, storage)
@@ -826,12 +772,12 @@ class JsonlSessionRepo:
         return found
 
     def delete(self, metadata: SessionMetadata) -> None:
+        """Deletes the file under the same id and workspace guards as open, holding the lock."""
         self._assert_open()
         if metadata.id in self._open:
             raise SessionAlreadyOpenError(metadata.id)
         path = self._locate(metadata)
-        # 与 open 同一套护栏：`_locate` 优先用 metadata.path，不校验就等于
-        # "拿别人的 metadata 删别人的文件"。删除比打开更不可逆，这里不能更松。
+        # Same guard as open: metadata.path alone must not be enough to delete someone else's file.
         header = self._header_of(path)
         if header.id != metadata.id:
             raise SessionStorageError(
@@ -846,8 +792,7 @@ class JsonlSessionRepo:
                 f"会话 {metadata.id} 属于另一个工作区（{header.workspace}），"
                 f"不能在 {self.workspace} 的仓库里删除"
             )
-        # 删除也是一条写路径：另一个进程正持有它时不能删（否则它下次提交会写进
-        # 一个已经被 unlink 的 inode，或把别人刚要打开的文件抽走）。
+        # Deleting is a write path: a concurrent holder must not lose its session to an unlink.
         lock = SessionFileLock(path)
         lock.acquire(metadata.id)
         try:
@@ -867,7 +812,7 @@ class JsonlSessionRepo:
         self._open.clear()
         self._summaries.clear()
 
-    # ---------------- 内部 ----------------
+    # Internals: handle lookup, metadata reads and id reservation.
 
     def _publish(
         self, metadata: JsonlSessionMetadata, storage: JsonlStorage
@@ -877,6 +822,7 @@ class JsonlSessionRepo:
         def forget() -> None:
             self._open.pop(metadata.id, None)
 
+        # on_close unregisters the id, so the same session can be opened again later.
         session = StorageBackedSession(
             metadata,
             storage,
@@ -890,17 +836,13 @@ class JsonlSessionRepo:
         path = getattr(metadata, "path", None)
         if isinstance(path, Path) and path.exists():
             return path
+        # A stale recorded path falls back to the first filename match for the id.
         for candidate in self._session_paths(metadata.id):
             return candidate
         raise SessionNotFoundError(metadata.id)
 
     def _session_paths(self, session_id: str) -> builtins.list[Path]:
-        """这个 id 对应的文件（文件名形如 ``<时间戳>-<毫秒>_<id>.jsonl``）。
-
-        以前用 `name.endswith("_" + id + ".jsonl")` 判断：`create(id="a")` 会被
-        已存在的 `..._x_a.jsonl`（id 就是 `x_a`）误判成"已存在"。前缀里没有下划线，
-        所以 id 就是第一个 ``_`` 之后的部分——按下划线切一刀再比，才是精确匹配。
-        """
+        """Files for one id: the id follows the first underscore, so matching splits on it."""
         if not self.root.exists():
             return []
         want = f"{quote(session_id, safe='')}{SUFFIX}"
@@ -912,6 +854,7 @@ class JsonlSessionRepo:
         return found
 
     def _reserve(self, session_id: str) -> None:
+        # Reserve the id before the file exists, so two concurrent creates cannot both win.
         if session_id in self._open or session_id in self._pending:
             raise SessionExistsError(session_id)
         if self._session_paths(session_id):
@@ -920,7 +863,7 @@ class JsonlSessionRepo:
 
     @staticmethod
     def _header_of(path: Path) -> JsonlHeader:
-        """只读首行解析 header（不重放）。删除与列表都靠它，各写一份会分叉。"""
+        """Parses the first line only; listing and deletion share it so they cannot diverge."""
         try:
             with path.open("r", encoding="utf-8") as handle:
                 first = handle.readline()
@@ -935,10 +878,11 @@ class JsonlSessionRepo:
             modified_at = int(path.stat().st_mtime * 1000)
             header = self._header_of(path)
         except OSError as exc:
-            # 列表不该因为一个坏文件（读不了、刚好被删）整体失败。
+            # One unreadable file must not fail the whole listing.
             logger.warning("跳过读不了的会话文件 %s：%s", path, exc)
             return None
         except SessionStorageError as exc:
+            # Same for a file whose header is invalid.
             logger.warning("跳过 header 非法的会话文件 %s：%s", path, exc)
             return None
         return JsonlSessionMetadata(

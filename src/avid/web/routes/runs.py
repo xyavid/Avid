@@ -1,9 +1,4 @@
-"""运行端点：起一次运行、查状态、请求取消。
-
-``POST /sessions/{id}/runs`` 起工作线程后立刻返回 201 —— 一次运行是 30 秒到
-数分钟，同步 HTTP 既会超时也无法增量观察（设计文档 §10 的异步化七问）。
-取消是**显式命令**：关页面或刷新不算取消，因为 run 会持久化（§5.4）。
-"""
+"""Run endpoints: start a run, read its status and request cancellation."""
 
 from __future__ import annotations
 
@@ -21,11 +16,7 @@ router = APIRouter()
     status_code=status.HTTP_201_CREATED,
 )
 def start_run(request: Request, session_id: str, body: StartRunIn) -> dict:
-    """``branch`` 决定这次运行接在哪条链尾上（缺省 main）。
-
-    ``permission`` 决定这次运行的三轴预设；缺省按会话所属工作区的默认权限。
-    ``full_access_ack`` 是 full 的显式授权凭据，由 DTO 校验（缺则 422，到不了这里）。
-    """
+    """Starts a run on the chosen branch and permission preset and returns before the work finishes."""
     record = current_services(request).runs.start(
         session_id,
         body.prompt,
@@ -48,7 +39,7 @@ def get_run(request: Request, run_id: str) -> dict:
 
 @router.post("/runs/{run_id}/cancel", response_model=CancelOut, status_code=status.HTTP_202_ACCEPTED)
 def cancel_run(request: Request, run_id: str) -> dict:
-    """请求取消：**在下一个检查点生效**，不承诺立即停止（§7.4）。"""
+    """Requests cancellation, which takes effect at the next checkpoint rather than immediately."""
     record = current_services(request).runs.cancel(run_id)
     return {
         "run_id": record.run_id,

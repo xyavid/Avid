@@ -1,34 +1,4 @@
-"""Policy Engine：把 :class:`~avid.policy.action.Action` 变成一次裁决。
-
-决策表的形状（**顺序即优先级**，``deny`` 全局高于 ``ask``，``ask`` 高于 ``allow``）：
-
-===================  =============================================  ========================
-第一步               判什么                                          出口
-===================  =============================================  ========================
-1 硬拒绝             ``rm -rf /``、``mkfs``、写块设备、关机            deny（任何模式、任何人）
-2 阶梯               ADMIN / SYSTEM / PROJECT deny                    deny（**包括 full**）
-2 阶梯（ask 档）     敏感但合法的目标（``.env``）                     REVIEW
-3 越过沙箱           写工作区与授予清单之外的目标                      REVIEW
-4 危险              提权 / 磁盘 / 服务 / 网络直接执行 / 容器 / 远程    REVIEW
-5 降级               要沙箱而沙箱不可用，且动作会改动状态              REVIEW
-6 成本              ``subagent`` 这类"不危险但花钱"的动作             REVIEW
-7 其余              区内只读、区内写入、**读整个文件系统**（沙箱保证）  allow
-===================  =============================================  ========================
-
-**边界是沙箱，不是工作区**：步骤 3 判的是"这次调用要不要沙箱保证不了的能力"，
-不是"路径在不在工作区里"。沙箱以 ``--ro-bind / /`` 提供整个文件系统的只读访问，
-所以读工作区之外是**已有能力**（与 Codex ``workspace-write``、Claude Code 沙箱的
-read/write 分层同口径）；要审批的只有写/删区外目标。降级时边界挪回人身上（步骤 5）。
-
-REVIEW 由三轴的 ``approval`` 回答：
-
-* ``user``：问人（同意一次即记进能力账本，同一次运行不再问）；
-* ``classifier``：确定性审查（判不准即拒），**不问人**；
-* ``none``（full）：直接放行，但审计里留下 ``answered_by=none``。
-
-**full 不等于无所不能**：第 1、2 步在任何模式下都成立。ADMIN DENY 是"人也不能覆盖"的
-一层，这正是"deny 高于 allow"的实际含义。
-"""
+"""Turns one Action into one verdict: deny outranks ask, and ask outranks allow, in every mode."""
 
 from __future__ import annotations
 
@@ -64,21 +34,23 @@ from .rules import (
     Rule,
 )
 
-# 阶梯自己的 "deny" 与引擎的 `VERDICT_DENY` 是同一个字符串（规格里 deny 只有一种含义），
-# 但两个模块各自是权威，所以显式别名、不共用名字：避免"用的是导入的还是新定义的"歧义。
+# The ladder's deny string equals the engine's, but each module is authoritative, so it is aliased
+# explicitly instead of being shared under one name.
 from .rules import VERDICT_DENY as RULE_DENY
 from .sandbox import UNMANAGED, SandboxSpec
 
+# Verdicts the engine returns.
 VERDICT_ALLOW = "allow"
 VERDICT_ASK = "ask"
 VERDICT_DENY = "deny"
 
-# 对外的结构化终局。verdict/kind 继续保留，供旧事件与审计消费者兼容。
+# Normalized outcomes; verdict and kind are kept for existing event and audit readers.
 SAFE_AUTO = "SAFE_AUTO"
 NEEDS_APPROVAL = "NEEDS_APPROVAL"
 SANDBOX_DENIED = "SANDBOX_DENIED"
 POLICY_DENIED = "POLICY_DENIED"
 
+# Kinds record why a call was reviewed or refused, and they select the wording further down.
 KIND_HARD = "hard"
 KIND_CREDENTIAL = "credential"
 KIND_RULE = "rule"
@@ -87,11 +59,11 @@ KIND_DANGER = "danger"
 KIND_DEGRADED = "degraded"
 KIND_NETWORK = "network"
 KIND_COST = "cost"
-#: 外部 MCP 工具（阶段 30e）：语义分类器看不见，口径是 manual 问一次、auto 拒、full 放。
+#: External MCP tools: unclassifiable semantics, so manual asks, auto refuses and full allows.
 KIND_MCP = "mcp"
 
-#: 回传给模型的文案。三类拒绝给不同的下一步指引（"永远不许"与"这次不行"对模型意味着
-#: 完全不同的事，混为一谈会让它反复重试）。
+# Messages for the model; each denial kind points at a different next step, because "never allowed"
+# and "not this time" mean different things to a model and mixing them invites blind retries.
 HARD_MESSAGE = (
     "Permission denied. 原因：硬拒绝（{reason}）。"
     "这条命令被永久禁止，不要重试、也不要改写绕过，请改用别的方式完成任务。"
@@ -147,14 +119,12 @@ MESSAGE_FOR: dict[str, str] = {
     KIND_MCP: MCP_MESSAGE,
 }
 
+# Approval callback: tool name, arguments and reason; True grants the call for the rest of the run.
 AskUser = Callable[[str, dict[str, Any], str], bool]
 
 
 class Ledger(Protocol):
-    """能力账本的最小接口（实现见 :class:`avid.policy.permission.ApprovalLedger`）。
-
-    引擎不 import 门面模块（门面 import 引擎），所以这里只声明形状。
-    """
+    """Minimal capability-ledger interface, declared here because the facade imports this module."""
 
     def knows(self, key: tuple[str, ...]) -> bool: ...
 
@@ -165,7 +135,7 @@ class Ledger(Protocol):
 
 @dataclass(frozen=True)
 class Decision:
-    """一次裁决的完整结果：给机器看的出口、给人看的理由、给模型看的文案。"""
+    """Result of one decision: verdict for machines, reason for humans, message for the model."""
 
     verdict: str
     kind: str = ""
@@ -174,7 +144,7 @@ class Decision:
     message: str = ""
     key: tuple[str, ...] | None = None
     answered_by: str = ""
-    #: 批准时应当授予的能力（路径 → ro/rw）。由沙箱在组装 argv 时使用。
+    #: Capabilities granted by an approval (path -> ro/rw), used by the sandbox when building argv.
     grants: tuple[tuple[str, str], ...] = ()
     code: str = ""
     operation: str = ""
@@ -186,11 +156,9 @@ class Decision:
 
     @property
     def type(self) -> str:
-        """规范化的四类命令终局，供工具执行器与 API 使用。
+        """Normalized outcome for callers: allow, sandbox denial, needs approval, or policy denial.
 
-        ``verdict``/``kind`` 是历史兼容字段；这个属性把 Policy、Approval、Sandbox
-        的结果压缩成调用方可稳定分派的类型。``degraded`` 明确属于沙箱边界失败，不能
-        被误报成普通策略拒绝。
+        A degraded sandbox is a boundary failure, not an ordinary policy refusal.
         """
         if self.verdict == VERDICT_ALLOW:
             return SAFE_AUTO
@@ -202,23 +170,22 @@ class Decision:
 
     @property
     def command_type(self) -> str:
-        """``type`` 的显式别名，避免调用方与 Python 内建名混淆。"""
+        """Explicit alias of ``type`` so callers do not confuse it with the builtin name."""
         return self.type
 
-    def __bool__(self) -> bool:  # 既有调用方按 bool(decision) 判断
+    def __bool__(self) -> bool:  # existing callers test bool(decision)
         return self.allowed
 
 
 def access_for(action: Action) -> str:
-    """这次能力授予按什么口径挂载：写类给 rw，其余给 ro（原则⑦：授予尽量窄）。"""
+    """Reports how a granted capability is mounted: read-write for writes, read-only otherwise."""
     return "rw" if action.operations[:1] == (OPERATION_WRITE,) else "ro"
 
 
 def ladder_hit(action: Action, ladder: Ladder | None) -> Rule | None:
-    """在动作的**所有**目标上查阶梯，返回优先级最高的那条命中。
+    """Returns the highest-priority ladder hit across every target of the action.
 
-    bash 的目标可能不止一个（``cat /etc/hosts ~/.ssh/id_rsa``），逐个查才不会因为
-    "第一个目标很干净"而漏掉后面那个。
+    A bash call can carry several targets, so each one is checked instead of trusting the first.
     """
     if ladder is None:
         return None
@@ -230,16 +197,15 @@ def ladder_hit(action: Action, ladder: Ladder | None) -> Rule | None:
             hits.append(rule)
     if not hits:
         return None
+    # Deny outranks ask first, and only then does the higher tier win.
     hits.sort(key=lambda rule: (rule.verdict != RULE_DENY, TIER_ORDER[rule.tier]))
     return hits[0]
 
 
 def review_key(action: Action) -> tuple[str, ...]:
-    """REVIEW 的记账键：bash 按归一化命令原文，其它按第一个目标。
+    """Returns the review ledger key: normalized bash command, else the first target.
 
-    "同意一次即生效"的粒度就是它——同一条命令重跑不再问，换个命令照问。
-    MCP 工具固定按 (tool, 全名) 记：它的参数是 server 自己的 schema，里面的
-    "path" 与我们的路径账本无关，不能掉进下面的路径分支。
+    It is the granularity of "agree once"; MCP tools key on the full name, not on their arguments.
     """
     if is_mcp_tool(action.tool):
         return ("tool", action.tool)
@@ -256,11 +222,9 @@ def review_key(action: Action) -> tuple[str, ...]:
 def review_facts(
     action: Action, rule: Rule | None, sandbox: SandboxSpec | None
 ) -> tuple[str, str, str] | None:
-    """这一步要不要 REVIEW、给人看的理由、以及给文案用的细节。
+    """Returns ``(kind, reason, detail)`` when this step needs review, else ``None``.
 
-    返回 ``(kind, reason, detail)``；``None`` 表示没有任何 REVIEW 理由。``detail`` 与
-    ``reason`` 分开，是因为拒绝文案里再嵌一次完整理由会读出"命中安全策略（安全策略
-    要求逐次批准（…））"这种套娃——文案是给模型看的，重复只会稀释信息。
+    ``detail`` stays separate so the denial message does not nest one full reason inside another.
     """
     if rule is not None:
         kind = KIND_CREDENTIAL if rule.tier == TIER_ADMIN else KIND_RULE
@@ -268,9 +232,7 @@ def review_facts(
         return kind, f"{prefix}（{rule.reason}）", rule.reason
 
     if is_mcp_tool(action.tool):
-        # 外部 MCP 工具永远进 REVIEW：行为只有 server 自己知道，闸门给不出"它安全"
-        # 的证据。manual 问一次（账本按工具名记），auto 下无人可答 → 第 5 步拒绝，
-        # full 不问（第 3 步放行）。
+        # An external MCP tool always goes to review: manual asks once, auto has nobody to ask.
         server = mcp_server(action.tool)
         return KIND_MCP, f"外部 MCP 工具（{server} server）", action.tool
 
@@ -285,8 +247,7 @@ def review_facts(
         return KIND_DANGER, joined, joined
 
     if sandbox is not None and sandbox.degraded and action.tool in APPROVAL_RULES:
-        # 只把**受管工具**打回 REVIEW：区内读取本来就由路径校验保证（"区内读取从不
-        # 审批"是既有规格），沙箱不可用时再问一遍只是噪音。
+        # Only managed tools come back to review: an in-workspace read never needed approval anyway.
         detail = sandbox.reason or "后端不可用"
         return KIND_DEGRADED, f"沙箱不可用（{detail}）", detail
 
@@ -314,13 +275,13 @@ def decide(
     ledger: Ledger | None = None,
     ask: AskUser | None = None,
 ) -> Decision:
-    """唯一的裁决入口。参数都是**事实**，函数本身不做 IO（除了 ``ask`` 会阻塞等答复）。"""
+    """Single decision entry point; every argument is a fact and only ``ask`` may block on IO."""
     spec = mode_spec(mode) if isinstance(mode, str) else mode
     approval = spec.approval
-    # 没有规格 = 要求沙箱但没有后端（见 sandbox.UNMANAGED）：失败关闭，而不是无边界。
+    # A missing sandbox spec means one was requested with no backend, so fail closed.
     sandbox = sandbox if sandbox is not None else UNMANAGED
 
-    # 1 硬拒绝：任何模式、任何回答都不放行。
+    # Step 1, hard deny: terminal in every mode, and no answer from anyone can override it.
     if action.damage:
         return Decision(
             VERDICT_DENY,
@@ -330,16 +291,15 @@ def decide(
             HARD_MESSAGE.format(reason=action.damage),
         )
 
-    # 2 阶梯：deny 命中即终局（full 也不例外）；ask 命中进入 REVIEW。
+    # Step 2, ladder: a deny hit is final even in full, while an ask hit goes to review.
     rule = ladder_hit(action, ladder)
     if rule is not None and rule.verdict == RULE_DENY:
         kind = KIND_CREDENTIAL if rule.tier == TIER_ADMIN else KIND_RULE
         reason = f"{rule.reason}（{rule.tier}）"
         return Decision(VERDICT_DENY, kind, rule.tier, reason, _message(kind, rule.reason))
 
-    # 沙箱只挂载**已存在**的路径：区外新建文件无法授予（不为此放开整个父目录），
-    # 所以在执行前把这件事说成沙箱拒绝，而不是批准之后收到一个只读文件系统错误。
-    # 判据用 exceeds_sandbox：写沙箱自带可写位置（/tmp、/dev）的动作用不到这条。
+    # The sandbox mounts only paths that already exist, so an outside target that is missing is
+    # refused here rather than surfacing as a read-only error after an approval was granted.
     if sandbox.enforced:
         beyond = exceeds_sandbox(action)
         if beyond is not None and action.tool == "bash":
@@ -357,8 +317,8 @@ def decide(
                     target=target,
                 )
 
-    # 沙箱决定资源上限，与命令是否被人批准正交。限制网络时即使审批通过也
-    # 没有出网能力：在执行前告知结构化错误，不能等 curl 的 DNS 错误冒充结论。
+    # Resource limits are orthogonal to approval, so a restricted network is refused up front
+    # instead of surfacing later as a DNS error from the command itself.
     if action.network and sandbox.network == "restricted":
         operation = "network_listen" if "network_listen" in action.capabilities else "network_connect"
         target = action.network_target or "unknown"
@@ -377,11 +337,11 @@ def decide(
     key = review_key(action)
     grants = _grant_key(action)
 
-    # 3 approval=none（full）：不设问，但记下"没人拦过"。
+    # Step 3, full: nothing is asked, and the audit still records that nobody stopped it.
     if approval == APPROVAL_NONE:
         return Decision(VERDICT_ALLOW, kind, "", reason, answered_by="none", key=key)
 
-    # 4 账本复用：同一能力同意过一次就够。
+    # Step 4, the ledger: one approval of a capability is enough for the rest of the run.
     path_access = access_for(action)
     paths_granted = bool(action.outside_writes) and all(
         ledger.knows(("path", target, path_access))
@@ -391,7 +351,7 @@ def decide(
     if ledger is not None and (ledger.knows(key) or paths_granted):
         return Decision(VERDICT_ALLOW, kind, "", reason, key=key, answered_by="ledger")
 
-    # 5 approval=classifier：确定性审查，判不准即拒。
+    # Step 5, classifier: deterministic review, refusing whenever it cannot be sure.
     if approval == APPROVAL_CLASSIFIER:
         review = classify(action, rule=rule, sandbox=sandbox)
         if review.allowed:
@@ -406,7 +366,7 @@ def decide(
             answered_by="classifier",
         )
 
-    # 6 approval=user：问人。问不到（没有回答者 / EOF / 超时）就是拒绝。
+    # Step 6, approval user: ask a human; a missing answerer, EOF or timeout all end in refusal.
     answerer = ask
     if answerer is not None and answerer(action.tool, action.arguments, reason):
         if ledger is not None:
@@ -441,19 +401,15 @@ def gate(
     outside: str | None = None,
     action: Action | None = None,
 ) -> Decision:
-    """``brokerize`` + ``decide`` 的组合入口（既有调用方的形状）。
+    """Composes brokerize and decide; danger and outside may come from caller-computed facts.
 
-    ``danger`` / ``outside`` 是**调用方算好的事实**覆盖（测试与直调用路径）：给了就用
-    它，没给就用 broker 从参数里算出来的。
-
-    ``ladder`` 缺省时按 ``root`` **现装一份阶梯**（读宿主策略文件，代价很小）。这条缺省
-    是刻意的失败方向：漏传阶梯等于"没有 deny 规则"，那会让宿主级禁令静默消失；
-    现装一份最坏是"读了一次配置"，永远不会更宽。
+    A missing ladder is loaded on the spot, since no ladder at all means no deny rules.
     """
     built = action if action is not None else brokerize(name, arguments, root=root)
     if ladder is None:
         ladder = Ladder.load(root=root)
     if danger is not None or outside is not None:
+        # A caller-supplied fact is inserted ahead of what the broker derived from arguments.
         risks = list(built.risks)
         if danger and danger not in risks:
             risks.insert(0, danger)

@@ -1,19 +1,4 @@
-"""命令行入口：avid "问题"
-
-会话（阶段 12）在 CLI 里是这样接线的：
-
-* ``--session ID``：续接该会话；不存在就创建。历史从会话读回，本轮的新消息
-  由 ``agent_loop`` 的 ``on_message`` 观察点逐条落库。
-* ``--new-session``：新建会话并把 id 打到 stderr（stdout 只放模型的回答）。
-* ``--list-sessions`` / ``--delete-session``：会话的查看与销毁。
-
-CLI 是**唯一**同时认识 ``runtime`` 与 ``session`` 的地方：循环不认识持久化，
-会话包也不认识运行时（不变量 I7）。
-
-会话落盘在 ``工作区/.avid/sessions/``。``--list-sessions`` 的名字与条数来自
-``JsonlSessionRepo.summarize``：读一次文件 + 解析尾部窗口，不重放整个会话
-（以前是 O(文件大小)×会话数，见 `session/jsonl.py` 的 `summarize_file`）。
-"""
+"""Command line entry point: one question, the agent loop, session resume, workspace admin and web."""
 
 from __future__ import annotations
 
@@ -64,8 +49,7 @@ from .workspaces import (
     sessions_root,
 )
 
-# 工具清单从注册表派生：硬编码过两次，两次都漏（写 8 个时实际已有 14 个）。
-# cli 已经是「认识 tools 包」的接线处，这里不新增模块边。
+# Derived from the tool registry so the help text cannot drift from the shipped toolset.
 AGENT_TOOL_HELP = "（" + " / ".join(item["function"]["name"] for item in TOOLS) + "）"
 
 
@@ -74,12 +58,7 @@ def _local_time(timestamp_ms: int) -> str:
 
 
 def _resolve_workspace(selection: str | None) -> Workspace:
-    """解析这次命令用哪个工作区。**只读**——注册表只由 `avid workspace` 写。
-
-    ``--workspace`` 可以给已登记的 id/路径，也可以直接给一个目录（那就是这个进程的
-    工作地点，当场生效但不登记）。缺省是**当前目录**——命令行上下文替你选了它，
-    不是"没选"；解析结果会打印，所以不存在"归属不明"的会话。
-    """
+    """Picks this command's workspace by id, path or the current directory, never writing the registry."""
     registry = WorkspaceRegistry()
     if selection:
         found = registry.find(selection)
@@ -99,16 +78,12 @@ def _resolve_workspace(selection: str | None) -> Workspace:
 
 
 def _default_mode_choices() -> tuple[str, ...]:
-    """能**持久化**成工作区默认值的模式。full 不在里面：full ≠ default。"""
+    """Returns the modes a workspace may persist as its default, which excludes full."""
     return tuple(mode for mode in MODES if mode != FULL_MODE)
 
 
 def _start_mcp(state: RunState) -> None:
-    """装配这次运行的 MCP server（``<工作区>/.avid/mcp.json``，阶段 30e）。
-
-    起不来的 server 只打警告不拦运行——run 里还有内置工具可用；进程的关闭
-    由调用方的 finally 走 ``state.close_mcp()``。
-    """
+    """Starts this run's MCP servers, warning about failures instead of aborting the run."""
     manager = McpManager(state.workspace_root)
     state.mcp = manager
     for warning in manager.start_all():
@@ -116,12 +91,8 @@ def _start_mcp(state: RunState) -> None:
 
 
 def _announce_security(security: RunSecurity | None) -> None:
-    """把这次运行的安全三轴说出来（stderr）。
-
-    产品规则里「full 必须可见」落在这里：关掉沙箱这件事不能只存在于某个开关里，
-    用户每次运行都该在终端看到「这次是什么模式、沙箱在不在」。
-    """
-    if security is None:  # pragma: no cover - 调用点保证非空
+    """Prints the run's three security axes to stderr so a disabled sandbox is never invisible."""
+    if security is None:  # pragma: no cover - callers guarantee a non-None security object
         return
     print(
         f"[安全] {security.mode}（approval={security.approval}，"
@@ -204,9 +175,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Dispatches to the matching mode and returns the process exit code."""
     argv = list(sys.argv[1:] if argv is None else argv)
-    # 子命令 `avid web` / `avid workspace` 在普通解析之前分流：
-    # 既有的 `avid "问题"` 逐字不变。
+    # Subcommands are split off before ordinary parsing, leaving the plain question form unchanged.
     if argv and argv[0] == "web":
         return _run_web(argv[1:])
     if argv and argv[0] == "workspace":
@@ -240,7 +211,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.agent:
         logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(message)s")
-        logging.getLogger("httpx").setLevel(logging.WARNING)  # 只留自己的 trace 行
+        # Silence the HTTP client so only Avid's own trace lines reach stderr.
+        logging.getLogger("httpx").setLevel(logging.WARNING)
         try:
             target = _resolve_workspace(args.workspace)
             state = RunState.for_run(
@@ -275,7 +247,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"循环中止：{exc}", file=sys.stderr)
             return 1
         finally:
-            # MCP server 进程随 run 起停（阶段 30e）。
+            # MCP server processes live exactly as long as the run does.
             state.close_mcp()
         return 0
 
@@ -295,11 +267,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def usage_suffix(usage: Usage, config: Config) -> str:
-    """一行的用量摘要：三基数 + 缓存读写/命中率 + 上下文占用（窗口不认识就不写）。
-
-    与 Web 界面同一口径（都走 ``ai/usage.py`` 的归一化）：``缓存`` 只在这次上报
-    真的带了这个数时才出现，缺失时整段省略——命令行不该为"没有这个数"编一个 0。
-    """
+    """Formats the one-line usage summary, omitting every figure the provider did not report."""
     parts = [
         f"prompt={usage.prompt_tokens}",
         f"completion={usage.completion_tokens}",
@@ -320,7 +288,7 @@ def usage_suffix(usage: Usage, config: Config) -> str:
 
 
 def _run_session(args: argparse.Namespace, config, state: RunState | None = None) -> int:
-    """续接或新建会话跑一次循环：历史来自会话，本轮消息逐条写回会话。"""
+    """Resumes or creates a session and runs one loop, reading history and writing this round back."""
     try:
         target = _resolve_workspace(args.workspace)
     except WorkspaceNotFound as exc:
@@ -377,7 +345,7 @@ def _run_session(args: argparse.Namespace, config, state: RunState | None = None
             session.close()
         repo.close()
         if state is not None:
-            # MCP server 进程随 run 起停（阶段 30e）。
+            # MCP server processes live exactly as long as the run does.
             state.close_mcp()
 
     print(reply)
@@ -391,7 +359,7 @@ def _run_session(args: argparse.Namespace, config, state: RunState | None = None
 
 
 def _session_admin(args: argparse.Namespace) -> int:
-    """查看与销毁：都不调模型，所以不需要先校验模型配置。"""
+    """Lists or deletes sessions; neither calls a model, so no model config is needed first."""
     try:
         target = _resolve_workspace(args.workspace)
     except WorkspaceNotFound as exc:
@@ -463,7 +431,7 @@ def build_workspace_parser() -> argparse.ArgumentParser:
 
 
 def _run_workspace(argv: list[str]) -> int:
-    """``avid workspace``：注册表的唯一写入口。会话数据一律不在这里动。"""
+    """Implements ``avid workspace``, the only writer of the registry; session data stays untouched."""
     args = build_workspace_parser().parse_args(argv)
     registry = WorkspaceRegistry()
     try:
@@ -527,11 +495,7 @@ def build_web_parser() -> argparse.ArgumentParser:
 
 
 def _run_web(argv: list[str]) -> int:
-    """``avid web``：起 uvicorn。
-
-    Web 依赖是**可选的**（``pyproject.toml`` 的 ``[project.optional-dependencies].web``），
-    所以缺依赖时给出可执行的修复命令，而不是 ImportError 栈。
-    """
+    """Starts uvicorn, turning a missing optional web dependency into an actionable message."""
     args = build_web_parser().parse_args(argv)
     try:
         import uvicorn
@@ -553,8 +517,7 @@ def _run_web(argv: list[str]) -> int:
         "开发期前端：pnpm -C web dev（Vite 代理 /api → 本进程）",
         file=sys.stderr,
     )
-    # 产物漂移：`avid web` 服务的是 copy:dist 的那一份，源码比它新时它在**忠实地发旧页面**。
-    # 这里说出来而不是等人比对页脚的构建戳——这个坑仓库注释里点过名，但仍然靠人记得。
+    # The served bundle is the copied one, so newer frontend sources mean an old page is being served.
     drift = frontend_drift_warning(STATIC_DIR, load_build_info(STATIC_DIR))
     if drift:
         print(f"⚠ {drift}", file=sys.stderr)
@@ -578,12 +541,7 @@ def _run_web(argv: list[str]) -> int:
 
 
 def _allowed_hosts(host: str) -> frozenset[str]:
-    """这次监听允许哪些 Host / Origin 主机名（信任边界，见 `web/app.py`）。
-
-    回环之外要显式放行：绑 `0.0.0.0` 时用户通常用本机 IP 访问，所以把本机地址也
-    加进来，并打印一条警告——那不是"只在本地"了。`AVID_ALLOWED_HOSTS`（逗号分隔）
-    是给反向代理/自定义域名的逃生口。
-    """
+    """Builds the Host and Origin allow-list for this bind address, warning when it is not loopback."""
     if host in LOOPBACK_HOSTS:
         return trusted_hosts()
     print(
@@ -595,7 +553,7 @@ def _allowed_hosts(host: str) -> frozenset[str]:
     try:
         _, _, addresses = socket.gethostbyname_ex(socket.gethostname())
         extra.update(addresses)
-    except OSError:  # pragma: no cover - 取不到本机地址时只信显式给的那些
+    except OSError:  # pragma: no cover - trust only the explicitly given hosts if lookup fails
         pass
     return trusted_hosts(frozenset(item for item in extra if item))
 
@@ -608,12 +566,7 @@ def _host_of(value: str) -> str:
 
 
 def _peek(repo: JsonlSessionRepo, meta: JsonlSessionMetadata) -> tuple[str | None, int]:
-    """名字与条数：走**不重放**的摘要路径。
-
-    以前这里 `open()` 整个会话只为读这两个数（代价 O(文件大小)×会话数，见文件头
-    的旧注释）；现在只读一次文件、解析尾部窗口，并按 (mtime,size) 缓存。
-    读不了就当没有名字——列表不该因为一个坏文件失败。
-    """
+    """Reads a session's name and count through the non-replaying summary path, degrading quietly."""
     try:
         summary = repo.summarize(meta)
     except SessionError:

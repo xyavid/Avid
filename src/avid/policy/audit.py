@@ -1,23 +1,4 @@
-"""审计：把"谁按什么规则、对什么目标、做了什么裁决"写成只追加的一行行 JSON。
-
-Agent Safety 的最后一项是 **Audit**——没有它，前面几层都只是"相信它按规则跑了"。
-
-落点 ``~/.avid/audit/audit-YYYY-MM-DD.jsonl``：
-
-* 按天分文件，纯追加（``O_APPEND``），不重写、不轮转删除；
-* 在沙箱的**掩蔽清单**里（``~/.avid``）且被 ADMIN 规则 deny，模型读写不了它；
-* 每条自带运行标识与三轴快照，因此"这次运行到底关没关沙箱"是可查的历史事实，
-  而不是界面上的一句话。
-
-两条取舍：
-
-1. **审计要留下命令本身**：抹掉命令原文等于抹掉审计的用途。但内联凭据
-   （``Authorization: Bearer …``、``token=…``）会被抹成 ``***``——审计文件不该成为
-   第二份凭据副本。
-2. **写失败不改结论**：磁盘满、目录不可写都只记计数与一条日志，绝不打断运行。
-   审计失败是"少了一条记录"，不是"这次调用该失败"。代价是"审计静默失效"这一风险，
-   所以 :attr:`AuditLog.failures` 会被带进运行终态，界面能看出"这次没留下记录"。
-"""
+"""Append-only JSONL audit trail recording which rule, target and verdict applied to each action."""
 
 from __future__ import annotations
 
@@ -40,20 +21,18 @@ logger = logging.getLogger("avid.policy.audit")
 AUDIT_DIR_ENV = "AVID_AUDIT_DIR"
 AUDIT_FILE_PREFIX = "audit-"
 
-#: 内联凭据（不是整份参数打码：命令原文要留下，只抹掉值）。
+# Only the credential value is masked: the command text itself must stay in the record.
 _INLINE_SECRET = re.compile(
     r"(?i)\b(authorization|token|api[_-]?key|password|passwd|secret)\b(\s*[:=]\s*)"
     r"(?:bearer\s+)?(\S+)"
 )
 _BEARER = re.compile(r"(?i)\bbearer\s+(\S+)")
+# Longest value kept per field; longer ones are truncated so one record stays bounded.
 _MAX_FIELD_CHARS = 2000
 
 
 def default_audit_dir(home: str | Path | None = None) -> Path:
-    """审计目录。优先级：``AVID_AUDIT_DIR`` > ``AVID_HOME/audit`` > ``<宿主家>/.avid/audit``。
-
-    中间那一档让"整个用户级目录换掉"（测试、多宿主）一次性生效，不必逐个环境变量对齐。
-    """
+    """Return the audit directory, preferring AVID_AUDIT_DIR, then AVID_HOME, then the host home."""
     override = os.environ.get(AUDIT_DIR_ENV)
     if override:
         return Path(override).expanduser()
@@ -64,12 +43,13 @@ def default_audit_dir(home: str | Path | None = None) -> Path:
 
 
 def redact_inline(text: str) -> str:
-    """抹掉内联凭据的值，保留命令结构。"""
+    """Mask inline credential values while keeping the surrounding command structure readable."""
     text = _INLINE_SECRET.sub(r"\1\2***", text)
     return _BEARER.sub("Bearer ***", text)
 
 
 def _clean(value: Any) -> Any:
+    # Redact and truncate every field recursively so no single record grows without bound.
     if isinstance(value, str):
         text = redact_inline(value)
         return text if len(text) <= _MAX_FIELD_CHARS else text[:_MAX_FIELD_CHARS] + "…"
@@ -84,7 +64,7 @@ def _clean(value: Any) -> Any:
 
 @dataclass
 class AuditLog:
-    """一次运行的审计写入口。线程安全（批内并发调用会同时写）。"""
+    """Audit writer for a single run; thread-safe because one batch may write concurrently."""
 
     directory: Path | None = None
     run_tag: str = ""
@@ -92,20 +72,21 @@ class AuditLog:
     mode: str = ""
     axes: Mapping[str, str] = field(default_factory=dict)
     sandbox: Mapping[str, Any] = field(default_factory=dict)
+    # Injected clock keeps record timestamps and the daily file rollover testable.
     clock: Callable[[], float] = time.time
     failures: int = 0
     written: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def path(self) -> Path | None:
-        """今天该写的文件。``directory`` 为 None（禁用）时返回 None。"""
+        """Return today's audit file, or None when the audit directory is disabled."""
         if self.directory is None:
             return None
         stamp = datetime.fromtimestamp(self.clock(), tz=UTC).strftime("%Y-%m-%d")
         return self.directory / f"{AUDIT_FILE_PREFIX}{stamp}.jsonl"
 
     def write(self, kind: str, **fields: Any) -> dict[str, Any] | None:
-        """写一条记录。**永不抛**：审计失败不该改变任何裁决。"""
+        """Append one record and return it; any write failure is counted and never raised."""
         record: dict[str, Any] = {
             "ts": int(self.clock() * 1000),
             "kind": kind,
@@ -123,6 +104,7 @@ class AuditLog:
         line = json.dumps(record, ensure_ascii=False, default=str) + "\n"
         try:
             with self._lock:
+                # Serialize appends so concurrent writers cannot interleave a single JSON line.
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with target.open("a", encoding="utf-8") as handle:
                     handle.write(line)
@@ -134,7 +116,7 @@ class AuditLog:
         return record
 
     def summary(self) -> dict[str, Any]:
-        """随终态带出去：让"审计静默失效"可见。"""
+        """Report counters into the run's final state so a silently failing audit stays visible."""
         return {
             "path": str(self.path()) if self.directory is not None else None,
             "written": self.written,

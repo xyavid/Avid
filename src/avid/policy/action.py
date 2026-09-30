@@ -1,27 +1,4 @@
-"""Tool Broker：把模型给的 JSON 参数变成一份**归一化的动作事实**。
-
-流水线上的第一站，也是唯一做"风险分类"的地方（原则②：边界在 LLM 之外，所以这一站
-的输出是纯数据，不含任何裁决）：
-
-::
-
-    tool_call{name, arguments}  ──brokerize──▶  Action
-                                                 ├ normalize  归一化后的可读形式
-                                                 ├ identify   目标路径（绝对）
-                                                 ├ classify   风险类别 + 是否出网
-                                                 └ operations 读还是写（bash 两者皆是）
-
-裁决者在 ``engine.py``：同一份 ``Action`` 喂给四级 deny 阶梯与三轴决策表，因此
-"什么算危险"与"什么算越界"都只有一份定义。
-
-**越界与敏感的判定不是沙箱**：bash 的目标识别是**启发式**（扫字面量记号），变量展开、
-``bash script.sh``、解释器内构造的路径都绕得过去。它的用途是决定"要不要问/要不要拒"，
-真正拦住 bash 的是 ``sandbox.py`` 的挂载与网络命名空间。
-
-路径数学只有一份，住在 ``tools/workspace.py``；本模块在**函数内**惰性取用它，因为
-``tools/`` 里也有模块 import ``policy.permission``（``tools/subagent.py``），模块级
-import 会构成 ``policy ↔ tools`` 的包级环。
-"""
+"""Turns one tool call's arguments into the normalized action facts the engine decides on."""
 
 from __future__ import annotations
 
@@ -36,15 +13,14 @@ from urllib.parse import urlsplit
 from .command_parse import parse_shell
 from .modes import APPROVAL_NONE
 
-# 命令起始位置：行首，或 ; & | 之后；跳过程序路径前缀与常见包装命令。
-# 用它锚定，避免 `grep halt file` 这类把关键字当参数的误伤。
-# 注意：env FOO=1 dd ... 这种插了变量赋值的写法仍能绕过——黑名单只是护栏。
+# Command-start anchor: line start or after ; & |, skipping wrapper commands and any path prefix.
+# Anchoring keeps a keyword used as an argument (`grep halt file`) from reading as a command, and a
+# variable assignment inserted before the program still bypasses the blacklist, so it is a guardrail.
 _CMD_START = (
     r"(?:^|[;&|]\s*)(?:(?:sudo|command|env|nohup|xargs|time|nice)\s+)*(?:\S*/)?"
 )
 
-# (正则, 拒绝原因)。只收"不可恢复的系统级破坏"——可恢复的操作交给审批闸门。
-#: 硬拒绝：任何模式、任何回答都不放行（原则③的 ADMIN DENY 里最硬的一档）。
+# Hard deny: unrecoverable system-level damage, refused in every mode and by every answer.
 DENY_PATTERNS: tuple[tuple[str, str], ...] = (
     (
         _CMD_START + r"rm\b[^|;&]*\s(?:/\*?|~/?\*?|\$HOME/?\*?)(?:\s|;|&|$)",
@@ -58,15 +34,13 @@ DENY_PATTERNS: tuple[tuple[str, str], ...] = (
     (_CMD_START + r"ch(?:mod|own)\s+-R\s+\S+\s+/(?:\s|$)", "递归修改根目录的权限或属主"),
 )
 
-# 危险命令：会在工作区之外产生副作用、不可逆地丢数据、或取得更高权限。
-# 与模式无关的部分只有"它是不是危险"；"危险之后怎么办"由三轴的 approval 决定
-# （manual 问人 / auto 由分类器裁决 / full 直接放行）。
+# Dangerous commands: side effects outside the workspace, irreversible data loss, or privilege gain.
+# Whether a danger needs approval is decided by the three axes, not by this table.
 DANGER_PATTERNS: tuple[tuple[str, str], ...] = (
     (_CMD_START + r"(?:sudo|su|doas|pkexec)\b", "提权"),
     (
-        # 短选项组合（-r / -f / -rf / -Rf）与**长选项**（--recursive / --force / --dir）
-        # 都要认：只匹配 `-[a-zA-Z]*[rRf]` 时 `rm --recursive x` 会整个漏过危险层，
-        # 在沙箱模式下**完全不问**就放行。
+        # Long options must be recognized too: matching only -[a-zA-Z]*[rRf] would let
+        # `rm --recursive x` skip the danger tier and, under the sandbox, run without asking.
         _CMD_START + r"rm\b[^|;&]*\s(?:--(?:recursive|force|dir)\b|-[a-zA-Z]*[rRf])",
         "递归或强制删除",
     ),
@@ -94,7 +68,7 @@ DANGER_PATTERNS: tuple[tuple[str, str], ...] = (
     (_CMD_START + r"(?:docker|podman|kubectl|helm)\b", "容器或编排操作"),
 )
 
-#: 出网命令：网络是一级边界（原则⑤），所以"这次动作碰不碰网"要单独记进审计。
+# Network commands: the network is a first-class boundary, so reaching it is recorded for the audit.
 NETWORK_HINTS: tuple[str, ...] = (
     r"(?:^|[;&|]\s*)(?:(?:sudo|command|env|nohup|xargs|time|nice)\s+)*(?:\S*/)?"
     r"(?:curl|wget|ssh|scp|sftp|rsync|nc|ncat|telnet|ftp)\b",
@@ -102,8 +76,8 @@ NETWORK_HINTS: tuple[str, ...] = (
     r"\b(?:pip|pip3|uv|npm|pnpm|yarn|cargo|go)\b[^|;&]*\b(?:install|add|get|update|publish)\b",
 )
 
-#: 判"这条命令是不是在写"的线索。bash 归到写就按写+读两个口径都查 deny 规则——
-#: 宁可多问一次，也不要因为读/写分不清而漏掉一条写禁令。
+# Clue for "does this command write"; bash is then checked against read and write deny rules alike,
+# because one extra question is cheaper than missing a write prohibition.
 _WRITE_HINTS = re.compile(
     r"(?:>>?\s*\S|\btee\b|\bcp\b|\bmv\b|\brm\b|\brmdir\b|\bmkdir\b|\btouch\b|\bln\b"
     r"|\binstall\b|\btruncate\b|\bdd\b|\bsed\s+-i\b|\bpatch\b|\bunzip\b|\btar\b[^|;&]*-x"
@@ -111,14 +85,11 @@ _WRITE_HINTS = re.compile(
     re.MULTILINE,
 )
 
-# 敏感路径（提权凭据、云密钥、私钥、影子口令）：读取或写入都算危险。
+# Credentials, cloud keys, private keys and shadow passwords: reading or writing them is dangerous.
 #
-# 判定用"展开 + 路径分量"而不是正则字面量：`~/.ssh/config`、`$HOME/.ssh/config`、
-# `/home/u/.ssh/config` 是同一个目标，只看字面量会漏掉后两种。
-#
-# 分量判定（而不是"解析后与 $HOME 比前缀"）是刻意的：$HOME 下的点目录常是符号链接
-# （WSL 里 `~/.aws -> /mnt/c/Users/...`），resolve() 之后就不再以 $HOME 为前缀，
-# 前缀比较会漏掉它。只要路径分量里出现这些点目录就判敏感——宁可多问一次。
+# Matching goes by expanded path component rather than by a resolved $HOME prefix, because dot
+# directories under $HOME are often symlinks (in WSL `~/.aws` points at a Windows path), and a
+# resolve() would then no longer match the prefix.
 SENSITIVE_COMPONENTS: tuple[str, ...] = (".ssh", ".aws", ".gnupg", ".docker")
 SENSITIVE_ABSOLUTE: tuple[str, ...] = (
     "/etc/shadow",
@@ -128,42 +99,40 @@ SENSITIVE_ABSOLUTE: tuple[str, ...] = (
 )
 SENSITIVE_SUFFIX = ".pem"
 
-# 命令里按空白与 shell 元字符切开后再逐个判路径（与 tools/workspace.py 同一套切法）。
+# Commands are split on whitespace and shell metacharacters, then each token is tested as a path.
 _SENSITIVE_SPLIT = re.compile(r"[\s;|&()<>'\"]+")
 
-#: 需要审批的原因文案：**沙箱不能保证**的那些工具。沙箱可用时它们由挂载保证，
-#: 不进这张表；沙箱不可用时（降级）manual 会按这里逐个问人。
+# Tools the sandbox cannot guarantee; when the sandbox is unavailable, manual mode asks about these.
 APPROVAL_RULES: dict[str, str] = {
     "bash": "执行 shell 命令",
     "write_file": "写入文件（已有内容会被覆盖）",
     "edit_file": "修改文件内容",
 }
 
-#: 成本规则（非安全）：沙箱保证不了"要花多少钱"。manual 问一次并记账。
+# Cost rules (not security): the sandbox cannot bound how much a call costs, so manual asks once.
 COST_RULES: dict[str, str] = {
     "subagent": "并行派发 subagent（会额外消耗多次模型调用）",
 }
 
-#: 文件工具的目标就是它的 path 参数。
+# File tools whose target is their path argument.
 PATH_TOOLS: frozenset[str] = frozenset({"read_file", "write_file", "edit_file", "glob"})
 
-#: 写类文件工具（决定查读规则还是写规则）。
+# Write-class file tools; membership decides whether read or write rules are consulted.
 WRITE_TOOLS: frozenset[str] = frozenset({"write_file", "edit_file"})
 
+# Operation names shared with the rules ladder.
 OPERATION_READ = "read"
 OPERATION_WRITE = "write"
 
-#: 会改动沙箱**之外**状态的 capability。沙箱保证的是"读整个文件系统 + 写工作区（与授予的
-#: 路径、它自己的临时目录）"，所以读不算越出边界，写/删区外才算。
+# Capabilities that change state outside the sandbox; reading the host is already granted.
 WRITE_CAPABILITIES: frozenset[str] = frozenset({"filesystem_write", "filesystem_delete"})
 
-#: 沙箱自己提供、与工作区无关的可写位置：私有的 ``/tmp``（tmpfs）与 ``/dev``。
-#: 写它们碰不到宿主，因此不构成"越出沙箱"。
+# Writable locations the sandbox provides (a private /tmp and /dev), so writing them stays inside.
 SANDBOX_WRITABLE_PREFIXES: tuple[str, ...] = ("/tmp", "/dev")
 
 
 def in_sandbox_writable(path: str) -> bool:
-    """这个路径是不是沙箱自带的、写它碰不到宿主的位置。"""
+    """Reports whether a path is one of the writable locations the sandbox itself provides."""
     text = str(path)
     return any(
         text == prefix or text.startswith(prefix + "/") for prefix in SANDBOX_WRITABLE_PREFIXES
@@ -171,41 +140,30 @@ def in_sandbox_writable(path: str) -> bool:
 
 
 def exceeds_sandbox(action: Action) -> tuple[str, str] | None:
-    """这次调用是否需要沙箱**没有**保证的能力；是则返回 ``(capability, target)``。
+    """Returns ``(capability, target)`` when the call writes outside what the sandbox guarantees.
 
-    判据是"写/删一个沙箱管不到的目标"，**不是**"路径在工作区之外"：沙箱以
-    ``--ro-bind / /`` 提供整个文件系统的只读访问，读工作区之外的路径是已有能力。
-    这与主流实现同口径——Codex 的 ``workspace-write`` 是 "permits reading files,
-    editing files in ``cwd`` and ``writable_roots``. Editing files in other
-    directories requires approval"；Claude Code 的沙箱把文件系统隔离分成 read /
-    write 两层；opencode 的 ``read`` 默认 allow、只有 ``external_directory`` 默认 ask。
-
-    于是边界落在"写"上：写工作区与授予清单之外的目标，才是要审批的能力请求；批不下来
-    （目标不存在、无法逐路径挂载）就是沙箱拒绝。
-
-    ``bash`` 在执行时跑在沙箱里（宿主 ``/tmp`` 已被换成私有 tmpfs），文件工具则在
-    agent 进程里跑——所以"沙箱自带可写位置"只对前者成立：文件工具写 ``/tmp`` 会真的
-    落到宿主上，仍然需要授权。
+    Reading anywhere is already granted, so only writes need approval.
     """
+    # File tools run in the agent process, so a write to /tmp reaches the host and needs a grant.
     if not action.outside_writes:
         return None
     writes = sorted(WRITE_CAPABILITIES & set(action.capabilities))
     if not writes:
         return None
     for target in action.outside_writes:
+        # bash runs in the sandbox, where /tmp and /dev are the sandbox's own, not the host's.
         if action.tool == "bash" and in_sandbox_writable(target):
             continue
         return writes[0], target
     return None
 
 
-
 def _outside_write_targets(command: str, outside: tuple[str, ...], root: str | None) -> tuple[str, ...]:
-    """只对可确定的常见 shell 形状收窄写目标；其它形状保守保留全部区外目标。
+    """Narrows write targets to known shell shapes; an uncertain command keeps every target.
 
-    这只是审批前的提示，不是物理隔离：未知命令仍由 bwrap 只读挂载拦截。
-    不解析选项、变量展开或 shell 重定向的边角语义，避免把未知目的地误判为只读源。
+    Approval only, not isolation: unknown commands are still blocked by the mounts.
     """
+    # Imported here rather than at module level to avoid a policy <-> tools import cycle.
     from ..tools import workspace
 
     facts = parse_shell(command)
@@ -224,32 +182,30 @@ def _outside_write_targets(command: str, outside: tuple[str, ...], root: str | N
                     return outside
                 redirect_targets.append(str(workspace.target_path(words[index + 1], root=Path(root) if root else None)))
         if program in {"cp", "mv", "install", "ln"}:
-            # 只识别无选项的 source... destination；-t、-T 等选项保守走原路径。
+            # Only option-free source and destination are recognized; options keep the targets.
             operands = [word for word in words[1:] if word not in {">", ">>", "<>"}]
             if len(operands) < 2 or any(word.startswith("-") for word in operands):
                 return outside
             writes.add(str(workspace.target_path(operands[-1], root=Path(root) if root else None)))
         elif program in {"cat", "echo", "printf", "rg", "grep", "head", "tail", "wc"}:
-            # 这些命令自身只读，写入只能来自重定向。
+            # These commands only read, so any write has to come from a redirection.
             pass
         else:
-            # 非白名单命令可能写任意参数，不能靠重定向推断其输入均为只读。
+            # A non-whitelisted command may write any argument, so redirects cannot prove reads.
             writes.update(outside)
         writes.update(redirect_targets)
     return tuple(target for target in outside if target in writes)
 
 
 def _under(path: Path, base: Path) -> bool:
-    """path 是否在 base 之内（含 base 本身）。策略层不 import tools，自己写一份。"""
+    """Reports whether ``path`` is inside ``base``, ``base`` included."""
     return path == base or base in path.parents
 
 
 def sensitive_reason(raw: str) -> str | None:
-    """一个路径字面量是不是敏感目标；是则返回类别名。
+    """Returns a category name when a path literal is a sensitive target, else ``None``.
 
-    先展开 ``~`` 与 ``$HOME``；路径分量里出现敏感点目录（``.ssh`` / ``.aws`` /
-    ``.gnupg`` / ``.docker``）即命中，另外覆盖 ``/etc/shadow`` 一类绝对目标与
-    ``.pem`` 后缀。
+    ``~`` and ``$HOME`` are expanded first, then path components and absolute targets are checked.
     """
     text = os.path.expanduser(os.path.expandvars(raw.strip()))
     if not text:
@@ -279,17 +235,17 @@ def _sensitive_in_command(command: str) -> str | None:
 
 
 def command_key(command: str) -> str:
-    """危险命令与越界命令的记账键：规范化空白后逐字比较。"""
+    """Returns the ledger key for dangerous and outside commands: whitespace-normalized text."""
     return " ".join(command.split())
 
 
 def normalize_command(command: str) -> str:
-    """参数归一化：折叠空白。这是"同一件事的两种写法"的**唯一**认定口径。"""
+    """Folds whitespace in a command; the single rule for two spellings of the same thing."""
     return command_key(command)
 
 
 def hard_deny(name: str, arguments: Any) -> str | None:
-    """ADMIN 档：只对 bash 的 command 做黑名单匹配，命中返回拒绝原因。"""
+    """Returns a deny reason for a bash command matching the hard-deny blacklist, else ``None``."""
     if name != "bash" or not isinstance(arguments, dict):
         return None
 
@@ -300,6 +256,7 @@ def hard_deny(name: str, arguments: Any) -> str | None:
     for pattern, reason in DENY_PATTERNS:
         if re.search(pattern, command, re.MULTILINE):
             return reason
+    # Every parsed segment is re-tested so a blacklisted command after a separator is not missed.
     facts = parse_shell(command)
     for segment in facts.segments:
         candidate = " ".join(segment)
@@ -310,12 +267,13 @@ def hard_deny(name: str, arguments: Any) -> str | None:
 
 
 def danger_categories(name: str, arguments: Any) -> tuple[str, ...]:
-    """危险类别（可能多个，按表的顺序）。空元组表示不是危险命令/敏感目标。"""
+    """Returns the danger category names in table order; an empty tuple means not dangerous."""
     if not isinstance(arguments, dict):
         return ()
 
     found: list[str] = []
     if name != "bash":
+        # No other tool is pattern-matched; at most its path can be sensitive.
         path = arguments.get("path")
         if isinstance(path, str) and sensitive_reason(path):
             found.append("敏感路径")
@@ -337,6 +295,7 @@ def danger_categories(name: str, arguments: Any) -> tuple[str, ...]:
         for pattern, category in DANGER_PATTERNS:
             if category not in found and re.search(pattern, candidate, re.MULTILINE):
                 found.append(category)
+    # Capability facts add categories that the raw command text alone would not show.
     if "shell_execute" in facts.capabilities and "解释器执行" not in found:
         found.append("解释器执行")
     if "filesystem_delete" in facts.capabilities and "删除文件" not in found:
@@ -349,13 +308,13 @@ def danger_categories(name: str, arguments: Any) -> tuple[str, ...]:
 
 
 def danger_reason(name: str, arguments: Any) -> str | None:
-    """第一个危险类别名；``None`` 表示不危险。保留给既有调用方与文案。"""
+    """Returns the first danger category name, or ``None`` when the call is not dangerous."""
     categories = danger_categories(name, arguments)
     return categories[0] if categories else None
 
 
 def reaches_network(name: str, arguments: Any) -> bool:
-    """这次动作是否显式出网（curl/wget/ssh/git push/包管理器联网动作）。"""
+    """Reports whether the call explicitly reaches the network."""
     if name != "bash" or not isinstance(arguments, dict):
         return False
     command = arguments.get("command")
@@ -367,11 +326,11 @@ def reaches_network(name: str, arguments: Any) -> bool:
 
 
 def network_target(command: str) -> str:
-    """对显式网络命令提取目的地；未知目的地不伪装成可放行。"""
+    """Extracts the destination of a network command; an unknown one is not treated as safe."""
     url = re.search(r"https?://[^\s'\"|;&()<>]+", command)
     if url:
         return urlsplit(url.group(0)).hostname or "unknown"
-    # ssh/scp 常用目标没有 URL；保留参数原样供审计，不主动解析 DNS。
+    # ssh and scp targets rarely carry a URL, so the raw argument is kept for audit, not resolved.
     host = re.search(r"\b(?:ssh|scp)\s+(?:-[\w-]+\s+)*([^\s;|&]+)", command)
     return host.group(1) if host else "unknown"
 
@@ -382,6 +341,7 @@ def _operations_for(name: str, command: str | None) -> tuple[str, ...]:
     if name in PATH_TOOLS:
         return (OPERATION_READ,)
     if name == "bash" and isinstance(command, str):
+        # bash counts as both operations so a write deny cannot be missed by a read/write guess.
         if _WRITE_HINTS.search(command):
             return (OPERATION_WRITE, OPERATION_READ)
         return (OPERATION_READ, OPERATION_WRITE)
@@ -391,11 +351,12 @@ def _operations_for(name: str, command: str | None) -> tuple[str, ...]:
 def _scan_paths(
     name: str, arguments: dict[str, Any], root: str | None
 ) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
-    """识别目标：返回 (全部目标, 区外目标, 敏感目标)，都是绝对路径字符串。
+    """Returns ``(all, outside, sensitive)`` absolute targets for one call.
 
-    文件工具是**精确**的（与执行时同一份路径数学）；bash 是**启发式**的（只扫字面量）。
+    File tool targets come from the exact path math; bash targets are a literal-token scan.
     """
-    from ..tools import workspace  # 函数内 import：避免 policy ↔ tools 的包级环
+    # Imported here rather than at module level to avoid a policy <-> tools import cycle.
+    from ..tools import workspace
 
     base = Path(root) if root else None
     targets: list[Path] = []
@@ -421,7 +382,7 @@ def _scan_paths(
 
 @dataclass(frozen=True)
 class Action:
-    """一次工具调用的归一化事实。**不含裁决**——裁决在 :mod:`avid.policy.engine`。"""
+    """Normalized facts about one tool call; it carries no verdict, the engine owns that."""
 
     tool: str
     arguments: dict[str, Any] = field(default_factory=dict)
@@ -440,14 +401,13 @@ class Action:
 
     @property
     def danger(self) -> str | None:
-        """第一个危险类别名（给文案用）。"""
+        """Returns the first danger category name, for wording."""
         return self.risks[0] if self.risks else None
 
     def ledger_key(self) -> tuple[str, str]:
-        """能力账本的记账键：bash 按归一化命令原文，其它按目标路径，都没有则整份参数。
+        """Returns the ledger key: normalized command, else the first target, else the arguments.
 
-        键的**类型**就是能力类型（``command`` / ``path``）——这正是原则⑦要的东西：
-        升级是"授予这条命令/这个路径"，不是"关掉沙箱"。
+        The key kind is the capability kind, so an approval grants one command or one path.
         """
         command = self.arguments.get("command")
         if isinstance(command, str) and command.strip():
@@ -463,7 +423,7 @@ class Action:
 def brokerize(
     name: str, arguments: Any, *, root: str | None = None, mode: str | None = None
 ) -> Action:
-    """把一次工具调用变成 :class:`Action`。``mode`` 只用于兜底判断（full 时区外不设限）。"""
+    """Builds the ``Action`` for one tool call; the outside fact is recorded but not filtered."""
     args = arguments if isinstance(arguments, dict) else {}
     command = args.get("command") if isinstance(args.get("command"), str) else None
 
@@ -472,8 +432,7 @@ def brokerize(
         _outside_write_targets(command, outside, root) if name == "bash" and command
         else outside if name in WRITE_TOOLS else ()
     )
-    # full（approval=none）下"区外"这个事实仍然要被记录与审计，只是不再拦——
-    # 所以这里不做任何过滤，是否设限由 engine 按三轴裁决。
+    # The outside fact is always recorded, even where nothing is enforced: the engine decides that.
     risks = list(danger_categories(name, args))
     if outside and "越界" not in risks:
         risks.append("越界")
@@ -506,26 +465,23 @@ def brokerize(
 
 
 def is_unrestricted(approval: str) -> bool:
-    """full 档：连"区外"都不设限。单独成函数，好让测试直接盯这条语义。"""
+    """Reports whether the approval level lifts even the outside-workspace limit."""
     return approval == APPROVAL_NONE
 
 
-# ---------------- MCP 工具（阶段 30e） ----------------
-#
-# MCP 工具的名字由 tools/mcp.py 合成：``mcp__<server>__<tool>``。它们不是注册表里的
-# 内置工具，但闸门必须认识这个前缀：外部工具的语义分类器看不见（参数含义只有 server
-# 自己知道），裁决口径因此与内置工具不同（engine.review_facts / classifier.classify）。
+# MCP tool names are built as mcp__<server>__<tool>; the gate must know that prefix because an
+# external tool's semantics cannot be classified statically, so its handling differs by design.
 
 MCP_TOOL_PREFIX = "mcp__"
 
 
 def is_mcp_tool(name: str) -> bool:
-    """这个工具是不是 MCP 工具（由某个 server 动态提供）。"""
+    """Reports whether a tool is provided dynamically by an MCP server."""
     return name.startswith(MCP_TOOL_PREFIX)
 
 
 def mcp_server(name: str) -> str:
-    """从 ``mcp__<server>__<tool>`` 里取出 server 名。"""
+    """Extracts the server name from an ``mcp__<server>__<tool>`` name."""
     rest = name[len(MCP_TOOL_PREFIX) :]
     return rest.split("__", 1)[0]
 

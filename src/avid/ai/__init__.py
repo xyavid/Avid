@@ -1,5 +1,1 @@
-"""协议层：模型调用、配置来源、消息结构与配对不变量。
-
-Transcript 归这一层而不是运行时层：工具调用与结果的配对是**协议要求**
-（OpenAI 兼容端点会直接拒绝不配对的请求），不是运行时策略。
-"""
+"""Model protocol layer: config, provider dispatch, and the paired tool-call message invariant."""

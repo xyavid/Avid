@@ -1,11 +1,4 @@
-"""协议层的共享词表：Turn / Reply / 错误类型 / SSE 解码。
-
-三个 provider 模块（openai_compat / anthropic / gemini）与门面 `client.py` 都从这里
-拿同一套类型，于是「流式与非流式同形」「跨 provider 同形」有单一权威可对照。
-
-本模块不认识 httpx（除了 `prompt_too_long` 收的是已取出的状态码与正文文本），
-不认识任何一家的字段名——那属于各自的 provider 模块。
-"""
+"""Shared protocol vocabulary: Turn and Reply shapes, error types, and the SSE decoder."""
 
 from __future__ import annotations
 
@@ -16,24 +9,20 @@ from typing import Any
 
 from .usage import Usage, normalize_usage
 
-#: 默认**不设**输出上限（None = 请求体里不带 max_tokens 字段，上限交给服务商）。
-#: 曾经写死 8000：推理模型的可见输出与思维链争同一份配额，被吃光时正文为空、
-#: finish_reason=length，而没有 tool_calls 的轮次会被循环当成「模型答完了」——一次
-#: 空答复就这样「成功」收尾（现场会话 01a0d277，见 dev/diagnosis/2026-09-27-stop-and-compaction.md）。
-#: 需要复现某次实验的用量时，调用方仍然可以显式传一个数字。
+#: Default output cap; None omits max_tokens so the provider decides the limit.
+# A fixed cap lets reasoning tokens starve the visible reply, which then looks like a finished turn.
 DEFAULT_MAX_TOKENS: int | None = None
 
 
 class LLMError(Exception):
-    """调用失败。信息包含状态码与响应正文片段，便于定位。"""
+    """A model call failed; the message carries the status code and a body excerpt."""
 
 
 class PromptTooLongError(LLMError):
-    """请求超出模型上下文长度。循环据此做一次兜底压缩后重试。"""
+    """The request exceeded the context window, so the caller may compact and retry once."""
 
 
-# 各家措辞不同，命中任一即可判定为上下文超限。Gemini 的措辞是它的 REST 错误
-# 原文（"input token count ... exceeds the maximum number of tokens allowed"）。
+# Wording differs per provider; any of these substrings marks a context-overflow error.
 _PROMPT_TOO_LONG_SIGNS = (
     "prompt is too long",
     "prompt_too_long",
@@ -49,11 +38,8 @@ _PROMPT_TOO_LONG_SIGNS = (
 
 
 def prompt_too_long(status_code: int, body: str) -> bool:
-    """状态码与响应正文 → 是否上下文超限。
-
-    状态码必须对（400/413/422）：500 里出现 "context length" 字样是服务端故障，
-    不是可恢复的输入问题（.test_server_error_with_overflow_wording_is_not_treated_as_overflow）。
-    """
+    """Report whether a status code and body mean the prompt exceeded the context window."""
+    # Server errors are not recoverable input problems, even when the body mentions context length.
     if status_code not in (400, 413, 422):
         return False
     text = body.lower()
@@ -69,7 +55,7 @@ class Reply:
 
 @dataclass(frozen=True)
 class Turn:
-    """一轮模型响应。message 是清洗过的 assistant 消息，可直接追加进 messages。"""
+    """One model response; message is a cleaned assistant message ready to append to messages."""
 
     message: dict[str, Any]
     text: str
@@ -77,8 +63,7 @@ class Turn:
     usage: Usage
     model: str
     finish_reason: str
-    # 思维链原文（A2）。**不进 message**：回传会污染下一轮，多数端点也拒收这些字段。
-    # 它不参与"模型答了什么"的判断，但决定了用户能不能看懂"这一轮为什么没有正文"。
+    # Reasoning stays out of message: echoing it back pollutes or is rejected by the endpoint.
     reasoning: str = ""
 
 
@@ -86,15 +71,10 @@ DeltaCallback = Callable[[str], None]
 
 
 def content_text(raw: Any) -> str:
-    """把 assistant 的 ``content`` 归一成正文。
-
-    各家的等价写法必须走同一条路：``null`` / 缺字段 / 分片数组都要变成字符串，
-    否则非流式路径会把 ``None`` 原样写进回传给模型的消息（而流式路径写 ``""``），
-    两条路径宣称的"同形"就不成立。
-    """
+    """Normalize an assistant content field to text so streaming and non-streaming agree."""
     if isinstance(raw, str):
         return raw
-    if isinstance(raw, list):  # content parts：拼其中的 text 字段
+    if isinstance(raw, list):  # Content parts: concatenate their text fields.
         return "".join(
             item.get("text", "")
             for item in raw
@@ -104,7 +84,7 @@ def content_text(raw: Any) -> str:
 
 
 def usage_of(data: Any) -> Usage:
-    """响应信封 → 统一口径。方言识别全在 ``ai/usage.py``（流式与非流式共用它）。"""
+    """Normalize a response envelope's usage fields; dialect detection lives in ai/usage.py."""
     return normalize_usage(data)
 
 
@@ -119,15 +99,11 @@ def _decode_stream_frame(payload: str) -> dict[str, Any]:
 
 
 def iter_sse_events(lines: Iterable[str]) -> Iterator[dict[str, Any]]:
-    """SSE 行流 → JSON 帧。心跳注释、空帧与 `[DONE]` 都跳过。
-
-    只依赖**行**的切分：半行缓冲由 `httpx.Response.iter_lines()` 负责，所以这里不必
-    再实现一次「分块边界切在 JSON 中间」的容错——那是客户端 SSE 解析器的活（§5.4 第 6 条）。
-    Anthropic 与 Gemini 的 SSE 也是 data 行（Gemini 走 `?alt=sse`），共用这一个解码器。
-    """
+    """Turn an SSE line stream into JSON frames, skipping heartbeats, blank frames and [DONE]."""
+    # Partial frames are already reassembled: the caller iterates whole lines, so no parser here.
     buffered: list[str] = []
     for line in lines:
-        if line == "":  # 空行 = 一帧结束
+        if line == "":  # An empty line ends the current frame.
             payload = "\n".join(buffered)
             buffered.clear()
             if not payload.strip():
@@ -136,19 +112,19 @@ def iter_sse_events(lines: Iterable[str]) -> Iterator[dict[str, Any]]:
                 return
             yield _decode_stream_frame(payload)
             continue
-        if line.startswith(":"):  # 心跳 / 注释
+        if line.startswith(":"):  # Heartbeat or comment line.
             continue
         if line.startswith("data:"):
             value = line[len("data:") :]
             buffered.append(value[1:] if value.startswith(" ") else value)
-        # `event:` / `id:` / `retry:` 当前不用：三家都只用 data 行携带载荷。
-    payload = "\n".join(buffered)  # 没有末尾空行也不丢最后一帧
+        # event:/id:/retry: fields are unused: all three providers carry payloads on data lines.
+    payload = "\n".join(buffered)  # Flush a trailing frame that had no blank line after it.
     if payload.strip() and payload.strip() != "[DONE]":
         yield _decode_stream_frame(payload)
 
 
 def assistant_message(text: str, tool_calls: list[dict[str, Any]]) -> dict[str, Any]:
-    """OpenAI 形状的 assistant 消息。没有工具调用时不给 message 加这个键。"""
+    """Build an OpenAI-shaped assistant message, omitting tool_calls when there are none."""
     message: dict[str, Any] = {"role": "assistant", "content": text}
     if tool_calls:
         message["tool_calls"] = tool_calls

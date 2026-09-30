@@ -1,3 +1,3 @@
-"""Avid — 自建 agent 运行时（harness）。"""
+"""Avid: a self-built agent runtime (harness)."""
 
 __version__ = "0.0.1"

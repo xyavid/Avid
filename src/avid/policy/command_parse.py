@@ -1,9 +1,4 @@
-"""Conservative shell segmentation for policy analysis (not an OS security boundary).
-
-The bwrap mount/net namespaces remain the enforcement boundary. A shell grammar that we
-cannot analyse must never be called safe; nested interpreters and substitutions are
-examined recursively with a depth limit. The executor still receives the original text.
-"""
+"""Conservative shell segmentation for policy analysis; bwrap, not this parser, enforces."""
 
 from __future__ import annotations
 
@@ -11,8 +6,10 @@ import re
 import shlex
 from dataclasses import dataclass
 
+# Matches a leading VAR=value assignment so it can be stripped before the program name is read.
 _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z_0-9]*=.*$", re.S)
 _SEPARATORS = {";", "&&", "||", "|", "&", "(", ")", "\n"}
+# Program families that grant a base capability; git and interpreters are refined further below.
 _READ_COMMANDS = {
     "ls",
     "pwd",
@@ -58,23 +55,23 @@ _INTERPRETERS = {"bash", "sh", "zsh", "powershell", "pwsh"}
 
 @dataclass(frozen=True)
 class ShellFacts:
+    """Facts from a command: its segments, the capabilities it implies, and parse uncertainty."""
+
     segments: tuple[tuple[str, ...], ...]
     capabilities: frozenset[str]
-    uncertain: bool = False
+    uncertain: bool = False  # true when the parser cannot prove the construct safe
 
 
 def _lex(command: str) -> list[str]:
     lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()<>")
     lexer.whitespace_split = True
+    # Comments stay disabled so a '#' inside the command is lexed as an ordinary word.
     lexer.commenters = ""
     return list(lexer)
 
 
 def _nested_substitutions(command: str) -> tuple[list[str], bool]:
-    """Extract command substitutions before shlex removes quoting.
-
-    Ambiguous/unbalanced constructs are marked uncertain; this parser never executes text.
-    """
+    """Extracts command substitutions before shlex strips quoting; unbalanced ones are uncertain."""
     nested: list[str] = []
     uncertain = False
     i = 0
@@ -111,11 +108,14 @@ def _nested_substitutions(command: str) -> tuple[list[str], bool]:
 
 
 def parse_shell(command: str, *, depth: int = 0) -> ShellFacts:
+    """Splits a command into segments and derives capabilities, recursing into interpreters."""
+    # Past the depth limit the command counts as an uncertain shell execution, never as safe.
     if depth > 6:
         return ShellFacts((), frozenset({"shell_execute"}), True)
     try:
         tokens = _lex(command)
     except ValueError:
+        # Text shlex cannot tokenize is uncertain rather than silently empty and harmless.
         return ShellFacts((), frozenset({"shell_execute"}), True)
     segments: list[tuple[str, ...]] = []
     current: list[str] = []
@@ -133,6 +133,7 @@ def parse_shell(command: str, *, depth: int = 0) -> ShellFacts:
 
     for segment in segments:
         words = list(segment)
+        # Leading assignments and wrapper commands are stripped so the real program name is reached.
         while words and _ASSIGNMENT.match(words[0]):
             words.pop(0)
         while words and words[0] in {"env", "command", "nohup", "time", "nice"}:
@@ -149,12 +150,14 @@ def parse_shell(command: str, *, depth: int = 0) -> ShellFacts:
             while words and words[0].startswith("-"):
                 words.pop(0)
             if words:
-                words.pop(0)  # duration
+                words.pop(0)  # the duration argument is not the program
         if not words:
             continue
+        # Only the basename is compared, so /usr/bin/rm is treated as rm.
         program = words[0].rsplit("/", 1)[-1].lower()
         args = words[1:]
         capabilities.add("process_spawn")
+        # Secret file names are matched anywhere in the word because the path may carry a prefix.
         if any(re.search(r"(?:^|/|\\).env(?:\..*)?$", word) for word in words):
             capabilities.add("secret_access")
         if any(
@@ -207,6 +210,7 @@ def parse_shell(command: str, *, depth: int = 0) -> ShellFacts:
                 "restore",
                 "checkout",
             }:
+                # An unrecognized git verb makes the whole command unprovable.
                 uncertain = True
             if verb in {"fetch", "pull", "push", "clone", "ls-remote"}:
                 capabilities.add("network_connect")
@@ -233,6 +237,8 @@ def parse_shell(command: str, *, depth: int = 0) -> ShellFacts:
             )
             if flag is not None:
                 capabilities.add("shell_execute")
+                # Only -c and -Command expose the child text; -EncodedCommand and a missing
+                # argument stay opaque and therefore uncertain.
                 if flag + 1 >= len(args) or args[flag].lower() == "-encodedcommand":
                     uncertain = True
                 else:
@@ -243,6 +249,7 @@ def parse_shell(command: str, *, depth: int = 0) -> ShellFacts:
         if program in {"python", "python3", "node"} and any(
             arg in {"-c", "-e", "--eval"} for arg in args
         ):
+            # An inline eval flag runs arbitrary code, so it counts as shell execution.
             capabilities.add("shell_execute")
         if program not in _READ_COMMANDS | _WRITE_COMMANDS | _NETWORK_COMMANDS | _INTERPRETERS | {
             "git",
@@ -263,10 +270,12 @@ def parse_shell(command: str, *, depth: int = 0) -> ShellFacts:
             "pkexec",
             "cd",
         }:
+            # A program outside the known tables is unprovable, so it is reported uncertain.
             uncertain = True
 
     nested, incomplete = _nested_substitutions(command)
     uncertain |= incomplete
+    # Commands hidden inside substitutions are parsed too and count as shell execution.
     for child_text in nested:
         child = parse_shell(child_text, depth=depth + 1)
         segments.extend(child.segments)

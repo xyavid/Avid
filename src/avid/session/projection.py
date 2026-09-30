@@ -1,13 +1,4 @@
-"""条目链 → messages：续接时把会话读回成一次模型调用的输入。
-
-只有一件事需要额外处理：**没有结果的 tool_calls 批次**。会话是逐条提交的，
-进程可能在 ``assistant(tool_calls)`` 与它的 tool 结果之间被杀掉，于是链里
-留下一批没有结果的调用。pi 用 checkpoint/recovery 处理这种情况（本阶段不做，
-取舍 A6），Avid 用更小的办法：投影时把这批调用整段丢掉，其余消息一条不丢
-——包括崩溃之后又续接出来的那些轮次。
-
-丢掉的部分没有信息损失：那一轮本来就没跑完。
-"""
+"""Entry chain to messages: reading a session back as one model call's input, dropping unfinished tool-call batches."""
 
 from __future__ import annotations
 
@@ -18,15 +9,12 @@ from .types import MESSAGE_ENTRY, NOTICE_ENTRY, BranchScan, Entry
 
 __all__ = ["messages_for_branch", "entries_to_messages", "repair_incomplete_batches"]
 
-# 两种类型都进投影：`NOTICE_ENTRY` 是内核注入的提醒，模型**当时确实看到了它**，
-# 所以续接出来的 messages 必须逐字带上（否则与当时的 transcript 不一致，
-# test_session_integration 的 test_stop_nudge_is_persisted 钉的就是这条）。
-# 它与对话消息的区别只在渲染侧：前端据此不把它画成用户说的话。
+# Both types project, because kernel-injected notices were part of the transcript the model actually saw.
 _TRANSCRIPT_TYPES = (MESSAGE_ENTRY, NOTICE_ENTRY)
 
 
 def messages_for_branch(session: Any, branch: str = "main") -> list[dict[str, Any]]:
-    """取一条分支上的全部消息（从旧到新）。分支不存在就返回空列表。"""
+    """Every message on a branch, oldest first; an unknown branch yields an empty list."""
     found = session.branch(branch)
     if found is None:
         return []
@@ -35,7 +23,7 @@ def messages_for_branch(session: Any, branch: str = "main") -> list[dict[str, An
 
 
 def entries_to_messages(entries: Sequence[Entry]) -> list[dict[str, Any]]:
-    """消息条目 → 消息列表，并丢掉不完整的尾巴。"""
+    """Project transcript entries into message dicts and repair the incomplete tail."""
     messages = [
         dict(entry.message)
         for entry in entries
@@ -45,11 +33,7 @@ def entries_to_messages(entries: Sequence[Entry]) -> list[dict[str, Any]]:
 
 
 def repair_incomplete_batches(messages: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-    """让结果能通过 ``Transcript`` 的结构校验：每个 tool_call 都要有结果。
-
-    规则：整批结果没到齐的调用（连同它已经拿到的部分结果）丢掉；孤儿 tool
-    结果（没有对应调用）也丢掉；其余消息保持原顺序（返回的是新列表）。
-    """
+    """Drop calls whose results never all arrived, plus orphan tool results, keeping the rest in order."""
     kept: list[dict[str, Any]] = []
     pending: set[str] = set()
     batch_start: int | None = None
@@ -57,12 +41,14 @@ def repair_incomplete_batches(messages: Sequence[dict[str, Any]]) -> list[dict[s
     for message in messages:
         if message.get("role") == "tool":
             call_id = str(message.get("tool_call_id"))
+            # A result with no matching pending call is an orphan and is dropped.
             if call_id not in pending:
                 continue
             pending.discard(call_id)
             kept.append(message)
             continue
 
+        # A new non-tool message means the previous batch never finished, so drop its partial results.
         if pending:
             del kept[batch_start:]
             pending = set()
@@ -74,6 +60,7 @@ def repair_incomplete_batches(messages: Sequence[dict[str, Any]]) -> list[dict[s
             batch_start = len(kept)
         kept.append(message)
 
+    # A batch still pending at the end of the chain never completed either.
     if pending:
         del kept[batch_start:]
     return kept

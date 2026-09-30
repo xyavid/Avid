@@ -1,29 +1,4 @@
-"""系统文件夹选择器：由**本机后端**弹原生对话框，返回绝对路径。
-
-浏览器拿不到目录的绝对路径——``<input webkitdirectory>`` 只给相对路径，File System
-Access API 只给一个 handle——所以"选文件夹"这件事只能由跑在本机的后端做，界面负责
-发起与展示结果。
-
-后端按顺序探测，第一个能起来的胜出：
-
-1. ``AVID_PICKER_CMD``（显式覆盖：一条命令把选中的路径打到 stdout；也用作 e2e 的确定性接缝）
-2. **tkinter**（跨平台，WSLg / Linux 桌面 / Windows 原生都能用；返回本机路径，无需翻译）
-3. ``zenity`` / ``kdialog``（Linux 桌面常见）
-4. **Windows 原生对话框**（WSL 互操作调 ``powershell.exe``，路径用 ``wslpath -u`` 翻译回来）
-5. ``osascript``（macOS）
-
-约定（决定调用方怎么处理结果）：
-
-* **用户取消 → 返回 ``None``**，不是错误。"取消"与"失败"必须分得开，否则界面会把
-  一次取消报成故障；
-* **没有可用后端 → :class:`PickerUnavailable`**，调用方据此给出可执行的替代做法
-  （``avid workspace add <路径>``）；
-* **后端起得来但失败 → :class:`PickerFailed`**（带后端名与原因）；
-* 一次只允许一个对话框（由调用方持锁）：第二个窗口会盖住第一个，用户会以为卡死。
-
-**只应在回环地址上暴露。** 这个能力等于"让服务进程在宿主机桌面上弹窗"，与审批按钮
-是同一条理由（``AGENTS.md`` 第 6 节）。
-"""
+"""Host-side folder picker that opens a native dialog on the host desktop, loopback only."""
 
 from __future__ import annotations
 
@@ -39,39 +14,39 @@ from contextlib import suppress
 
 logger = logging.getLogger("avid.svc.picker")
 
+# Names an explicit picker command in the environment; also the deterministic seam used by tests.
 ENV_OVERRIDE = "AVID_PICKER_CMD"
 
-# 对话框是给人看的：默认给 5 分钟，超时按"取消"处理（关掉窗口），免得 HTTP 请求挂着。
+# Seconds a dialog may stay open before it counts as cancelled, so a request cannot hang.
 PICKER_TIMEOUT_SECONDS = 300.0
 
+# Caption shown inside the dialog window.
 TITLE = "选择工作区文件夹"
 
 
 class PickerError(Exception):
-    """选择器失败。消息面向使用者，可直接展示。"""
+    """Picker failure whose message is written for the user and can be shown directly."""
 
 
 class PickerUnavailable(PickerError):
-    """没有任何可用的后端。"""
+    """No backend is available on this machine."""
 
 
 class PickerFailed(PickerError):
-    """后端可用但执行失败。"""
+    """A backend is available but its execution failed."""
 
 
 class _BackendUnavailable(Exception):
-    """这个后端在这台机器上起不来——试下一个（内部信号，不外传）。"""
+    """Internal signal that this backend cannot start here, so the next one is tried."""
 
 
-# ---------------- 后端 ----------------
+# One backend per supported environment; each returns a path or None on cancellation.
 
 def _finish(result: subprocess.CompletedProcess[str]) -> str | None:
-    """把一次子进程调用收敛成"路径 / 取消"。
+    """Turn a process result into a path or a cancellation; non-zero exit codes count as cancel."""
 
-    **非零退出码一律按取消处理**：zenity 与 kdialog 都用 1 表示取消，而把非零当失败
-    会把一次正常的取消报成故障。
-    """
     if result.returncode != 0:
+        # A non-zero exit code means the user cancelled, which must not be reported as a failure.
         if result.stderr.strip():
             logger.info("选择器退出码 %s：%s", result.returncode, result.stderr.strip())
         return None
@@ -80,6 +55,7 @@ def _finish(result: subprocess.CompletedProcess[str]) -> str | None:
 
 
 def _override(timeout: float, env: dict[str, str]) -> str | None:
+    """Run the command named by the environment override and take its stdout as the chosen path."""
     command = env.get(ENV_OVERRIDE, "").strip()
     if not command:
         raise _BackendUnavailable("未设置 AVID_PICKER_CMD")
@@ -93,6 +69,7 @@ def _override(timeout: float, env: dict[str, str]) -> str | None:
 
 
 def _run(argv: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
+    """Run one picker process, reporting timeouts and spawn failures as picker failures."""
     try:
         return subprocess.run(
             argv,
@@ -103,41 +80,34 @@ def _run(argv: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
-        # 以前这个异常会穿透所有捕获层（pick_directory 只捕 _BackendUnavailable，
-        # WorkspaceService 只捕 PickerError）→ 冒到 500 兜底处理器，把内部命令行
-        # 回给客户端。超时是"选择器起得来但没结果"，按 PickerFailed 报。
+        # A timeout means the backend started but produced nothing, so it must not escape as a 500.
         raise PickerFailed(f"选择器 {argv[0]} 超时（{timeout:.0f} 秒）") from exc
     except OSError as exc:
         raise PickerFailed(f"选择器 {argv[0]} 起不来：{exc}") from exc
 
 
 def _tkinter(timeout: float, env: dict[str, str]) -> str | None:
-    """进程内弹 Tk 对话框。
-
-    超时用 ``after`` 关掉窗口（等价于取消），所以它不会比 ``timeout`` 更久。
-    macOS 要求 Tk 在主线程——那里请用 ``AVID_PICKER_CMD`` 调 ``osascript``，
-    这里连不上就自动落到下一个后端。
-    """
+    """Open a Tk dialog in-process; the timeout closes the window, which counts as a cancel."""
     try:
         import tkinter as tk
         from tkinter import filedialog
-    except ImportError as exc:  # pragma: no cover - 取决于发行版
+    except ImportError as exc:  # pragma: no cover - depends on the distribution
         raise _BackendUnavailable(f"tkinter 不可用（{exc}）") from exc
 
     try:
         root = tk.Tk()
-    except Exception as exc:  # TclError：连不上显示（无 X / 无 WSLg）
+    except Exception as exc:  # TclError: no display is reachable
         raise _BackendUnavailable(f"连不上显示（{exc}）") from exc
 
     root.withdraw()
     root.after(int(timeout * 1000), root.destroy)
     try:
         chosen = filedialog.askdirectory(parent=root, title=TITLE, mustexist=True)
-    except Exception as exc:  # 窗口被 after 关掉时也会走到这里
+    except Exception as exc:  # also reached when the timer closed the window
         logger.info("tkinter 对话框异常（多半是超时关闭）：%s", exc)
         return None
     finally:
-        with suppress(Exception):  # 已销毁
+        with suppress(Exception):  # already destroyed
             root.destroy()
     return chosen or None
 
@@ -158,6 +128,7 @@ def _kdialog(timeout: float, env: dict[str, str]) -> str | None:
     return _finish(_run([binary, "--getexistingdirectory", os.getcwd()], timeout))
 
 
+# PowerShell fragment that shows the native folder browser and prints the chosen path.
 _POWERSHELL_SCRIPT = (
     "Add-Type -AssemblyName System.Windows.Forms | Out-Null; "
     "$d = New-Object System.Windows.Forms.FolderBrowserDialog; "
@@ -168,7 +139,7 @@ _POWERSHELL_SCRIPT = (
 
 
 def _to_local_path(raw: str) -> str:
-    """Windows 路径 → 本机路径。``wslpath`` 认 ``C:\\…`` 与 ``\\\\wsl.localhost\\…``。"""
+    """Translate a Windows path to a local one, accepting both drive letters and UNC shares."""
     translator = shutil.which("wslpath")
     if translator is None:
         return raw
@@ -203,7 +174,7 @@ def _osascript(timeout: float, env: dict[str, str]) -> str | None:
     )
 
 
-# 顺序即优先级：先本机进程内（无需翻译路径），再到桌面工具，最后到 Windows/macOS 的桥。
+# Order is priority: in-process backends first, then desktop tools, then the OS bridges.
 BACKENDS: tuple[tuple[str, Callable[[float, dict[str, str]], str | None]], ...] = (
     ("override", _override),
     ("tkinter", _tkinter),
@@ -213,7 +184,7 @@ BACKENDS: tuple[tuple[str, Callable[[float, dict[str, str]], str | None]], ...] 
     ("osascript", _osascript),
 )
 
-if sys.platform == "darwin":  # macOS 上 Tk 要主线程，别在请求线程里试
+if sys.platform == "darwin":  # Tk must run on the main thread on macOS, so skip it there
     BACKENDS = tuple(item for item in BACKENDS if item[0] != "tkinter")
 
 
@@ -222,8 +193,9 @@ def pick_directory(
     timeout: float = PICKER_TIMEOUT_SECONDS,
     env: dict[str, str] | None = None,
 ) -> str | None:
-    """弹一次文件夹选择器。返回绝对路径；用户取消返回 ``None``。"""
+    """Open one folder dialog; returns an absolute path, None on cancel, and raises with none."""
     environment = dict(os.environ if env is None else env)
+    # Reasons from every backend that could not start, quoted in the error message.
     problems: list[str] = []
 
     for name, backend in BACKENDS:
@@ -243,14 +215,14 @@ def pick_directory(
     )
 
 
-# 诊断值的缓存时长：探测本身不贵（import tkinter + which），但 `/api/meta` 会被
-# 界面反复取。以前是 `lru_cache`（**永久**）：装上 zenity 或改 AVID_PICKER_CMD 之后
-# `/api/meta` 仍报旧值，只有重启才更新——诊断值撒谎比慢几毫秒糟得多。
+# Diagnostic cache lifetime; short so installing a backend or changing the override shows up soon.
 _BACKEND_TTL_SECONDS = 30.0
+# Cached probe result as a (monotonic time, backend name) pair, or None before the first probe.
 _backend_cache: tuple[float, str | None] | None = None
 
 
 def _probe_backend() -> str | None:
+    """Return the first backend that could run here, without opening any dialog."""
     environment = dict(os.environ)
     for name, _backend in BACKENDS:
         if name == "override":
@@ -263,9 +235,11 @@ def _probe_backend() -> str | None:
                 from tkinter import Tcl  # noqa: F401
             except ImportError:
                 continue
+            # tkinter also needs a reachable display to be usable.
             if not (environment.get("DISPLAY") or environment.get("WAYLAND_DISPLAY")):
                 continue
             return "tkinter"
+        # Executable each remaining backend needs to be on PATH.
         binary = {
             "zenity": "zenity",
             "kdialog": "kdialog",
@@ -278,7 +252,7 @@ def _probe_backend() -> str | None:
 
 
 def available_backend() -> str | None:
-    """第一个能起来的后端名（只探测，不弹窗）。给 `/api/meta` 做诊断用。"""
+    """Name of the backend that would be used, cached briefly for the capability report."""
     global _backend_cache
     now = time.monotonic()
     if _backend_cache is not None and now - _backend_cache[0] < _BACKEND_TTL_SECONDS:
@@ -289,7 +263,7 @@ def available_backend() -> str | None:
 
 
 def clear_backend_cache() -> None:
-    """丢掉诊断缓存（测试与"刚改完环境变量"的场景用）。"""
+    """Drop the diagnostic cache so the next probe re-reads the environment."""
     global _backend_cache
     _backend_cache = None
 

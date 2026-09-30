@@ -1,14 +1,4 @@
-"""装配 FastAPI 应用：路由、错误信封、静态资源与 SPA fallback。
-
-两条路由规则（设计文档 §4.3）：
-
-* ``/api/*`` **永远**返回 JSON 或 SSE，未知路径返回 JSON 404，绝不回落到 SPA
-  外壳——否则前端会把 404 当 HTML 解析，错误变成静默；
-* 其余路径先找静态文件，找不到再回落 ``index.html``（SPA fallback）。
-
-产物漂移的对冲：``copy-dist.mjs`` 写 ``static/.build.json``（git_sha + built_at），
-``GET /api/meta`` 返回它，UI 页脚显示。
-"""
+"""Assembles the FastAPI application: routers, error envelope, static assets and the SPA fallback."""
 
 from __future__ import annotations
 
@@ -36,23 +26,13 @@ logger = logging.getLogger("avid.web.app")
 
 STATIC_DIR = Path(__file__).parent / "static"
 
-# 信任边界（I-P10 / architecture-criteria §12）：这不是鉴权（本地单用户工具没有
-# 账号体系），而是把两类"浏览器替别人发请求"的路堵掉。
-#
-# * **DNS rebinding**：恶意页面把某个域名解析到 127.0.0.1，浏览器的同源策略就
-#   认为它在跟自己的源说话——此时 Host 头是那个域名，白名单外直接拒。
-# * **CSRF**：跨站表单与 `fetch` 的"简单请求"不做预检就能打到无 body 的写端点
-#   （`POST /api/workspaces/pick` 会在宿主机弹文件夹选择器、`POST
-#   /api/runs/{id}/cancel` 会取消任务）。浏览器对跨源请求一定带 Origin，白名单外
-#   拒掉即可；命令行与测试不带 Origin，因此不受影响。
-#
-# `AVID_ALLOWED_HOSTS`（逗号分隔）是给非回环部署的显式逃生口，见 `cli._run_web`。
+# A trust boundary rather than authentication: it stops DNS rebinding through the Host header and
+# cross-site form posts through the Origin header, while command line clients send neither.
 LOOPBACK_HOSTS: frozenset[str] = frozenset({"127.0.0.1", "localhost", "::1"})
+# Escape hatch for non-loopback deployments, read as a comma-separated list of extra hostnames.
 ALLOWED_HOSTS_ENV = "AVID_ALLOWED_HOSTS"
 
-# 安全响应头。CSP 与产物形状对齐：首屏只有同源脚本/样式/字体（dist/index.html 里
-# 没有内联 script），`style-src` 需要 `unsafe-inline` 是因为 Radix 在运行时注入
-# 滚动锁等样式；`img-src` 放 data: 是 `favicon` 用的。
+# Inline styles are needed because Radix injects scroll-lock styles at runtime; data: images are favicons.
 SECURITY_HEADERS: dict[str, str] = {
     "Content-Security-Policy": (
         "default-src 'self'; "
@@ -69,19 +49,21 @@ SECURITY_HEADERS: dict[str, str] = {
 
 
 def _hostname_of(value: str) -> str:
-    """从 Host / Origin 里取出主机名：去掉端口、方括号、大小写。"""
+    """Reduces a Host or Origin value to a bare lowercase hostname, dropping any port."""
     if not value:
         return ""
     text = value.strip()
-    if "//" in text:  # Origin 形态
+    # An Origin is a full URL, so the hostname lives in its netloc.
+    if "//" in text:
         text = urlsplit(text).netloc or ""
-    if text.startswith("["):  # IPv6 字面量 [::1]:8765
+    # IPv6 literals keep the address inside brackets, as in [::1]:8765.
+    if text.startswith("["):
         return text[1:].split("]", 1)[0].lower()
     return text.rsplit(":", 1)[0].lower()
 
 
 def trusted_hosts(extra: frozenset[str] | None = None) -> frozenset[str]:
-    """允许的 Host / Origin 主机名：回环 + 环境变量追加 + 装配时显式给的那些。"""
+    """Collects the allowed hostnames: loopback, the environment variable, and any explicit extras."""
     allowed = set(LOOPBACK_HOSTS)
     for item in os.environ.get(ALLOWED_HOSTS_ENV, "").split(","):
         if item.strip():
@@ -92,7 +74,7 @@ def trusted_hosts(extra: frozenset[str] | None = None) -> frozenset[str]:
 
 
 class TrustBoundaryMiddleware(BaseHTTPMiddleware):
-    """Host 白名单 + Origin 校验。放行要两条都过。"""
+    """Rejects requests whose Host or Origin is not allowed, then attaches the security headers."""
 
     def __init__(self, app: Any, allowed_hosts: frozenset[str]) -> None:
         super().__init__(app)
@@ -120,14 +102,14 @@ class TrustBoundaryMiddleware(BaseHTTPMiddleware):
             response.headers.setdefault(name, value)
         return response
 
-# 未知 /api 路径的兜底 JSON 404。绝不回落 SPA（B10）。
+# Fallback JSON 404 for unknown API paths, which must never fall back to the SPA shell.
 UNKNOWN_API = ErrorOut(
     error=ErrorBody(code="not_found", message="未知的 API 路径")
 ).model_dump()
 
 
 def load_build_info(static_dir: Path) -> dict[str, Any]:
-    """构建戳：产物是 bundling 进来的还是从 checkout 直接跑的。"""
+    """Reads the build stamp that says whether the bundle was packaged or served from a checkout."""
     stamp = static_dir / ".build.json"
     if stamp.is_file():
         try:
@@ -143,7 +125,7 @@ def load_build_info(static_dir: Path) -> dict[str, Any]:
 
 
 def _parse_built_at(value: object) -> float | None:
-    """``.build.json`` 里的 ISO 时间戳 → epoch 秒；解析不了给 None。"""
+    """Converts the ISO timestamp in the build stamp to epoch seconds, or None if unparseable."""
     if not isinstance(value, str):
         return None
     try:
@@ -161,22 +143,12 @@ def _newest_mtime(root: Path) -> float:
 
 
 def frontend_drift_warning(static_dir: Path, build: dict[str, Any]) -> str | None:
-    """前端源码比静态产物新时给一句人话，否则 None。
-
-    ``avid web`` 服务的是 ``src/avid/web/static/``（``copy:dist`` 的产物），**不是**
-    ``web/dist``。于是「改了前端、也 build 了、忘了 copy:dist」的结果是它在**忠实地发一份
-    旧页面**——而界面上没有任何东西提示这件事（构建戳只在设置页显示，除非你去比对它是不是
-    当前 HEAD）。这个坑仓库里点过名（``dev/tmp/e2e_server.py`` 特意改成服务 ``web/dist``
-    就是因为它），但仍然靠人记得，所以把它变成启动时的一句话。
-
-    判据是 mtime 而不是 git sha：打包进 wheel 时没有 ``web/`` 目录、也没有 ``.git``，
-    那条路径上不存在这种漂移（直接返回 None）。代价是"改了前端源码但产物更新"这种情形
-    只能靠时间戳判断——够用，且不需要在启动路径上起子进程。
-    """
+    """Reports that the frontend sources are newer than the served bundle, or None when they are not."""
     built = _parse_built_at(build.get("built_at"))
     if built is None:
         return None
     parents = static_dir.resolve().parents
+    # A checkout puts web/src four levels above the static directory; a packaged wheel has no such path.
     if len(parents) < 4:
         return None
     source = parents[3] / "web" / "src"
@@ -204,6 +176,7 @@ def create_app(
     workspace_root: str | Path | None = None,
     allowed_hosts: frozenset[str] | None = None,
 ) -> FastAPI:
+    """Builds the application: trust middleware, error handlers, routers and the static fallback."""
     app = FastAPI(
         title="Avid",
         version=f"api-v{API_VERSION}",
@@ -212,13 +185,10 @@ def create_app(
     app.add_middleware(
         TrustBoundaryMiddleware, allowed_hosts=trusted_hosts(allowed_hosts)
     )
-    # ``workspace_root`` 只在自装配时有用：指定它就是单工作区模式，
-    # 不给则是多工作区模式（建会话必须指定归属）。
+    # A workspace root is only meaningful for self-assembly: given, the process is single-workspace.
     app.state.services = services or Services(workspace_root=workspace_root)
     app.state.static_dir = Path(static_dir) if static_dir is not None else STATIC_DIR
     app.state.build = load_build_info(app.state.static_dir)
-
-    # ---------------- 错误信封 ----------------
 
     @app.exception_handler(ServiceError)
     async def _service_error(_: Request, exc: ServiceError) -> JSONResponse:
@@ -243,8 +213,7 @@ def create_app(
 
     @app.exception_handler(Exception)
     async def _internal_error(_: Request, exc: Exception) -> JSONResponse:
-        # 只回一个关联 id：以前把 `f"{type(exc).__name__}: {exc}"` 回给客户端，
-        # 等于把内核内部细节（可能含绝对路径）贴到任意本地 HTTP 客户端/界面上。
+        # Return only a correlation id: echoing the exception type and text leaks kernel internals.
         error_id = uuid.uuid4().hex[:12]
         logger.exception("未处理的服务端错误（error_id=%s）：%s", error_id, exc)
         return JSONResponse(
@@ -255,8 +224,6 @@ def create_app(
                 {"error_id": error_id},
             ),
         )
-
-    # ---------------- 路由 ----------------
 
     for module in (meta, sessions, runs, approvals, events, workspaces):
         app.include_router(module.router, prefix="/api")
@@ -269,17 +236,16 @@ def create_app(
     async def unknown_api(rest: str) -> JSONResponse:
         return JSONResponse(status_code=404, content=UNKNOWN_API)
 
-    # ---------------- 静态资源与 SPA fallback ----------------
-
     @app.get("/{path:path}", include_in_schema=False)
     async def spa(path: str) -> Any:
         root: Path = app.state.static_dir
         if root.is_dir():
             target = (root / path).resolve()
+            # Resolving first keeps a traversal path from escaping the static directory.
             if target.is_file() and root.resolve() in target.parents:
                 return FileResponse(target)
-            # 带扩展名却找不到的文件是**缺失资源**，不是前端路由：回落 index.html 会让
-            # 浏览器把 HTML 当 JS 解析（陈旧缓存页的典型失败），必须显式 404。
+            # A missing file with an extension is a missing asset, not a route: the fallback would
+            # make the browser parse HTML as script, so it gets an explicit 404 instead.
             if "." in path.rsplit("/", 1)[-1]:
                 return JSONResponse(
                     status_code=status.HTTP_404_NOT_FOUND,

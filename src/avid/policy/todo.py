@@ -1,8 +1,4 @@
-"""todo_write：带状态的 TODO 列表。
-
-状态由 ``RunState`` 显式持有并传入（原来是 ContextVar）——工具不再自己去找状态，
-因此"哪个工具需要运行状态"是一个可枚举、可断言的事实（见 ``execution.STATEFUL_TOOLS``）。
-"""
+"""todo_write: a whole-list TODO store whose state is supplied by the caller on every call."""
 
 from __future__ import annotations
 
@@ -10,11 +6,13 @@ from typing import TYPE_CHECKING, Any, NoReturn
 
 from ..tools.registry import tool
 
-if TYPE_CHECKING:  # 只为类型标注；运行时导入会成环（state.py 要 import 本模块）
+# Type-only import: importing RunState at runtime would cycle back into this module.
+if TYPE_CHECKING:
     from ..runtime.state import RunState
 
 VALID_STATUSES = ("pending", "in_progress", "completed")
 
+# Single-character marks rendered for each status in the list output.
 _MARKS = {"completed": "x", "in_progress": "~", "pending": " "}
 
 
@@ -23,17 +21,13 @@ def _bad(message: str) -> NoReturn:
 
 
 class TodoList:
-    """一份 TODO 列表。整体替换、原子校验。"""
+    """A TODO list replaced as a whole, with validation that is all-or-nothing."""
 
     def __init__(self) -> None:
         self.items: list[dict[str, str]] = []
 
     def replace(self, raw: Any) -> None:
-        """用 raw 整体替换当前列表。
-
-        任一项不合法就抛 ValueError，且**旧列表一字不动**——半接受的列表比
-        拒绝更难排查。
-        """
+        """Replace the list from raw input; an invalid item raises and leaves the old list untouched."""
         if not isinstance(raw, list):
             _bad("todos 必须是数组")
 
@@ -52,6 +46,7 @@ class TodoList:
                 )
             cleaned.append({"content": content.strip(), "status": status})
 
+        # At most one item may be in progress, so the model always has a single current step.
         active = sum(1 for item in cleaned if item["status"] == "in_progress")
         if active > 1:
             _bad(
@@ -109,10 +104,11 @@ class TodoList:
         }
     },
     required=("todos",),
-    # 共享可变状态（待办清单）。
+    # The TODO list is shared mutable state, so calls into this tool must not interleave.
     concurrency="exclusive",
 )
 def todo_write(args: dict[str, Any], *, state: "RunState") -> str:
+    """Replace the whole TODO list and return either the rendered list or a validation error."""
     try:
         state.todo.replace(args.get("todos"))
     except ValueError as exc:

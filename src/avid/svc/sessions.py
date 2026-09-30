@@ -1,17 +1,4 @@
-"""会话读视图（F1）。
-
-按设计文档的写权限归属：条目的写入者有且只有 ``SessionRecorder``，所以这里
-**没有**任何「追加条目」的能力。本模块只有两处写：改名（= 值写入，PATCH 端点）
-与销毁（DELETE 端点），两者都是会话对象自身的生命周期，不是消息。
-
-读路径有一个关键约束：一个会话在 ``JsonlSessionRepo`` 里同时只能被一个句柄
-打开，而活动 run 正持有它。所以所有读都先问注册表要活动句柄，拿不到才
-自己 open/close——否则「运行中刷新页面」会直接失败。
-
-分页纪律（不变量 I14）在服务端：默认 ``limit=100``，硬上限 500，游标
-``cursor_seq`` **排他**（指向上一页最后一条）。长历史靠服务端分页解决，
-不是靠前端虚拟化。
-"""
+"""Read views over sessions for the application services, plus the rename and delete writes."""
 
 from __future__ import annotations
 
@@ -44,30 +31,25 @@ from .workspaces import Workspace, WorkspaceService
 
 logger = logging.getLogger("avid.svc.sessions")
 
+# Default and hard ceiling for one page of entries, since the server owns pagination discipline.
 DEFAULT_ENTRY_LIMIT = 100
-MAX_ENTRY_LIMIT = 500
+MAX_ENTRY_LIMIT = 500  # largest page the server will serve
 
-# 判定链尾是否残缺时最多回看多少条——超过就放弃判定（返回 False），
-# 不做昂贵的历史扫描。
+# Entries the tail scan may inspect; beyond that it gives up instead of replaying the whole history.
 _TAIL_SCAN_LIMIT = 64
 
 
 class SessionService:
+    """Session listing, lookup, branches and entries, sharing the run registry for handles."""
+
     def __init__(self, workspaces: WorkspaceService, runs: RunRegistry) -> None:
         self.workspaces = workspaces
         self.runs = runs
 
-    # ---------------- 列表与元信息 ----------------
+    # Listing and metadata reads.
 
     def list_sessions(self) -> list[dict[str, Any]]:
-        """会话列表（元信息 + 名字 + 条数）。
-
-        代价是 O(会话数 × 文件大小)：名字是会话文件里的一个值、条数要读全部条目。
-        CLI 早已承认这个代价；Web 首屏同样付它（设计文档 §6.1）。
-
-        走 `known_workspaces()` 而不是候选列表：已删除（墓碑）的工作区里的会话仍然要列
-        出来——前端按"归属在候选里找不到"把它们归进未归属组，而不是让它们凭空消失。
-        """
+        """Summaries of every session in every known workspace, including removed workspaces."""
         found: list[dict[str, Any]] = []
         for workspace in self.workspaces.known_workspaces():
             for meta in self.workspaces.repo_for(workspace).list():
@@ -93,20 +75,14 @@ class SessionService:
                 "truncated_tail": truncated,
             }
         except (SessionReadError, SessionError) as exc:
-            # 列表是最不该因为一个坏项整体失败的读操作（与 CLI 列举同原则）。
+            # One unreadable session must not fail the whole listing, matching the CLI behaviour.
             logger.warning("跳过读不了的会话 %s：%s", meta.id, exc)
             return None
 
     def _facts(
         self, meta: SessionMetadata, workspace: Workspace | None
     ) -> tuple[str | None, int, bool]:
-        """列表页要的三个事实：先用不重放的快速路径，判不出来才退回重放。
-
-        以前每个会话都 ``open()`` 一次（逐行重放 + 建对象 + 抢会话句柄），
-        20 个会话 5.9 MB 实测 54 ms；会话一多，首屏与"每次运行结束重取列表"
-        都变成秒级。尾部窗口判不出链尾时（例如刚在别的分支上追加了很多条目）
-        仍然重放一次拿权威答案——不猜。
-        """
+        """Name, count and tail flag from the cheap tail window, or by replay if undecidable."""
         if workspace is None:
             return self._facts_by_replay(meta, workspace)
         repo = self.workspaces.repo_for(workspace)
@@ -128,11 +104,7 @@ class SessionService:
     def _workspace_field(
         self, workspace: Workspace | None, meta: SessionMetadata
     ) -> dict[str, Any]:
-        """归属的线格式：id 来自会话 header（创建时的静态事实），名字来自注册表。
-
-        注册表里查不到（已被摘掉索引、或老会话）也要给得出 id 与根目录——
-        归属在 header 里，不依赖索引存活。
-        """
+        """Wire shape of a session's ownership: id from its header, names from the registry."""
         owner = workspace
         if owner is None:
             found = self.workspaces.find_session(meta.id)
@@ -142,7 +114,7 @@ class SessionService:
             "id": workspace_id,
             "root": owner.root if owner is not None else None,
             "name": owner.name if owner is not None else None,
-            # 界面据此预选权限模式：会话的默认档来自它的工作区。
+            # The UI preselects this mode because a session inherits its workspace default.
             "default_permission": (
                 owner.default_permission if owner is not None else None
             ),
@@ -164,7 +136,7 @@ class SessionService:
                 "branch": DEFAULT_BRANCH,
             }
 
-    # ---------------- 写：改名与销毁 ----------------
+    # Write paths: rename and delete.
 
     def create(
         self,
@@ -173,8 +145,7 @@ class SessionService:
         id: str | None = None,
         name: str | None = None,
     ) -> dict[str, Any]:
-        """新建会话：**必须先有归属**。``workspace`` 是必填参数——缺失是 400，
-        不存在"用服务端默认值兜住"的路径（归属是会话的不可变事实，不该由环境决定）。"""
+        """Create a session; a workspace is mandatory, since ownership is an immutable fact."""
         owner = self.workspaces.resolve(workspace)
         repo = self.workspaces.repo_for(owner)
         try:
@@ -203,12 +174,13 @@ class SessionService:
             session.close()
 
     def rename(self, session_id: str, name: str) -> dict[str, Any]:
+        """Rename a session and return its refreshed view."""
         with self._session(session_id) as session:
             session.set_name(name)
         return self.get(session_id)
 
     def delete(self, session_id: str) -> None:
-        # 关句柄的路径都要先持会话句柄锁：销毁要求会话已关闭，与运行/读取互斥。
+        # Deletion takes the session handle lock first, because destroying it needs the file closed.
         with self.runs.session_lock(session_id):
             if self.runs.active_run_id(session_id) is not None:
                 raise SessionBusy(f"会话有活动 run，不能销毁：{session_id}")
@@ -222,18 +194,10 @@ class SessionService:
                 raise SessionReadError(f"销毁会话失败：{exc}") from exc
             self.workspaces.forget_session(session_id)
 
-    # ---------------- 分支 ----------------
+    # Branches.
 
     def list_branches(self, session_id: str) -> dict[str, Any]:
-        """分支列表（含链尾、条数与**该分支最近一次运行的用量快照**）。
-
-        条数要沿 parent 链走一趟，所以是 O(分支数 × 链长)。当前规模（分支个位数、
-        条目数百）付得起；触发条件是长会话里分支列表明显变慢，届时把条数冗余成值。
-
-        用量快照一次 ``scan_values`` 全拿（它是会话值，key 就是分支名）：界面进会话
-        或切换会话时，用同一个请求就能把"上次用了多少上下文、命中多少"画出来，
-        不必再问一次服务端，也不必等下一次模型调用。
-        """
+        """Branches with tip, entry count and the usage snapshot recorded on each branch."""
         with self._session(session_id) as session:
             usage_by_branch = {
                 item.key: item.value for item in session.scan_values(USAGE_NS)
@@ -247,11 +211,7 @@ class SessionService:
     def create_branch(
         self, session_id: str, *, name: str | None = None, at: str | None = None
     ) -> dict[str, Any]:
-        """在某条目处开一条新分支（fork）。``name`` 缺省时自动取 b2 / b3…
-
-        活动 run 期间拒绝：分支头与条目共用同一个会话句柄，而运行还在往旧链尾追加，
-        此刻分叉会让「新链从哪来」含混（还会和运行线程抢同一把写锁）。
-        """
+        """Fork a new branch at an entry; refused while a run is still appending to the tip."""
         if self.runs.active_run_id(session_id) is not None:
             raise SessionBusy(f"会话有活动 run，不能分叉：{session_id}")
         with self._session(session_id) as session:
@@ -274,20 +234,20 @@ class SessionService:
             "tip_entry_id": None if target is None else target.get_tip_id(),
             "entry_count": 0 if target is None else len(target.find_entries(BranchScan())),
             "is_default": name == DEFAULT_BRANCH,
-            # None = 这个分支还没跑过（或端点没上报用量）。界面显示「—」，不猜。
+            # None means the branch has not run yet, so the UI shows a dash instead of guessing.
             "usage": usage,
         }
 
     @staticmethod
     def _next_branch_name(session: Any) -> str:
-        """b2、b3…：跳过已存在的名字，免得默认命名撞上一个手工起的同名分支。"""
+        """Next free auto-generated branch name, skipping names that already exist."""
         existing = set(session.branch_names())
         index = 2
         while f"b{index}" in existing:
             index += 1
         return f"b{index}"
 
-    # ---------------- 条目分页 ----------------
+    # Entry pagination.
 
     def entries(
         self,
@@ -298,7 +258,7 @@ class SessionService:
         limit: int | None = None,
         cursor_seq: int | None = None,
     ) -> dict[str, Any]:
-        """按分支分页取条目。``order=desc`` 是默认：首屏要的是链尾。"""
+        """One page of entries, newest first by default because the first screen shows the tip."""
         if order not in ("asc", "desc"):
             raise InvalidRequest(f"order 只能是 asc 或 desc，收到 {order!r}")
 
@@ -311,7 +271,7 @@ class SessionService:
                 else target.find_entries(
                     BranchScan(
                         order="oldestFirst" if order == "asc" else "newestFirst",
-                        limit=size + 1,  # 多取一条判断还有没有下一页
+                        limit=size + 1,  # one extra entry reveals whether another page exists
                         cursor_seq=cursor_seq,
                     )
                 )
@@ -327,7 +287,7 @@ class SessionService:
                 "entries": [self._entry_to_dict(entry) for entry in page],
                 "has_more": has_more,
                 "next_cursor": next_cursor,
-                # 只对链尾（第一页）有意义：整批结果没到齐的 tool_calls 会被投影丢掉
+                # Only the tip page can be truncated: projection drops an unfinished batch.
                 "truncated_tail": (
                     self._truncated_tail(session) if cursor_seq is None else False
                 ),
@@ -344,24 +304,22 @@ class SessionService:
             "message": entry.message,
         }
 
-    # ---------------- 内部 ----------------
+    # Internals.
 
     def _truncated_tail(self, session: Any) -> bool:
-        """链尾是否有一批没有结果的 tool_calls（= 上次运行在此中断）。
-
-        投影 ``repair_incomplete_batches`` 会把整批丢掉；这里用同样的判据但只看
-        链尾附近若干条，避免为了一个布尔值扫全history。
-        """
+        """Whether the tip holds tool calls without results, meaning the run stopped mid batch."""
         target = session.branch(DEFAULT_BRANCH)
         if target is None:
             return False
         entries = target.find_entries(BranchScan(order="newestFirst", limit=_TAIL_SCAN_LIMIT))
+        # Tool result ids seen while walking back from the tip.
         seen: set[str] = set()
         for entry in entries:
             message = entry.message or {}
             if message.get("role") == "tool":
                 seen.add(str(message.get("tool_call_id")))
                 continue
+            # The first non-result message ends the batch under inspection.
             expected = {
                 str(call.get("id")) for call in (message.get("tool_calls") or [])
             }
@@ -376,14 +334,8 @@ class SessionService:
         meta: SessionMetadata | None = None,
         workspace: Workspace | None = None,
     ) -> Iterator[Any]:
-        """活动 run 正持有的句柄优先；否则自己 open/close。
-
-        ``meta``/``workspace`` 由调用方传进来时不再反查归属：列表已经为每个工作区
-        遍历过一遍，再查一次会让列举变成 O(工作区数 × 会话数) 的平方级扫描。
-
-        整段持**会话句柄锁**：会话层只允许一个句柄，而运行线程会在别处开/关它。
-        没有这把锁，"读路径先开、运行线程后开"必然撞车（运行 failed 或读 500）。
-        """
+        """Yield a session handle: the one an active run holds, or one opened and closed here."""
+        # Holding the handle lock keeps a read from colliding with a run opening the same session.
         with self.runs.session_lock(session_id):
             active = self.runs.active_session(session_id)
             if active is not None:
@@ -392,6 +344,7 @@ class SessionService:
 
             owner = workspace
             metadata = meta
+            # Callers that already know the owner skip the reverse lookup, which would be quadratic.
             if owner is None or metadata is None:
                 found = self.workspaces.find_session(session_id)
                 if found is None:

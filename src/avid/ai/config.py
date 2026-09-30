@@ -1,4 +1,4 @@
-"""从环境变量读取并校验模型配置。"""
+"""Read and validate model configuration from environment variables."""
 
 from __future__ import annotations
 
@@ -12,35 +12,29 @@ ENV_API_KEY = "AVID_API_KEY"
 ENV_BASE_URL = "AVID_BASE_URL"
 ENV_MODEL = "AVID_MODEL"
 ENV_CONTEXT_WINDOW = "AVID_CONTEXT_WINDOW"
-# 协议族覆盖。缺省从 base_url 探测（api.anthropic.com → anthropic，
-# generativelanguage → gemini，其余 openai 兼容）；探测规则见 detect_provider。
+# Protocol-family override; when unset the family is detected from base_url.
 ENV_PROVIDER = "AVID_PROVIDER"
-# 关掉"向 provider 问模型窗口"的探测（实现见 `ai/client.py::fetch_context_length`）。
-# 取值 off / 0 / false / no 都算关；缺省 = 开。单测把它关掉，免得去打真实端点。
+# Set to off/0/false/no to disable the provider model-window probe; tests keep it off.
 ENV_MODEL_INFO = "AVID_MODEL_INFO"
-# 一步（模型一次回复）里最多同时跑几个工具调用。1 = 完全串行（改动前的行为）。
-# 只有**并发安全**的工具会被并进同一段，写类/bash/任务类/子 agent 仍是串行屏障
-# （分类见 `tools/safety.py`）。上限给死一个硬顶，防手误写个 1000 把磁盘打满。
+# Per-step cap on parallel tool calls; 1 means fully serial and only concurrency-safe tools overlap.
 ENV_MAX_PARALLEL_TOOL_CALLS = "AVID_MAX_PARALLEL_TOOL_CALLS"
 
 REQUIRED = (ENV_API_KEY, ENV_MODEL)
 
-#: 并发的默认值与硬上限。
+#: Default and hard ceiling for the number of tool calls run in parallel within one step.
 DEFAULT_MAX_PARALLEL_TOOL_CALLS = 10
 MAX_PARALLEL_TOOL_CALLS_CEILING = 32
 
-#: `ENV_MODEL_INFO` 的关闭取值（大小写无关）。
+#: Values of ENV_MODEL_INFO that disable the probe (case-insensitive).
 _MODEL_INFO_OFF = ("off", "0", "false", "no")
-
-# ---------------- provider（协议族）----------------
 
 PROVIDER_OPENAI = "openai"
 PROVIDER_ANTHROPIC = "anthropic"
 PROVIDER_GEMINI = "gemini"
-#: 合法取值。providers/ 的注册表是协议实现，这里是配置层的取值域。
+#: Allowed values; the registry in providers/ holds the matching protocol implementations.
 PROVIDERS = (PROVIDER_OPENAI, PROVIDER_ANTHROPIC, PROVIDER_GEMINI)
 
-#: 各家没配 AVID_BASE_URL 时的缺省端点。
+#: Default endpoint per protocol family when AVID_BASE_URL is unset.
 DEFAULT_BASE_URLS: dict[str, str] = {
     PROVIDER_OPENAI: DEFAULT_BASE_URL,
     PROVIDER_ANTHROPIC: "https://api.anthropic.com",
@@ -49,7 +43,7 @@ DEFAULT_BASE_URLS: dict[str, str] = {
 
 
 def detect_provider(base_url: str) -> str:
-    """从端点猜协议族。猜不出的都按 OpenAI 兼容处理（自建网关的常态）。"""
+    """Infer the protocol family from the endpoint host, defaulting to OpenAI-compatible."""
     host = base_url.lower()
     if "anthropic" in host:
         return PROVIDER_ANTHROPIC
@@ -59,16 +53,11 @@ def detect_provider(base_url: str) -> str:
 
 
 def model_info_enabled(source: Mapping[str, str] | None = None) -> bool:
-    """要不要问 provider 的 `/models`。缺省开——它只在窗口查不到时才发一次请求。"""
+    """Report whether the provider model-window probe is enabled."""
     env = os.environ if source is None else source
     return env.get(ENV_MODEL_INFO, "").strip().lower() not in _MODEL_INFO_OFF
 
-# 内置的模型窗口表（前缀匹配）。它只用来算「上下文占用率」这一个比值，所以
-# **只列确定知道的值**，查不到一律回 None（界面显示 tokens 与「—」）。
-#
-# 为什么不做一个功能齐全的模型注册表：占用率的分母随模型版本变动（还受 beta 头、
-# 服务端配置影响），维护一张"看起来全"的表会长期给出错误的分母——错的分母比没有
-# 分母更糟。要精确值就设 AVID_CONTEXT_WINDOW（它优先于本表）。
+# Built-in context windows by model-name prefix, listing only values that are certainly known.
 MODEL_CONTEXT_WINDOWS: tuple[tuple[str, int], ...] = (
     ("gpt-4.1", 1_047_576),
     ("gpt-4o", 128_000),
@@ -79,8 +68,7 @@ MODEL_CONTEXT_WINDOWS: tuple[tuple[str, int], ...] = (
     ("claude-sonnet-4", 200_000),
     ("claude-opus-4", 200_000),
     ("claude-3", 200_000),
-    # 家族兜底（最长前缀优先，上面的具体条目不会被它抢占）：Anthropic 当前
-    # 全系 200k，Gemini 当前全系 1M。具体版本变化时按 AVID_CONTEXT_WINDOW 覆盖。
+    # Family fallbacks; the longest matching prefix wins, so the specific entries above still apply.
     ("claude-", 200_000),
     ("deepseek-chat", 65_536),
     ("deepseek-reasoner", 65_536),
@@ -92,7 +80,7 @@ MODEL_CONTEXT_WINDOWS: tuple[tuple[str, int], ...] = (
 
 
 def window_for(model: str) -> int | None:
-    """按模型名查内置窗口表。最长前缀优先，避免 ``gpt-4`` 这类短前缀抢占。"""
+    """Look up the built-in window table by longest matching model-name prefix."""
     name = model.strip().lower()
     matched: int | None = None
     best = -1
@@ -104,7 +92,7 @@ def window_for(model: str) -> int | None:
 
 
 class ConfigError(Exception):
-    """配置缺失或非法。错误信息自带修复方法。"""
+    """Configuration is missing or invalid; the message states how to repair it."""
 
 
 @dataclass(frozen=True)
@@ -112,18 +100,16 @@ class Config:
     api_key: str
     base_url: str
     model: str
-    # 模型上下文窗口（tokens）。None = 不认识这个模型，占用率因此不可计算——
-    # 调用方显示 tokens 数与「—」，不做任何换算猜测。
+    # Context window in tokens; None means unknown, so the usage ratio is not computed.
     context_window: int | None = None
-    # 协议族（openai / anthropic / gemini）。None = 按 base_url 探测
-    # （见 resolved_provider）；显式给值只在探测不准时需要。
+    # Protocol family (openai / anthropic / gemini); None means it is detected from base_url.
     provider: str | None = None
-    # 一步内并行工具调用的上限。1 = 完全串行。只会影响**并发安全**的工具；
-    # 写类调用是屏障，永远单独跑（`tools/safety.py`）。
+    # Per-step cap on parallel tool calls; 1 is fully serial and unsafe tools never overlap.
     max_parallel_tool_calls: int = DEFAULT_MAX_PARALLEL_TOOL_CALLS
 
     @property
     def resolved_provider(self) -> str:
+        """Protocol family in effect: the explicit override or the one detected from base_url."""
         name = self.provider or detect_provider(self.base_url)
         if name not in PROVIDERS:
             raise ConfigError(
@@ -137,6 +123,7 @@ class Config:
 
 
 def load_config(env: Mapping[str, str] | None = None) -> Config:
+    """Build a Config from the given mapping, raising ConfigError when values are missing."""
     source = os.environ if env is None else env
 
     missing = [name for name in REQUIRED if not source.get(name, "").strip()]
@@ -148,9 +135,7 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         )
 
     model = source[ENV_MODEL].strip()
-    # provider 与 base_url 互相补位：显式指定 provider 时，缺省端点跟着它走
-    # （AVID_PROVIDER=anthropic 不该打到 api.openai.com）；只配 base_url 时
-    # 协议族由探测决定，不写进 Config（探测结果跟随端点，换网关不用改两处）。
+    # An explicit provider picks its default endpoint; detection follows base_url implicitly.
     raw_base = source.get(ENV_BASE_URL, "").strip()
     raw_provider = source.get(ENV_PROVIDER, "").strip()
     if raw_provider and raw_provider not in PROVIDERS:
@@ -170,12 +155,7 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
 
 
 def _max_parallel_tool_calls(source: Mapping[str, str]) -> int:
-    """一步内的并发上限。缺省 10。
-
-    与 `_context_window` 同一个失败模型：写了非法值就报错，不静默回落——用户设了 4
-    却按 10 跑，比报错更难查。1 是合法值（完全串行），大于硬上限同样报错而不是夹取，
-    否则"我设了 1000"与"实际跑 32"之间的差会一直藏着。
-    """
+    """Resolve the per-step parallel cap; illegal values raise rather than falling back."""
     raw = source.get(ENV_MAX_PARALLEL_TOOL_CALLS, "").strip()
     if not raw:
         return DEFAULT_MAX_PARALLEL_TOOL_CALLS
@@ -199,11 +179,7 @@ def _max_parallel_tool_calls(source: Mapping[str, str]) -> int:
 
 
 def _context_window(source: Mapping[str, str], model: str) -> int | None:
-    """显式配置优先于内置表。
-
-    显式值非法时**报错而不是回落**：``AVID_CONTEXT_WINDOW=128k`` 这种写法要是被
-    静默忽略，用户会以为自己在看一个真实的分母，实际看的是内置表算出来的另一个数。
-    """
+    """Resolve the context window; an explicit value wins over the table and must be valid."""
     raw = source.get(ENV_CONTEXT_WINDOW, "").strip()
     if not raw:
         return window_for(model)

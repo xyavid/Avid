@@ -1,9 +1,4 @@
-"""``/api/meta`` · ``/api/health`` · ``/api/skills``：版本、特性表与能力面。
-
-按特性分支、不按版本号分支：客户端读 ``features`` 决定启用哪些能力，只在
-``api_version`` **不兼容**时失败收敛（§6.3）。构建戳由这里补上——它是静态资源
-目录的事实，属于传输适配层，不属于 ``svc/``。
-"""
+"""Meta endpoints describing the API version, the feature flags and the capability surface."""
 
 from __future__ import annotations
 
@@ -19,6 +14,7 @@ router = APIRouter()
 
 @router.get("/meta", response_model=MetaOut)
 def get_meta(request: Request) -> dict:
+    """Returns service metadata with the build stamp attached, which belongs to this layer."""
     services = current_services(request)
     meta = services.meta()
     meta["build"] = request.app.state.build
@@ -30,7 +26,7 @@ def get_health(request: Request) -> dict:
     services = current_services(request)
     return {
         "status": "ok",
-        # 版本号是模块常量，不必为了它跑一遍 meta()（那会连带扫技能目录）。
+        # The version is a module constant, so health avoids a metadata call that scans the skills.
         "api_version": API_VERSION,
         "uptime_ms": max(0, now_ms() - services.started_at),
     }
@@ -38,7 +34,7 @@ def get_health(request: Request) -> dict:
 
 @router.get("/skills", response_model=SkillListOut)
 def get_skills(request: Request) -> dict:
-    """技能目录：name + 一行描述，与 system prompt 同源。"""
+    """Lists the skill directory entries, taken from the same source as the system prompt."""
     return {"skills": current_services(request).skills()}
 
 

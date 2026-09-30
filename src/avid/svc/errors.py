@@ -1,9 +1,4 @@
-"""应用服务的领域错误。
-
-这些错误**只表达业务语义**，不表达传输：``status`` 只是给 ``web/`` 做默认映射的
-建议值，``web/`` 也可以覆盖它。好处是 ``svc/`` 不必 import 任何 HTTP 框架
-（不变量 A4），而错误码仍是稳定字符串、与事件类型共用一份命名规则（§6.2）。
-"""
+"""Domain errors of the application services, carrying stable machine-readable error codes."""
 
 from __future__ import annotations
 
@@ -11,8 +6,9 @@ from typing import Any
 
 
 class ServiceError(Exception):
-    """应用服务错误的基类。``code`` 是稳定字符串，前端按它分支。"""
+    """Base class for service errors; ``code`` is the stable string the client branches on."""
 
+    # Suggested defaults for the wire format; the transport layer may override the status.
     code = "internal"
     status = 500
 
@@ -23,7 +19,7 @@ class ServiceError(Exception):
 
 
 class RunBusy(ServiceError):
-    """同一会话已有活动 run（不变量 I3，仅进程内）。"""
+    """The session already has an active run inside this process."""
 
     code = "run_busy"
     status = 409
@@ -35,7 +31,7 @@ class RunNotFound(ServiceError):
 
 
 class RunFinished(ServiceError):
-    """对已经结束的 run 请求取消。"""
+    """Cancellation was requested for a run that has already ended."""
 
     code = "run_already_finished"
     status = 409
@@ -52,14 +48,14 @@ class SessionExists(ServiceError):
 
 
 class SessionBusy(ServiceError):
-    """删除一个仍有活动 run 的会话。"""
+    """An attempt to delete a session that still has an active run."""
 
     code = "session_busy"
     status = 409
 
 
 class BranchExists(ServiceError):
-    """同名分支已存在。悄悄重建会丢掉原来那条链，所以显式报错。"""
+    """A branch of that name exists; recreating it would silently drop the old chain."""
 
     code = "branch_exists"
     status = 409
@@ -81,7 +77,7 @@ class ApprovalExpired(ServiceError):
 
 
 class ApprovalConflict(ServiceError):
-    """已决审批收到一个**不同**的答复。同一答复重复投递走 200 + accepted:false。"""
+    """A settled approval received a different answer; the same answer repeated is idempotent."""
 
     code = "approval_resolved"
     status = 409
@@ -89,46 +85,42 @@ class ApprovalConflict(ServiceError):
 
 
 class SessionReadError(ServiceError):
-    """会话文件损坏或读不了。列表路径跳过坏项，单会话路径显式失败。"""
+    """A session file is corrupt or unreadable; listings skip it, single-session reads fail."""
 
     code = "session_error"
     status = 500
 
 
 class WorkspaceExists(ServiceError):
-    """要登记的工作区已经在列表里（进程绑定的或已登记的）。"""
+    """The workspace to register is already listed, either bound to the process or registered."""
 
     code = "workspace_exists"
     status = 409
 
 
 class PickerBusy(ServiceError):
-    """已经有一个文件夹选择器开着。"""
+    """A folder picker dialog is already open."""
 
     code = "picker_busy"
     status = 409
 
 
 class PickerUnavailable(ServiceError):
-    """这台机器上没有可用的系统文件夹选择器。"""
+    """This machine has no usable system folder picker."""
 
     code = "picker_unavailable"
     status = 503
 
 
 class PickerFailed(ServiceError):
-    """选择器后端起得来但失败了。"""
+    """A picker backend started but then failed."""
 
     code = "picker_failed"
     status = 500
 
 
 class TooManyStreams(ServiceError):
-    """同时打开的事件流太多（上限见 `svc.MAX_CONCURRENT_STREAMS`）。
-
-    为什么值得一个错误码：SSE 用同步生成器时会长期占住线程池里的线程，额度耗尽
-    意味着"再开就要开始饿死 REST"——这必须是一个显式的 503，而不是悄悄变慢。
-    """
+    """Too many event streams are open; the cap is the guard rail published by the service layer."""
 
     code = "too_many_streams"
     status = 503

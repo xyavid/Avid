@@ -1,9 +1,4 @@
-"""SSE 编帧：只有 durable 事件写 ``id:``（设计文档 §5.1）。
-
-这条规则本身就是重连语义：浏览器自动重发 ``Last-Event-ID`` 时，它自然停在最后
-一个 durable 事件上，delta 与 transient 不参与补齐——不需要任何额外约定。
-心跳是与重连独立的机制，不依赖浏览器默认行为。
-"""
+"""SSE framing: only durable events carry an ``id:`` field, so a resume stops at the last of them."""
 
 from __future__ import annotations
 
@@ -18,23 +13,22 @@ from .schemas import event_payload
 
 logger = logging.getLogger("avid.web.sse")
 
-# 每 HEARTBEAT_SECONDS 一行注释帧穿透中间代理（比 Flowise 的 30s 更保守）。
-# 心跳间隔与后端同源（`runtime/events.py`）：客户端据 /api/meta 的值设超时，
-# 两边各写一份 15.0 迟早错位。
+# Same constant the client reads from the metadata endpoint, so the two timeouts cannot drift apart.
 HEARTBEAT_SECONDS = STREAM_HEARTBEAT_SECONDS
 
+# Comment-only frame that keeps idle connections alive through intermediary proxies.
 PING = ": ping\n\n"
 
 STREAM_HEADERS = {
     "Cache-Control": "no-cache",
     "Connection": "keep-alive",
-    # 让反向代理不缓冲：否则事件会被攒起来一次性送达。
+    # Ask reverse proxies not to buffer, or events would be held back and delivered in one batch.
     "X-Accel-Buffering": "no",
 }
 
 
 def encode(payload: dict[str, Any]) -> str:
-    """一条事件帧。``seq`` 为 None（transient / delta）时不写 ``id:``。"""
+    """Encodes one event frame, writing ``id:`` only when the payload carries a durable sequence."""
     lines: list[str] = []
     seq = payload.get("seq")
     if seq is not None:
@@ -52,11 +46,7 @@ def stream(
     deltas: bool = False,
     heartbeat: float = HEARTBEAT_SECONDS,
 ) -> Iterator[str]:
-    """把一个 run 的事件流编成 SSE 文本（同步版：跑在线程里）。
-
-    游标补齐、缓冲淘汰时的 ``resync``、以及「delta 默认不投递」都在
-    ``svc/runs.py`` 里决定；这里只负责把事件变成字节。
-    """
+    """Encodes a run's event stream to SSE text on a worker thread, turning the None yield into a ping."""
     for event in registry.subscribe(
         record.run_id, after=after, deltas=deltas, heartbeat=heartbeat
     ):
@@ -74,10 +64,7 @@ async def stream_async(
     deltas: bool = False,
     heartbeat: float = HEARTBEAT_SECONDS,
 ) -> AsyncIterator[str]:
-    """``stream`` 的 asyncio 版：等待走事件桥，连接不占线程池线程（阶段 30d）。
-
-    编帧规则与同步版逐字相同——同一条 SSE 语义，只有"怎么等"不同。
-    """
+    """Async twin of ``stream`` that waits on the event loop instead of occupying a thread pool slot."""
     async for event in registry.subscribe_async(
         record.run_id, after=after, deltas=deltas, heartbeat=heartbeat
     ):
