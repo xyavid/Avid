@@ -1,0 +1,22 @@
+{
+  "suite": "cache_hit",
+  "how": "uv run --env-file .env python benchmarks/cache_hit/run.py --live",
+  "arms": [
+    {
+      "arm": "frozen_prefix",
+      "model": "scale(offline)",
+      "calls": 5,
+      "distinct_system_hashes": 1,
+      "distinct_tail_hashes": 5,
+      "system_chars": 588,
+      "status": "finished"
+    }
+  ],
+  "conclusions": [
+    {
+      "id": "C1",
+      "text": "一次运行内 system prompt 逐字节稳定（5 次调用共用 1 个哈希），而 tail 每轮变化——前缀缓存能命中的前提成立",
+      "pass": true
+    }
+  ]
+}
