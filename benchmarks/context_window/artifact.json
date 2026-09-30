@@ -15,8 +15,8 @@
       "model_calls": 23,
       "overflows": 1,
       "summaries": 1,
-      "max_prompt_tokens": 32911,
-      "max_utilization": 1.004,
+      "max_prompt_tokens": 33124,
+      "max_utilization": 1.011,
       "compaction_steps": [
         "reactive_compact"
       ],
@@ -24,7 +24,7 @@
       "limits_handed_to_compaction": [],
       "detail_has_derived_note": false,
       "details": [
-        "摘要更早的 28 条，保留最近 6 条"
+        "摘要更早的 27 条，保留最近 6 条"
       ]
     },
     {
@@ -40,8 +40,8 @@
       "model_calls": 21,
       "overflows": 0,
       "summaries": 0,
-      "max_prompt_tokens": 25323,
-      "max_utilization": 0.773,
+      "max_prompt_tokens": 25536,
+      "max_utilization": 0.779,
       "compaction_steps": [
         "micro_compact",
         "micro_compact"
@@ -51,13 +51,13 @@
         "micro_compact"
       ],
       "limits_handed_to_compaction": [
-        27463,
-        28154
+        27222,
+        27910
       ],
       "detail_has_derived_note": true,
       "details": [
-        "落盘 4 项较早的工具结果（保留最近 3 条）（阈值随窗口派生：27463 字符（窗口 32768 × 0.8 × 实测 1.08 字符/token − 系统与工具 830 字符））",
-        "落盘 4 项较早的工具结果（保留最近 3 条）（阈值随窗口派生：28154 字符（窗口 32768 × 0.8 × 实测 1.11 字符/token − 系统与工具 830 字符））"
+        "落盘 4 项较早的工具结果（保留最近 3 条）（阈值随窗口派生：27222 字符（窗口 32768 × 0.8 × 实测 1.08 字符/token − 系统与工具 1099 字符））",
+        "落盘 4 项较早的工具结果（保留最近 3 条）（阈值随窗口派生：27910 字符（窗口 32768 × 0.8 × 实测 1.11 字符/token − 系统与工具 1099 字符））"
       ]
     },
     {
@@ -73,8 +73,8 @@
       "model_calls": 21,
       "overflows": 0,
       "summaries": 0,
-      "max_prompt_tokens": 26084,
-      "max_utilization": 0.796,
+      "max_prompt_tokens": 24928,
+      "max_utilization": 0.761,
       "compaction_steps": [
         "micro_compact",
         "micro_compact"
@@ -84,13 +84,13 @@
         "micro_compact"
       ],
       "limits_handed_to_compaction": [
-        103674,
-        103499
+        102715,
+        102634
       ],
       "detail_has_derived_note": true,
       "details": [
-        "落盘 4 项较早的工具结果（保留最近 3 条）（阈值随窗口派生：103674 字符（窗口 32768 × 0.8 × 实测 3.99 字符/token − 系统与工具 830 字符））",
-        "落盘 3 项较早的工具结果（保留最近 3 条）（阈值随窗口派生：103499 字符（窗口 32768 × 0.8 × 实测 3.98 字符/token − 系统与工具 830 字符））"
+        "落盘 3 项较早的工具结果（保留最近 3 条）（阈值随窗口派生：102715 字符（窗口 32768 × 0.8 × 实测 3.96 字符/token − 系统与工具 1099 字符））",
+        "落盘 4 项较早的工具结果（保留最近 3 条）（阈值随窗口派生：102634 字符（窗口 32768 × 0.8 × 实测 3.96 字符/token − 系统与工具 1099 字符））"
       ]
     },
     {
@@ -142,7 +142,7 @@
     },
     {
       "id": "C4",
-      "text": "语言差异被吸收：同一个 32k 窗口，ASCII 臂的派生阈值是中文臂的 3 倍以上（103499 vs 28154 字符）",
+      "text": "语言差异被吸收：同一个 32k 窗口，ASCII 臂的派生阈值是中文臂的 3 倍以上（102634 vs 27910 字符）",
       "pass": true
     },
     {

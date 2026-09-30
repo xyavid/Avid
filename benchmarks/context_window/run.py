@@ -54,7 +54,11 @@ from avid.runtime import events as events_module  # noqa: E402
 from avid.runtime.context_manager import ContextBudget  # noqa: E402
 from avid.runtime.loop import agent_loop  # noqa: E402
 from avid.runtime.state import RunState  # noqa: E402
-from avid.tools.schemas import READ_FILE  # noqa: E402
+from avid.tools.registry import specs  # noqa: E402
+
+READ_FILE = next(
+    item.schema() for item in specs() if item.schema()["function"]["name"] == "read_file"
+)
 
 ARTIFACT = Path(__file__).resolve().parent / "artifact.json"
 
