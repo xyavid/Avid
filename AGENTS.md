@@ -9,17 +9,96 @@ Avid 是一个自建的 agent 运行时（harness）：模型调用、工具执�
 - **核心用途**：先做通用内核，场景后接；用同一个内核承载编码、检索、业务流等不同任务。
 - **目标**：改动任一模块（模型 / 工具 / 记忆 / 上下文策略）不需要动其它部分，且改动前后有可对比的评测数字。
 - **验收基准**：参考场景 **R**（读取本地文件 + 计算）——首个工具与后续评测集都从它长出来。
-- **技术栈**：内核 Python 3.12，环境与依赖管理用 `uv`；前端 TypeScript（React + Vite），独立 pnpm 工具链，产物复制进 `src/avid/web/static/` 随 wheel 分发。
-- **当前状态**：最小模型调用、Agent 循环、9 个工具（`bash` / `read_file` / `write_file` / `edit_file` / `glob` / `todo_write` / `subagent` / `load_skill` / `web_search`）、技能系统、上下文压缩管线、安全分层（三轴预设 + 四级 deny 阶梯 + bwrap 沙箱 + 审计）与 hook 扩展点、会话持久化（`session/`）、工作区（`workspaces.py`）均已跑通。项目目标见 `dev/plan/roadmap.md`。
-- **Web 层（阶段 15）**：内核加 `runtime/events.py`（事件类型单点 + `on_event` 观察点）、审批注入（`RunState.ask`）与取消检查点；新增应用服务 `svc/`（运行注册表与重放缓冲、审批待决表、会话读）与传输适配 `web/`（FastAPI + SSE + 静态资源，`avid web` 子命令，FastAPI 在 `[project.optional-dependencies].web`）；前端 `web/` 按 L0–L4 分层（tokens/sketch → primitives/patterns → features → layouts → routes）。接口与页面见 `docs/guide/web-ui.md`，设计见 `docs/design/frontend-architecture.md`。
-- **阶段 16（F3 流式 delta）**：`ai/client.stream_completion` 按 SSE 解析并返回与 `chat_completion` **同形**的 `Turn`（分片累加器是纯函数，B9 断言逐字段相等）；svc 的生产路径用 `streaming_chat` 把正文增量接到事件流上，delta 带 `seq=None`、不落盘、不重放，且**不占用 durable 的重放预算**；`agent_loop` 多一个 `summarize` 参数把「主轮次」与「压缩摘要」分开（否则摘要文本会混进 delta 流）。`features.deltas = 1`。
-- **阶段 17（F4 分支视图）**：会话层加 `scan_values(namespace)` 与 `branch_names()`（分支只是「链尾是谁」的一个值，条目树只增不改）；svc/web 加分支列表、分叉与 `POST /runs {branch}`；前端新增 `features/branches`（选择器 + 从链尾分叉）与条目动作行的「从此处分支」，由 route 用 `branchSlot` 组合。`features.branches = 1`。
-- **阶段 18（工作区 + 权限三态）**：`workspaces.py` 是用户级注册表（`~/.avid/workspaces.json`，id 由根目录派生，所以重复登记幂等、索引丢失不丢数据），会话 header 记录归属，运行级工作区根（`RunState.workspace_root`）取代模块全局，CLI/Web/前端都能选；权限从"一道审批规则"变成四层裁决（硬拒绝 → 危险命令 → 越界 → 常规规则）×三档模式（`strict` / `workspace` / `system`）：危险命令三种模式一律问一次（按规范化命令原文记账），越界在 `strict`/`workspace` 问一次（按绝对路径记账）、`system` 放行。规格与决策表见 `docs/design/workspace-permission.md`。导航列是**"工作区即文件夹"**（按工作区分组、可折叠、组内超出 5 条给「展开其余 N 个会话」、每行带相对时间），建会话 = 在某个文件夹上点 ＋，因此没有"新建会话 + 工作区下拉"这一对；右上角 🔍 是纯客户端的按会话名搜索（不匹配工作区名、不持久化）。**新增工作区**在界面上是导航列右上角的 ＋：服务端弹宿主机文件夹选择器（`AVID_PICKER_CMD`/tkinter/zenity/kdialog/Windows/osascript 依次探测），取消什么都不做，重复返回 409 并切到已有的那个。
-- **阶段 22（上下文占用与 cache hit 台账）**：`ai/usage.py` 是唯一的 provider adapter，把四家写法归一成同一个 `Usage`（OpenAI 的 `prompt_tokens_details.cached_tokens`、DeepSeek 兼容的 `prompt_cache_hit_tokens`、Anthropic 的 `cache_read_input_tokens` / `cache_creation_input_tokens`、Gemini 的 `usageMetadata.cachedContentTokenCount`），流式与非流式两条解析路径共用它；`RunState.usage_report()` 是**唯一**的计算点（上下文占用 = 最近一轮真实 `prompt_tokens` / 窗口 / 占用率 / **三块字符占比分配**（系统提示词、工具定义、对话消息——前两块从不发给前端，只能由循环在发请求前记字符数）、缓存读写与命中率、压缩次数与压缩后读数——最后一项由压缩之后下一轮的真实读数回填，不做本地估算），每轮进 `run_status`、终态进 `run_finished`，并由 `SessionRecorder.record_usage()` 按**分支**落进会话值（`avid.usage`，JSONL 线格式与 `STORAGE_VERSION` 未动）；窗口来自 `AVID_CONTEXT_WINDOW` 或内置模型名小表（`ai/config.py`），查不到就不算占用率、可空字段一律显示「—」而不是 0。**没有新增事件类型**，`features.usage = 1`。两条顺序不变量：用量值在**宣告终态之前**落盘（客户端收到 `run_finished` 就会重取分支列表），`record.status` 的翻转与终态事件入缓冲在**同一段临界区**（否则订阅者会看到"已终态 + 缓冲里没有终态事件"而静默提前返回）。前端指示器在 `features/composer`，常驻输入条那一行、紧邻发送按钮左侧。规格与取舍见 `runtime-architecture.md` §20、`docs/guide/web-ui.md` §3.3。
-- **阶段 26（安全分层）**：把"权限"拆成**三个正交参数**（`approval` / `sandbox` / `network`）与三个用户预设（`manual`＝沙箱内免问、危险与越界问人；`auto`＝同样的沙箱，改由确定性分类器裁决、判不准即拒；`full`＝不问不套沙箱），**`full ≠ default`** 由三重锁保证（CLI `--allow-full-access`、Web `full_access_ack`、注册表/DTO/CLI 都不接受它作默认）。策略层分为 `policy/action.py`（Tool Broker：归一化 / 目标识别 / 风险分类）、`policy/engine.py`（Policy Engine：deny > ask > allow）、`policy/rules.py`（ADMIN → SYSTEM → PROJECT → USER 四级 deny 阶梯 + 唯一的放松点 SYSTEM `[allow]`；仓库文件只能加严）、`policy/sandbox.py`（bwrap：只读系统 + 可写工作区 + 掩蔽宿主凭据 + `--unshare-net` + env 白名单 + 按能力账本挂载授予）、`policy/audit.py`（`~/.avid/audit/*.jsonl`，放行也记）、`policy/permission.py`（门面：`build_run_security` 是**唯一**装配点）。沙箱不可用时**不静默降级**（manual 逐个问、auto 失败关闭，三处可见）；审计写失败只计数不改裁决。E2E `benchmarks/sandbox_boundary/` 四个臂 × 14 条攻击性探针给出 17 条布尔结论（含"broker 看不见的越界写被只读挂载挡住"）。规格见 `docs/design/workspace-permission.md`，出图 `dev/architecture/phase-26-security-layers.svg`。
-- **阶段 27（待办清单面板 + 任务图下线）**：两件事。① 新增「待办清单」面板：`features/conversation/components/TodoPanel.tsx` + `features/conversation/lib/todos.ts`（`latestTodos`），常驻在**输入条正上方**（`ConversationView` 底栏、`TodoPanel` 之上就是时间线），数据从会话条目里**最后一次** `todo_write` 的调用参数推导——零新接口、零新存储，刷新与重进会话看到的正好是这条分支上的计划；默认展开、可折叠（`uiStore.todoExpanded`，收起过一次就记住），没有清单时整块不渲染（连它自己那份间距也不留）。那次 `todo_write` 仍以工具卡留在时间线里（记的是"当时提交了什么"），面板显示的是"现在的计划"，两者不合并。② **任务图整体下线**：删掉 `create_task` / `update_task` / `can_start` / `claim_task` / `complete_task` / `get_task` 六个工具、`tools/tasks.py`（`TaskStore`）、`svc/tasks.py`、`web/routes/tasks.py`、`GET /api/tasks{,/{id}}`、前端 `features/tasks/**` 与 `/tasks` 页面及导航项，`features.tasks` 特性位与 `uiStore.taskFilter` 一并删除；工具数 15 → 9（`bash` / `read_file` / `write_file` / `edit_file` / `glob` / `todo_write` / `subagent` / `load_skill` / `web_search`）。理由是消费者只有那个只读页面，而"这次对话的计划"由 `todo_write` 承接、跨会话的依赖与分工没有真实使用证据。**旧数据 `<工作区根>/.tasks/` 不迁移、不删除**，只是不再被读——留着它比写一段迁移代码便宜，也便于日后反悔时把文件捡回来。规格与删除理由见 `docs/design/runtime-architecture.md` §17（该章保留为当时的实现记录，开头有下线横幅）。
-- **阶段 29（ContextManager：上下文装配单点化）**：新增 `runtime/context_manager.py`，把「模型这一轮看到什么」收拢为**块装配**：`Block(kind, content, section)`——SYSTEM 落位（`instructions` / `environment` / `skill_catalog` / hook 注入）**首轮定型、运行内不变**（前缀缓存友好）；TAIL 落位（`plan` / `run_state`）每轮重渲染、挂请求末尾且**不落库**；对话本体仍是 `Transcript`。压缩编排自 `runtime/context.py` **整体并入**（装配与预算同属一个所有者），五步管线留在 `policy/compaction.py` 签名不变；`compose()`＝压缩+渲染，`render()`＝兜底压缩后重渲染。TODO 计划从「每 N 轮一条 `[提醒]` user 消息（落库、要靠 notice 类型与用户输入区分）」改为 tail 块常驻（模型每轮可见、不落库不发事件），沉默计数器（`rounds_since_todo` / `todo_reminder_after` / `TODO_REMINDER_AFTER_ROUNDS`）整个退役。随之删除：`state.system_prompt` / `skills.build_system_prompt` / `AGENT_INSTRUCTIONS` / `todo.build_reminder` / `hooks.context_inject_hook`（`UserPromptSubmit` 扩展点保留给用户 hook）；subagent 与 bench 的提示词走同一装配器（各自的 `SUB_SYSTEM` / `SYSTEM_PROMPT` 以 instructions 覆盖传入，bare 臂经 `ContextManager.system_prompt()` 取同源系统提示词），压缩摘要的 `SUMMARY_SYSTEM` 留在 `policy/compaction.py`（依赖方向优先于文案集中）。**新增一类上下文 = `register_source(kind, fn)` 一行**；本阶段只做现有来源（RAG / Memory / 身份 / 租户 / Artifact 不留占位），记账内部按 kind 细分（`ComposedRequest.parts`）、对外仍三块，前端零改动。`TODO_REMINDER` 事件常量保留作 wire 兼容（不再发射）。规格见 `docs/design/runtime-architecture.md` §21，出图 `dev/architecture/phase-29-context-manager.svg`（本地不入库）。
-- **架构设计**：`docs/design/runtime-architecture.md`——分层解耦方案、与 pi 的异同、两阶段落地路径与可验证验收标准。**阶段 A（原地抽取）与阶段 B（分包为 `ai/` / `runtime/` / `policy/`）均已落地**：循环只剩调度，`loop.py` 与 `execution.py` 对策略层**零运行时依赖**（`runtime/` 其余三个文件各有明确理由——`context_manager.py` 装配上下文并编排压缩、`state.py` 持有运行期实例、`hooks.py` 注册默认回调；见 `runtime-architecture.md` §12 判据 9，由 `tests/test_web_boundaries.py` 的 A13 门禁钉住），`Transcript`（现在 `ai/`）独占消息写入、`RunState` 取代 3 个 contextvars、`ContextManager` 独占上下文装配与压缩编排（阶段 29 起）、`execution` 独占工具协议。**阶段 12 新增 `session/`（与 `ai/` 平级、零 avid 内部依赖）**：条目树 + 值 + 分支 + 变更线，内存与 JSONL 两个后端共用一套一致性用例；循环只多一个 `on_message` 观察点，`cli.py` 是唯一接线处（见设计文档 §16）。
+- **技术栈**：内核 Python 3.12，环境与依赖管理用 `uv`，运行期依赖只有 `httpx`；前端 TypeScript（React + Vite），独立 pnpm 工具链，产物复制进 `src/avid/web/static/` 随 wheel 分发。
+- **现状**：模型调用 → 循环 → 9 个内置工具 + stdio MCP → 权限三轴预设（四级 deny 阶梯 + bwrap 沙箱 + 审计）→ hook 四事件 → 技能 → 上下文压缩 → 会话持久化 → 本地 Web 服务，端到端可用。**浏览器界面已在阶段 32 清空重建**：`web/src/` 只剩骨架（见 `docs/status/CAPABILITIES.md` §11），页面结构与视觉语言待定。
+
+本文件只写**跨阶段的稳定约定**；会随阶段变化的现状、数字与阶段账本各有归属：
+
+| 想问什么 | 去哪 |
+|---|---|
+| 现在能做什么、不能做什么、瓶颈与未知 | `docs/status/CURRENT_STATE.md` |
+| 每项能力的入口与证据 | `docs/status/CAPABILITIES.md` |
+| 有什么数字、缺什么数字 | `docs/status/BENCHMARK.md` |
+| 分层、依赖方向与门禁 | `docs/status/ARCHITECTURE.md` |
+| 下一步往哪走 | `docs/status/ROADMAP.md` |
+| 已完成阶段的目标 / 实现 / 产出 | `dev/plan/roadmap.md`（本地，不入库） |
+
+### 1.1 常用命令
+
+```bash
+uv sync && uv sync --extra web   # 内核依赖 / 追加 Web 依赖（fastapi·uvicorn·pydantic）
+uv run --env-file .env avid --agent "读 pyproject.toml，告诉我项目名"
+uv run --env-file .env avid web --port 8765
+
+uv run pytest                    # 默认不跑 stress 与 eval（见 pyproject 的 addopts）
+uv run pytest -m stress          # 复杂度与长会话门禁
+uv run --env-file .env pytest -q -m eval_smoke -s   # 评测冒烟（真模型，有成本）
+uv run ruff check src/avid && uv run mypy           # 与 CI 同一套静态检查
+
+pnpm -C web build && pnpm -C web run copy:dist   # 产物进 src/avid/web/static/，随 wheel 分发
+pnpm -C web run typecheck && pnpm -C web test    # 前端类型检查与骨架单测
+```
+
+评测仪器（真模型，不是门禁）：`uv run --env-file .env python -m benchmarks.run --smoke`，参数见 `benchmarks/README.md`。安装、配置项、CLI 全量参数与 Web 交付形态见 `README.md`。阶段 32 删掉旧前端时，`pnpm run verify` 与六项前端门禁（分层 / token / 样式 / 对比度 / 体积）、`budget.json` 与 Playwright e2e 一并删除——它们检查的目录结构与 token 表都不存在了，待新的前端设计定稿后重建。
+
+### 1.2 数据流
+
+CLI 与 Web 是**两个平级接线点**，内核不知道有几个调用方（`svc/`）：
+
+```text
+CLI  avid --agent / --session ─┐
+Web  POST /api/sessions/{id}/runs ─┴─► svc/runs.RunRegistry（线程 + 事件重放缓冲）
+                                       ▼
+                         runtime/loop.agent_loop —— 只表达调度顺序
+                           ├ ContextManager.compose()  装配 SYSTEM / tail 块，编排压缩
+                           ├ chat() → Turn             正文 + tool_calls
+                           └ execution.execute_batch()
+                                ├ policy/action 归一化 → policy/engine 裁决（deny > ask > allow）
+                                ├ policy/sandbox 按能力账本组装 bwrap argv
+                                └ 工具 handler（tools/*，含 MCP 包装）
+       on_message ─► SessionRecorder ─► <工作区>/.avid/sessions/*.jsonl（durable 真相）
+       on_event   ─► RunRegistry 缓冲 ─► SSE ─► 浏览器消费方（前端骨架，页面待建）
+```
+
+- **`on_message` 是消息的唯一出口**：循环不 import 会话层，落库与否由回调决定。
+- **`on_event` 是步骤级事实的通道**，不是第二个消息通道；事件不写进会话 JSONL。
+- 五步压缩阶梯在 `policy/compaction.py`，编排归 `ContextManager`。
+- 完整数据流、状态所有权与依赖门禁见 `docs/status/ARCHITECTURE.md` §2–§4。
+
+### 1.3 关键子系统
+
+| 子系统 | 位置 | 职责 |
+|---|---|---|
+| 模型适配 | `ai/`：`transport` 退避重试、`protocol` 共享词表、`providers/{openai_compat,anthropic,gemini}`、`usage` 四家 usage 归一、`transcript` 独占消息写入 | 换模型只动这一层 |
+| 循环与运行期 | `runtime/`：`loop` 只调度、`state.RunState` 一次运行的全部可变状态、`execution` 工具协议、`context_manager` 上下文装配与压缩编排、`events` 事件名单点、`hooks` 默认回调 | 一次运行的生命周期 |
+| 策略层 | `policy/`：`action` 归一化与风险分类、`engine`（deny > ask > allow）、`rules` 四级阶梯、`sandbox` bwrap、`audit`、`permission` 唯一装配点、`compaction`、`modes` 三轴预设、`skills`、`todo` | 阈值、规则与文案的高频变化集中地 |
+| 会话 | `session/`：条目树 + 值 + 分支 + 变更线，`memory` 与 `jsonl` 两后端共用一套一致性用例，`recorder` 是唯一写入者 | 磁盘上的会话真相 |
+| 应用服务 | `svc/`：`runs` 运行注册表与重放缓冲、`approvals` 待决表、`sessions` 读视图、`workspaces`、`picker` | 内核的第二个调用方 |
+| 传输适配 | `web/`：FastAPI 路由 + pydantic DTO + SSE 编帧 + 静态资源 | 线格式的唯一所有者 |
+| 工具 | `tools/`：`registry` 单点声明、`files`/`shell`/`subagent`/`skill`/`web_search`/`mcp`、`validate` 参数校验 | 9 个内置工具 + 该工作区声明的 MCP 工具 |
+| 工作区 | `workspaces.py` + `~/.avid/workspaces.json` | 用户级注册表（索引，非权威） |
+| 前端 | `web/`：入口 + 占位壳 + 两份**契约种子**（`src/api/types.ts` · `src/events/types.ts`） | 浏览器侧全部代码。**阶段 32 已把旧前端整体删除**（原 L0–L4 分层不再存在），页面结构与视觉语言待定 |
+| 评测仪器 | `benchmarks/`：21 条 case × 3 变体、五种判定器、轨迹落盘 | **不进 wheel**，产品代码反过来不许依赖它 |
+
+### 1.4 入口点
+
+| 入口 | 位置 |
+|---|---|
+| CLI | `src/avid/cli.py`：单轮 / `--agent` 循环 / `--session` 会话 / `avid workspace` / `avid web` |
+| Web 服务 | `src/avid/web/app.py`（FastAPI）；接口面（端点 / 事件 / 信任边界）见 `docs/guide/web-ui.md` |
+| 测试 | `tests/`，镜像 `src/avid/` 结构；`tests/test_web_boundaries.py` 是分层门禁 |
+| 模块入口 | `src/avid/__main__.py`（`python -m avid`） |
+
+### 1.5 常见改动落点
+
+| 要改什么 | 动哪里 |
+|---|---|
+| 新增工具 | 在实现函数上挂 `@tool(...)`——`tools/registry.py` 是单点，其余表全部派生 |
+| 新增模型协议 | `ai/providers/` 加一个 provider，对循环返回**同形** `Turn` |
+| 新增一类上下文 | `ContextManager.register_source(kind, fn)` 一行 |
+| 调阈值 / 规则 / 文案 | `policy/` |
+| 加一个事件 | `runtime/events.py`（唯一单点）+ 前端联合类型，`tests/test_event_contract.py` 钉住两边相等 |
+| 加一个界面 | 阶段 32 已把旧前端删空，新的分层与门禁尚未确立——先定视觉与布局方案，再按新结构落 `web/src/`（不要预先建空目录） |
 
 ## 2. 提交规范
 
