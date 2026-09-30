@@ -28,7 +28,7 @@ uv run --env-file .env pytest -q -m eval -s         # 全量
 与抖动，它是提交前手动跑的一次实验，不是门禁。评测数字不决定退出码——通过率是测量结果。
 
 **pytest 路径有一个必须知道的坑**：`tests/conftest.py` 的 `model_env` 是 autouse 的，会给
-每个测试塞 `AVID_API_KEY=test-key`。它现在对 `eval` / `eval_smoke` 标记让开，并且
+每个测试塞 `AVID_API_KEY=test-key`。它对 `eval` / `eval_smoke` 标记让开，并且
 `support.real_config_or_skip()` 会在拿到那对假配置时**直接失败**——否则一次 401 会让全部
 运行变成 `llm_error` 而测试仍然绿（实测踩到过一次）。
 
@@ -131,7 +131,7 @@ benchmarks/runs/<UTC 时间>-<commit>/
   `registry` / `state` / `hooks` / `on_message` / `on_event`）。硬超时用既有的取消检查点。
   为什么要开这个口：**单变量对照必须在同一个 commit 上跑**，而"改常量再跑一次"会把代码
   差异混进差值里；注入值会写进每次运行的 `overrides`。
-- **注入阈值时必须关掉"随窗口派生"**：内核现在会在有窗口、有真实读数时自己按窗口算 ③④
+- **注入阈值时必须关掉"随窗口派生"**：内核会在有窗口、有真实读数时自己按窗口算 ③④
   的字符阈值（见 `docs/status/CAPABILITIES.md` §5 与 E2E `benchmarks/context_window/`），
   注入 `--context-chars` 时 `runner` 一并传 `from_window=False`，否则注入的数字会被静默
   盖掉、两组结果的差值不再只来自这个变量。**不给** `--context-chars` 的运行走内核默认

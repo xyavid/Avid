@@ -34,6 +34,7 @@ uv run pytest                    # 默认不跑 stress 与 eval（见 pyproject 
 uv run pytest -m stress          # 复杂度与长会话门禁
 uv run --env-file .env pytest -q -m eval_smoke -s   # 评测冒烟（真模型，有成本）
 uv run ruff check src/avid && uv run mypy           # 与 CI 同一套静态检查
+seiso check                       # 文档规范（kind 映射与豁免见 seiso.toml；--preview 另有实验规则）
 
 pnpm -C web build && pnpm -C web run copy:dist   # 产物进 src/avid/web/static/，随 wheel 分发
 pnpm -C web run typecheck && pnpm -C web test    # 前端类型检查与骨架单测
@@ -197,4 +198,4 @@ fix(tools): 读取不存在文件时回传错误文本而非中断循环
 - **单元测试先写**：要写单元测试就在写实现之前写；实现完成后补的单元测试不算数、不写。
 - **E2E 是默认测试手段**：复杂功能一律用 E2E 验证是否真的跑通，不用单元测试代替。E2E 末尾必须产出一个**可重复的产物**——同一条命令重跑得到同样结论，产物落在仓库里、可被他人直接打开检查。
 - **隔离测试先列失败清单**：必须对某个系统做隔离测试时，先把「它可能怎么坏」逐条列全，再写代码。
-- **全套 E2E 只在收尾跑**：开发期间只跑与当前改动直接相关的最小验证，全套 E2E 留到 §3 第三步「收尾举证」执行一次。
+- **全套 E2E 只在收尾跑**：开发期间只跑与本次改动直接相关的最小验证，全套 E2E 留到 §3 第三步「收尾举证」执行一次。

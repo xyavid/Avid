@@ -65,7 +65,7 @@
 | 协议 | `ai/config.py` | 环境变量读取 | 隔离"配置来源" | 无 |
 | 能力 | `tools/*` | 工具集的实现与 schema（写这张表时是 14 个，阶段 27 后是 9 个） | 隔离"文件系统与进程" | 无（`subagent` 例外见 §5.3） |
 
-不新增层、不新增能力。分层只是在当时的 13 个模块上重排依赖方向（现在模块更多，分层不变；计数以 `pkgutil.walk_packages` 实测为准）。
+不新增层、不新增能力。分层只是在当时的 13 个模块上重排依赖方向（其后模块更多，分层不变；计数以 `pkgutil.walk_packages` 实测为准）。
 
 ## 4. 核心接口与数据结构
 
@@ -248,7 +248,7 @@ def agent_loop(
 > 后续两次**有意的**签名删除：`max_rounds` 先由 `int = MAX_ROUNDS`（写死 8）改成
 > `int | None = None`，随后**整个参数与 `RoundLimitExceeded` 一起删掉**。原因：轮数不是
 > 收敛判据，写死的 8 会把"逐轮读 9 个文件"这种普通任务判成未收敛，而一个"可选闸门"留着
-> 就仍会被当成产品设置。现在循环没有轮数上限（`itertools.count(1)`），预算只在评测层以
+> 就仍会被当成产品设置。循环没有轮数上限（`itertools.count(1)`），预算只在评测层以
 > 墙钟 `timeout_seconds` 的形式存在。调用点因为少传一个关键字参数而不受影响。
 
 > 阶段 16（F3）在 `chat` 之后补了一个 `summarize=None`（默认回落到 `chat`，所以不改变任何
@@ -431,7 +431,7 @@ D1–D8 里，D3/D5/D6/D7 是**能力差异**（我们没做），D1/D2/D4 是**
 | `transcript.py` → **`ai/`**（原计划放 runtime，落地时发现会让 policy 反向依赖 runtime） | 同上 |
 | `compact.py` / `permission.py` / `tools/todo.py` / `skill_loader.py` → `policy/` | 同上 |
 | 全部测试的 import | 机械替换 |
-| `AGENTS.md` §1 当前状态、`docs/design/*` 路径引用 | 文档同步 |
+| `AGENTS.md` §1 简介、`docs/design/*` 路径引用 | 文档同步 |
 
 **阶段 B 不做的事**：不合并文件、不改签名、不调整职责——纯搬家。这样出问题时回滚范围明确。
 
@@ -1200,7 +1200,7 @@ JSON 损坏（实现按"拒绝并回文本"处理，契约测试覆盖，不静�
 > 本节记的是当时的落地过程，里面的文件、门禁与验收数字**都已不在代码里**（见 §17 开头横幅）。
 > 保留它是为了留下"当时怎么验的"这一层证据：README 式的结论容易忘，验收清单与偏差记录不会。
 
-§17 的设计稿在阶段 13 实施：`todo_write` 答不了的两件事（**这条现在能不能开工**、**谁在做**）由
+§17 的设计稿在阶段 13 实施：`todo_write` 答不了的两件事（**这条能不能开工**、**谁在做**）由
 `.tasks/` 里的任务图补上。
 
 ### 18.1 落地范围
@@ -1342,7 +1342,7 @@ round=5  （收尾）                 → 模型自己说明"tests 仍被 endpoi
 裁决收敛在 `policy.engine.decide` 一个入口（门面 `policy.permission.gate` 是同一条路），
 `runtime/hooks.py` 的 `permission_hook` 只做三步：`brokerize` 算事实（归一化命令、目标、风险
 类别）、`decide` 拿三轴 + 阶梯 + 沙箱规格裁决、把裁决写进审计。（阶段 26 之前这里是
-"hook 自己算 `danger_reason` / `outside_target` 再调 gate"；现在算事实的那部分进了 Tool Broker，
+"hook 自己算 `danger_reason` / `outside_target` 再调 gate"；阶段 26 起算事实的那部分进了 Tool Broker，
 因为"什么算危险/越界"与"越界了怎么办"必须分开。）
 
 - **路径数学只有一份**（`tools/workspace.py`）：策略层不复制边界判断，所以"判定在区外"与

@@ -37,7 +37,7 @@ pnpm -C web run copy:dist        # dist → src/avid/web/static + 构建戳（`a
 uv run avid web --port 8765      # 静态资源与 API 同源
 ```
 
-`web/` 现在只有 `dev` / `build` / `preview` / `copy:dist` / `typecheck` / `test` 六个脚本；
+前端脚本与命令的清单以 `web/README.md` 为准；
 旧前端的门禁脚本（分层 / token / 样式 / 对比度 / 体积）已随前端删除。
 
 `GET /api/meta` 的 `build` 字段返回构建戳（`git_sha` + `built_at`）；从 checkout 直接跑而

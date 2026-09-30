@@ -37,7 +37,7 @@
 
 **代价与对冲**
 
-- 依赖簇变大（对照 `pyproject.toml:7` 当前的单一 httpx）。对冲：FastAPI 进 `[project.optional-dependencies].web`，CLI 使用路径不装；`web/` 是唯一 importer，由 grep 门禁守着（`tests/test_web_boundaries.py`：内核侧不许出现 `fastapi` / `pydantic` / `starlette` / `uvicorn`，而 `src/avid` 里的 `fastapi` 必须全部落在 `web/`）。换框架（例如退到 Starlette 单用）只需改 `web/`，`svc/` 与内核不动——这正是 `web/` 这一层边界存在的理由。
+- 依赖簇变大（对照 `pyproject.toml:7` 的单一 httpx）。对冲：FastAPI 进 `[project.optional-dependencies].web`，CLI 使用路径不装；`web/` 是唯一 importer，由 grep 门禁守着（`tests/test_web_boundaries.py`：内核侧不许出现 `fastapi` / `pydantic` / `starlette` / `uvicorn`，而 `src/avid` 里的 `fastapi` 必须全部落在 `web/`）。换框架（例如退到 Starlette 单用）只需改 `web/`，`svc/` 与内核不动——这正是 `web/` 这一层边界存在的理由。
 - pydantic 与「内核类型是普通 dataclass」的取向冲突。对冲：内核类型（`Entry`、事件）保持 dataclass/`dict`，DTO 由 `web/schemas.py` 的显式 mapper 构造。**不允许让 `session/` 依赖 pydantic**——那会破坏 `session/__init__.py:10` 声明的「不 import 任何 avid 子包、只认识条目与 JSON」。
 
 **反事实测试**（判据 §10）
@@ -45,7 +45,7 @@
 | 条件 | FastAPI 方案是否成立 |
 |---|---|
 | 需求全变（改成纯 CLI 或 TUI） | 成立：内核不依赖它，删 `web/` 即可 |
-| 规模 ×100（100 个并发会话） | 不成立：当前模型是「每会话一个线程 + 进程内注册表」，会话是文件后端且无跨进程锁（`runtime-architecture.md:426`）。此时需要队列与真正的会话锁，属于另一轮设计 |
+| 规模 ×100（100 个并发会话） | 不成立：模型是「每会话一个线程 + 进程内注册表」，会话是文件后端且无跨进程锁（`runtime-architecture.md:426`）。此时需要队列与真正的会话锁，属于另一轮设计 |
 | 依赖长期不可靠（浏览器→服务断连） | 成立：durable 事件可重放，UI 的权威视图来自 REST |
 | 改成多用户/远程 | 不成立：需要鉴权、每用户工作区隔离、CSRF 面。当前 `.avid/` 目录就是权限边界 |
 | 团队从 1 变 10 | 部分成立：契约与层禁规则让并行改动有边界，但 `web/schemas.py` 会成为合并热点 |
@@ -170,7 +170,7 @@
 | 不做 | 理由 | 重新考虑的信号 |
 |---|---|---|
 | subagent 内部事件转发（子 run 的消息/工具事件推到父流） | n8n 用 `ForwardedChildChunkWire` 做过（`dev/research/agent-frontend-survey-final.md:195`），但那要求父 run 的事件语义容纳子 run 的身份与嵌套；v1 的 UI 只需要「哪个子任务在做什么」 | 用户反馈「并行派发时看不到进度」≥2 次，或 subagent 单批耗时成为常见等待 |
-| 会话树的分支/fork 视图 | `session/` 已有 branch 与 value（`values.py:19-21`），但当前 CLI 只用一个 `main` 分支；Onyx 的消息树（`Map<nodeId, Message>` + `childrenNodeIds`，`dev/research/agent-frontend-stack-survey.md:540`）与 Avid 条目树同构，是明确的后续形态 | 出现第一次真实的 fork/重新生成需求 |
+| 会话树的分支/fork 视图 | `session/` 已有 branch 与 value（`values.py:19-21`），但 CLI 只用一条 `main` 分支；Onyx 的消息树（`Map<nodeId, Message>` + `childrenNodeIds`，`dev/research/agent-frontend-stack-survey.md:540`）与 Avid 条目树同构，是明确的后续形态 | 出现第一次真实的 fork/重新生成需求 |
 | 前端侧 Markdown 增量渲染库（streamdown 类） | Dify 与 AutoGPT 都用它（`dev/research/agent-frontend-survey-final.md:221`），但它是 React 生态绑定且体积不小；v1 的消息是整条到达 | 接入 delta 后，若自研渲染的帧率不达标 |
 | 前端文件写入 / 目录浏览 API | 本地反面样本 purrcat 的人类面板绕过权限模型直接写文件（`ui/src/components/chat/IDEPanel.tsx:411-415` 经 Electron `fs:writeFile`，或 `POST /api/filesystem/write` 只做路径转换 + `open().write`），而 agent 侧有 `require_write` 闸门——同一个仓库两套写路径 | 需要人类手动改文件时，**经工具管线**暴露（走 `write_file` 与审批闸门），而不是新开一条 API |
 | 桌面壳（Electron/Tauri） | OpenHands 的打包链要同时带 uv 与 Node 分发（约 130 MB），并用 `afterPack` 把误拷的 `node_modules` 换成 7 MB 闭包（`dev/research/agent-frontend-survey-final.md:498`）。参照实现 purrcat 有完整的 Electron 壳可抄（`electron/main.js` 的 sidecar spawn + 看门狗 + 就绪轮询 + 超时错误页、`preload.js` 的窗口与 `fs:*` 桥），**但它的 `fs:readFile/writeFile/readDir/stat` 没有路径白名单，照抄前必须先加** | 需要在没有终端的机器上分发时 |
@@ -202,7 +202,7 @@
 
 **分页纪律（服务端，不是前端）**：条目列表**必须**有默认 `limit`（100）与硬上限（500），游标用 `cursor_seq` 反向分页并以 `(seq)` 打破并列——`session/types.py:118-141` 的 `EntryQuery`/`BranchScan` 已经有 `limit`/`cursor_seq`，不需要新机制。这条不是风格问题：Langflow 在这个点上出过一次有数字的事故——监控端点缺省返回全量历史，「19k messages 每次请求约 34 MB」，编辑器每 5 秒轮询导致界面冻结；修复方式是默认 `limit=100` + 硬上限 + 反向分页 + 复合索引（`dev/research/agent-frontend-survey-addendum-verified.md:165`）。**长历史靠服务端分页解决，不是靠前端虚拟化。**
 
-**一个被 Web 首屏放大的既有代价**：`GET /api/sessions` 要显示会话名与条数，而名字是会话文件里的一个值、条数要读全部条目，所以这个端点当前是 O(会话数 × 文件大小)——`cli.py:13-15` 已经承认了这个代价（`--list-sessions` 的 `_peek` 会打开每个会话，`cli.py:238-247`）。CLI 下它是「敲一次命令等一会」，Web 下它是**每次刷新首屏**。处置：v1 接受这个代价；当会话数使首屏明显变慢时，把会话名冗余进 JSONL header（`cli.py:13-15` 已写明这条路径）。
+**一个被 Web 首屏放大的既有代价**：`GET /api/sessions` 要显示会话名与条数，而名字是会话文件里的一个值、条数要读全部条目，所以这个端点是 O(会话数 × 文件大小)——`cli.py:13-15` 已经承认了这个代价（`--list-sessions` 的 `_peek` 会打开每个会话，`cli.py:238-247`）。CLI 下它是「敲一次命令等一会」，Web 下它是**每次刷新首屏**。处置：v1 接受这个代价；当会话数使首屏明显变慢时，把会话名冗余进 JSONL header（`cli.py:13-15` 已写明这条路径）。
 
 **写权限的归属**（判据 §4/§6）：会话条目的写入者有且只有 `SessionRecorder`。因此 API 里**没有**「追加条目」端点——前端不是这些对象的作者。人类要写文件时，走 `/api/runs` 让 agent 去调用对应工具，权限闸门与审计因此不被绕过。同理，服务端**不把「是否执行」的判定委托给浏览器的可用性**：浏览器只是决策的输入端，未答复一律收敛为拒绝（超时、取消、断连、重启四条路径都收敛到 `deny`，见 §5.4）——这与 Open WebUI 的反向 RPC（后端 `sio.call` 阻塞等浏览器回包才决定是否执行，`dev/research/agent-frontend-survey-addendum-verified.md:196`）是相反取向，那样会把权限判定拆到两个信任域。
 
@@ -236,7 +236,7 @@ data: {"run_id":"run_...","seq":null,"text":"…"}      ← 无 id 行，不参�
 - 失败收敛的具体表现：不尽力渲染，而是显式报出「界面与内核版本不兼容」并要求重新构建 `web/`（LibreChat 的协议协商就是这个形状，`dev/research/agent-frontend-impl-survey.md:274`；**该文件已于 2026-09-22 清理中删除，锚点不可复核**）。
 - **机械检查（先做这个，不上生成器）**：`tests/test_event_contract.py` 解析 `web/src/events/types.ts` 的联合类型成员集合，与 `runtime/events.py` 的 `EVENT_TYPES` 比较集合相等。理由：生成式契约不是免费的——Dify 生成前要打 6 类规范化补丁、OpenHands 要维护公开面过滤 + 人工 `allowClientOnly` 清单并已出现生成源 1.47.0 与运行时 1.49.1 的静默漂移（`dev/research/agent-frontend-survey-final.md:41`）。在「事件数量 × 变更频率」超过人工同步成本之前，一条集合相等测试比一套生成器便宜（这条判据取自 `dev/research/agent-frontend-survey-final.md:478`）。
 - **升级到生成器的条件与路径**（写清以便将来照做）：事件类型 ≥ 25 个，或单次迭代要改 ≥ 3 个事件的载荷结构时，改用 FastAPI 的 OpenAPI 做**类型生成**（hey-api，只生成类型不生成方法体，OpenHands 的形态），门禁用 Dify 的「CI 先删再生成再 diff」（`dev/research/agent-frontend-survey-final.md:118`）。
-- **破坏性变更的跑道**（生成器时代才需要，现在记录以免将来临时发明）：OpenHands 的做法是 5 个 minor 版本的弃用跑道 + 用 `oasdiff` 对比上一个 PyPI 发布 + CI 校验弃用话术；弱 schema 的允许清单必须带 `reason` / `owner` / `expiry` / `follow_up` 四个字段（`dev/research/agent-frontend-survey-verified-addendum.md:435-439`）。Avid 当前的规模不需要它，但**契约一旦开始生成，废弃就必须有到期日**，否则抽象会永久滞留。
+- **破坏性变更的跑道**（生成器时代才需要，先行记录以免将来临时发明）：OpenHands 的做法是 5 个 minor 版本的弃用跑道 + 用 `oasdiff` 对比上一个 PyPI 发布 + CI 校验弃用话术；弱 schema 的允许清单必须带 `reason` / `owner` / `expiry` / `follow_up` 四个字段（`dev/research/agent-frontend-survey-verified-addendum.md:435-439`）。Avid 的规模还不需要它，但**契约一旦开始生成，废弃就必须有到期日**，否则抽象会永久滞留。
 
 ---
 
@@ -305,7 +305,7 @@ class RunObserver(Protocol):
 阶段 27 把任务图整体下线——六个任务工具、`tools/tasks.py`、`svc/tasks.py`、
 `web/routes/tasks.py`、`GET /api/tasks{,/{id}}` 与 `/tasks` 页面一并删除，本节记的这条非目标
 因此没有了对象。保留它只为留下两件事：当时为什么不给人类写路径（写入者是 agent，加一条写
-路径就要重新论证它是否绕过存储层校验），以及"这次对话的计划"现在由 `todo_write` 工具承接
+路径就要重新论证它是否绕过存储层校验），以及"这次对话的计划"由 `todo_write` 工具承接
 （`runtime-architecture.md` §17 有下线说明）。旧的 `<工作区根>/.tasks/` 数据不
 迁移、不删除，只是不再被读。
 
