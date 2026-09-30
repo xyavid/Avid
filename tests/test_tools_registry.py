@@ -20,7 +20,7 @@ def test_every_tool_is_declared_exactly_once():
 
 
 def test_schema_list_is_derived_from_specs():
-    assert TOOLS == [spec.schema() for spec in specs()]
+    assert [spec.schema() for spec in specs()] == TOOLS
 
 
 def test_stateful_flag_matches_the_implementation_signature():
