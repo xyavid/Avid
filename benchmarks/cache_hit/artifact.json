@@ -10,12 +10,68 @@
       "distinct_tail_hashes": 5,
       "system_chars": 588,
       "status": "finished"
+    },
+    {
+      "arm": "live_cache",
+      "model": "deepseek/deepseek-v4.1-flash",
+      "provider": "openai",
+      "status": "finished",
+      "error": null,
+      "min_ratio": 0.5,
+      "provider_reports_cache": true,
+      "calls": 4,
+      "rounds": [
+        {
+          "call": 1,
+          "system_sha": "be14e4f9fd9d",
+          "prompt_tokens": 827,
+          "cache_read_tokens": 0,
+          "cache_write_tokens": null,
+          "hit_ratio": 0.0
+        },
+        {
+          "call": 2,
+          "system_sha": "be14e4f9fd9d",
+          "prompt_tokens": 888,
+          "cache_read_tokens": 768,
+          "cache_write_tokens": null,
+          "hit_ratio": 0.865
+        },
+        {
+          "call": 3,
+          "system_sha": "be14e4f9fd9d",
+          "prompt_tokens": 950,
+          "cache_read_tokens": 768,
+          "cache_write_tokens": null,
+          "hit_ratio": 0.808
+        },
+        {
+          "call": 4,
+          "system_sha": "be14e4f9fd9d",
+          "prompt_tokens": 1013,
+          "cache_read_tokens": 768,
+          "cache_write_tokens": null,
+          "hit_ratio": 0.758
+        }
+      ],
+      "distinct_system_hashes_live": 1,
+      "median_hit_ratio_from_round2": 0.808
     }
   ],
   "conclusions": [
     {
       "id": "C1",
       "text": "一次运行内 system prompt 逐字节稳定（5 次调用共用 1 个哈希），而 tail 每轮变化——前缀缓存能命中的前提成立",
+      "pass": true
+    },
+    {
+      "id": "C2",
+      "text": "live：provider 上报缓存命中，且命中开始后每轮持续（第 2 轮起）",
+      "pass": true
+    },
+    {
+      "id": "C3",
+      "text": "live：第 2 轮起命中率中位数 0.808 ≥ 阈值 0.5",
       "pass": true
     }
   ]

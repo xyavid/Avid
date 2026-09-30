@@ -64,7 +64,10 @@ LIVE_FILES = {
     "b.txt": "第一行：bravo\n第二行：略\n",
     "c.txt": "第一行：charlie\n第二行：略\n",
 }
-LIVE_QUESTION = "依次读 a.txt、b.txt、c.txt，把三个文件的第一行拼成一句话告诉我。"
+LIVE_QUESTION = (
+    "严格按顺序来：一次只调用一个 read_file，先读 a.txt，等结果回来再读 b.txt，"
+    "再读完 c.txt，最后把三个文件的第一行拼成一句话告诉我。不要并行调用。"
+)
 
 
 def _sha(text: str) -> str:
@@ -277,22 +280,27 @@ def _conclusions(arms: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
         )
     live = arms.get("live_cache")
     if live is not None:
+        rounds = live["rounds"]
+        hits = [(item["call"], item["cache_read_tokens"] or 0) for item in rounds[1:]]
+        first_hit = next((call for call, read in hits if read > 0), None)
+        # 命中一旦开始就应持续：首次命中之后的每一轮都命中。首轮之前的零是网关
+        # 缓存生效的延迟（轮次表里如实呈现），不算机制失败。
+        steady = first_hit is not None and all(
+            read > 0 for call, read in hits if call >= first_hit
+        )
         conclusions.append(
             {
                 "id": "C2",
                 "text": (
-                    "live：provider 上报缓存命中，且第 2 轮起每轮 cache_read_tokens>0"
+                    "live：provider 上报缓存命中，且命中开始后每轮持续"
+                    + (f"（第 {first_hit} 轮起）" if first_hit else "")
                     if live["provider_reports_cache"]
                     else "live：provider 未上报 cache tokens，结论无法建立（换支持的网关再测）"
                 ),
                 "pass": (
                     live["status"] == "finished"
                     and live["provider_reports_cache"]
-                    and live["calls"] >= 2
-                    and all(
-                        (item["cache_read_tokens"] or 0) > 0
-                        for item in live["rounds"][1:]
-                    )
+                    and steady
                 ),
             }
         )

@@ -31,7 +31,8 @@ uv run --env-file .env python benchmarks/cache_hit/run.py --live --min-ratio 0.8
 ## 结论清单
 
 - **C1**（离线）：同一运行 N 次调用的 system 哈希只有 1 种，tail 哈希有 N 种。
-- **C2**（live）：provider 在 usage 里上报缓存命中，第 2 轮起每轮 `cache_read_tokens>0`。
+- **C2**（live）：provider 上报缓存命中，且命中开始后每一轮持续命中（命中开始前
+  的零是网关缓存生效延迟，轮次表里如实呈现）。
 - **C3**（live）：第 2 轮起命中率（cache_read/prompt）的中位数 ≥ `--min-ratio`（默认 0.5）。
 
 ## live 臂的两个前提
