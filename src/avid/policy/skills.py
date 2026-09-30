@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger("avid.policy.skills")
 
 SKILLS_SUBDIR = "skills"
+
+# frontmatter `always:` 认可的写法；其余值一律视为不常驻。
+_ALWAYS_TRUTHY = {"true", "yes", "1", "on"}
 
 
 def default_skills_dir(root: str | Path | None = None) -> Path:
@@ -51,7 +55,8 @@ class SkillLoader:
         self.skills_dir = (
             Path(skills_dir) if skills_dir is not None else default_skills_dir()
         )
-        self.skills: dict[str, dict[str, str]] = {}
+        # `always` is a bool among string fields, so the value type stays loose.
+        self.skills: dict[str, dict[str, Any]] = {}
 
     def scan(self) -> "SkillLoader":
         """Rebuild the registry, skipping non-files and entries that resolve outside the skills root."""
@@ -78,6 +83,8 @@ class SkillLoader:
                 "name": name,
                 "description": description,
                 "content": text,
+                "always": meta.get("always", "").strip().lower() in _ALWAYS_TRUTHY,
+                "body": body,
             }
 
         logger.info(
@@ -88,11 +95,28 @@ class SkillLoader:
         return self
 
     def catalog(self) -> str:
-        """Render the name and description lines that stay resident in the system prompt."""
+        """Render the name and description lines that stay resident in the system prompt.
+
+        Always skills are left out: their full text already sits in the prompt, so a
+        catalog entry would only invite a pointless load_skill call.
+        """
         return "\n".join(
             f"- {name}: {self.skills[name]['description']}"
             for name in sorted(self.skills)
+            if not self.skills[name]["always"]
         )
+
+    def always_bodies(self) -> list[tuple[str, str]]:
+        """Return sorted (name, body) for always skills, frontmatter stripped.
+
+        Uncapped: how much of this may enter the system prompt is a prompt-budget
+        decision, made by the assembler (context_manager) via policy.prompt.
+        """
+        return [
+            (name, self.skills[name]["body"])
+            for name in sorted(self.skills)
+            if self.skills[name]["always"]
+        ]
 
     def load(self, name: str) -> str:
         """Look a skill up by registry key only, so a path-shaped argument is always a miss."""

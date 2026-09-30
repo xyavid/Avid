@@ -24,6 +24,8 @@ def test_scans_frontmatter(tmp_path):
         "name": "code-review",
         "description": "做代码审查",
         "content": text,
+        "always": False,
+        "body": "正文",
     }
 
 
@@ -154,6 +156,65 @@ def test_load_treats_the_name_as_a_key_not_a_path(tmp_path):
 
     assert loader.load("../../etc/passwd").startswith("错误：没有这个技能")
     assert loader.load("alpha/SKILL.md").startswith("错误：没有这个技能")
+
+
+# ---------- always 层级：正文常驻 system prompt（阶段 31） ----------
+
+
+def test_always_flag_is_parsed_from_frontmatter(tmp_path):
+    write_skill(tmp_path, "a", "---\ndescription: A\nalways: true\n---\n常驻正文\n")
+    write_skill(tmp_path, "b", "---\ndescription: B\n---\n按需正文\n")
+
+    loader = SkillLoader(tmp_path).scan()
+
+    assert loader.skills["a"]["always"] is True
+    assert loader.skills["b"]["always"] is False
+
+
+def test_always_accepts_common_truthy_writes(tmp_path):
+    for value in ("True", "yes", "1", "on"):
+        root = tmp_path / "pos" / value
+        write_skill(root, "a", f"---\nalways: {value}\n---\n正文\n")
+        assert SkillLoader(root).scan().skills["a"]["always"] is True, value
+
+    for value in ("false", "no", "0", "", "sometimes"):
+        root = tmp_path / "neg" / (value or "empty")
+        write_skill(root, "a", f"---\nalways: {value}\n---\n正文\n")
+        assert SkillLoader(root).scan().skills["a"]["always"] is False, value
+
+
+def test_always_bodies_returns_frontmatter_free_bodies_sorted(tmp_path):
+    write_skill(tmp_path, "b", "---\nname: beta\nalways: true\n---\nB 正文\n")
+    write_skill(tmp_path, "a", "---\nname: alpha\nalways: true\n---\nA 正文\n")
+    write_skill(tmp_path, "c", "---\ndescription: 按需\n---\n不进来\n")
+
+    assert SkillLoader(tmp_path).scan().always_bodies() == [
+        ("alpha", "A 正文"),
+        ("beta", "B 正文"),
+    ]
+
+
+def test_always_bodies_is_empty_without_always_skills(tmp_path):
+    write_skill(tmp_path, "a", "---\ndescription: A\n---\n正文\n")
+
+    assert SkillLoader(tmp_path).scan().always_bodies() == []
+
+
+def test_catalog_excludes_always_skills(tmp_path):
+    write_skill(tmp_path, "a", "---\ndescription: 常驻的\nalways: true\n---\n正文\n")
+    write_skill(tmp_path, "b", "---\ndescription: 按需的\n---\n正文\n")
+
+    assert SkillLoader(tmp_path).scan().catalog() == "- b: 按需的"
+
+
+def test_load_still_returns_the_full_file_for_an_always_skill(tmp_path):
+    text = "---\ndescription: A\nalways: true\n---\n含 frontmatter 的全文\n"
+    write_skill(tmp_path, "a", text)
+
+    loader = SkillLoader(tmp_path).scan()
+
+    assert loader.load("a") == text
+    assert loader.always_bodies() == [("a", "含 frontmatter 的全文")]
 
 
 # ---------- 运行隔离：每个 RunState 自带一份注册表 ----------

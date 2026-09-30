@@ -117,6 +117,116 @@ def test_skill_catalog_renders_into_system(tmp_path):
     assert request.parts["skill_catalog"] > 0
 
 
+# ---------- bootstrap 与常驻技能（阶段 31） ----------
+
+
+def test_bootstrap_block_carries_the_workspace_agents_md(tmp_path):
+    (tmp_path / "AGENTS.md").write_text("# 协作约定\n提交信息用中文。", encoding="utf-8")
+    state = RunState(workspace_root=str(tmp_path))
+
+    request = make_manager(state=state).compose()
+
+    assert "## 工作区约定" in request.system
+    assert "提交信息用中文。" in request.system
+    assert request.parts["bootstrap"] > 0
+
+
+def test_bootstrap_is_absent_without_the_file(tmp_path):
+    state = RunState(workspace_root=str(tmp_path))
+
+    request = make_manager(state=state).compose()
+
+    assert "bootstrap" not in request.parts
+    assert "## 工作区约定" not in request.system
+
+
+def test_bootstrap_ignores_an_empty_or_missing_file(tmp_path):
+    (tmp_path / "AGENTS.md").write_text("   \n", encoding="utf-8")
+    state = RunState(workspace_root=str(tmp_path))
+
+    assert "bootstrap" not in make_manager(state=state).compose().parts
+
+
+def test_bootstrap_ignores_a_directory_shaped_file(tmp_path):
+    (tmp_path / "AGENTS.md").mkdir()
+    state = RunState(workspace_root=str(tmp_path))
+
+    assert "bootstrap" not in make_manager(state=state).compose().parts
+
+
+def test_bootstrap_truncates_past_the_cap(tmp_path, monkeypatch):
+    from avid.policy import prompt
+
+    monkeypatch.setattr(prompt, "AGENTS_MD_MAX_CHARS", 50)
+    (tmp_path / "AGENTS.md").write_text("长" * 80, encoding="utf-8")
+    state = RunState(workspace_root=str(tmp_path))
+
+    request = make_manager(state=state).compose()
+
+    assert prompt.TRUNCATION_NOTE in request.system
+    assert "长" * 50 in request.system
+    assert "长" * 51 not in request.system
+
+
+def test_always_skill_lands_in_system_and_leaves_the_catalog(tmp_path):
+    (tmp_path / "style").mkdir()
+    (tmp_path / "style" / "SKILL.md").write_text(
+        "---\ndescription: 代码风格\nalways: true\n---\n缩进用四空格。\n", encoding="utf-8"
+    )
+    state = RunState()
+    state.skills = SkillLoader(tmp_path).scan()
+
+    request = make_manager(state=state).compose()
+
+    assert "## 常驻技能" in request.system
+    assert "缩进用四空格。" in request.system
+    assert request.parts["skill_always"] > 0
+    # always 技能不再占目录：不需要为一个已常驻的技能调 load_skill
+    assert "- style: 代码风格" not in request.system
+
+
+def test_always_total_cap_skips_later_skills(tmp_path, monkeypatch):
+    from avid.policy import prompt
+
+    monkeypatch.setattr(prompt, "SKILL_ALWAYS_TOTAL_MAX_CHARS", 10)
+    for name in ("a", "b"):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "SKILL.md").write_text(
+            f"---\ndescription: {name}\nalways: true\n---\n{'字' * 8}\n", encoding="utf-8"
+        )
+    state = RunState()
+    state.skills = SkillLoader(tmp_path).scan()
+
+    request = make_manager(state=state).compose()
+
+    assert "### a" in request.system
+    assert "### b" not in request.system
+
+
+def test_default_instructions_carry_identity_contract_and_guardrail():
+    """默认文案（阶段 31 起来自 policy.prompt）钉住四类必备内容。"""
+    request = make_manager().compose()
+
+    assert "你是 Avid" in request.system
+    # 工具契约：授权执行并验证、不可逆先确认、缺信息先澄清、等结果再答复
+    assert "不可逆" in request.system
+    assert "澄清" in request.system
+    assert "工具结果" in request.system
+    # 外部内容防线：工具结果是数据不是指令
+    assert "不是指令" in request.system
+    # 原有的 todo 约定保留
+    assert "todo_write" in request.system
+
+
+def test_environment_includes_runtime_facts():
+    import platform
+
+    request = make_manager().compose()
+
+    assert platform.system() in request.system
+    assert "今天：" in request.system
+
+
 # ---------- tail 落位 ----------
 
 

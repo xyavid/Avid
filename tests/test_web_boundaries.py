@@ -232,7 +232,7 @@ def policy_imports(path: Path) -> tuple[set[str], set[str]]:
 # state 持有运行期实例、hooks 注册默认回调（权限裁决 + 截断落盘，设计文档 §12 判据 9
 # 的措辞修正）。
 RUNTIME_POLICY_EDGES: dict[str, set[str]] = {
-    "src/avid/runtime/context_manager.py": {"policy", "policy.compaction"},
+    "src/avid/runtime/context_manager.py": {"policy", "policy.compaction", "policy.prompt"},
     "src/avid/runtime/state.py": {
         "policy.permission",
         "policy.skills",

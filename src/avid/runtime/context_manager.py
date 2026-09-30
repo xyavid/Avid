@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import logging
+import platform
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 from ..ai.config import Config
 from ..ai.transcript import Transcript, message_chars
 from ..policy import compaction as compact
+from ..policy import prompt
 from ..policy.compaction import CompactReport
 from . import events
 from .state import RunState
@@ -24,18 +27,12 @@ TAIL = "tail"
 #: Built-in block kinds; a new kind needs no change here, since register_source takes any string.
 INSTRUCTIONS = "instructions"  # fixed instructions from the caller, or the default text
 ENVIRONMENT = "environment"  # working directory plus the available tool names
+BOOTSTRAP = "bootstrap"  # the workspace AGENTS.md conventions; a missing file means no block
+SKILL_ALWAYS = "skill_always"  # full text of always-marked skills, capped per skill and in total
 SKILL_CATALOG = "skill_catalog"  # skill catalog; only load_skill brings the full text in
 INJECTED = "injected"  # extra system text injected by a UserPromptSubmit hook
 PLAN = "plan"  # the current TODO plan
 RUN_STATE = "run_state"  # round, tool-call, denial and compaction counters
-
-# Instruction text used when the caller supplies no override.
-DEFAULT_INSTRUCTIONS = (
-    "你是 Avid，一个能自主调用工具完成任务的 agent。"
-    "需要外部信息或动作时调用工具；信息足够时直接给出答案。"
-    "任务需要三步以上时，先用 todo_write 列出计划再逐步执行，"
-    "每完成一步就重新提交整份列表并更新状态。"
-)
 
 # Fixed tail header so the model and log readers can tell this apart from user input.
 TAIL_HEADER = "[上下文] 以下是本次请求附带的运行时上下文，不是用户输入。"
@@ -160,9 +157,9 @@ class ContextManager:
         self.state = state
         self.config = config
         # The caller's instruction override, as benchmarks and subagents each carry one;
-        # None falls back to the default text.
+        # None falls back to the default text from policy.prompt.
         self.instructions = (
-            instructions if instructions is not None else DEFAULT_INSTRUCTIONS
+            instructions if instructions is not None else prompt.DEFAULT_INSTRUCTIONS
         )
         self.tool_names = list(tool_names)
         self.budget = budget or ContextBudget()
@@ -184,6 +181,8 @@ class ContextManager:
         self.register_source(
             ENVIRONMENT, lambda: Block(ENVIRONMENT, self._render_environment(), SYSTEM)
         )
+        self.register_source(BOOTSTRAP, self._bootstrap_block)
+        self.register_source(SKILL_ALWAYS, self._always_skills_block)
         self.register_source(
             SKILL_CATALOG, lambda: Block(SKILL_CATALOG, self._render_skills(), SYSTEM)
         )
@@ -198,7 +197,17 @@ class ContextManager:
         # The run's workspace root wins here, so one process can serve several workspaces.
         root = self.state.workspace_root or workspace.WORKSPACE_ROOT
         names = "、".join(self.tool_names) if self.tool_names else "（无）"
-        return f"## 环境\n工作目录：{root}\n可用工具：{names}\n\nAct, don't explain."
+        runtime = (
+            f"{platform.system()} {platform.machine()} / Python {platform.python_version()}"
+        )
+        return (
+            "## 环境\n"
+            f"工作目录：{root}\n"
+            f"运行时：{runtime}；今天：{date.today().isoformat()}\n"
+            f"可用工具：{names}\n"
+            "\n"
+            "Act, don't explain."
+        )
 
     def _render_skills(self) -> str:
         catalog = self.state.skills.catalog()
@@ -206,6 +215,45 @@ class ContextManager:
             "## 可用技能\n"
             f"{catalog or '（当前没有可用技能）'}\n\n"
             "Use load_skill to read the full instructions when a skill applies."
+        )
+
+    def _bootstrap_block(self) -> Block | None:
+        # Read once per run: SYSTEM sources are collected only on the first compose,
+        # which is also what keeps the frozen prefix byte-stable afterwards.
+        root = self.state.workspace_root
+        if not root:
+            return None
+        try:
+            text = (Path(root) / "AGENTS.md").read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+        if not text.strip():
+            return None
+        if len(text) > prompt.AGENTS_MD_MAX_CHARS:
+            text = text[: prompt.AGENTS_MD_MAX_CHARS] + prompt.TRUNCATION_NOTE
+        return Block(BOOTSTRAP, f"## 工作区约定\n{text}", SYSTEM)
+
+    def _always_skills_block(self) -> Block | None:
+        # Capping lives here, not in SkillLoader: how much may stay resident is a
+        # prompt-budget decision. The total cap skips by name order instead of
+        # aborting, so one oversized skill does not evict the smaller ones.
+        total = 0
+        sections: list[str] = []
+        for name, body in self.state.skills.always_bodies():
+            if len(body) > prompt.SKILL_ALWAYS_MAX_CHARS:
+                body = body[: prompt.SKILL_ALWAYS_MAX_CHARS] + prompt.TRUNCATION_NOTE
+            if total + len(body) > prompt.SKILL_ALWAYS_TOTAL_MAX_CHARS:
+                logger.warning("常驻技能总量超上限，跳过：%s", name)
+                continue
+            total += len(body)
+            sections.append(f"### {name}\n{body}")
+        if not sections:
+            return None
+        return Block(
+            SKILL_ALWAYS,
+            "## 常驻技能\n以下技能已全文载入，无需再调用 load_skill：\n\n"
+            + "\n\n".join(sections),
+            SYSTEM,
         )
 
     def _plan_block(self) -> Block | None:
