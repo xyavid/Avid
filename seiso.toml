@@ -1,0 +1,44 @@
+include = ["**/*.md", "**/*.markdown"]
+preview = false
+
+# benchmarks/fixtures 是评测 case 用的仿真项目（每次跑在临时副本上，见 benchmarks/README.md），
+# 里面的 md 是给判定器消费的道具，不是本项目文档。
+exclude = ["benchmarks/fixtures/**"]
+
+# skills/*/SKILL.md 的 frontmatter（name/description）由技能加载器解析，
+# kind 不写进 frontmatter，用路径映射声明，避免动运行时契约。
+[[kinds]]
+path = "**/README.md"
+kind = "readme"
+
+[[kinds]]
+path = "AGENTS.md"
+kind = "reference"
+
+[[kinds]]
+path = "skills/**/SKILL.md"
+kind = "howto"
+
+# docs/：设计与接口规格描述"现在是什么"，是 reference；ROADMAP 回答"接下来做什么"，是 plan。
+# status/ 五份是易变事实的唯一家（分工见 docs/README.md），同样按 reference 纳入规则。
+[[kinds]]
+path = "docs/guide/**"
+kind = "reference"
+
+[[kinds]]
+path = "docs/design/**"
+kind = "reference"
+
+[[kinds]]
+path = "docs/status/*.md"
+kind = "reference"
+
+[[kinds]]
+path = "docs/status/ROADMAP.md"
+kind = "plan"
+
+[lint.per-file-ignores]
+# status/ 五份是易变事实的唯一家（分工与硬要求见 docs/README.md），页面按阶段节奏重写，
+# "长期页面不记快变值"对这里的现状陈述不适用；BENCHMARK / CURRENT_STATE 里的 commit
+# 是基线与写作基线的身份，属于带日期的观察记录，规范允许保留。
+"docs/status/**" = ["STL"]
