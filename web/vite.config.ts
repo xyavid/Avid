@@ -29,5 +29,8 @@ export default defineConfig({
     // `// @vitest-environment jsdom` 单独切换，不必让全部用例都背 jsdom 的启动成本。
     environment: 'node',
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+    // 补 jsdom 缺失的浏览器 API（目前是 matchMedia）。放在全局是因为它是**环境缺口**：
+    // 任何渲染布局的用例都会撞上，不是某个组件的测试细节，各文件自己写必然漂移。
+    setupFiles: ['./src/test/setup.ts'],
   },
 })

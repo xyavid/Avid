@@ -47,6 +47,18 @@ export default {
         /* 发丝线 */
         hair: rgbVar('border'),
         'hair-strong': rgbVar('border-strong'),
+        /*
+         * 状态描边色。**只有这两个写法**能与 `border-hair` 共存：
+         *   · 不要写 `border-hair border-danger/40`：Tailwind 按类名字母序输出同轴类，
+         *     `.border-danger/40` 的 border-color 恒排在 `.border-hair` 之前而被静默
+         *     覆盖（实测，红色不生效且不报错）。
+         *   · 键名不要带 `border-` 前缀：Tailwind 对 `border-*` 有特例，
+         *     会把 `border-border-danger` 解析成色名 `border-danger` 而落空。
+         * `state-*` 既语义清楚，又在字典序上排在 `hair` 之后——覆盖方向正确。
+         * 详见 tokens.css 里对应注释。
+         */
+        'state-danger': rgbVar('state-danger'),
+        'state-warn': rgbVar('state-warn'),
         /* 语义 */
         ok: rgbVar('ok'),
         warn: rgbVar('warn'),
@@ -71,6 +83,19 @@ export default {
         full: 'var(--avid-radius-full)',
       },
       borderWidth: {
+        /*
+         * `hair` 让 `border-hair` / `border-x-hair` / `border-r-hair` 都生成
+         * 0.5px 的线宽（各方向变体由 Tailwind 从同一 key 派生）。
+         *
+         * ⚠ 与 `colors.hair`（线的**颜色**）同名不同轴：`border-hair` 因此是
+         * "0.5px 的线"，而颜色必须另外写——惯例写法是 `border-hair border-hair`
+         * （先线宽后颜色），或者用 `border-t-hair border-hair` 这类方向变体。
+         * 这是 Tailwind 的固有歧义，不是笔误；token 表里 `--avid-stroke-hair`
+         * 与 `--avid-border-rgb` 也确实是两个不同的东西（线宽 vs 线色）。
+         *
+         * 低 DPI 屏上 0.5px 会渲染成"很淡的 1px"，这是显式选择：
+         * 宁可细到近乎消失，也不要 1px 的塑料边。
+         */
         hair: 'var(--avid-stroke-hair)',
         thin: 'var(--avid-stroke-thin)',
       },

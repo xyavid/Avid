@@ -56,6 +56,25 @@
   /* 发丝线：结构分割**只**靠它，不靠阴影。 */
   --avid-border-rgb: 216 207 190; /* #D8CFBE 常规线 */
   --avid-border-strong-rgb: 196 185 165; /* 加重线：分组边界 */
+  /*
+   * 状态描边色：**必须**是独立 token，且**类名要排在 `hair` 之后**。
+   *
+   * 两条都是实测出来的，不是推断：
+   *   · Tailwind 把同轴的类**按类名字母序**输出（不是配置里的书写顺序——
+   *     实测把 hair 写在前面也会被排到后面去）。`border-danger/40` 这类
+   *     颜色类恒定排在 `.border-hair` 之前，同权重下被静默覆盖：
+   *     写 `border-hair border-danger/40` 得到的是普通发丝线色，红色不生效且不报错。
+   *   · 名字里**不能带 `border-` 前缀**：Tailwind 对 `border-*` 有特例，
+   *     `border-border-danger` 会被当成色名 `border-danger` 去解析，映射到不存在的值。
+   *
+   * 所以这两个键叫 `state-danger` / `state-warn`：语义清楚（状态描边），
+   * 且 `state-*` 在字典序上排在 `hair` 之后，覆盖方向正确。
+   *
+   * 值是把朱红/赭以 40% 预混到纸面（#F8F4ED）上算出的实色——不是透明色，
+   * 因为 40% 的 alpha 在这里是审美选择，而 token 的价值正在于它是**一个**确定值。
+   */
+  --avid-state-danger-rgb: 224 168 160;
+  --avid-state-warn-rgb: 226 199 160;
 
   /* 语义色：一律低饱和。 */
   --avid-ok-rgb: 74 107 74; /* #4A6B4A 墨绿 */
