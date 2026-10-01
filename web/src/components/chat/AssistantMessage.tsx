@@ -25,15 +25,9 @@ export function AssistantMessage({ children, streaming = false, name = 'Avid', c
     <div className={cx('flex gap-a8', className)}>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-a8">
-          {/* 头像：标识本身代替了原先的字母「A」。小尺寸取 accent——流式光标与呼吸点
-              同为 accent，助手这一侧的颜色由此统一到一处；形状在 13px 下只剩剪影，
-              靠颜色比靠轮廓更容易被认出。 */}
-          <span
-            aria-hidden
-            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-hairline border-hair bg-card text-accent"
-          >
-            <AvidMark size={13} />
-          </span>
+          {/* 头像：标识直接贴在纸面上——不做圆托、不垫色板（用户要求背景透明），
+              图案自带配色，与旁边名称行同一片底色。 */}
+          <AvidMark size={24} className="shrink-0" />
           <span className="font-ui text-ui leading-[18px] text-ink-light">{name}</span>
         </div>
         {streaming ? (

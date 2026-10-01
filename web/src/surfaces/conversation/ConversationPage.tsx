@@ -37,17 +37,12 @@ import { ProjectCard } from '../../components/session/ProjectCard'
 import { SessionNav } from '../../components/session/SessionNav'
 import { AppShell } from '../../app/AppShell'
 
-/** 欢迎态（报告 §6 底部欢迎态）：100px 头像圆 + 衬线欢迎语（letter-spacing .06em）。
-    圆内是标识本体（原先是一个字母「A」）——大尺寸取墨色，形状自己站得住。 */
+/** 欢迎态（报告 §6 底部欢迎态）：标识 + 衬线欢迎语（letter-spacing .06em）。
+    标识直接贴在纸面上，不做圆托——图案自带配色，透明底。 */
 function Welcome({ detail }: { detail: string }) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-a16">
-      <span
-        aria-hidden
-        className="flex h-[100px] w-[100px] items-center justify-center rounded-full border-hairline border-hair bg-card text-ink"
-      >
-        <AvidMark size={64} />
-      </span>
+      <AvidMark size={96} />
       <p className="font-serif text-[20px] tracking-[0.06em] text-ink">有什么可以帮你？</p>
       <p className="font-ui text-hint text-ink-muted">{detail}</p>
     </div>

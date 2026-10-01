@@ -121,13 +121,14 @@ export function GalleryPage() {
       )}
 
       {show('mark') && (
-        <Section id="mark" title="标识 · 焰（48 视框实心单色，与线性图标集是两类）">
-          {/* 两套主题并排：给子树挂 data-theme 即可让里面的 token 全部换掉——
-              换肤机制（只覆盖变量）在这里顺带当了演示，不需要任何裸色值。 */}
+        <Section id="mark" title="标识 · 荷花（自带配色的插画，与线性图标集是两类）">
+          {/* 标识不做圆托、不垫色板：直接贴在页面上、背景透明（使用者的要求）。
+              两套主题并排——给子树挂 data-theme 即可换掉里面所有 token，
+              标识自己不变色（它有自己的配色），只是周边底色跟着主题走。 */}
           <div className="flex flex-wrap gap-a24">
             <div className="rounded-md border-hairline border-hair bg-paper px-a16 py-a12">
-              <p className="mb-a8 font-ui text-hint text-ink-muted">暖纸 · 墨（text）</p>
-              <div className="flex items-end gap-a12 text-ink">
+              <p className="mb-a8 font-ui text-hint text-ink-muted">暖纸 · 纸面直放</p>
+              <div className="flex items-end gap-a12">
                 {[16, 20, 24, 32, 48, 64].map((s) => (
                   <span key={s} className="flex flex-col items-center gap-a4">
                     <AvidMark size={s} />
@@ -140,8 +141,8 @@ export function GalleryPage() {
               data-theme="midnight"
               className="rounded-md border-hairline border-hair bg-paper px-a16 py-a12"
             >
-              <p className="mb-a8 font-ui text-hint text-ink-muted">青夜 · 雪（text）</p>
-              <div className="flex items-end gap-a12 text-ink">
+              <p className="mb-a8 font-ui text-hint text-ink-muted">青夜 · 纸面直放</p>
+              <div className="flex items-end gap-a12">
                 {[16, 20, 24, 32, 48, 64].map((s) => (
                   <span key={s} className="flex flex-col items-center gap-a4">
                     <AvidMark size={s} />
@@ -155,23 +156,16 @@ export function GalleryPage() {
           <div className="mt-a16 flex flex-wrap items-end gap-a24">
             <div>
               <p className="mb-a8 font-ui text-hint text-ink-muted">
-                圆内落位 · 小尺寸取 accent（与流式光标同色），大尺寸取墨
+                欢迎态尺寸（96px，直放不托底）
               </p>
-              <div className="flex items-end gap-a16">
-                <span className="flex h-6 w-6 items-center justify-center rounded-full border-hairline border-hair bg-card text-accent">
-                  <AvidMark size={13} />
-                </span>
-                <span className="flex h-[100px] w-[100px] items-center justify-center rounded-full border-hairline border-hair bg-card text-ink">
-                  <AvidMark size={64} />
-                </span>
-              </div>
+              <AvidMark size={96} />
             </div>
             <div>
               <p className="mb-a8 font-ui text-hint text-ink-muted">
-                与字标的锁定组合（EB Garamond 500，标记 20px）
+                与字标的锁定组合（EB Garamond 500，标记 22px）
               </p>
               <span className="flex items-center gap-a8 text-ink">
-                <AvidMark size={20} />
+                <AvidMark size={22} />
                 <span className="font-serif text-title tracking-[0.01em]">Avid</span>
               </span>
             </div>
