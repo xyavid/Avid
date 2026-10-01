@@ -9,6 +9,7 @@
  * | 图标 | 首个使用点 |
  * |---|---|
  * | check | 成功徽章「已编译」等（阶段 2 ✓） |
+ * | user-check | 权限模式「手动」（人审，阶段 4 ✓） |
  * | x | 审批拒绝、对话框关闭、清空搜索（阶段 3–4） |
  * | plus | 新建会话、composer 附加（阶段 3–4） |
  * | search | 侧栏会话搜索框（阶段 3） |
@@ -168,6 +169,13 @@ const PATHS = {
     <>
       <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
       <circle cx="12" cy="7" r="4" />
+    </>
+  ),
+  'user-check': (
+    <>
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="m16 11 2 2 4-4" />
     </>
   ),
 } satisfies Record<string, ReactNode>

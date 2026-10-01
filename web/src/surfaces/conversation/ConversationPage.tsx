@@ -11,7 +11,7 @@
 import { useEffect, useState } from 'react'
 
 import { ApiError, getMeta, listBranches, listEntries, listSessions } from '../../api/client'
-import type { Entry, Meta, SessionSummary, UsageReport } from '../../api/types'
+import type { Entry, Meta, PermissionMode, SessionSummary, UsageReport } from '../../api/types'
 import { Composer } from '../../components/chat/Composer'
 import { Timeline } from '../../components/chat/Timeline'
 import { ContextRail } from '../../components/rail/ContextRail'
@@ -41,6 +41,8 @@ export function ConversationPage() {
   const [entries, setEntries] = useState<Entry[] | null>(null)
   const [usage, setUsage] = useState<UsageReport | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // 权限「态势」：随选中会话回落到其工作区的默认权限，用户可在输入区改（下次发送生效）。
+  const [permission, setPermission] = useState<PermissionMode>('manual')
 
   useEffect(() => {
     let alive = true
@@ -90,6 +92,11 @@ export function ConversationPage() {
 
   const selected = sessions?.find((s) => s.id === selectedId) ?? null
 
+  useEffect(() => {
+    setPermission(selected?.workspace?.default_permission ?? 'manual')
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在切换会话时回落默认值
+  }, [selected?.id])
+
   let body = <Welcome detail="从左侧选择一个会话；发送消息在阶段 5 接线" />
   if (error) {
     body = <p className="px-a8 pt-a8 font-ui text-ui text-danger">{error}</p>
@@ -114,7 +121,7 @@ export function ConversationPage() {
       main={
         <div className="mx-auto flex h-full max-w-chat-input flex-col">
           <div className="min-h-0 flex-1 overflow-y-auto px-a16 pt-a16">{body}</div>
-          <Composer />
+          <Composer permission={permission} onChangePermission={setPermission} />
         </div>
       }
       rail={<ContextRail meta={meta} session={selected} usage={usage} />}

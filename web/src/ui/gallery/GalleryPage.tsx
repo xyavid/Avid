@@ -197,9 +197,9 @@ export function GalleryPage() {
       )}
 
       {show('composer') && (
-        <Section id="composer" title="输入区（16px 圆角壳；发送阶段 5 接线）">
+        <Section id="composer" title="输入区（16px 圆角壳；权限胶囊可交互，发送阶段 5 接线）">
           <div className="max-w-chat-input border-hairline border-hair bg-sidebar p-a12">
-            <Composer />
+            <Composer permission="manual" onChangePermission={() => {}} />
           </div>
         </Section>
       )}
