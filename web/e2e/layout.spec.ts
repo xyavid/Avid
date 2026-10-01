@@ -98,19 +98,40 @@ test.describe('布局与视觉', () => {
   })
 
   test('宽度降级：820px 收起导航列，1180px 以下检查器改浮层', async ({ page, stubApi }) => {
-    await stubApi({ sessions: [defaultSession('s-1', '降级会话')] })
+    await stubApi({
+      sessions: [defaultSession('s-1', '降级会话')],
+      workspaces: [defaultWorkspace('ws-1', '/home/fishy/Avid', 'Avid')],
+    })
 
-    // 窄屏：导航列不常驻（AppShell 不渲染它），但主区仍完整可用。
+    // 窄屏（<900）：导航列不常驻（AppShell 不渲染它），但主区仍完整可用。
     await page.setViewportSize({ width: 820, height: 900 })
     await page.goto('/', { waitUntil: 'domcontentloaded' })
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
     await expect(page.locator('nav[aria-label="会话"]')).toHaveCount(0)
     await expect(page.getByRole('textbox', { name: '输入' })).toBeVisible()
 
-    // 宽屏：导航列常驻。
+    /*
+     * 中间档（900 ≤ 宽 < 1180）：导航列常驻，但检查器**不再占一整列**。
+     * 判据用右栏容器的宽度而不是"某个类名"——1180 断点会在 380px 的检查器
+     * 与主区之间二选一，而信息面板是常驻的，所以这一档必须证明：
+     * 导航在、输入区在、右栏没有把主区压到不可读。
+     */
+    await page.setViewportSize({ width: 1050, height: 900 })
+    await page.goto('/', { waitUntil: 'domcontentloaded' })
+    await expect(page.locator('nav[aria-label="会话"]')).toBeVisible()
+    const mid = await page.evaluate(() => ({
+      main: Math.round(document.querySelector('#avid-main')!.getBoundingClientRect().width),
+      composerBottom: Math.round(document.querySelector('textarea')!.getBoundingClientRect().bottom),
+      viewport: window.innerHeight,
+    }))
+    expect(mid.main, '主区在中间档被压得太窄').toBeGreaterThan(380)
+    expect(mid.composerBottom).toBeLessThanOrEqual(mid.viewport)
+
+    // 宽屏（≥1180）：导航列常驻，右栏信息面板也在。
     await page.setViewportSize({ width: 1440, height: 900 })
     await page.goto('/', { waitUntil: 'domcontentloaded' })
     await expect(page.locator('nav[aria-label="会话"]')).toBeVisible()
+    await expect(page.getByRole('region', { name: '工作区' })).toBeVisible()
   })
 
   test('收起侧栏只改宽度，不丢内容', async ({ page, stubApi }) => {
