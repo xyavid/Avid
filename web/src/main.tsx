@@ -15,6 +15,10 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import { App } from './app/App'
+import { initAppearance } from './state/appearance'
+
+// 挂载前先按存储的偏好定主题，避免先亮后暗的闪烁。
+initAppearance()
 
 const container = document.getElementById('root')
 if (container === null) {

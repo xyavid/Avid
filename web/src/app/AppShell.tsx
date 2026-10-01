@@ -19,16 +19,17 @@ export type AppShellProps = {
   sidebar?: ReactNode
   main?: ReactNode
   rail?: ReactNode
+  /** 顶栏右侧操作区（设置按钮等）；缺省显示占位标注。 */
+  actions?: ReactNode
 }
 
-export function AppShell({ sidebar, main, rail }: AppShellProps) {
+export function AppShell({ sidebar, main, rail, actions }: AppShellProps) {
   const railScrollRef = useAutoHideScroll<HTMLElement>()
   return (
     <div className="grid h-dvh grid-rows-[var(--titlebar-h)_minmax(0,1fr)] bg-paper font-ui text-ink">
       <header className="flex items-center justify-between border-b border-hair px-a16">
         <span className="font-serif text-title tracking-[0.01em]">Avid</span>
-        {/* 主题切换与服务状态的预留位（阶段 6 / 后续接线） */}
-        <RegionNote>主题 · 状态占位</RegionNote>
+        {actions ?? <RegionNote>主题 · 状态占位</RegionNote>}
       </header>
 
       <div className="grid min-h-0 grid-cols-[var(--sidebar-width)_minmax(0,1fr)_var(--channel-inspector-width)]">

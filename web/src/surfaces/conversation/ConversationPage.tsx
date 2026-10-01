@@ -28,8 +28,10 @@ import { Timeline, toolIcon } from '../../components/chat/Timeline'
 import { ToolCard } from '../../components/chat/ToolCard'
 import { UserBubble } from '../../components/chat/UserBubble'
 import { useRunStream } from '../../state/useRunStream'
+import { IconButton } from '../../ui/IconButton'
 import { useAutoHideScroll } from '../../ui/useAutoHideScroll'
 import { ContextRail } from '../../components/rail/ContextRail'
+import { SettingsModal } from '../../components/settings/SettingsModal'
 import { ProjectCard } from '../../components/session/ProjectCard'
 import { SessionNav } from '../../components/session/SessionNav'
 import { AppShell } from '../../app/AppShell'
@@ -67,6 +69,10 @@ export function ConversationPage() {
   // 活运行：一次运行的发送/订阅/终态回拉。liveSession 标记活事件属于哪个会话
   // （切走会话时活区块不跟过去）；attachedRunRef 防重复附着同一运行。
   const [liveSession, setLiveSession] = useState<string | null>(null)
+  // `?settings=1` 是开发期钉子（截图/联调直达设置界面），与 ?gallery=1 同性质
+  const [settingsOpen, setSettingsOpen] = useState(
+    () => new URLSearchParams(window.location.search).has('settings'),
+  )
   const conversationScrollRef = useAutoHideScroll<HTMLDivElement>()
   const selectedIdRef = useRef<string | null>(null)
   selectedIdRef.current = selectedId
@@ -271,7 +277,9 @@ export function ConversationPage() {
   }
 
   return (
-    <AppShell
+    <>
+      <AppShell
+        actions={<IconButton icon="settings" label="设置" onClick={() => setSettingsOpen(true)} />}
       sidebar={
         <div className="flex min-h-0 flex-1 flex-col gap-a12">
           <ProjectCard
@@ -320,7 +328,11 @@ export function ConversationPage() {
           />
         </div>
       }
-      rail={<ContextRail usage={usage} />}
-    />
+        rail={<ContextRail usage={usage} />}
+      />
+      {settingsOpen && (
+        <SettingsModal model={meta?.capabilities.model ?? null} onClose={() => setSettingsOpen(false)} />
+      )}
+    </>
   )
 }

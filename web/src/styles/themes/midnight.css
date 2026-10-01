@@ -1,0 +1,59 @@
+/* ==========================================================================
+   Avid Web · 主题：青夜（深色）—— [data-theme='midnight']
+   ==========================================================================
+   报告 §4 给出三值（bg #3B4A54 / accent #C99AAF / text #E1EAF0），
+   其余是**同色温推断档**（青蓝底 + 暖玫瑰强调，保持「抬升面比主面更亮」
+   「文字不纯黑」两条纪律），阶段 7 打磨时按参考深色图校准。
+   换肤 = 只覆盖变量；组件一行不改（tokens.css 的机制）。
+   ========================================================================== */
+
+[data-theme='midnight'] {
+  /* 面：主面 → 抬升（更亮）→ 侧栏（更深） */
+  --bg: #3B4A54;
+  --bg-card: #44545F;
+  --bg-glass: rgba(59, 74, 84, 0.92);
+  --sidebar-bg: #35434C;
+
+  /* 字：冷白三档，绝不纯白 */
+  --text: #E1EAF0;
+  --text-light: #B3C2CC;
+  --text-muted: #8A9BA7;
+
+  /* 结构线（亮色低透明度）与阴影（暗面加重） */
+  --border: rgba(225, 234, 240, 0.16);
+  --shadow: rgba(0, 0, 0, 0.28);
+
+  /* 强调：暖玫瑰四件套 */
+  --accent: #C99AAF;
+  --accent-hover: #D7AEC0;
+  --accent-light: rgba(201, 154, 175, 0.14);
+  --accent-rgb: 201 154 175;
+
+  /* 语义色：低饱和的暗面适配档 */
+  --green: #8FBE93;
+  --coral: #E8A79F;
+  --danger: #D98A7E;
+
+  /* 叠层：亮色低透明度（压暗在暗主题失效，改用提亮） */
+  --overlay-subtle: rgba(225, 234, 240, 0.03);
+  --overlay-light: rgba(225, 234, 240, 0.06);
+  --overlay-medium: rgba(225, 234, 240, 0.10);
+  --overlay-strong: rgba(225, 234, 240, 0.18);
+
+  /* RGB 三元组镜像（Tailwind /alpha 用） */
+  --bg-rgb: 59 74 84;
+  --bg-card-rgb: 68 84 95;
+  --sidebar-bg-rgb: 53 67 76;
+  --text-rgb: 225 234 240;
+  --text-light-rgb: 179 194 204;
+  --text-muted-rgb: 138 155 167;
+  --green-rgb: 143 190 147;
+  --coral-rgb: 232 167 159;
+  --danger-rgb: 217 138 126;
+
+  /* 气泡/工具块/提示框沿用语义槽位 */
+  --user-bg: var(--accent-light);
+  --tool-bg: var(--bg-card);
+  --tooltip-bg: var(--text);
+  --tooltip-text: var(--bg);
+}

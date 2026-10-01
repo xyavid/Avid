@@ -2,6 +2,7 @@
    元素基线（base.css）必须在 preflight 之后才能覆盖它。 */
 
 @import './tokens.css';
+@import './themes/midnight.css';
 @import './animations.css';
 @import './tailwind.css';
 @import './base.css';
