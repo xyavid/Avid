@@ -1,0 +1,38 @@
+/* ==========================================================================
+   Avid Web · 动效关键帧唯一真相源 —— 阶段 0 冻结
+   ==========================================================================
+   来源：《Hana 界面设计报告》附录 B 原文。命名沿用 hana- 前缀以保持可追溯
+   （语义见报告 §8.1 对照表）；时长只用 tokens.css 的三档，缓动只用四档。
+
+   动效纪律（报告 §8.2，组件阶段同样受它约束）：
+   - hover 是轻微呼吸（色 / 透明度微变），不放大、不弹跳；
+   - 禁：:active 缩放弹跳、闪烁、旋转炫技、自动轮播抢注意；
+   - 遮罩压暗用 --scrim-*，不拿它做阴影；
+   - base.css 里有 prefers-reduced-motion 的全局兜底。
+
+   待回补（chat 阶段随流式组件加入，来源同报告 §8.1 表）：
+   hana-stream-tail-in / hana-typewriter-dots / hana-cycling-dots。
+   ========================================================================== */
+
+@keyframes hana-fade-in  { from { opacity: 0; } to { opacity: 1; } }
+@keyframes hana-fade-out { from { opacity: 1; } to { opacity: 0; } }
+
+/* 位移量用 --slide-y 控制（默认 4px） */
+@keyframes hana-fade-up   { from { opacity: 0; transform: translateY(var(--slide-y, 4px)); } to { opacity: 1; transform: translateY(0); } }
+@keyframes hana-fade-down { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(var(--slide-y, 4px)); } }
+
+@keyframes hana-scale-in  { from { opacity: 0; transform: scale(0.96) translateY(8px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+@keyframes hana-popout    { from { opacity: 0; transform: scale(0.92); } to { opacity: 1; transform: scale(1); } }
+@keyframes hana-slide-in-left  { from { opacity: 0; transform: translateX(-20px) scale(0.97); } to { opacity: 1; transform: translateX(0) scale(1); } }
+@keyframes hana-slide-in-top   { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes hana-card-slide-down{ from { transform: translateY(-110%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+/* 呼吸灯：亮暗用 --pulse-lo / --pulse-hi 控制 */
+@keyframes hana-pulse { 0%, 100% { opacity: var(--pulse-lo, 0.3); } 50% { opacity: var(--pulse-hi, 1); } }
+
+@keyframes hana-expand { from { max-height: 0; opacity: 0; } to { max-height: 800px; opacity: 1; } }
+@keyframes hana-spin   { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+/* 确认栏上升 / 收缩（clip-path 裁剪）—— 审批条的直接候选 */
+@keyframes hana-rise    { from { opacity: 0; transform: translateY(24px); clip-path: inset(100% 0 0 0); } to { opacity: 1; transform: translateY(0); clip-path: inset(0 0 0 0); } }
+@keyframes hana-retract { from { opacity: 1; transform: translateY(0); clip-path: inset(0 0 0 0); } to { opacity: 0; transform: translateY(24px); clip-path: inset(100% 0 0 0); } }

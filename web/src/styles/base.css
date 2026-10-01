@@ -1,0 +1,63 @@
+/* ==========================================================================
+   Avid Web · 元素基线 —— 阶段 0 冻结
+   ==========================================================================
+   只做 reset 与全局排版基线，不含任何组件与布局（阶段 0 纪律）。
+   一切取值引用 tokens.css；本文件不出现裸值（reduced-motion 的 0.01ms 除外，
+   那是「关掉动画」的惯用写法，不是设计值）。
+   ========================================================================== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--fs-body);
+  /* 数字对齐（报告 §5）：时间戳、token 计数、用量读数全站受益 */
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* 中英混排的衬线正文行高略高（报告 §5），供正文类容器取用 */
+.serif-text {
+  font-family: var(--font-serif-text);
+  line-height: 1.7;
+}
+
+::selection {
+  background: var(--accent-light);
+}
+
+img,
+svg {
+  display: block;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+/* 动效纪律的兜底：系统声明减少动效时，一切动画与过渡立即失效 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

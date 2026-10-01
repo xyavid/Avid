@@ -1,0 +1,124 @@
+/* ==========================================================================
+   Avid Web · 设计 token 唯一真相源 —— 阶段 0 冻结
+   ==========================================================================
+   来源：《Hana 界面设计报告》附录 A 的 :root 原文逐值落地，色彩取 §3.2 暖纸
+   （默认主题）。全部色值可追溯到报告；唯二偏离都已在行内标注：
+     1. --fs-micro 0.62rem → 0.6875rem（9.9px → 11px，报告 §12.4 的可读性建议）；
+     2. 略去 Hana 业务语义 token（mood / jian / 封面画廊），Avid 用不到。
+
+   纪律（协议「始终」条款）：
+   - 组件层禁止裸色值 / 魔法数，一切尺寸与颜色引用这里的变量；
+   - 换肤只允许 [data-theme="…"] 覆盖变量（themes/*.css），不许改组件；
+   - 阶段 0 冻结后只构建、不修改；发现缺件 → 回到本层补，并注明回到哪条。
+   - 待回补清单（组件阶段按本地基推导后加进 §语义色）：Avid 审批三态、
+     运行中圆点、overlay 叠层四档、流式工具卡底色。
+   ========================================================================== */
+
+:root {
+  /* ---- 间距 · 4px 网格（报告 §2.1） -------------------------------- */
+  --space-2: 0.125rem;  /*  2px */
+  --space-4: 0.25rem;   /*  4px */
+  --space-6: 0.375rem;  /*  6px */
+  --space-8: 0.5rem;    /*  8px */
+  --space-10: 0.625rem; /* 10px */
+  --space-12: 0.75rem;  /* 12px */
+  --space-16: 1rem;     /* 16px */
+  --space-24: 1.5rem;   /* 24px */
+  --space-32: 2rem;     /* 32px */
+  --space-40: 2.5rem;   /* 40px */
+
+  /* ---- 字号 · 6 档（报告 §2.2；micro 是唯一偏离，见文件头） ---------- */
+  --fs-title: 1rem;      /* 16px   区块标题、卡片标题 */
+  --fs-body: 0.9rem;     /* 14.4px 正文、label */
+  --fs-ui: 0.82rem;      /* 13.1px 次级界面文字、描述 */
+  --fs-caption: 0.78rem; /* 12.5px 控件文字、小号正文 */
+  --fs-hint: 0.7rem;     /* 11.2px 提示、元数据、tag、badge */
+  --fs-micro: 0.6875rem; /* 11px   角标计数、时间戳、键位标（原 9.9px，已抬） */
+
+  /* ---- 对话列排版（报告 §2.6 / 附录 A） ---------------------------- */
+  --chat-column-width: 720px;
+  --chat-input-column-width: calc(720px + 1.25rem);
+  --chat-message-font-size: 15px;
+
+  /* ---- 圆角（报告 §2.3；默认温和档，「极方」是主题层的显式选择） ---- */
+  --radius-xs: 3px;
+  --radius-sm: 5px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-input: 6px;
+  --radius-chat-surface: 16px;
+  --radius-card: 8px;
+  --radius-chat-card: 8px;
+  --radius-chat-card-inner: max(2px, calc(var(--radius-card) - 2px));
+  --border-width: 1px;
+
+  /* ---- 动效 · 时长 3 档（报告 §2.4：一切 transition 归到这三档） ---- */
+  --duration-instant: 0.1s;  /* 瞬：hover、关闭、退场、撤销 */
+  --duration-fast: 0.15s;    /* 快：默认（按钮、面板、focus、状态切换） */
+  --duration-slow: 0.25s;    /* 慢：模态、大块进场、强调动作 */
+
+  /* ---- 动效 · 缓动 4 档（报告 §2.5） -------------------------------- */
+  --ease-out:      cubic-bezier(0.16, 1, 0.3, 1);   /* 入场 */
+  --ease-in:       cubic-bezier(0.7, 0, 0.84, 0);   /* 退场 */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);      /* 通用 */
+  --ease-smooth:   cubic-bezier(0.22, 0.68, 0, 1);  /* 平滑 */
+
+  /* ---- 遮罩 scrim（报告 §2.7：只压暗背景，禁止用于 box-shadow） ----- */
+  --scrim-15: rgba(0, 0, 0, 0.15);
+  --scrim-30: rgba(0, 0, 0, 0.30);
+  --scrim-35: rgba(0, 0, 0, 0.35);
+  --scrim-45: rgba(0, 0, 0, 0.45);
+
+  /* ---- 布局尺寸（报告 §2.6；阶段 1 骨架直接引用） ------------------- */
+  --sidebar-width: 240px;
+  --channel-inspector-width: 280px;
+  --preview-panel-width: 580px;
+  --titlebar-h: 44px;
+
+  /* ---- 字体 · 4 栈（报告 §5；字重只用 400/500） --------------------- */
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Helvetica Neue',
+             'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-serif: 'EB Garamond', 'Noto Serif SC', 'Source Han Serif SC',
+                'Songti SC', 'STSong', serif;                    /* 标题/装饰衬线 */
+  --font-serif-text: 'PT Serif', 'Noto Serif SC', 'Source Han Serif SC',
+                     'Songti SC', 'STSong', serif;               /* 正文阅读衬线 */
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* ---- 色彩 · 暖纸（默认主题，报告 §3.2；:root 即浅色基线） ---------- */
+  /* 面：纸面主色绝不纯白，抬升面比主面更亮 */
+  --bg: #F8F4ED;
+  --bg-card: #FCFAF5;
+  --bg-glass: rgba(250, 248, 242, 0.92);
+  --sidebar-bg: #F4F0EA;
+
+  /* 墨：三级暖墨，绝不纯黑 */
+  --text: #3B3D3F;
+  --text-light: #6B6F73;
+  --text-muted: #8E9196;
+
+  /* 结构线与阴影：发丝线分层优先于阴影 */
+  --border: rgba(122, 96, 88, 0.18);
+  --shadow: rgba(59, 61, 63, 0.09);
+
+  /* 唯一强调色「远山青」四件套：全系统仅一种彩色，视觉占比 ≤ 5% */
+  --accent: #537D96;
+  --accent-hover: #456A80;
+  --accent-light: rgba(83, 125, 150, 0.08);
+  --accent-rgb: 83, 125, 150;
+
+  /* 语义色：低饱和 */
+  --green: #7BAE7F;   /* success · 墨绿 */
+  --coral: #EC8F8D;   /* 温和警示 */
+  --danger: #8B3A3A;  /* danger · 深朱 */
+
+  /* 链接默认取 accent */
+  --link: var(--accent);
+  --link-hover: var(--accent-hover);
+
+  /* 气泡 / 工具块 / 提示框（报告 §3.1 的语义槽位，值锚定本地基；
+     组件阶段若需更精确的分层可回补，但必须引用上述基础变量） */
+  --user-bg: var(--accent-light);   /* 用户气泡：accent 浅垫底（组件墙实绘即此） */
+  --tool-bg: var(--bg-card);        /* 工具卡：抬升面 + 发丝线 */
+  --tooltip-bg: var(--text);        /* 提示框默认反色 */
+  --tooltip-text: var(--bg);
+}

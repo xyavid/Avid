@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Avid Web · Token 速查板（阶段 0 冻结）</title>
+<style>
+/* 阶段 0 验收对照物：色板/字号的示例块允许出现原始值（它们就是被展示的事实），
+   其余一律引用 tokens.css 同款变量。数值全部可追溯到《Hana 界面设计报告》。 */
+:root{
+  --bg:#F8F4ED; --bg-card:#FCFAF5; --sidebar-bg:#F4F0EA;
+  --text:#3B3D3F; --text-light:#6B6F73; --text-muted:#8E9196;
+  --border:rgba(122,96,88,.18); --shadow:rgba(59,61,63,.09);
+  --accent:#537D96; --accent-hover:#456A80; --accent-light:rgba(83,125,150,.08);
+  --green:#7BAE7F; --coral:#EC8F8D; --danger:#8B3A3A;
+  --font-serif:'EB Garamond','Noto Serif SC','Source Han Serif SC','Songti SC','STSong',serif;
+  --font-serif-text:'PT Serif','Noto Serif SC','Source Han Serif SC','Songti SC','STSong',serif;
+  --font-ui:'Inter',-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+  --font-mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{width:1280px;background:var(--bg);color:var(--text);font-family:var(--font-ui);
+  font-size:14.4px;padding:34px 44px 44px}
+h1{font-family:var(--font-serif);font-size:26px;font-weight:500;color:var(--text)}
+.sub{font-size:12.5px;color:var(--text-muted);margin-top:4px;letter-spacing:.02em}
+.hr{border:none;border-top:.5px solid var(--border);margin:18px 0}
+h2{font-family:var(--font-serif);font-size:17px;font-weight:500;border-left:2px solid var(--accent);
+  padding-left:9px;margin-bottom:12px;color:var(--text)}
+.grid{display:flex;gap:12px;flex-wrap:wrap}
+.sw{width:105px}
+.sw .box{height:52px;border-radius:5px;border:.5px solid var(--border)}
+.sw .nm{font-size:11px;color:var(--text-muted);margin-top:5px;line-height:1.35;white-space:nowrap}
+.sw .hex{font-family:var(--font-mono);font-size:10.5px;color:var(--text-muted);opacity:.85;overflow-wrap:anywhere}
+.tsample{display:flex;align-items:baseline;gap:12px;margin-bottom:6px}
+.tsample .lab{font-family:var(--font-mono);font-size:11px;color:var(--text-muted);width:150px}
+.note{font-size:11px;color:var(--accent-hover);background:var(--accent-light);
+  border-radius:3px;padding:1px 7px;margin-left:8px}
+.cols{display:flex;gap:40px}
+.cols>div{flex:1;min-width:0}
+.space .row2{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.space .lbl{font-family:var(--font-mono);font-size:11px;color:var(--text-muted);width:92px}
+.space .bar{height:14px;background:var(--accent-light);border-radius:2px}
+.radius{display:flex;gap:14px}
+.radius .r{width:64px;height:52px;background:var(--bg-card);border:.5px solid var(--border);
+  display:flex;align-items:flex-end;justify-content:center;padding-bottom:5px;
+  font-size:11px;color:var(--text-muted)}
+.rn{font-size:11.5px;color:var(--text-muted);margin-top:8px}
+.mo{display:flex;gap:20px}
+.mo .m{flex:1;background:var(--bg-card);border:.5px solid var(--border);border-radius:5px;padding:10px 14px}
+.mo .m .k{font-size:12px;color:var(--text);font-weight:500}
+.mo .m .v{font-family:var(--font-mono);font-size:11px;color:var(--text-muted);margin-top:3px}
+.fstack{margin-bottom:10px}
+.fstack .lab{font-family:var(--font-mono);font-size:11px;color:var(--text-muted)}
+.fstack .sample{font-size:15px;margin-top:2px}
+.fstack .sample.serif{font-family:var(--font-serif)}
+.fstack .sample.stext{font-family:var(--font-serif-text)}
+.fstack .sample.ui{font-family:var(--font-ui)}
+.fstack .sample.mono{font-family:var(--font-mono);font-size:13px}
+.themes{display:flex;gap:10px}
+.th{display:flex;align-items:center;gap:8px;border:.5px solid var(--border);border-radius:5px;
+  padding:5px 11px 5px 7px;background:var(--bg-card);font-size:12px;color:var(--text-light)}
+.th i{width:16px;height:16px;border-radius:3px;display:inline-block}
+.foot{font-size:11px;color:var(--text-muted);margin-top:26px;line-height:1.7}
+</style>
+</head>
+<body>
+<h1>Avid Web · Token 速查板</h1>
+<div class="sub">纸本世界 · 单一强调色 #537D96 · 暖中性基调 · 发丝线 · 安静动效 —— 阶段 0 冻结（来源：Hana 设计报告附录 A）</div>
+<div class="hr"></div>
+
+<h2>色彩 · 墨色阶梯与唯一强调色</h2>
+<div class="grid" style="margin-bottom:22px">
+  <div class="sw"><div class="box" style="background:#F8F4ED"></div><div class="nm">宣纸主面 --bg</div><div class="hex">#F8F4ED</div></div>
+  <div class="sw"><div class="box" style="background:#FCFAF5"></div><div class="nm">卡片/抬升面 --bg-card</div><div class="hex">#FCFAF5</div></div>
+  <div class="sw"><div class="box" style="background:#F4F0EA"></div><div class="nm">侧栏深纸 --sidebar-bg</div><div class="hex">#F4F0EA</div></div>
+  <div class="sw"><div class="box" style="background:#3B3D3F"></div><div class="nm">浓墨正文 --text</div><div class="hex">#3B3D3F</div></div>
+  <div class="sw"><div class="box" style="background:#6B6F73"></div><div class="nm">二级墨 --text-light</div><div class="hex">#6B6F73</div></div>
+  <div class="sw"><div class="box" style="background:#8E9196"></div><div class="nm">三级墨 --text-muted</div><div class="hex">#8E9196</div></div>
+  <div class="sw"><div class="box" style="background:rgba(122,96,88,.18)"></div><div class="nm">结构线 --border</div><div class="hex">rgba(122,96,88,.18)</div></div>
+  <div class="sw"><div class="box" style="background:#537D96"></div><div class="nm">远山青 --accent</div><div class="hex">#537D96</div></div>
+  <div class="sw"><div class="box" style="background:#7BAE7F"></div><div class="nm">墨绿 success</div><div class="hex">#7BAE7F</div></div>
+  <div class="sw"><div class="box" style="background:#8B3A3A"></div><div class="nm">深朱 danger</div><div class="hex">#8B3A3A</div></div>
+</div>
+
+<h2>字号 · 6 档</h2>
+<div style="margin-bottom:22px">
+  <div class="tsample"><span class="lab">--fs-title · 16px</span><span style="font-size:16px;font-family:var(--font-serif)">纸本手账的区块标题</span></div>
+  <div class="tsample"><span class="lab">--fs-body · 14.4px</span><span style="font-size:14.4px">正文内容 用字号与明度建立层级</span></div>
+  <div class="tsample"><span class="lab">--fs-ui · 13.1px</span><span style="font-size:13.1px;color:var(--text-light)">次级界面文字与描述</span></div>
+  <div class="tsample"><span class="lab">--fs-caption · 12.5px</span><span style="font-size:12.5px;color:var(--text-light)">控件文字 小号正文</span></div>
+  <div class="tsample"><span class="lab">--fs-hint · 11.2px</span><span style="font-size:11.2px;color:var(--text-muted)">提示 · 元数据 · tag · badge</span></div>
+  <div class="tsample"><span class="lab">--fs-micro · 11px</span><span style="font-size:11px;color:var(--text-muted)">角标计数 · 时间戳 · 键位标</span><span class="note">唯一偏离：原 9.9px，按报告 §12.4 抬到 11px</span></div>
+</div>
+
+<div class="cols" style="margin-bottom:22px">
+  <div>
+    <h2>间距 · 4px 网格</h2>
+    <div class="space">
+      <div class="row2"><span class="lbl">--space-2</span><span class="bar" style="width:2px"></span></div>
+      <div class="row2"><span class="lbl">--space-4</span><span class="bar" style="width:4px"></span></div>
+      <div class="row2"><span class="lbl">--space-6</span><span class="bar" style="width:6px"></span></div>
+      <div class="row2"><span class="lbl">--space-8</span><span class="bar" style="width:8px"></span></div>
+      <div class="row2"><span class="lbl">--space-10</span><span class="bar" style="width:10px"></span></div>
+      <div class="row2"><span class="lbl">--space-12</span><span class="bar" style="width:12px"></span></div>
+      <div class="row2"><span class="lbl">--space-16</span><span class="bar" style="width:16px"></span></div>
+      <div class="row2"><span class="lbl">--space-24</span><span class="bar" style="width:24px"></span></div>
+      <div class="row2"><span class="lbl">--space-32</span><span class="bar" style="width:32px"></span></div>
+      <div class="row2"><span class="lbl">--space-40</span><span class="bar" style="width:40px"></span></div>
+    </div>
+  </div>
+  <div>
+    <h2>圆角 · 克制为方</h2>
+    <div class="radius">
+      <div class="r" style="border-radius:3px">xs 3</div>
+      <div class="r" style="border-radius:5px">sm 5</div>
+      <div class="r" style="border-radius:8px">md 8</div>
+      <div class="r" style="border-radius:12px">lg 12</div>
+    </div>
+    <div class="rn">另有语义档：input 6 · chat-surface 16 · card 8；「极方 2/3/4px」是主题层的显式选择，不在默认档。</div>
+    <h2 style="margin-top:18px">动效 · 3 档时长 / 4 档缓动</h2>
+    <div class="mo">
+      <div class="m"><div class="k">instant · 0.1s</div><div class="v">hover / 关闭 / 退场</div></div>
+      <div class="m"><div class="k">fast · 0.15s</div><div class="v">默认<br>--ease-out</div></div>
+      <div class="m"><div class="k">slow · 0.25s</div><div class="v">模态 / 大块进场</div></div>
+      <div class="m"><div class="k">禁</div><div class="v">弹跳 / 缩放<br>旋转</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="cols" style="margin-bottom:8px">
+  <div>
+    <h2>字体 · 4 栈（字重只用 400/500）</h2>
+    <div class="fstack"><div class="lab">--font-serif · 标题/装饰衬线</div><div class="sample serif">远山青，落款印章方角。Aa 0123</div></div>
+    <div class="fstack"><div class="lab">--font-serif-text · 正文阅读衬线</div><div class="sample stext">对话正文走这一栈，行高 1.7。Aa 0123</div></div>
+    <div class="fstack"><div class="lab">--font-ui · 界面无衬线</div><div class="sample ui">界面控件、次级文字与描述。Aa 0123</div></div>
+    <div class="fstack"><div class="lab">--font-mono · 代码/数字</div><div class="sample mono">--space-2 … --space-40 · tabular-nums</div></div>
+  </div>
+  <div>
+    <h2>主题 · data-theme 架构</h2>
+    <div class="themes">
+      <span class="th"><i style="background:#F8F4ED"></i><span style="color:#537D96">暖纸 · 默认（:root）</span></span>
+      <span class="th"><i style="background:#3B4A54"></i><span style="color:#C99AAF">青夜 · 阶段 6</span></span>
+    </div>
+    <div class="rn" style="margin-top:10px">换肤 = [data-theme] 覆盖变量，组件零改动；其余 9 套主题不在本期。</div>
+    <h2 style="margin-top:18px">布局尺寸（阶段 1 骨架引用）</h2>
+    <div class="rn" style="margin-top:2px">对话列 ≤720px · 侧栏 240px · 预览面板 580px · 检查器 280px · 顶栏 44px</div>
+  </div>
+</div>
+
+<div class="hr"></div>
+<div class="foot">
+  冻结说明：本页是阶段 0 的验收对照物。tokens.css / animations.css / base.css 一经确认即 FROZEN，
+  后续阶段只构建、不修改；发现缺件回到本层补并注明。纪律：组件禁裸色值与魔法数 · 图标只用线性 SVG ·
+  动效只用三档时长 · 尊重 prefers-reduced-motion。
+</div>
+</body>
+</html>
