@@ -34,28 +34,44 @@
    * 1. 色：暖纸三层底 + 暖墨三档字 + 单一强调
    * ============================================================ */
 
-  /* 底：纸面主色 → 抬升面 → 侧栏（比主面更深一层）。
-     `--avid-bg-rgb` 是宣纸底色：连低色温都算不上，是"旧纸"的暖米。 */
-  --avid-bg-rgb: 248 244 237; /* #F8F4ED 宣纸主面 */
-  --avid-bg-deep-rgb: 244 240 234; /* #F4F0EA 侧栏：比主面深一档 */
-  --avid-card-rgb: 252 250 245; /* #FCFAF5 卡片：比主面亮一档 */
-  --avid-float-rgb: 250 248 242; /* #FAF8F2 浮层实底（**实底**，不是毛玻璃） */
-  --avid-inset-rgb: 243 238 230; /* 凹陷面：输入框 / 代码底 */
+  /* 底：纸面主色 → 侧栏（略暗一档）→ 抬升面（右栏 / 浮层，更亮）。
+     实测自参考截图：主区 #F0EFE8、左栏 #E3E4DB、右栏与浮层 #F9FBF7。
+     比上一版（暖米 #F8F4ED）更冷、更绿——纸本锚点保留，但色相偏"竹纸"而非"宣纸"。
+     **左栏现在比主面暗**：这是截图里的实际关系（色块把侧栏托出来）。 */
+  --avid-bg-rgb: 240 239 232; /* #F0EFE8 主区纸面 */
+  --avid-bg-deep-rgb: 227 228 219; /* #E3E4DB 左栏：比主面暗一档 */
+  --avid-card-rgb: 249 251 247; /* #F9FBF7 抬升面：右栏卡片 / 浮层 */
+  --avid-float-rgb: 249 251 247; /* #F9FBF7 浮层实底（**实底**，不是毛玻璃） */
+  --avid-inset-rgb: 241 240 233; /* #F1F0E9 凹陷面：行内 code / 输入底 */
 
-  /* 文字：暖墨三档。全都是棕灰，没有一档带冷蓝。 */
-  --avid-text-rgb: 42 38 34; /* #2A2622 主文字 */
-  --avid-text-light-rgb: 74 67 60; /* #4A433C 二级 */
-  --avid-text-muted-rgb: 107 97 88; /* #6B6158 三级 / caption */
-  --avid-text-faint-rgb: 142 133 122; /* 四级：时间戳 / 角标，仅非阅读性注记 */
+  /* 文字：墨绿灰三档。统一色温（冷绿），不混暖棕。 */
+  --avid-text-rgb: 57 66 60; /* #39423C 主文字（纸面上 9.0:1） */
+  --avid-text-light-rgb: 74 84 78; /* #4A544E 二级 */
+  --avid-text-muted-rgb: 95 105 99; /* #5F6963 三级（纸面上 4.9:1，过 AA） */
+  --avid-text-faint-rgb: 124 134 128; /* #7C8680 四级：仅时间戳等非阅读性注记（3.3:1） */
 
-  /* 强调：唯一彩色。青蓝（印章色），低饱和。 */
-  --avid-accent-rgb: 83 125 150; /* #537D96 */
-  --avid-accent-hover-rgb: 63 97 121; /* #3F6179 */
-  --avid-accent-soft-rgb: 232 238 242; /* 强调的浅底（hover / 选中） */
+  /*
+   * 强调：唯一彩色。**青绿**，实测自截图的 #5BA88C。
+   *
+   * 拆成两个 token 是这版最重要的一处修正：截图里那个青绿用在**标题文字**上时
+   * 对比度只有 2.45:1（远低于 AA 4.5:1），说明它是"装饰用的亮青绿"，
+   * 不能直接拿来当正文/标题的颜色。所以：
+   *   · `accent`（#5BA88C）：**只用于实底填充**与装饰性元素——实底配深字 8.5:1；
+   *   · `accent-ink`（#3B745D）：**一切作为文字/图标的强调色**，纸面 4.9:1、右栏 5.6:1。
+   * 混用一个值会让"看着像参考截图"与"读得清楚"二选一，拆开就都成立。
+   */
+  --avid-accent-rgb: 91 168 140; /* #5BA88C 亮青绿：填充 / 装饰 */
+  --avid-accent-hover-rgb: 74 143 118; /* #4A8F76：填充的 hover */
+  --avid-accent-ink-rgb: 59 116 93; /* #3B745D 深青绿：文字与图标（AA） */
+  --avid-accent-soft-rgb: 229 240 235; /* #E5F0EB 强调的浅底（hover / 选中） */
+  --avid-accent-deep-rgb: 30 58 46; /* #1E3A2E 实底上的深字（8.5:1） */
 
-  /* 发丝线：结构分割**只**靠它，不靠阴影。 */
-  --avid-border-rgb: 216 207 190; /* #D8CFBE 常规线 */
-  --avid-border-strong-rgb: 196 185 165; /* 加重线：分组边界 */
+  /* 发丝线：结构分割**只**靠它，不靠阴影。
+     值提到 #C9CBBF：截图里的线约 #D5D6CB，但在纸面上只有 1.27:1（几乎看不见）。
+     "层级靠发丝线建立"要成立，线得先**看得见**，所以取 1.4–1.6:1 这一档，
+     仍然安静，但确实参与分层。 */
+  --avid-border-rgb: 201 203 191; /* #C9CBBF 常规线 */
+  --avid-border-strong-rgb: 176 179 166; /* #B0B3A6 加重线：分组边界 */
   /*
    * 状态描边色：**必须**是独立 token，且**类名要排在 `hair` 之后**。
    *
@@ -70,26 +86,27 @@
    * 所以这两个键叫 `state-danger` / `state-warn`：语义清楚（状态描边），
    * 且 `state-*` 在字典序上排在 `hair` 之后，覆盖方向正确。
    *
-   * 值是把朱红/赭以 40% 预混到纸面（#F8F4ED）上算出的实色——不是透明色，
+   * 值是把朱红/赭以 40% 预混到**新的纸面 #F0EFE8** 上算出的实色——不是透明色，
    * 因为 40% 的 alpha 在这里是审美选择，而 token 的价值正在于它是**一个**确定值。
+   * 底色换了就必须重算：沿用旧底色预混出来的值会与新纸面差半个色阶。
    */
-  --avid-state-danger-rgb: 224 168 160;
-  --avid-state-warn-rgb: 226 199 160;
+  --avid-state-danger-rgb: 218 162 153;
+  --avid-state-warn-rgb: 219 194 154;
 
-  /* 语义色：一律低饱和。 */
-  --avid-ok-rgb: 74 107 74; /* #4A6B4A 墨绿 */
-  --avid-warn-rgb: 150 106 49; /* 赭 */
-  --avid-danger-rgb: 139 44 31; /* #8B2C1F 深朱 */
-  --avid-info-rgb: 83 125 150; /* 与 accent 同源：没有第二个彩色 */
+  /* 语义色：一律低饱和，且都过 AA（纸面上 ≥4.5:1）。 */
+  --avid-ok-rgb: 62 107 74; /* #3E6B4A 墨绿（5.4:1） */
+  --avid-warn-rgb: 138 100 42; /* #8A642A 赭（4.6:1） */
+  --avid-danger-rgb: 139 44 31; /* #8B2C1F 深朱（7.4:1） */
+  --avid-info-rgb: 59 116 93; /* 与 accent-ink 同源：全系统只有一个彩色 */
 
-  /* 底：状态块 / 气泡 / 代码。 */
-  --avid-ok-bg-rgb: 236 241 234;
-  --avid-warn-bg-rgb: 246 238 227;
-  --avid-danger-bg-rgb: 246 233 230;
-  --avid-info-bg-rgb: 232 238 242;
-  --avid-user-bg-rgb: 239 232 219; /* 用户气泡：纸面再深一档 */
-  --avid-tool-bg-rgb: 246 243 236; /* 工具块底 */
-  --avid-code-bg-rgb: 242 238 230;
+  /* 底：状态块 / 气泡 / 代码。都从新底色推导，保持同一色温。 */
+  --avid-ok-bg-rgb: 233 241 235;
+  --avid-warn-bg-rgb: 244 238 226;
+  --avid-danger-bg-rgb: 245 233 230;
+  --avid-info-bg-rgb: 229 240 235;
+  --avid-user-bg-rgb: 231 233 223; /* 用户气泡：纸面上再深一档 */
+  --avid-tool-bg-rgb: 243 244 237; /* 工具块底 */
+  --avid-code-bg-rgb: 241 240 233; /* 代码底 = 实测的 #F1F0E9 */
 
   /*
    * 遮罩（scrim）：**只用于压暗背景，禁止拿它做 box-shadow**。
@@ -116,10 +133,10 @@
    */
   --avid-paper-fiber: radial-gradient(
       ellipse 120% 80% at 20% 0%,
-      rgb(255 253 248 / 55%),
-      transparent 60%
+      rgb(252 253 249 / 60%),
+      transparent 62%
     ),
-    radial-gradient(ellipse 100% 70% at 80% 100%, rgb(238 230 216 / 45%), transparent 55%);
+    radial-gradient(ellipse 100% 70% at 80% 100%, rgb(226 229 219 / 50%), transparent 58%);
 
   /* ============================================================
    * 2. 尺度：间距（4px 网格子集，9 档）
@@ -254,7 +271,7 @@
 
   /* 焦点环：键盘可达性不是可选项。用强调色的浅底 + 发丝边，不用浏览器默认蓝。 */
   :focus-visible {
-    outline: var(--avid-stroke-thin) solid rgb(var(--avid-accent-rgb));
+    outline: var(--avid-stroke-thin) solid rgb(var(--avid-accent-ink-rgb));
     outline-offset: 1px;
     border-radius: var(--avid-radius-xs);
   }
@@ -289,7 +306,7 @@
   }
 
   ::selection {
-    background-color: rgb(var(--avid-accent-rgb) / 18%);
+    background-color: rgb(var(--avid-accent-rgb) / 22%);
   }
 }
 

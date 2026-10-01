@@ -160,7 +160,7 @@ export function SessionItem({
             className="min-w-0 flex-1 text-left"
           >
             <span
-              className={cx('block truncate text-ui', active ? 'font-medium text-accent' : 'text-ink')}
+              className={cx('block truncate text-ui', active ? 'font-medium text-accent-ink' : 'text-ink')}
             >
               {label}
             </span>

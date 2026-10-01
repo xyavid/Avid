@@ -109,7 +109,7 @@ export function PermissionSelector({
               <span
                 className={cx(
                   'text-caption',
-                  option.mode === value ? 'font-medium text-accent' : 'text-ink',
+                  option.mode === value ? 'font-medium text-accent-ink' : 'text-ink',
                 )}
               >
                 {option.label}

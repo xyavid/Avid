@@ -41,9 +41,17 @@ export default {
         'ink-muted': rgbVar('text-muted'),
         'ink-faint': rgbVar('text-faint'),
         /* 唯一彩色 */
+        /*
+         * 强调色**拆两档**（见 tokens.css 的说明）：
+         *   · `accent` 只做填充/装饰——`bg-accent` 配 `text-accent-deep`；
+         *   · `accent-ink` 做一切**文字与图标**的强调——`text-accent-ink`。
+         * 混用会让"像参考截图"与"读得清楚"二选一：亮青绿当正文只有 2.45:1。
+         */
         accent: rgbVar('accent'),
         'accent-hover': rgbVar('accent-hover'),
+        'accent-ink': rgbVar('accent-ink'),
         'accent-soft': rgbVar('accent-soft'),
+        'accent-deep': rgbVar('accent-deep'),
         /* 发丝线 */
         hair: rgbVar('border'),
         'hair-strong': rgbVar('border-strong'),
