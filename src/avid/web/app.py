@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -124,47 +123,6 @@ def load_build_info(static_dir: Path) -> dict[str, Any]:
     return {"git_sha": None, "built_at": None, "source": "dev"}
 
 
-def _parse_built_at(value: object) -> float | None:
-    """Converts the ISO timestamp in the build stamp to epoch seconds, or None if unparseable."""
-    if not isinstance(value, str):
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
-    except ValueError:
-        return None
-
-
-def _newest_mtime(root: Path) -> float:
-    newest = 0.0
-    for path in root.rglob("*"):
-        if path.is_file():
-            newest = max(newest, path.stat().st_mtime)
-    return newest
-
-
-def frontend_drift_warning(static_dir: Path, build: dict[str, Any]) -> str | None:
-    """Reports that the frontend sources are newer than the served bundle, or None when they are not."""
-    built = _parse_built_at(build.get("built_at"))
-    if built is None:
-        return None
-    parents = static_dir.resolve().parents
-    # A checkout puts web/src four levels above the static directory; a packaged wheel has no such path.
-    if len(parents) < 4:
-        return None
-    source = parents[3] / "web" / "src"
-    if not source.is_dir():
-        return None
-    newest = _newest_mtime(source)
-    if newest <= built:
-        return None
-    stamp = datetime.fromtimestamp(newest, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    return (
-        f"前端源码比静态产物新（源码 {stamp} > 产物 {build.get('built_at')}）："
-        "`avid web` 服务的是 src/avid/web/static/，先跑 "
-        "`pnpm -C web build && pnpm -C web run copy:dist`，否则它会发一份旧页面。"
-    )
-
-
 def _envelope(code: str, message: str, detail: dict[str, Any] | None = None) -> dict:
     return {"error": {"code": code, "message": message, "detail": detail or {}}}
 
@@ -258,7 +216,7 @@ def create_app(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content=_envelope(
                 "static_missing",
-                "前端产物不存在：先 `pnpm -C web build`，再 `pnpm -C web run copy:dist`。",
+                "前端产物不存在：前端尚未重建，没有可服务的静态资源。",
                 {"static_dir": str(root)},
             ),
         )

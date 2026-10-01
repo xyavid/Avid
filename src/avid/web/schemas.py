@@ -7,7 +7,6 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..policy.permission import full_grant_error
-
 from ..runtime import events
 from ..runtime.events import RunEvent
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Query, Request, status
 from fastapi.responses import StreamingResponse
 
-from ...svc import STREAM_HEARTBEAT_SECONDS, Services, TooManyStreams
+from ...svc import STREAM_HEARTBEAT_SECONDS, TooManyStreams
 from ..sse import STREAM_HEADERS, stream_async
 from . import current_services
 

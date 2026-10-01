@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from ..runtime.events import STREAM_HEARTBEAT_SECONDS
-
 import json
 import logging
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
+from ..runtime.events import STREAM_HEARTBEAT_SECONDS
 from .schemas import event_payload
 
 logger = logging.getLogger("avid.web.sse")

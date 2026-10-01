@@ -36,9 +36,6 @@ from .tools import TOOLS, build_toolset, workspace
 from .tools.mcp import McpManager
 from .web.app import (
     LOOPBACK_HOSTS,
-    STATIC_DIR,
-    frontend_drift_warning,
-    load_build_info,
     trusted_hosts,
 )
 from .workspaces import (
@@ -513,14 +510,9 @@ def _run_web(argv: list[str]) -> int:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     allowed_hosts = _allowed_hosts(args.host)
     print(
-        f"Avid Web 正在监听 http://{args.host}:{args.port}\n"
-        "开发期前端：pnpm -C web dev（Vite 代理 /api → 本进程）",
+        f"Avid Web 正在监听 http://{args.host}:{args.port}",
         file=sys.stderr,
     )
-    # The served bundle is the copied one, so newer frontend sources mean an old page is being served.
-    drift = frontend_drift_warning(STATIC_DIR, load_build_info(STATIC_DIR))
-    if drift:
-        print(f"⚠ {drift}", file=sys.stderr)
     if args.reload:
         if args.workspace:
             print(

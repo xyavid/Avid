@@ -1,4 +1,4 @@
-"""A1 – A6 / A10 – A12 / A14：架构边界用 grep 与断言守住（不依赖运行）。
+"""A1 – A6 / A10 – A11 / A13 – A14：架构边界用 grep 与断言守住（不依赖运行）。
 
 这些规则的价值在于它们**会失败**：一次「顺手 import 一下」会被立刻拦住。
 边界是正则的边界——它只匹配字面量，拼接出来的 URL 与间接 import 不在覆盖内
@@ -13,7 +13,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src" / "avid"
-WEB = ROOT / "web"
 
 # svc/ 也在内核侧：它是最容易被"顺手 import 一下 pydantic"的层（离传输层最近），
 # 而 A1 以前只查这五个包——`pyproject.toml` 那句"web/ 是唯一 importer"因此少了
@@ -33,14 +32,6 @@ def hits(paths: list[Path], pattern: str) -> list[str]:
             if regex.search(line):
                 found.append(f"{path.relative_to(ROOT)}:{number}: {line.strip()}")
     return found
-
-
-def frontend_sources() -> list[Path]:
-    if not WEB.is_dir():
-        return []
-    return sorted(
-        [*WEB.joinpath("src").rglob("*.ts"), *WEB.joinpath("src").rglob("*.tsx")]
-    )
 
 
 def code_hits(paths: list[Path], pattern: str) -> list[str]:
@@ -160,26 +151,6 @@ def test_a10_on_message_wiring_stays_in_four_places():
 def test_a11_recorder_remains_the_only_session_writer():
     assert hits(files_under("web"), r"append_message|\.commit\(") == []
     assert hits(files_under("svc"), r"append_message|\.commit\(") == []
-
-
-# ---------------- A12 ----------------
-
-
-def test_a12_frontend_has_no_third_party_urls_outside_api():
-    # `__tests__/` 例外：URL 夹具（例如 sanitizeUrl 的用例）必须拿真实字面量当输入，
-    # 而它们不产生请求。规则拦的是运行时代码里的第三方端点。
-    found = [
-        item
-        for item in hits(frontend_sources(), r"https?://")
-        if not item.split(":")[0].startswith("web/src/api/")
-        and "/__tests__/" not in item.split(":")[0]
-    ]
-    assert found == [], f"前端在 api/ 之外直连了第三方：{found}"
-
-
-def test_frontend_sources_exist():
-    """A12 是空集合断言，目录不存在时会假通过——这里把前提钉住。"""
-    assert frontend_sources(), "web/src 下没有前端源码"
 
 
 # ---------------- A13：runtime → policy 的边界（设计文档 §12 判据 9） ----------------

@@ -1,5 +1,0 @@
-
-# Playwright 产物：截图 / trace / HTML 报告是**证据**不是源码，留本地即可。
-# 失败时它们就在 test-results/ 下，需要时手动翻；入库只会让 diff 变噪。
-test-results/
-playwright-report/
