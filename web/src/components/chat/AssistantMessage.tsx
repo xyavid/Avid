@@ -1,8 +1,7 @@
 /**
  * 助手消息（报告 §7.3）：头像行 + 正文分列，左对齐、无气泡（纸面直书）。
- * 头像 18px 与名称行 18px 行盒**严格等高**（fs-ui × leading-[18px]），
- * 顶对齐即居中，视觉整齐；正文走正文衬线栈（PT Serif），字号
- * --chat-message-font-size，中文衬线行高 1.7（报告 §5）。
+ * 头像 24px 圆，名称行（fs-ui）在其上垂直居中；正文走正文衬线栈
+ * （PT Serif），字号 --chat-message-font-size，中文衬线行高 1.7（报告 §5）。
  * 流式态：三枚 accent 呼吸点（hana-cycling-dots，阶段 3 补件关键帧），
  * 正文此时不渲染——半截文本宁可不出现在 durable 视图里。
  */
@@ -27,7 +26,7 @@ export function AssistantMessage({ children, streaming = false, name = 'Avid', c
         <div className="flex items-center gap-a8">
           <span
             aria-hidden
-            className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full border-hairline border-hair bg-card font-serif text-micro text-ink-light"
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-hairline border-hair bg-card font-serif text-ui text-ink-light"
           >
             {name.slice(0, 1)}
           </span>
