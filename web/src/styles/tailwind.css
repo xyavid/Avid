@@ -1,0 +1,5 @@
+/* Tailwind 三层入口（经 postcss.config.js 的 tailwindcss 插件展开）。 */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

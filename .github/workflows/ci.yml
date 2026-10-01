@@ -35,3 +35,32 @@ jobs:
       # 但必须**存在一个会执行它的地方**，否则"门禁存在"与"门禁被执行"又会脱钩。
       - name: 跑 stress 门禁
         run: uv run pytest -q -m stress
+
+  web:
+    name: 前端（构建/类型/单测）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          # 版本读 web/package.json 的 packageManager 字段（pnpm 10）。
+          # Node 24 = 本机基线：jsdom 30 → undici 8 需要 Node ≥ 22.19，低于它会
+          # 在 vitest 起 jsdom 时才炸成一条 unhandled error；engines 由
+          # web/.npmrc 的 engine-strict 在安装期就失败关闭。
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: 安装依赖
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+      # 阶段 33 重建的前端：门禁从这三件最小集起步（打包链 / 类型自洽 / 用例非空转），
+      # 分层 / token / 对比度 / 体积等门禁待对应阶段落成后随结构恢复。
+      - name: 构建
+        working-directory: web
+        run: pnpm run build
+      - name: 类型检查
+        working-directory: web
+        run: pnpm run typecheck
+      - name: 单测
+        working-directory: web
+        run: pnpm test

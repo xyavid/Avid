@@ -121,4 +121,19 @@
   --tool-bg: var(--bg-card);        /* 工具卡：抬升面 + 发丝线 */
   --tooltip-bg: var(--text);        /* 提示框默认反色 */
   --tooltip-text: var(--bg);
+
+  /* ---- RGB 三元组镜像（阶段 1 回补） --------------------------------
+     Tailwind 的透明度修饰（`text-ink/70` 这类）要求 `rgb(var(--x-rgb) / <alpha>)`
+     形态，只能作用于「R G B」三元组。只为会被 /alpha 修饰的颜色提供镜像；
+     发丝线（固定 0.18 透明度）与 accent-light 等预制色仍用上面的原始值。
+     本段是冻结层的**回补**（协议允许：缺件回本层补并注明），非重新设计。 */
+  --bg-rgb: 248 244 237;
+  --bg-card-rgb: 252 250 245;
+  --sidebar-bg-rgb: 244 240 234;
+  --text-rgb: 59 61 63;
+  --text-light-rgb: 107 111 115;
+  --text-muted-rgb: 142 145 150;
+  --green-rgb: 123 174 127;
+  --coral-rgb: 236 143 141;
+  --danger-rgb: 139 58 58;
 }
