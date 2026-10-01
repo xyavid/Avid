@@ -9,6 +9,7 @@
 
 import type { ReactNode } from 'react'
 
+import { AvidMark } from '../ui/Mark'
 import { useAutoHideScroll } from '../ui/useAutoHideScroll'
 
 function RegionNote({ children }: { children: ReactNode }) {
@@ -28,7 +29,13 @@ export function AppShell({ sidebar, main, rail, actions }: AppShellProps) {
   return (
     <div className="grid h-dvh grid-rows-[var(--titlebar-h)_minmax(0,1fr)] bg-paper font-ui text-ink">
       <header className="flex items-center justify-between border-b border-hair px-a16">
-        <span className="font-serif text-title tracking-[0.01em]">Avid</span>
+        {/* 标识锁定组合：标记取墨色（继承根节点的 text-ink），与字标同日排。
+            标记比 fs-title 的 16px 略大（20px），是为了和衬线字标的字高对齐——
+            等号对齐会让标记看起来偏小。 */}
+        <span className="flex items-center gap-a8">
+          <AvidMark size={20} />
+          <span className="font-serif text-title tracking-[0.01em]">Avid</span>
+        </span>
         {actions ?? <RegionNote>主题 · 状态占位</RegionNote>}
       </header>
 

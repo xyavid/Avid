@@ -16,6 +16,7 @@ import { Button } from '../Button'
 import { Card } from '../Card'
 import { ICON_NAMES, Icon } from '../Icon'
 import { Input } from '../Input'
+import { AvidMark } from '../Mark'
 import { Tabs } from '../Tabs'
 import { Tag } from '../Tag'
 
@@ -52,7 +53,7 @@ export function GalleryPage() {
         <>
           <h1 className="font-serif text-[26px] font-medium">Avid 组件墙</h1>
           <p className="mt-a4 font-ui text-caption text-ink-muted">
-            基础 · 按钮 输入 标签 徽章 图标 ｜ 组合 · 消息 会话 卡片 标签页 工具卡 会话列表 项目卡 右栏 输入区 ｜ 实际页面看主页（不带 ?gallery=1）
+            标识 · 焰 ｜ 基础 · 按钮 输入 标签 徽章 图标 ｜ 组合 · 消息 会话 卡片 标签页 工具卡 会话列表 项目卡 右栏 输入区 ｜ 实际页面看主页（不带 ?gallery=1）
           </p>
           <div className="mb-a16 mt-a16 border-t border-hair" />
         </>
@@ -115,6 +116,65 @@ export function GalleryPage() {
                 <span className="font-mono text-micro text-ink-muted">{name}</span>
               </span>
             ))}
+          </div>
+        </Section>
+      )}
+
+      {show('mark') && (
+        <Section id="mark" title="标识 · 焰（48 视框实心单色，与线性图标集是两类）">
+          {/* 两套主题并排：给子树挂 data-theme 即可让里面的 token 全部换掉——
+              换肤机制（只覆盖变量）在这里顺带当了演示，不需要任何裸色值。 */}
+          <div className="flex flex-wrap gap-a24">
+            <div className="rounded-md border-hairline border-hair bg-paper px-a16 py-a12">
+              <p className="mb-a8 font-ui text-hint text-ink-muted">暖纸 · 墨（text）</p>
+              <div className="flex items-end gap-a12 text-ink">
+                {[16, 20, 24, 32, 48, 64].map((s) => (
+                  <span key={s} className="flex flex-col items-center gap-a4">
+                    <AvidMark size={s} />
+                    <span className="font-mono text-micro text-ink-muted">{s}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div
+              data-theme="midnight"
+              className="rounded-md border-hairline border-hair bg-paper px-a16 py-a12"
+            >
+              <p className="mb-a8 font-ui text-hint text-ink-muted">青夜 · 雪（text）</p>
+              <div className="flex items-end gap-a12 text-ink">
+                {[16, 20, 24, 32, 48, 64].map((s) => (
+                  <span key={s} className="flex flex-col items-center gap-a4">
+                    <AvidMark size={s} />
+                    <span className="font-mono text-micro text-ink-muted">{s}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-a16 flex flex-wrap items-end gap-a24">
+            <div>
+              <p className="mb-a8 font-ui text-hint text-ink-muted">
+                圆内落位 · 小尺寸取 accent（与流式光标同色），大尺寸取墨
+              </p>
+              <div className="flex items-end gap-a16">
+                <span className="flex h-6 w-6 items-center justify-center rounded-full border-hairline border-hair bg-card text-accent">
+                  <AvidMark size={13} />
+                </span>
+                <span className="flex h-[100px] w-[100px] items-center justify-center rounded-full border-hairline border-hair bg-card text-ink">
+                  <AvidMark size={64} />
+                </span>
+              </div>
+            </div>
+            <div>
+              <p className="mb-a8 font-ui text-hint text-ink-muted">
+                与字标的锁定组合（EB Garamond 500，标记 20px）
+              </p>
+              <span className="flex items-center gap-a8 text-ink">
+                <AvidMark size={20} />
+                <span className="font-serif text-title tracking-[0.01em]">Avid</span>
+              </span>
+            </div>
           </div>
         </Section>
       )}

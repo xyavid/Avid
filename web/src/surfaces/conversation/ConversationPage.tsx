@@ -29,6 +29,7 @@ import { ToolCard } from '../../components/chat/ToolCard'
 import { UserBubble } from '../../components/chat/UserBubble'
 import { useRunStream } from '../../state/useRunStream'
 import { IconButton } from '../../ui/IconButton'
+import { AvidMark } from '../../ui/Mark'
 import { useAutoHideScroll } from '../../ui/useAutoHideScroll'
 import { ContextRail } from '../../components/rail/ContextRail'
 import { SettingsModal } from '../../components/settings/SettingsModal'
@@ -36,15 +37,16 @@ import { ProjectCard } from '../../components/session/ProjectCard'
 import { SessionNav } from '../../components/session/SessionNav'
 import { AppShell } from '../../app/AppShell'
 
-/** 欢迎态（报告 §6 底部欢迎态）：100px 头像圆 + 衬线欢迎语（letter-spacing .06em）。 */
+/** 欢迎态（报告 §6 底部欢迎态）：100px 头像圆 + 衬线欢迎语（letter-spacing .06em）。
+    圆内是标识本体（原先是一个字母「A」）——大尺寸取墨色，形状自己站得住。 */
 function Welcome({ detail }: { detail: string }) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-a16">
       <span
         aria-hidden
-        className="flex h-[100px] w-[100px] items-center justify-center rounded-full border-hairline border-hair bg-card font-serif text-[40px] text-ink-light"
+        className="flex h-[100px] w-[100px] items-center justify-center rounded-full border-hairline border-hair bg-card text-ink"
       >
-        A
+        <AvidMark size={64} />
       </span>
       <p className="font-serif text-[20px] tracking-[0.06em] text-ink">有什么可以帮你？</p>
       <p className="font-ui text-hint text-ink-muted">{detail}</p>

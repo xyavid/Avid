@@ -9,6 +9,7 @@
 import type { ReactNode } from 'react'
 
 import { cx } from '../../ui/cx'
+import { AvidMark } from '../../ui/Mark'
 
 const DOTS = [0, 1, 2]
 
@@ -24,11 +25,14 @@ export function AssistantMessage({ children, streaming = false, name = 'Avid', c
     <div className={cx('flex gap-a8', className)}>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-a8">
+          {/* 头像：标识本身代替了原先的字母「A」。小尺寸取 accent——流式光标与呼吸点
+              同为 accent，助手这一侧的颜色由此统一到一处；形状在 13px 下只剩剪影，
+              靠颜色比靠轮廓更容易被认出。 */}
           <span
             aria-hidden
-            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-hairline border-hair bg-card font-serif text-ui text-ink-light"
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-hairline border-hair bg-card text-accent"
           >
-            {name.slice(0, 1)}
+            <AvidMark size={13} />
           </span>
           <span className="font-ui text-ui leading-[18px] text-ink-light">{name}</span>
         </div>
