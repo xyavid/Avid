@@ -10,8 +10,8 @@
 
 import { useEffect, useState } from 'react'
 
-import { ApiError, getMeta, listEntries, listSessions } from '../../api/client'
-import type { Entry, Meta, SessionSummary } from '../../api/types'
+import { ApiError, getMeta, listBranches, listEntries, listSessions } from '../../api/client'
+import type { Entry, Meta, SessionSummary, UsageReport } from '../../api/types'
 import { Composer } from '../../components/chat/Composer'
 import { Timeline } from '../../components/chat/Timeline'
 import { ContextRail } from '../../components/rail/ContextRail'
@@ -39,6 +39,7 @@ export function ConversationPage() {
   const [sessions, setSessions] = useState<SessionSummary[] | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [entries, setEntries] = useState<Entry[] | null>(null)
+  const [usage, setUsage] = useState<UsageReport | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -62,6 +63,7 @@ export function ConversationPage() {
     if (!selectedId) return
     let alive = true
     setEntries(null)
+    // 用量快照与条目分属两个端点；快照失败不该连累对话流，静默回退到「—」。
     listEntries(selectedId, { limit: 50 })
       .then((page) => {
         if (alive) setEntries([...page.entries].reverse())
@@ -71,6 +73,15 @@ export function ConversationPage() {
           setEntries([])
           setError(e instanceof ApiError ? e.message : String(e))
         }
+      })
+    listBranches(selectedId)
+      .then((bl) => {
+        if (!alive) return
+        const main = bl.branches.find((b) => b.name === 'main') ?? bl.branches.find((b) => b.is_default)
+        setUsage(main?.usage ?? null)
+      })
+      .catch(() => {
+        if (alive) setUsage(null)
       })
     return () => {
       alive = false
@@ -106,7 +117,7 @@ export function ConversationPage() {
           <Composer />
         </div>
       }
-      rail={<ContextRail meta={meta} session={selected} />}
+      rail={<ContextRail meta={meta} session={selected} usage={usage} />}
     />
   )
 }

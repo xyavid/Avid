@@ -8,7 +8,7 @@
  * - fetch 直接抛错（后端没起）→ 给可执行的下一步。
  */
 
-import type { EntryPage, Meta, SessionSummary } from './types'
+import type { BranchList, EntryPage, Meta, SessionSummary } from './types'
 
 export class ApiError extends Error {
   readonly code: string
@@ -78,4 +78,9 @@ export function listEntries(sessionId: string, opts: ListEntriesOptions = {}): P
   if (opts.limit !== undefined) params.set('limit', String(opts.limit))
   if (opts.cursorSeq !== undefined) params.set('cursor_seq', String(opts.cursorSeq))
   return request(`/api/sessions/${encodeURIComponent(sessionId)}/entries?${params.toString()}`)
+}
+
+/** 分支清单（含每分支落盘的用量快照——上下文卡的读数来源）。 */
+export function listBranches(sessionId: string): Promise<BranchList> {
+  return request(`/api/sessions/${encodeURIComponent(sessionId)}/branches`)
 }

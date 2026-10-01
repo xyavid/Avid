@@ -1,9 +1,12 @@
 /**
- * 右栏（参考图「工作区 / 上下文」区）：只读信息卡，读 meta 能力面与选中会话。
- * 没有装饰性内容——每个数字都能在后端找到出处；后续阶段（todo、用量）在此扩卡。
+ * 右栏（参考图「工作区 / 上下文」区）：只读信息卡。
+ * 工作区卡来自选中会话；上下文卡**只放上下文读数**——窗口 / 已用 / 占用率 /
+ * 缓存命中率，数据是分支用量快照（Branch.usage，落盘值）。模型、工具、技能
+ * 不是上下文，不进这张卡（用户明确要求）。null 一律显示「—」：
+ * "未上报"与"确实为 0"不同，不当 0 渲染。
  */
 
-import type { Meta, SessionSummary } from '../../api/types'
+import type { Meta, SessionSummary, UsageReport } from '../../api/types'
 import { Card } from '../../ui/Card'
 
 function Row({ label, value }: { label: string; value: string }) {
@@ -15,14 +18,24 @@ function Row({ label, value }: { label: string; value: string }) {
   )
 }
 
+/** token 数千分位；null → 「—」。 */
+function formatInt(value: number | null | undefined): string {
+  return value === null || value === undefined ? '—' : value.toLocaleString('en-US')
+}
+
+/** 比率（0–1）→ 百分号一位小数；null → 「—」。 */
+function formatPct(ratio: number | null | undefined): string {
+  return ratio === null || ratio === undefined ? '—' : `${(ratio * 100).toFixed(1)}%`
+}
+
 export type ContextRailProps = {
   meta: Meta | null
   session: SessionSummary | null
+  usage: UsageReport | null
 }
 
-export function ContextRail({ meta, session }: ContextRailProps) {
+export function ContextRail({ meta, session, usage }: ContextRailProps) {
   const workspace = session?.workspace
-  const sandbox = meta?.capabilities.sandbox
   return (
     <div className="flex flex-col gap-a16">
       <Card radius="md" title="工作区">
@@ -32,17 +45,10 @@ export function ContextRail({ meta, session }: ContextRailProps) {
         )}
       </Card>
       <Card radius="md" title="上下文">
-        <Row label="模型" value={meta?.capabilities.model ?? '—'} />
-        <Row label="工具" value={meta ? `${meta.capabilities.tools.length} 项` : '—'} />
-        <Row label="技能" value={meta ? `${meta.capabilities.skills.length} 项` : '—'} />
-        <Row
-          label="沙箱"
-          value={sandbox ? (sandbox.available ? `可用（${sandbox.backend}）` : '不可用') : '—'}
-        />
-        <Row
-          label="权限归属"
-          value={workspace?.default_permission ?? session?.workspace?.default_permission ?? '—'}
-        />
+        <Row label="已用 tokens" value={formatInt(usage?.context.tokens)} />
+        <Row label="上下文窗口" value={formatInt(usage?.context.window)} />
+        <Row label="占用率" value={formatPct(usage?.context.utilization)} />
+        <Row label="缓存命中率" value={formatPct(usage?.cache.hit_ratio)} />
       </Card>
     </div>
   )
