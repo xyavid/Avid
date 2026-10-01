@@ -35,4 +35,13 @@ describe('Input（组件墙 §输入框）', () => {
 
     expect(screen.getByRole('textbox').className).toContain('shadow-focus-ring')
   })
+
+  it('bare 变体：无描边无底色无固定高（composer 壳内使用）', () => {
+    render(<Input bare value="" onChange={() => {}} placeholder="裸" />)
+
+    const classes = (screen.getByPlaceholderText('裸') as HTMLInputElement).className.split(' ')
+    expect(classes).not.toContain('border-hair')
+    expect(classes).not.toContain('bg-card')
+    expect(classes).not.toContain('h-control')
+  })
 })

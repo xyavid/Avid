@@ -16,12 +16,12 @@ describe('AppShell 骨架（阶段 1）', () => {
     expect(screen.getByText(/右栏 280px/)).toBeTruthy()
   })
 
-  it('骨架不含任何真实内容：只有占位框与标注', () => {
+  it('插槽缺省时只有区域标注，不含任何真实构件', () => {
     const { container } = render(<AppShell />)
 
-    // 占位搜索框是骨架里唯一的"构件"，它只是个 30px 的空框
-    const boxes = container.querySelectorAll('div[aria-hidden]')
-    expect(boxes.length).toBe(1)
-    expect(boxes[0]?.textContent).toBe('')
+    // 默认态没有任何交互构件（按钮/输入/图标）——真实内容全部由表面插槽注入
+    expect(container.querySelectorAll('button, input, svg')).toHaveLength(0)
+    expect(screen.getByText(/侧栏 240px/)).toBeTruthy()
+    expect(screen.getByText(/右栏 280px/)).toBeTruthy()
   })
 })

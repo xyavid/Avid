@@ -16,15 +16,28 @@ export type SessionItemProps = {
   meta: string
   active?: boolean
   streaming?: boolean
+  /** 提供即整项可点（role=button + 键盘可达），focus-within 会点亮操作按钮 */
+  onSelect?: () => void
   className?: string
 }
 
-export function SessionItem({ title, meta, active = false, streaming = false, className }: SessionItemProps) {
+export function SessionItem({ title, meta, active = false, streaming = false, onSelect, className }: SessionItemProps) {
   return (
     <div
+      role={onSelect ? 'button' : undefined}
+      tabIndex={onSelect ? 0 : undefined}
+      onClick={onSelect}
+      onKeyDown={(e) => {
+        if (!onSelect) return
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onSelect()
+        }
+      }}
       className={cx(
         'group rounded-sm px-[9px] py-[7px] transition-colors duration-fast ease-out',
         active ? 'bg-accent-light' : 'hover:bg-accent-light',
+        onSelect && 'cursor-pointer',
         className,
       )}
     >
