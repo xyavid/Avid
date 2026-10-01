@@ -8,7 +8,7 @@
  * truncated_tail（上次运行中断）在流顶给一条提示——派生自投影，不新增字段。
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import {
   ApiError,
@@ -21,8 +21,13 @@ import {
   pickFolder,
 } from '../../api/client'
 import type { Entry, Meta, PermissionMode, SessionSummary, UsageReport, WorkspaceSummary } from '../../api/types'
+import { ApprovalBar } from '../../components/chat/ApprovalBar'
+import { AssistantMessage } from '../../components/chat/AssistantMessage'
 import { Composer } from '../../components/chat/Composer'
-import { Timeline } from '../../components/chat/Timeline'
+import { Timeline, toolIcon } from '../../components/chat/Timeline'
+import { ToolCard } from '../../components/chat/ToolCard'
+import { UserBubble } from '../../components/chat/UserBubble'
+import { useRunStream } from '../../state/useRunStream'
 import { ContextRail } from '../../components/rail/ContextRail'
 import { ProjectCard } from '../../components/session/ProjectCard'
 import { SessionNav } from '../../components/session/SessionNav'
@@ -58,6 +63,36 @@ export function ConversationPage() {
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null)
   const [wsBusy, setWsBusy] = useState(false)
   const [wsHint, setWsHint] = useState<string | null>(null)
+  // 活运行：一次运行的发送/订阅/终态回拉。liveSession 标记活事件属于哪个会话
+  // （切走会话时活区块不跟过去）；attachedRunRef 防重复附着同一运行。
+  const [liveSession, setLiveSession] = useState<string | null>(null)
+  const selectedIdRef = useRef<string | null>(null)
+  selectedIdRef.current = selectedId
+  const attachedRunRef = useRef<string | null>(null)
+  const settledRef = useRef<() => Promise<void>>(async () => {})
+  const live = useRunStream(selectedId, () => {
+    void settledRef.current()
+  })
+  settledRef.current = async () => {
+    const id = selectedIdRef.current
+    if (id) {
+      try {
+        const [page, bl] = await Promise.all([listEntries(id, { limit: 50 }), listBranches(id)])
+        setEntries([...page.entries].reverse())
+        const main = bl.branches.find((b) => b.name === 'main') ?? bl.branches.find((b) => b.is_default)
+        setUsage(main?.usage ?? null)
+      } catch {
+        // 回拉失败保留旧视图，刷新兜底
+      }
+    }
+    try {
+      const w = await listSessions()
+      setSessions(w.sessions)
+    } catch {
+      // 列表刷新失败不阻塞收尾
+    }
+    live.reset()
+  }
 
   useEffect(() => {
     let alive = true
@@ -137,6 +172,16 @@ export function ConversationPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 只随项目切换与列表刷新而调整
   }, [activeWorkspaceId, sessions])
 
+  // 选中会话有在跑的运行（刷新 / 切回）：附着到它的流，durable 重放重建视图。
+  useEffect(() => {
+    const active = selected?.active_run_id ?? null
+    if (!active || live.phase !== 'idle' || attachedRunRef.current === active) return
+    attachedRunRef.current = active
+    setLiveSession(selected?.id ?? null)
+    live.attach(active)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只随会话的活动运行变化而附着
+  }, [selected?.active_run_id, live.phase])
+
   const refreshWorkspaces = async (): Promise<WorkspaceSummary[]> => {
     const w = await listWorkspaces()
     setWorkspaces(w.workspaces)
@@ -185,22 +230,42 @@ export function ConversationPage() {
     }
   }
 
+  const liveActive = live.phase === 'starting' || live.phase === 'running' || live.phase === 'settling'
+  const liveHere = liveActive && liveSession === selectedId
+  const displayError = error ?? (live.phase === 'error' && liveSession === selectedId ? live.error : null)
+
   let body = <Welcome detail={activeWorkspaceId ? '这个项目还没有会话' : '从左侧选择一个项目'} />
-  if (error) {
-    body = <p className="px-a8 pt-a8 font-ui text-ui text-danger">{error}</p>
+  if (displayError) {
+    body = <p className="px-a8 pt-a8 font-ui text-ui text-danger">{displayError}</p>
   } else if (selectedId && entries === null) {
     body = <p className="px-a8 font-ui text-hint text-ink-muted">加载中…</p>
-  } else if (selectedId && entries !== null && entries.length > 0) {
+  } else if (selectedId) {
+    const hasEntries = entries !== null && entries.length > 0
     body = (
       <>
         {selected?.truncated_tail && (
           <p className="mb-a16 text-center font-ui text-hint text-ink-muted">上次运行在此中断</p>
         )}
-        <Timeline entries={entries} />
+        {hasEntries && <Timeline entries={entries} />}
+        {liveHere && (
+          <div className="mt-a16 flex flex-col gap-a16">
+            {live.userText && <UserBubble>{live.userText}</UserBubble>}
+            {live.tools.map((t) => (
+              <ToolCard
+                key={t.callId}
+                icon={toolIcon(t.tool)}
+                title={t.tool}
+                status={t.status === 'denied' ? 'failed' : t.status}
+              />
+            ))}
+            {(live.assistantText || (!hasEntries && live.tools.length === 0)) && (
+              <AssistantMessage streaming>{live.assistantText}</AssistantMessage>
+            )}
+          </div>
+        )}
+        {!hasEntries && !liveHere && <Welcome detail="这个会话还没有对话内容" />}
       </>
     )
-  } else if (selectedId && entries !== null && entries.length === 0) {
-    body = <Welcome detail="这个会话还没有对话内容" />
   }
 
   return (
@@ -228,8 +293,27 @@ export function ConversationPage() {
       }
       main={
         <div className="mx-auto flex h-full max-w-chat-input flex-col">
-          <div className="min-h-0 flex-1 overflow-y-auto px-a16 pt-a16">{body}</div>
-          <Composer permission={permission} onChangePermission={setPermission} />
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-a16 pt-a16">{body}</div>
+          {live.approvals.length > 0 && liveSession === selectedId && (
+            <div className="px-a16 pb-a8">
+              <ApprovalBar
+                approvals={live.approvals}
+                busy={false}
+                onDecide={(id, decision) => void live.decide(id, decision)}
+              />
+            </div>
+          )}
+          <Composer
+            permission={permission}
+            onChangePermission={setPermission}
+            disabled={!selectedId}
+            busy={liveHere}
+            onSend={(text) => {
+              setLiveSession(selectedId)
+              void live.send(text, permission)
+            }}
+            onStop={() => void live.stop()}
+          />
         </div>
       }
       rail={<ContextRail usage={usage} />}

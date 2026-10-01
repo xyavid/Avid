@@ -8,7 +8,16 @@
  * - fetch 直接抛错（后端没起）→ 给可执行的下一步。
  */
 
-import type { BranchList, EntryPage, Meta, SessionSummary, WorkspaceSummary } from './types'
+import type {
+  BranchList,
+  CancelResult,
+  EntryPage,
+  Meta,
+  Run,
+  RunCreated,
+  SessionSummary,
+  WorkspaceSummary,
+} from './types'
 
 export class ApiError extends Error {
   readonly code: string
@@ -102,5 +111,42 @@ export function createWorkspace(input: CreateWorkspaceInput): Promise<WorkspaceS
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
+  })
+}
+
+export type StartRunInput = {
+  prompt: string
+  /** 这次运行接在哪条链尾上；缺省 = main。 */
+  branch?: string
+  /** 权限模式；缺省由服务端按会话所属工作区的默认权限回落。 */
+  permission?: 'manual' | 'auto' | 'full'
+  /** permission: 'full' 的显式授权凭据——少了它服务端 422（full 三重锁）。 */
+  full_access_ack?: boolean
+}
+
+/** 发起一次运行（201 → RunCreated）。 */
+export function startRun(sessionId: string, input: StartRunInput): Promise<RunCreated> {
+  return request(`/api/sessions/${encodeURIComponent(sessionId)}/runs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+}
+
+export function getRun(runId: string): Promise<Run> {
+  return request(`/api/runs/${encodeURIComponent(runId)}`)
+}
+
+/** 请求取消（202；取消是协作式的，实际终态以 run_cancelled 事件 / getRun 为准）。 */
+export function cancelRun(runId: string): Promise<CancelResult> {
+  return request(`/api/runs/${encodeURIComponent(runId)}/cancel`, { method: 'POST' })
+}
+
+/** 幂等答复一次审批；decision: 'allow' | 'deny'。 */
+export function decideApproval(runId: string, approvalId: string, decision: 'allow' | 'deny'): Promise<unknown> {
+  return request(`/api/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ decision }),
   })
 }

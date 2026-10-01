@@ -41,7 +41,8 @@ const TOOL_ICONS: Record<string, IconName> = {
   subagent: 'git-branch',
 }
 
-function toolIcon(name: string): IconName {
+/** 工具名 → 图标；未登记的工具回落到通用文件帧。页面活事件区也用它。 */
+export function toolIcon(name: string): IconName {
   return TOOL_ICONS[name] ?? 'file-frame'
 }
 

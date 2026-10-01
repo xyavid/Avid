@@ -28,10 +28,18 @@ describe('AssistantMessage（报告 §7.3：头像行 + 正文分列）', () => 
     expect(body.className).toContain('serif-text')
   })
 
-  it('流式态显示生成中的呼吸点，不渲染正文', () => {
-    render(<AssistantMessage streaming>还没生成完</AssistantMessage>)
+  it('流式态无文本：显示生成中的呼吸点，不渲染正文', () => {
+    render(<AssistantMessage streaming />)
 
     expect(screen.getByLabelText('生成中')).toBeTruthy()
-    expect(screen.queryByText('还没生成完')).toBeNull()
+  })
+
+  it('流式态有部分文本：渲染正文 + 光标呼吸尾标', () => {
+    const { container } = render(<AssistantMessage streaming>正在生成</AssistantMessage>)
+
+    expect(screen.getByText(/正在生成/)).toBeTruthy()
+    expect(container.querySelector('.serif-text')).toBeTruthy()
+    // 有文本时不再显示三点占位
+    expect(screen.queryByLabelText('生成中')).toBeNull()
   })
 })

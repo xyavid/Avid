@@ -1,11 +1,12 @@
 /**
  * 输入区（参考图主界面）：16px 圆角抬升面壳（--radius-chat-surface）+
- * 裸输入框（bare Input）+ 左侧 [权限按钮·附加·附件] + 右侧 accent 发送钮。
- * 输入列取 --chat-input-column-width（比对话列略宽，报告 §6）。
- * 权限按钮反映实际三态（手动/自动/完全），点卡片可改——它不改后端，
- * 改的是「下次发送用什么模式」，发送时随 StartRunInput 提交（阶段 5）。
- * 发送与流式在阶段 5 接线——当前整体禁用并在 title 注明，不装可用。
+ * 裸输入框（bare Input）+ 左侧 [附加·附件·权限] + 右侧发送/停止钮。
+ * Enter 发送（trim 后非空）；运行中（busy）输入禁用、发送钮变停止钮
+ * （square 图标，仍是 accent 实底——停止是协作式的，终态以事件为准）。
+ * 权限胶囊反映实际三态，发送时随 StartRunInput 提交（full 由 hook 附 ack）。
  */
+
+import { useState } from 'react'
 
 import type { PermissionMode } from '../../api/types'
 import { IconButton } from '../../ui/IconButton'
@@ -15,20 +16,59 @@ import { PermissionButton } from './PermissionButton'
 export type ComposerProps = {
   permission: PermissionMode
   onChangePermission: (mode: PermissionMode) => void
+  /** 无选中会话等：整条输入路径不可用。 */
+  disabled?: boolean
+  /** 运行中：输入禁用，发送钮变停止钮。 */
+  busy?: boolean
+  onSend: (text: string) => void
+  onStop: () => void
 }
 
-export function Composer({ permission, onChangePermission }: ComposerProps) {
+export function Composer({ permission, onChangePermission, disabled = false, busy = false, onSend, onStop }: ComposerProps) {
+  const [text, setText] = useState('')
+  const locked = disabled || busy
+  const canSend = !locked && text.trim().length > 0
+
+  const submit = () => {
+    if (!canSend) return
+    onSend(text.trim())
+    setText('')
+  }
+
   return (
     <div className="px-a16 pb-a16">
       <div className="relative mx-auto max-w-chat-input rounded-chat-surface border-hairline border-hair bg-card px-a16 py-a12 shadow-soft">
-        <Input bare placeholder="给 Avid 发消息…" aria-label="消息输入" disabled />
+        <Input
+          bare
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              submit()
+            }
+          }}
+          placeholder={busy ? '运行中…可点右侧停止' : '给 Avid 发消息…'}
+          aria-label="消息输入"
+          disabled={locked}
+        />
         <div className="mt-a8 flex items-center justify-between">
           <div className="flex items-center gap-a8">
             <IconButton icon="plus" label="附加" disabled />
             <IconButton icon="paperclip" label="附件" disabled />
             <PermissionButton mode={permission} onChange={onChangePermission} />
           </div>
-          <IconButton icon="send" label="发送" variant="primary" disabled title="阶段 5 接线：发送与流式" />
+          {busy ? (
+            <IconButton icon="square" label="停止" variant="primary" onClick={onStop} />
+          ) : (
+            <IconButton
+              icon="send"
+              label="发送"
+              variant="primary"
+              disabled={!canSend}
+              onClick={submit}
+            />
+          )}
         </div>
       </div>
     </div>

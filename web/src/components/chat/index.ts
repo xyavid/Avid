@@ -1,6 +1,7 @@
+export { ApprovalBar } from './ApprovalBar'
 export { AssistantMessage } from './AssistantMessage'
 export { Composer } from './Composer'
-export { Timeline } from './Timeline'
+export { Timeline, toolIcon } from './Timeline'
 export { ToolCard } from './ToolCard'
 export { ToolGroup } from './ToolGroup'
 export { UserBubble } from './UserBubble'

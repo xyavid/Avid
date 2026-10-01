@@ -1,40 +1,73 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { Composer } from '../Composer'
 
 afterEach(cleanup)
 
-describe('Composer（参考图输入区）', () => {
-  it('裸输入框就位；发送钮禁用并注明阶段 5 接线', () => {
-    render(<Composer permission="manual" onChangePermission={() => {}} />)
+function renderComposer(overrides?: { busy?: boolean; disabled?: boolean }) {
+  const onSend = vi.fn()
+  const onStop = vi.fn()
+  const view = render(
+    <Composer
+      permission="manual"
+      onChangePermission={() => {}}
+      onSend={onSend}
+      onStop={onStop}
+      {...overrides}
+    />,
+  )
+  return { onSend, onStop, ...view }
+}
 
-    const input = screen.getByPlaceholderText('给 Avid 发消息…') as HTMLInputElement
-    expect(input.disabled).toBe(true)
+describe('Composer（发送与停止）', () => {
+  it('输入后发送钮解禁；点击回调带 trim 后文本并清空输入', () => {
+    const { onSend } = renderComposer()
 
-    const send = screen.getByRole('button', { name: '发送' }) as HTMLButtonElement
-    expect(send.disabled).toBe(true)
-    expect(send.className).toContain('bg-accent')
-    expect(send.title).toContain('阶段 5')
+    const send = () => screen.getByRole('button', { name: '发送' })
+    expect((send() as HTMLButtonElement).disabled).toBe(true)
+
+    fireEvent.change(screen.getByPlaceholderText('给 Avid 发消息…'), { target: { value: '  跑一下  ' } })
+    expect((send() as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(send())
+    expect(onSend).toHaveBeenCalledWith('跑一下')
+    expect((screen.getByPlaceholderText('给 Avid 发消息…') as HTMLInputElement).value).toBe('')
   })
 
-  it('权限按钮在图标行里，chip 反映当前模式', () => {
-    render(<Composer permission="auto" onChangePermission={() => {}} />)
+  it('Enter 发送；空文本 Enter 不触发', () => {
+    const { onSend } = renderComposer()
+    const input = screen.getByPlaceholderText('给 Avid 发消息…')
 
-    expect(screen.getByRole('button', { name: '附加' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: '附件' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: '发送' })).toBeTruthy()
-    expect(screen.getByText('自动')).toBeTruthy()
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onSend).not.toHaveBeenCalled()
+
+    fireEvent.change(input, { target: { value: '跑一下' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onSend).toHaveBeenCalledWith('跑一下')
   })
 
-  it('权限胶囊可打开模式卡片（可交互，不受发送禁用影响）', () => {
-    render(<Composer permission="manual" onChangePermission={() => {}} />)
+  it('busy：输入禁用、发送钮变停止钮，点它回调 onStop', () => {
+    const { onStop } = renderComposer({ busy: true })
+
+    expect((screen.getByPlaceholderText('运行中…可点右侧停止') as HTMLInputElement).disabled).toBe(true)
+    const stop = screen.getByRole('button', { name: '停止' })
+    fireEvent.click(stop)
+    expect(onStop).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('button', { name: '发送' })).toBeNull()
+  })
+
+  it('disabled（无选中会话）：输入与附加类按钮全部禁用', () => {
+    renderComposer({ disabled: true })
+
+    expect((screen.getByPlaceholderText('给 Avid 发消息…') as HTMLInputElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: '附加' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('权限胶囊仍可交互（不受 busy/disabled 影响）', () => {
+    renderComposer({ disabled: true })
 
     fireEvent.click(screen.getByRole('button', { name: /权限模式/ }))
-    const dialog = screen.getByRole('dialog', { name: '权限模式' })
-    expect(dialog.textContent).toContain('手动')
-    expect(dialog.textContent).toContain('自动')
-    expect(dialog.textContent).toContain('完全')
+    expect(screen.getByRole('dialog', { name: '权限模式' })).toBeTruthy()
   })
 })
