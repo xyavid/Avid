@@ -63,16 +63,14 @@ describe('ProjectCard（侧栏 · 项目卡，可收回）', () => {
     expect((screen.getByRole('button', { name: '新增项目' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
-  it('picker 不可用：展开手动路径行，确认带路径回调', () => {
-    const onAddByPath = vi.fn()
-    render(
-      <ProjectCard workspaces={WORKSPACES} activeWorkspaceId="w1" pickerAvailable={false} onAddByPath={onAddByPath} />,
-    )
+  it('picker 不可用：加号禁用并说明替代入口，不再提供手动路径输入', () => {
+    render(<ProjectCard workspaces={WORKSPACES} activeWorkspaceId="w1" pickerAvailable={false} />)
 
-    const input = screen.getByPlaceholderText('/绝对/路径') as HTMLInputElement
-    fireEvent.change(input, { target: { value: '/tmp/new-ws' } })
-    fireEvent.click(screen.getByRole('button', { name: '确认' }))
-    expect(onAddByPath).toHaveBeenCalledWith('/tmp/new-ws')
+    const add = screen.getByRole('button', { name: '新增项目' }) as HTMLButtonElement
+    expect(add.disabled).toBe(true)
+    expect(add.title).toContain('avid workspace add')
+    expect(screen.queryByPlaceholderText('/绝对/路径')).toBeNull()
+    expect(screen.queryByText('手动输入路径')).toBeNull()
   })
 
   it('hint 展示；正在加载时行区给占位', () => {

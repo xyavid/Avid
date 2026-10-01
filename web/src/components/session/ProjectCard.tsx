@@ -2,9 +2,8 @@
  * 项目卡（侧栏 · 可收回）：一个「项目」就是一个选定的工作区——项目行即
  * 工作区候选（参考图形态：文件夹图标 + 名称的紧凑单行）。选中项是新会话
  * 将使用的工作区；会话归属在创建时绑定，现有会话只读（归属行打「当前会话」
- * 标记）。标题行：⊕ 新增（picker 可用时走宿主机选择器，不可用时展开手动
- * 路径行）+ chevron 收起/展开（可收回）。
- * 放在会话搜索框上方；右栏不再有工作区卡。
+ * 标记）。标题行：⊕ 新增（走宿主机文件夹选择器，不可用时按钮禁用并说明）
+ * + chevron 收起/展开（可收回）。放在会话搜索框上方；右栏不再有工作区卡。
  */
 
 import { useState } from 'react'
@@ -12,7 +11,6 @@ import { useState } from 'react'
 import type { WorkspaceSummary } from '../../api/types'
 import { cx } from '../../ui/cx'
 import { Icon } from '../../ui/Icon'
-import { Input } from '../../ui/Input'
 import { useAutoHideScroll } from '../../ui/useAutoHideScroll'
 
 function basename(root: string): string {
@@ -31,7 +29,6 @@ export type ProjectCardProps = {
   hint?: string | null
   onSelectWorkspace?: (id: string) => void
   onAddByPicker?: () => void
-  onAddByPath?: (path: string) => void
 }
 
 export function ProjectCard({
@@ -43,19 +40,9 @@ export function ProjectCard({
   hint = null,
   onSelectWorkspace,
   onAddByPicker,
-  onAddByPath,
 }: ProjectCardProps) {
   const [open, setOpen] = useState(true)
-  const [manualOpen, setManualOpen] = useState(false)
-  const [manualPath, setManualPath] = useState('')
   const listScrollRef = useAutoHideScroll<HTMLDivElement>()
-
-  const submitManual = () => {
-    const path = manualPath.trim()
-    if (!path || busy) return
-    onAddByPath?.(path)
-    setManualPath('')
-  }
 
   return (
     <div className="flex flex-col gap-a4">
@@ -67,7 +54,7 @@ export function ProjectCard({
             onClick={onAddByPicker}
             disabled={busy || !pickerAvailable}
             aria-label="新增项目"
-            title={pickerAvailable ? '打开文件夹选择器' : '宿主机文件夹选择器不可用，请展开后手动输入路径'}
+            title={pickerAvailable ? '打开文件夹选择器' : '宿主机文件夹选择器不可用；可在 CLI 用 avid workspace add 登记'}
             className="inline-flex h-[22px] w-[22px] items-center justify-center rounded-sm text-ink-muted transition-colors duration-fast ease-out hover:bg-overlay-light hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Icon name="plus" size={12} />
@@ -121,41 +108,6 @@ export function ProjectCard({
             )
           })}
         </div>
-      )}
-
-      {open && (manualOpen || !pickerAvailable) && (
-        <div className="flex items-center gap-a8">
-          <Input
-            bare
-            value={manualPath}
-            onChange={(e) => setManualPath(e.target.value)}
-            placeholder="/绝对/路径"
-            aria-label="项目路径"
-            disabled={busy}
-            className="h-[30px] rounded-sm bg-overlay-light px-a8"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') submitManual()
-            }}
-          />
-          <button
-            type="button"
-            onClick={submitManual}
-            disabled={busy || manualPath.trim() === ''}
-            className="shrink-0 rounded-sm border-hairline border-hair px-a8 py-a4 font-ui text-hint font-medium text-ink-light transition-colors duration-fast ease-out hover:bg-overlay-light hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            确认
-          </button>
-        </div>
-      )}
-
-      {open && pickerAvailable && !manualOpen && (
-        <button
-          type="button"
-          onClick={() => setManualOpen(true)}
-          className="self-start px-a8 font-ui text-micro text-ink-muted transition-colors duration-fast ease-out hover:text-ink-light"
-        >
-          手动输入路径
-        </button>
       )}
 
       {open && hint && <p className="px-a8 font-ui text-micro text-ink-light">{hint}</p>}

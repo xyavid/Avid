@@ -291,7 +291,6 @@ export function ConversationPage() {
             hint={wsHint}
             onSelectWorkspace={setActiveWorkspaceId}
             onAddByPicker={addByPicker}
-            onAddByPath={addByPath}
           />
           <SessionNav
             sessions={sessions ?? []}
