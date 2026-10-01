@@ -164,12 +164,17 @@ export function GalleryPage() {
       )}
 
       {show('toolcard') && (
-        <Section id="toolcard" title="工具卡">
-          <ToolCard icon="file-frame" title="读取 styles.css" badge="9 档间距">
-            --space-2 … --space-40
-            <br />
-            --duration-instant / fast / slow
-          </ToolCard>
+        <Section id="toolcard" title="工具卡（折叠行 ↔ 展开卡；连续调用聚组）">
+          <div className="flex flex-col gap-a8">
+            <ToolCard icon="terminal" title="bash" preview="uv run pytest -q" status="ok">
+              uv run pytest -q
+            </ToolCard>
+            <ToolCard icon="file-frame" title="读取 styles.css" badge="9 档间距" defaultExpanded>
+              --space-2 … --space-40
+              <br />
+              --duration-instant / fast / slow
+            </ToolCard>
+          </div>
         </Section>
       )}
 

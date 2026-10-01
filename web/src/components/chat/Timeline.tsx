@@ -3,12 +3,12 @@
  *
  * 规则：
  * - user → UserBubble；
- * - assistant 带 tool_calls → 每个 tool_call 一张 ToolCard；后随 role:'tool'
- *   的结果按 tool_call_id 归位进卡身（不渲染成独立消息）；结果未到（中断批次）
- *   时卡身显示参数预览；
+ * - assistant 带 tool_calls → 工具卡；**连续的工具调用聚成一组**（「N 个工具」，
+ *   组头可开关整组）；role:'tool' 的结果按 tool_call_id 归位（结果首行做折叠
+ *   行的预览，完整内容在展开态）；结果未到（中断批次）预览显示参数压缩串，
+ *   状态 = 运行中；失败判定与后端 classify_tool_status 同口径（见 ToolCard）；
  * - assistant 纯文本 → AssistantMessage（衬线）；空内容的 tool_calls 轮次不渲染；
- * - notice 条目跳过——内核注入的提醒不是对话（与后端口径一致，见 test_web_api
- *   对 notice 线格式的钉子）。
+ * - notice 条目跳过——内核注入的提醒不是对话（与后端口径一致）。
  */
 
 import type { ReactNode } from 'react'
@@ -16,7 +16,8 @@ import type { ReactNode } from 'react'
 import type { Entry } from '../../api/types'
 import type { IconName } from '../../ui/Icon'
 import { AssistantMessage } from './AssistantMessage'
-import { ToolCard } from './ToolCard'
+import { ToolCard, type ToolStatus } from './ToolCard'
+import { ToolGroup } from './ToolGroup'
 import { UserBubble } from './UserBubble'
 
 type ToolCall = { id: string; name: string; args: string; result: string | null }
@@ -44,11 +45,24 @@ function toolIcon(name: string): IconName {
   return TOOL_ICONS[name] ?? 'file-frame'
 }
 
-function previewArgs(args: string): string {
+/** 与后端 classify_tool_status 同口径（schemas.py）。 */
+const FAILED_PREFIXES = ['错误：', '参数错误：']
+const FAILED_MARK = '执行失败：'
+
+function statusOf(call: ToolCall): ToolStatus {
+  if (call.result === null) return 'running'
+  const failed =
+    FAILED_PREFIXES.some((p) => call.result!.startsWith(p)) || call.result!.slice(0, 64).includes(FAILED_MARK)
+  return failed ? 'failed' : 'ok'
+}
+
+/** 折叠行预览：有结果取首行；无结果取参数压缩串（单行 JSON）。 */
+function previewOf(call: ToolCall): string {
+  if (call.result !== null) return call.result.split('\n')[0] ?? ''
   try {
-    return JSON.stringify(JSON.parse(args), null, 2)
+    return JSON.stringify(JSON.parse(call.args))
   } catch {
-    return args
+    return call.args
   }
 }
 
@@ -80,16 +94,39 @@ function asItems(entries: Entry[]): Item[] {
 
 export function Timeline({ entries }: { entries: Entry[] }) {
   const items = asItems(entries)
-  const nodes: ReactNode[] = items.map((item, index) => {
-    if (item.kind === 'user') return <UserBubble key={index}>{item.text}</UserBubble>
-    if (item.kind === 'assistant') return <AssistantMessage key={index}>{item.text}</AssistantMessage>
-    return (
-      <ToolCard key={index} icon={toolIcon(item.call.name)} title={item.call.name}>
-        <span className="line-clamp-6 block whitespace-pre-wrap">
-          {item.call.result ?? previewArgs(item.call.args)}
-        </span>
+  const nodes: ReactNode[] = []
+  let index = 0
+  while (index < items.length) {
+    const item = items[index]!
+    if (item.kind !== 'tool') {
+      nodes.push(
+        item.kind === 'user' ? (
+          <UserBubble key={index}>{item.text}</UserBubble>
+        ) : (
+          <AssistantMessage key={index}>{item.text}</AssistantMessage>
+        ),
+      )
+      index += 1
+      continue
+    }
+    // 连续的工具调用聚成一组（哪怕只有一条：组头开关比单卡多一层，一条时直接给折叠行）
+    const run: Array<Extract<Item, { kind: 'tool' }>> = []
+    while (index < items.length && items[index]!.kind === 'tool') {
+      run.push(items[index] as Extract<Item, { kind: 'tool' }>)
+      index += 1
+    }
+    const cards = run.map((t, j) => (
+      <ToolCard
+        key={`${index}-${j}`}
+        icon={toolIcon(t.call.name)}
+        title={t.call.name}
+        preview={previewOf(t.call)}
+        status={statusOf(t.call)}
+      >
+        <span className="line-clamp-6 block whitespace-pre-wrap">{t.call.result ?? t.call.args}</span>
       </ToolCard>
-    )
-  })
+    ))
+    nodes.push(run.length === 1 ? cards[0]! : <ToolGroup key={`group-${index}`} count={run.length}>{cards}</ToolGroup>)
+  }
   return <div className="flex flex-col gap-a16">{nodes}</div>
 }

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import type { Entry } from '../../../api/types'
@@ -26,8 +26,8 @@ describe('Timeline（durable 条目 → 冻结组件）', () => {
     expect(screen.getByText('做完了')).toBeTruthy()
   })
 
-  it('assistant 的 tool_calls → 工具卡；role:tool 结果按 id 归位进卡身', () => {
-    const { container } = render(
+  it('单条工具调用 → 折叠行：标题 + 结果首行预览 + 成功勾，不渲染组头', () => {
+    render(
       <Timeline
         entries={[
           entry(1, { role: 'user', content: '跑一下' }),
@@ -42,26 +42,58 @@ describe('Timeline（durable 条目 → 冻结组件）', () => {
     )
 
     expect(screen.getByText('bash')).toBeTruthy()
-    // 结果进卡身，而不是渲染成独立消息
-    expect(screen.getByText(/bash ok/)).toBeTruthy()
-    // 空内容的 tool_calls 轮次不渲染空气泡（本轮没有衬线正文块）
-    expect(container.querySelectorAll('.serif-text')).toHaveLength(0)
+    expect(screen.getByText('bash ok')).toBeTruthy()
+    expect(screen.getByLabelText('成功')).toBeTruthy()
+    expect(screen.queryByText(/个工具/)).toBeNull()
   })
 
-  it('结果未到（中断的批次）：卡身显示参数预览', () => {
+  it('连续多条工具调用 → 聚成「N 个工具」组，组头可开关整组', () => {
     render(
       <Timeline
         entries={[
           entry(2, {
             role: 'assistant',
             content: '',
-            tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'bash', arguments: '{"command": "echo hi"}' } }],
+            tool_calls: [
+              { id: 'c1', type: 'function', function: { name: 'bash', arguments: '{"command":"echo one"}' } },
+              { id: 'c2', type: 'function', function: { name: 'bash', arguments: '{"command":"echo two"}' } },
+            ],
           }),
+          entry(3, { role: 'tool', tool_call_id: 'c1', content: 'one' }),
+          entry(4, { role: 'tool', tool_call_id: 'c2', content: 'two' }),
         ]}
       />,
     )
 
-    expect(screen.getByText(/echo hi/)).toBeTruthy()
+    expect(screen.getByText('2 个工具')).toBeTruthy()
+    expect(screen.getByText('one')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: /2 个工具/ }))
+    expect(screen.queryByText('one')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /2 个工具/ }))
+    expect(screen.getByText('two')).toBeTruthy()
+  })
+
+  it('失败结果（错误：前缀）标失败叉；中断批次标运行中并显示参数', () => {
+    render(
+      <Timeline
+        entries={[
+          entry(2, {
+            role: 'assistant',
+            content: '',
+            tool_calls: [
+              { id: 'c1', type: 'function', function: { name: 'bash', arguments: '{"command":"boom"}' } },
+              { id: 'c2', type: 'function', function: { name: 'bash', arguments: '{"command":"echo hi"}' } },
+            ],
+          }),
+          entry(3, { role: 'tool', tool_call_id: 'c1', content: '错误：命令被拒绝' }),
+        ]}
+      />,
+    )
+
+    expect(screen.getByLabelText('失败')).toBeTruthy()
+    expect(screen.getByLabelText('运行中')).toBeTruthy()
+    expect(screen.getByText('{"command":"echo hi"}')).toBeTruthy()
   })
 
   it('notice 条目不进对话视图', () => {
