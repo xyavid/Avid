@@ -8,7 +8,7 @@
  * - fetch 直接抛错（后端没起）→ 给可执行的下一步。
  */
 
-import type { BranchList, EntryPage, Meta, SessionSummary } from './types'
+import type { BranchList, EntryPage, Meta, SessionSummary, WorkspaceSummary } from './types'
 
 export class ApiError extends Error {
   readonly code: string
@@ -25,10 +25,10 @@ export class ApiError extends Error {
 }
 
 /** 同源请求；开发期由 vite 代理 /api → 8765。 */
-async function request<T>(path: string): Promise<T> {
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response
   try {
-    res = await fetch(path)
+    res = await fetch(path, init)
   } catch {
     throw new ApiError('network', '连不上本地服务：请确认 `avid web` 已启动、端口与访问地址一致。', 0, null)
   }
@@ -83,4 +83,24 @@ export function listEntries(sessionId: string, opts: ListEntriesOptions = {}): P
 /** 分支清单（含每分支落盘的用量快照——上下文卡的读数来源）。 */
 export function listBranches(sessionId: string): Promise<BranchList> {
   return request(`/api/sessions/${encodeURIComponent(sessionId)}/branches`)
+}
+
+export function listWorkspaces(): Promise<{ workspaces: WorkspaceSummary[] }> {
+  return request('/api/workspaces')
+}
+
+/** 弹宿主机文件夹选择器（服务端 AVID_PICKER_CMD）；null = 用户取消，不是错误。 */
+export function pickFolder(): Promise<{ path: string | null }> {
+  return request('/api/workspaces/pick', { method: 'POST' })
+}
+
+export type CreateWorkspaceInput = { path: string; name?: string; permission?: 'manual' | 'auto' }
+
+/** 注册工作区；已注册时后端 409 workspace_exists（detail 带既有 id/name/root）。 */
+export function createWorkspace(input: CreateWorkspaceInput): Promise<WorkspaceSummary> {
+  return request('/api/workspaces', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
 }

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { ApiError, getMeta, listEntries, listSessions } from '../client'
+import { ApiError, createWorkspace, getMeta, listEntries, listSessions, pickFolder } from '../client'
 
 function jsonResponse(status: number, body: unknown): Response {
   return { ok: status < 400, status, json: async () => body } as Response
@@ -17,7 +17,7 @@ describe('api/client（网络出口唯一层）', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     await expect(getMeta()).resolves.toEqual(meta)
-    expect(fetchMock).toHaveBeenCalledWith('/api/meta')
+    expect(fetchMock).toHaveBeenCalledWith('/api/meta', undefined)
   })
 
   it('listSessions 命中 /api/sessions', async () => {
@@ -72,5 +72,25 @@ describe('api/client（网络出口唯一层）', () => {
 
     const err = await getMeta().catch((e: unknown) => e) as ApiError
     expect(err.message).toContain('avid web')
+  })
+
+  it('pickFolder 走 POST /api/workspaces/pick', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { path: '/tmp/x' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(pickFolder()).resolves.toEqual({ path: '/tmp/x' })
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/workspaces/pick')
+    expect((fetchMock.mock.calls[0]?.[1] as RequestInit).method).toBe('POST')
+  })
+
+  it('createWorkspace POST 带 JSON 载荷', async () => {
+    const created = { id: 'w1', root: '/tmp/x', name: null, created_at: 0, last_used_at: 0, default_permission: null, is_default: false }
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(201, created))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(createWorkspace({ path: '/tmp/x' })).resolves.toEqual(created)
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit
+    expect(init.method).toBe('POST')
+    expect(init.body).toBe(JSON.stringify({ path: '/tmp/x' }))
   })
 })

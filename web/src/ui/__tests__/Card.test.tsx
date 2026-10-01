@@ -14,7 +14,7 @@ describe('Card（组件墙 §卡片）', () => {
     expect(title.className).toContain('font-serif')
     expect(screen.getByText(/抬升面比主面更亮/)).toBeTruthy()
     // 组件墙的简单卡是 5px（rounded-sm），8px 的 --radius-card 留给大面板
-    expect(title.parentElement?.className).toContain('rounded-sm')
+    expect(title.closest('div')?.parentElement?.className).toContain('rounded-sm')
   })
 
   it('panel 变体用 8px 圆角（右栏大面板用）', () => {
@@ -24,6 +24,18 @@ describe('Card（组件墙 §卡片）', () => {
       </Card>,
     )
 
-    expect(screen.getByText('面板').parentElement?.className).toContain('rounded-card')
+    expect(screen.getByText('面板').closest('div')?.parentElement?.className).toContain('rounded-card')
+  })
+
+  it('actions 插槽渲染在标题行右侧（如工作区卡的「新增」按钮）', () => {
+    render(
+      <Card title="工作区" actions={<button type="button">新增工作区</button>}>
+        内容
+      </Card>,
+    )
+
+    const header = screen.getByText('工作区').parentElement
+    expect(header?.textContent).toContain('工作区')
+    expect(header?.querySelector('button')?.textContent).toBe('新增工作区')
   })
 })

@@ -10,8 +10,17 @@
 
 import { useEffect, useState } from 'react'
 
-import { ApiError, getMeta, listBranches, listEntries, listSessions } from '../../api/client'
-import type { Entry, Meta, PermissionMode, SessionSummary, UsageReport } from '../../api/types'
+import {
+  ApiError,
+  createWorkspace,
+  getMeta,
+  listBranches,
+  listEntries,
+  listSessions,
+  listWorkspaces,
+  pickFolder,
+} from '../../api/client'
+import type { Entry, Meta, PermissionMode, SessionSummary, UsageReport, WorkspaceSummary } from '../../api/types'
 import { Composer } from '../../components/chat/Composer'
 import { Timeline } from '../../components/chat/Timeline'
 import { ContextRail } from '../../components/rail/ContextRail'
@@ -43,6 +52,11 @@ export function ConversationPage() {
   const [error, setError] = useState<string | null>(null)
   // 权限「态势」：随选中会话回落到其工作区的默认权限，用户可在输入区改（下次发送生效）。
   const [permission, setPermission] = useState<PermissionMode>('manual')
+  // 工作区候选与「新会话将使用的工作区」选择；新增走宿主机 picker（不可用时手动路径）。
+  const [workspaces, setWorkspaces] = useState<WorkspaceSummary[] | null>(null)
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null)
+  const [wsBusy, setWsBusy] = useState(false)
+  const [wsHint, setWsHint] = useState<string | null>(null)
 
   useEffect(() => {
     let alive = true
@@ -55,6 +69,13 @@ export function ConversationPage() {
       })
       .catch((e: unknown) => {
         if (alive) setError(e instanceof ApiError ? e.message : String(e))
+      })
+    listWorkspaces()
+      .then((w) => {
+        if (alive) setWorkspaces(w.workspaces)
+      })
+      .catch(() => {
+        if (alive) setWorkspaces([])
       })
     return () => {
       alive = false
@@ -97,6 +118,63 @@ export function ConversationPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在切换会话时回落默认值
   }, [selected?.id])
 
+  // 默认选择：选中会话归属的工作区，否则第一个候选；用户手动选过就不覆盖。
+  useEffect(() => {
+    if (activeWorkspaceId || !workspaces) return
+    const sw = selected?.workspace?.id
+    const fallback = sw && workspaces.some((w) => w.id === sw) ? sw : (workspaces[0]?.id ?? null)
+    if (fallback) setActiveWorkspaceId(fallback)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在缺省时填充一次
+  }, [workspaces, selected?.workspace?.id, activeWorkspaceId])
+
+  const refreshWorkspaces = async (): Promise<WorkspaceSummary[]> => {
+    const w = await listWorkspaces()
+    setWorkspaces(w.workspaces)
+    return w.workspaces
+  }
+
+  const addByPath = async (path: string) => {
+    setWsBusy(true)
+    setWsHint(null)
+    try {
+      await createWorkspace({ path })
+      const list = await refreshWorkspaces()
+      const created = list.find((w) => w.root === path)
+      if (created) setActiveWorkspaceId(created.id)
+      setWsHint(`已新增工作区：${created?.name ?? path}`)
+    } catch (e) {
+      if (e instanceof ApiError && e.code === 'workspace_exists') {
+        // 409：目录已在列表里——按 detail.id 选中既有项，不当作错误打扰
+        const list = await refreshWorkspaces()
+        const detailId = typeof e.detail?.id === 'string' ? e.detail.id : null
+        const known = (detailId && list.find((w) => w.id === detailId)) || list.find((w) => w.root === path)
+        if (known) setActiveWorkspaceId(known.id)
+        setWsHint('该目录已在列表中，已为你选中')
+      } else {
+        setWsHint(e instanceof ApiError ? e.message : String(e))
+      }
+    } finally {
+      setWsBusy(false)
+    }
+  }
+
+  const addByPicker = async () => {
+    setWsBusy(true)
+    setWsHint(null)
+    try {
+      const { path } = await pickFolder()
+      if (!path) {
+        setWsHint('已取消选择')
+        return
+      }
+      await addByPath(path)
+    } catch (e) {
+      setWsHint(e instanceof ApiError ? e.message : String(e))
+    } finally {
+      setWsBusy(false)
+    }
+  }
+
   let body = <Welcome detail="从左侧选择一个会话；发送消息在阶段 5 接线" />
   if (error) {
     body = <p className="px-a8 pt-a8 font-ui text-ui text-danger">{error}</p>
@@ -124,7 +202,22 @@ export function ConversationPage() {
           <Composer permission={permission} onChangePermission={setPermission} />
         </div>
       }
-      rail={<ContextRail meta={meta} session={selected} usage={usage} />}
+      rail={
+        <ContextRail
+          meta={meta}
+          session={selected}
+          usage={usage}
+          workspaces={workspaces}
+          activeWorkspaceId={activeWorkspaceId}
+          sessionWorkspaceId={selected?.workspace?.id ?? null}
+          pickerAvailable={meta?.capabilities.workspace_picker != null}
+          busy={wsBusy}
+          hint={wsHint}
+          onSelectWorkspace={setActiveWorkspaceId}
+          onAddByPicker={addByPicker}
+          onAddByPath={addByPath}
+        />
+      }
     />
   )
 }

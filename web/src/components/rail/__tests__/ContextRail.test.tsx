@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import type { Meta, SessionSummary, UsageReport } from '../../../api/types'
+import type { Meta, SessionSummary, UsageReport, WorkspaceSummary } from '../../../api/types'
 import { ContextRail } from '../ContextRail'
 
 const USAGE: UsageReport = {
@@ -51,5 +51,98 @@ describe('ContextRail（右栏）', () => {
 
     expect(screen.getByText('工作区')).toBeTruthy()
     expect(screen.getByText('/home/fishy/Avid')).toBeTruthy()
+  })
+
+  const WORKSPACES: WorkspaceSummary[] = [
+    { id: 'w1', root: '/home/fishy/Avid', name: 'Avid', created_at: 0, last_used_at: 0, default_permission: 'manual', is_default: true },
+    { id: 'w2', root: '/home/fishy/other', name: 'Other', created_at: 0, last_used_at: 0, default_permission: 'auto', is_default: false },
+  ]
+
+  it('列出候选工作区并可选择；会话归属打「当前会话」标记', () => {
+    const onSelect = vi.fn()
+    render(
+      <ContextRail
+        meta={META}
+        session={SESSION}
+        usage={USAGE}
+        workspaces={WORKSPACES}
+        activeWorkspaceId="w1"
+        sessionWorkspaceId="w1"
+        onSelectWorkspace={onSelect}
+      />,
+    )
+
+    expect(screen.getByText('Avid')).toBeTruthy()
+    expect(screen.getByText('Other')).toBeTruthy()
+    expect(screen.getByText('当前会话')).toBeTruthy()
+
+    fireEvent.click(screen.getByText('Other'))
+    expect(onSelect).toHaveBeenCalledWith('w2')
+  })
+
+  it('picker 可用：标题行出「新增」按钮，busy 时禁用', () => {
+    const onAddByPicker = vi.fn()
+    const { rerender } = render(
+      <ContextRail
+        meta={META}
+        session={SESSION}
+        usage={USAGE}
+        workspaces={WORKSPACES}
+        pickerAvailable
+        busy={false}
+        onAddByPicker={onAddByPicker}
+      />,
+    )
+
+    const add = screen.getByRole('button', { name: '新增' }) as HTMLButtonElement
+    expect(add.disabled).toBe(false)
+    fireEvent.click(add)
+    expect(onAddByPicker).toHaveBeenCalledOnce()
+
+    rerender(
+      <ContextRail
+        meta={META}
+        session={SESSION}
+        usage={USAGE}
+        workspaces={WORKSPACES}
+        pickerAvailable
+        busy
+        onAddByPicker={onAddByPicker}
+      />,
+    )
+    expect((screen.getByRole('button', { name: '新增' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('picker 不可用：出手动路径输入行，确认带路径回调', () => {
+    const onAddByPath = vi.fn()
+    render(
+      <ContextRail
+        meta={META}
+        session={SESSION}
+        usage={USAGE}
+        workspaces={WORKSPACES}
+        pickerAvailable={false}
+        onAddByPath={onAddByPath}
+      />,
+    )
+
+    const input = screen.getByPlaceholderText('/绝对/路径') as HTMLInputElement
+    fireEvent.change(input, { target: { value: '/tmp/new-ws' } })
+    fireEvent.click(screen.getByRole('button', { name: '确认' }))
+    expect(onAddByPath).toHaveBeenCalledWith('/tmp/new-ws')
+  })
+
+  it('hint 展示（如 409 已存在时页面给的话）', () => {
+    render(
+      <ContextRail
+        meta={META}
+        session={SESSION}
+        usage={USAGE}
+        workspaces={WORKSPACES}
+        hint="该目录已在列表中，已为你选中"
+      />,
+    )
+
+    expect(screen.getByText(/已在列表中/)).toBeTruthy()
   })
 })
