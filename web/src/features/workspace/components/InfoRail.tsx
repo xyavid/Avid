@@ -27,7 +27,15 @@ export interface InfoRailProps {
   workspaces: WorkspaceSummary[]
   /** 当前会话所属工作区；可能为 null（会话 header 里没有归属）。 */
   workspaceRoot: string | null
-  /** 本次运行的会话累计 tokens 与条数。 */
+  /**
+   * **当前这次运行**的 tokens 与该会话的条数。
+   *
+   * 为什么标签写「本轮」而不是「累计」：这个值来自 `RunView.tokens`，只统计当前
+   * 运行的运行期读数——页面刷新或还没起运行就是 0。会话头部的 `tokens` 才是跨运行
+   * 累计，但它不在本组件拿到的数据里。把它标成「累计」是不实的呈现，
+   * 会把"这一轮花了多少"读成"这个会话一共花了多少"。
+   */
+
   tokens: number
   messageCount: number
   onManageWorkspaces: () => void
@@ -131,7 +139,7 @@ export function InfoRail({
             <RailRow label="分支" value={orDash(branch)} />
             <RailRow label="模型" value={orDash(model)} />
             <RailRow label="条数" value={orDash(messageCount)} />
-            <RailRow label="累计 tokens" value={orDash(tokens)} />
+            <RailRow label="本轮 tokens" value={orDash(tokens)} />
           </div>
         )}
       </Card>

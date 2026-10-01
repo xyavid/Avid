@@ -71,7 +71,7 @@ describe('InfoRail 本次对话', () => {
 
     expect(screen.getByText('还没有选中会话')).toBeTruthy()
     expect(screen.queryByText('工作目录')).toBeNull()
-    expect(screen.queryByText('累计 tokens')).toBeNull()
+    expect(screen.queryByText('本轮 tokens')).toBeNull()
   })
 
   it('模型未知时显示「—」而不是 0 或空白', () => {
@@ -96,7 +96,7 @@ describe('InfoRail 本次对话', () => {
   it('条数与 tokens 照实显示，0 就是 0', () => {
     renderRail({ tokens: 0, messageCount: 0 })
 
-    expect(rowOf('累计 tokens').textContent).toContain('0')
+    expect(rowOf('本轮 tokens').textContent).toContain('0')
     expect(rowOf('条数').textContent).toContain('0')
   })
 })
