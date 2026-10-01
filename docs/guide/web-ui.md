@@ -28,6 +28,16 @@ pnpm -C web dev                                 # 终端 B：Vite，代理 /api 
 # → http://127.0.0.1:5173
 ```
 
+**端口必须对上**：Vite 的代理目标硬编码在 `web/vite.config.ts` 的 `server.proxy`
+里（默认 `http://127.0.0.1:8765`）。终端 A 换了 `--port` 而代理没跟着改，浏览器里
+每个 `/api` 请求都会拿到一条**代理自己生成的 `500` + 空正文**——界面会显示
+「连不上本地服务：…请确认后端已起、且端口与 Vite 代理目标一致」。
+
+这条提示是前端专门为这种情况准备的（`web/src/api/client.ts` 在遇到"非 2xx 且响应
+不是约定的 JSON 信封"时会额外探一次 `/api/health` 来区分"后端不在这儿"与"后端答坏了"）。
+换端口时两边一起改；从 checkout 直接跑也可用 `pnpm -C web build && pnpm -C web run copy:dist`
+把产物交给 `avid web` 同源发出，就不存在这个耦合。
+
 交付形态（一个进程、安装者不需要 Node）：
 
 ```bash

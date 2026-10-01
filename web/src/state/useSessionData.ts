@@ -51,7 +51,16 @@ export function describeError(error: unknown): string {
    */
   if (error instanceof Error) {
     if (error instanceof ApiError) {
-      return error.code === 'network_error' ? '连不上本地服务' : `${error.message}（${error.code}）`
+      /*
+       * 这两种码的 `message` 已经是给用户看的完整句子（含下一步动作），
+       * 再拼一次码只会把有效信息淹掉，所以直接原样显示。
+       * 尤其是 `backend_unreachable`：它答的是"后端没起来 / 端口不对"，
+       * 而那正是这类报障里最常见的真实原因。
+       */
+      if (error.code === 'network_error' || error.code === 'backend_unreachable') {
+        return error.message
+      }
+      return `${error.message}（${error.code}）`
     }
     return error.message
   }

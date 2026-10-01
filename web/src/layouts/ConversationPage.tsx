@@ -33,7 +33,6 @@ import { useRunStream } from '../state/useRunStream'
 import { AppShell } from './AppShell'
 import { InspectorSlot } from './InspectorSlot'
 import { RightRail } from './RightRail'
-import { SurfaceTabs } from './SurfaceTabs'
 import { useViewport } from './useViewport'
 
 export interface ConversationPageProps {
@@ -133,19 +132,15 @@ export function ConversationPage(props: ConversationPageProps) {
        */
       topbarCenter={
         /*
-         * 「聊天 / 频道」两个面：本次范围只做了聊天，频道**保留在标签里但禁用**。
-         * 删掉它会让用户以为"这个应用只有聊天"，而留着并说明"暂未开放"才是
-         * 对现状的诚实表述（`SurfaceTabs` 的 disabled 分支就是为它准备的）。
+         * 只有一个工作面时就**不放标签**。
+         *
+         * 原先留着禁用态的「频道」，理由是"诚实说明这个面存在但没做"；实际用起来
+         * 它只是占了一个位置并制造了一个点不动的控件——用户不关心一个还不存在的东西，
+         * 而一个永不响应的标签反而让人怀疑是不是坏了。等真有第二个面时再把它加回来，
+         * 那时用一个真正的标签组件（本项目曾有一个 `SurfaceTabs`，因为没有第二个面
+         * 可切而被删掉——需要时从 git 历史取回，而不是先留一个没人引用的空壳）。
          */
-        <SurfaceTabs
-          aria-label="工作面"
-          active="chat"
-          onChange={() => undefined}
-          tabs={[
-            { key: 'chat', label: '聊天' },
-            { key: 'channel', label: '频道', disabled: true },
-          ]}
-        />
+        <span className="text-caption text-ink-muted">聊天</span>
       }
       inspector={
         isWide ? (

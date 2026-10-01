@@ -9,6 +9,9 @@
 ```bash
 pnpm install
 pnpm dev            # Vite（代理 /api → 127.0.0.1:8765），需另起 `uv run avid web`
+                    # ⚠ 代理目标是**硬编码**在 vite.config.ts 里的。后端换 --port 而这里没跟着改，
+                    #   浏览器里每个 /api 都会拿到代理生成的 500 空正文（界面会提示"连不上本地服务"）。
+                    #   换端口就两边一起改；或直接 build + copy:dist 交给 avid web 同源发出。
 pnpm build          # tsc -b + vite build → dist/
 pnpm run copy:dist  # dist → ../src/avid/web/static + .build.json 构建戳
                     # `avid web` 服务的是**这一份**、不是 web/dist。改了前端只 build 不 copy
@@ -62,7 +65,7 @@ App.tsx                  装配；api/ + events/ 给数据，state/ 管状态
 1. 每条用例**自动断言控制台零错误**（`e2e/lib/fixtures.ts`）。React 的 key 冲突、
    无效嵌套、未捕获 Promise 都只出现在控制台里而页面看着能跑。
    要放行就在用例里显式 `allowConsoleError('…')`，别放宽全局判据。
-2. **未打桩的端点返回 404 且带路径**，不静默成功——否则"界面调了不该调的端点"永远查不出来。
+3. **未打桩的端点返回 404 且带路径**，不静默成功——否则"界面调了不该调的端点"永远查不出来。
 
 `test-results/` 与 `playwright-report/` 不入库（失败时的截图与 trace 留本地按需翻）。
 
