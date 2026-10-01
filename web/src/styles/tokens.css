@@ -1,0 +1,311 @@
+/*
+ * 设计 token：**唯一来源**。颜色 / 间距 / 字号 / 圆角 / 线宽 / 阴影 / 时长 / 缓动 / 层级
+ * 全部在这里定义成 CSS 变量；组件只引用变量，不写裸值。
+ *
+ * 视觉语言：纸本世界（参照 hana agent 的界面设计报告 §2–§9）。
+ *
+ *   · 锚点是「纸」：主面 #F8F4ED 是宣纸，**绝不纯白**；文字 #2A2622 是暖墨，**绝不纯黑**；
+ *     灰色统一暖色温，不混冷蓝。
+ *   · 极方角 + 0.5px 发丝线（hana 的 `new-warm-paper` 纸本主题就是这套覆盖）。
+ *   · 全系统**只有一个彩色在说话**：--avid-accent 青蓝 #537D96，视觉占比 ≤ 5%。
+ *   · 字重只用 400 / 500，不用 600+，不用合成粗体。层级靠字号 + 明度 + 发丝线。
+ *   · 时长只有三档、缓动只有四档；hover 是轻微呼吸，不放大、不弹跳。
+ *
+ * 为什么分两层：**底层是尺度与形，主题层是色**。换肤只覆盖色，尺度不动——
+ * 这样"主题"不可能把间距系统和动效纪律一起改坏。
+ *
+ * 三条硬规则（由 code review 守，旧脚本 check-style.mjs 已随旧前端删除）：
+ *   1. 圆角 / 阴影 / 线宽的档位只在本文件定义，组件里只引用 token；
+ *   2. 颜色以 `--avid-*-rgb` 三元组给出，rgb(var(--x) / 40%) 才能做 alpha 合成；
+ *   3. 组件里不得出现裸色值、`shadow-[…]`、内联 borderRadius / fontFamily。
+ *
+ * 命名空间 `--avid-`：避免与 Tailwind 预检或将来引入的第三方样式撞名。
+ * Tailwind 侧不做"主题再定义"，只在 tailwind.config.js 里把颜色绑到这些变量。
+ */
+
+/* Tailwind 指令放在本文件：这里是 CSS 入口，顺序必须是
+   base → token 定义 → 构件类。少一个文件就少一处漂移的可能。 */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* ============================================================
+   * 1. 色：暖纸三层底 + 暖墨三档字 + 单一强调
+   * ============================================================ */
+
+  /* 底：纸面主色 → 抬升面 → 侧栏（比主面更深一层）。
+     `--avid-bg-rgb` 是宣纸底色：连低色温都算不上，是"旧纸"的暖米。 */
+  --avid-bg-rgb: 248 244 237; /* #F8F4ED 宣纸主面 */
+  --avid-bg-deep-rgb: 244 240 234; /* #F4F0EA 侧栏：比主面深一档 */
+  --avid-card-rgb: 252 250 245; /* #FCFAF5 卡片：比主面亮一档 */
+  --avid-float-rgb: 250 248 242; /* #FAF8F2 浮层实底（**实底**，不是毛玻璃） */
+  --avid-inset-rgb: 243 238 230; /* 凹陷面：输入框 / 代码底 */
+
+  /* 文字：暖墨三档。全都是棕灰，没有一档带冷蓝。 */
+  --avid-text-rgb: 42 38 34; /* #2A2622 主文字 */
+  --avid-text-light-rgb: 74 67 60; /* #4A433C 二级 */
+  --avid-text-muted-rgb: 107 97 88; /* #6B6158 三级 / caption */
+  --avid-text-faint-rgb: 142 133 122; /* 四级：时间戳 / 角标，仅非阅读性注记 */
+
+  /* 强调：唯一彩色。青蓝（印章色），低饱和。 */
+  --avid-accent-rgb: 83 125 150; /* #537D96 */
+  --avid-accent-hover-rgb: 63 97 121; /* #3F6179 */
+  --avid-accent-soft-rgb: 232 238 242; /* 强调的浅底（hover / 选中） */
+
+  /* 发丝线：结构分割**只**靠它，不靠阴影。 */
+  --avid-border-rgb: 216 207 190; /* #D8CFBE 常规线 */
+  --avid-border-strong-rgb: 196 185 165; /* 加重线：分组边界 */
+
+  /* 语义色：一律低饱和。 */
+  --avid-ok-rgb: 74 107 74; /* #4A6B4A 墨绿 */
+  --avid-warn-rgb: 150 106 49; /* 赭 */
+  --avid-danger-rgb: 139 44 31; /* #8B2C1F 深朱 */
+  --avid-info-rgb: 83 125 150; /* 与 accent 同源：没有第二个彩色 */
+
+  /* 底：状态块 / 气泡 / 代码。 */
+  --avid-ok-bg-rgb: 236 241 234;
+  --avid-warn-bg-rgb: 246 238 227;
+  --avid-danger-bg-rgb: 246 233 230;
+  --avid-info-bg-rgb: 232 238 242;
+  --avid-user-bg-rgb: 239 232 219; /* 用户气泡：纸面再深一档 */
+  --avid-tool-bg-rgb: 246 243 236; /* 工具块底 */
+  --avid-code-bg-rgb: 242 238 230;
+
+  /*
+   * 遮罩（scrim）：**只用于压暗背景，禁止拿它做 box-shadow**。
+   * 两者混用的后果是暗主题下阴影翻白——hana 报告 §2.7 与 §8.2 专门记了这条。
+   */
+  --avid-scrim-15: rgb(0 0 0 / 15%);
+  --avid-scrim-30: rgb(0 0 0 / 30%);
+  --avid-scrim-45: rgb(0 0 0 / 45%);
+
+  /*
+   * 阴影：极淡，几乎不可见。自检要求「去掉全部阴影后层级依然清楚」——
+   * 所以阴影只作为**纸的厚度暗示**，不承担分层职责。
+   */
+  --avid-shadow-rgb: 42 38 34;
+  --avid-shadow-1: 0 1px 2px rgb(var(--avid-shadow-rgb) / 6%);
+  --avid-shadow-2: 0 2px 6px rgb(var(--avid-shadow-rgb) / 8%);
+  --avid-shadow-3: 0 8px 24px rgb(var(--avid-shadow-rgb) / 10%);
+
+  /*
+   * 宣纸纹理：纯 CSS radial-gradient 合成，**不引入位图**。
+   * 理由：位图纹理要进离线包、要过体积门禁、在暗色下还得单独禁掉；
+   * 两条极淡的斜向渐变已经足够给平涂面一点"纸的颗粒"，且零字节开销。
+   * 只在浅色纸本下生效（暗色由主题层把这条设成 none）。
+   */
+  --avid-paper-fiber: radial-gradient(
+      ellipse 120% 80% at 20% 0%,
+      rgb(255 253 248 / 55%),
+      transparent 60%
+    ),
+    radial-gradient(ellipse 100% 70% at 80% 100%, rgb(238 230 216 / 45%), transparent 55%);
+
+  /* ============================================================
+   * 2. 尺度：间距（4px 网格子集，9 档）
+   * ============================================================ */
+  --avid-space-2: 0.125rem; /*  2px */
+  --avid-space-4: 0.25rem; /*  4px */
+  --avid-space-6: 0.375rem; /*  6px */
+  --avid-space-8: 0.5rem; /*  8px */
+  --avid-space-10: 0.625rem; /* 10px */
+  --avid-space-12: 0.75rem; /* 12px */
+  --avid-space-16: 1rem; /* 16px */
+  --avid-space-24: 1.5rem; /* 24px */
+  --avid-space-32: 2rem; /* 32px */
+  --avid-space-40: 2.5rem; /* 40px */
+
+  /* ============================================================
+   * 3. 字号（6 档）
+   * 报告提醒：hana 的 --fs-micro ≈9.9px 低于可读下限，复刻时抬到 11px——
+   * 所以这里最小档就是 0.69rem ≈ 11px，且只用于角标，正文最小 0.78rem。
+   * ============================================================ */
+  --avid-fs-title: 1rem; /* 16px 区块标题 */
+  --avid-fs-body: 0.9rem; /* 14.4px 正文 */
+  --avid-fs-ui: 0.82rem; /* 13.1px 次级 UI */
+  --avid-fs-caption: 0.78rem; /* 12.5px 控件文字 */
+  --avid-fs-hint: 0.72rem; /* 11.5px 提示 / 元数据 */
+  --avid-fs-micro: 0.69rem; /* 11px 角标（下限） */
+
+  --avid-lh-tight: 1.35; /* 标题 / 单行 UI */
+  --avid-lh-normal: 1.55; /* 常规正文 */
+  --avid-lh-loose: 1.75; /* 中文长文阅读 */
+
+  /* ============================================================
+   * 4. 圆角：**极方**（纸本主题把 hana 的默认档压到最方）
+   * ============================================================ */
+  --avid-radius-xs: 2px;
+  --avid-radius-sm: 2px;
+  --avid-radius-md: 3px;
+  --avid-radius-lg: 4px;
+  --avid-radius-full: 9999px; /* 只给头像 / 状态点 */
+
+  /* ============================================================
+   * 5. 线宽：发丝线是这套视觉的结构骨架
+   * ============================================================ */
+  --avid-stroke-hair: 0.5px; /* 分割线 / 卡片边 */
+  --avid-stroke-thin: 1px; /* 强调边 / focus 环 */
+  --avid-stroke-thick: 1.5px; /* 线性图标 stroke-width */
+
+  /* ============================================================
+   * 6. 动效：三档时长 + 四档缓动。所有 transition 必须归到这几档。
+   * ============================================================ */
+  --avid-duration-instant: 0.1s; /* 瞬：hover、关闭、退场 */
+  --avid-duration-fast: 0.15s; /* 快：默认（按钮、面板、focus） */
+  --avid-duration-slow: 0.25s; /* 慢：模态、大块进场 */
+
+  --avid-ease-out: cubic-bezier(0.16, 1, 0.3, 1); /* 入场 */
+  --avid-ease-in: cubic-bezier(0.7, 0, 0.84, 0); /* 退场 */
+  --avid-ease-standard: cubic-bezier(0.2, 0, 0, 1); /* 通用 */
+  --avid-ease-smooth: cubic-bezier(0.22, 0.68, 0, 1); /* 平滑 */
+
+  /* ============================================================
+   * 7. 布局尺寸
+   * ============================================================ */
+  --avid-titlebar-h: 44px; /* 顶部条 */
+  --avid-nav-w: 240px; /* 会话导航列 */
+  --avid-nav-w-collapsed: 48px;
+  --avid-inspector-w: 380px; /* 检查器（比 hana 的 280 宽：diff/json 要横向空间） */
+  --avid-chat-col-w: 720px; /* 对话列最大宽度 */
+  --avid-row-h: 30px; /* 列表单行高 */
+  --avid-control-h: 32px; /* 输入控件高 */
+  --avid-icon-btn: 26px; /* 图标按钮 */
+  --avid-composer-min-h: 76px;
+
+  /* ============================================================
+   * 8. 层级：只给语义名，不给字面量
+   * ============================================================ */
+  --avid-z-base: 0;
+  --avid-z-sticky: 10;
+  --avid-z-drawer: 20;
+  --avid-z-dropdown: 30;
+  --avid-z-overlay: 40;
+  --avid-z-modal: 50;
+  --avid-z-tooltip: 60;
+
+  /* ============================================================
+   * 9. 字体栈
+   * 工具型产品不去强求衬线：UI 与正文都走 sans，代码走 mono。
+   * 用系统栈而非打包 woff2 —— 零网络、零体积、无 FOUT；代价是跨平台字形略有差异。
+   * ============================================================ */
+  --avid-font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue',
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  --avid-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas,
+    'Liberation Mono', monospace;
+
+  /* 触控/缩放钩子：由 useApplyTextScale 写，组件用 rem 就不必各自处理。 */
+  --avid-text-scale: 1;
+}
+
+/*
+ * base 层：只设**全局默认**，不设组件样式。
+ * `text` 与 `antialiased` 在这里统一给，避免每个容器各写一遍。
+ */
+@layer base {
+  html {
+    font-size: calc(16px * var(--avid-text-scale));
+    /* 桌面端要求：页面自身不滚动，滚动只发生在消息区与列表。
+       高度链靠 h-dvh + overflow-hidden，这里兜底防止整页出滚动条。 */
+    overflow: hidden;
+  }
+
+  body {
+    background-color: rgb(var(--avid-bg-rgb));
+    color: rgb(var(--avid-text-rgb));
+    font-family: var(--avid-font-ui);
+    font-size: var(--avid-fs-body);
+    line-height: var(--avid-lh-normal);
+    font-weight: 400;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /*
+   * 数字对齐：用量、序号、时间戳一列排下来不抖。
+   * 只给需要它的地方（这里是全局 body，表格与读数自然受益）。
+   */
+  code,
+  pre,
+  kbd,
+  samp {
+    font-family: var(--avid-font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* 焦点环：键盘可达性不是可选项。用强调色的浅底 + 发丝边，不用浏览器默认蓝。 */
+  :focus-visible {
+    outline: var(--avid-stroke-thin) solid rgb(var(--avid-accent-rgb));
+    outline-offset: 1px;
+    border-radius: var(--avid-radius-xs);
+  }
+
+  /*
+   * 滚动条：纸本风格化——细、无轨道底、hover 才明显。
+   * 只作用于 WebKit/Blink 与 Firefox 的标准属性；不写 hack 去改 Windows 原生滚动条。
+   */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--avid-text-faint-rgb) / 45%) transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: rgb(var(--avid-text-faint-rgb) / 35%);
+    border: 3px solid transparent;
+    border-radius: var(--avid-radius-full);
+    background-clip: content-box;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: rgb(var(--avid-text-faint-rgb) / 60%);
+  }
+
+  ::selection {
+    background-color: rgb(var(--avid-accent-rgb) / 18%);
+  }
+}
+
+@layer components {
+  /*
+   * 发丝线工具类：0.5px 在高 DPI 屏上才真正"发丝"；低 DPI 会渲染不出来，
+   * 所以同时保留 1px 的最小可见度由浏览器决定——这里写 0.5px 是显式选择：
+   * 宁可细到近乎消失，也不要 1px 的塑料边。
+   */
+  .avid-hair-b {
+    border-bottom: var(--avid-stroke-hair) solid rgb(var(--avid-border-rgb));
+  }
+
+  .avid-hair-t {
+    border-top: var(--avid-stroke-hair) solid rgb(var(--avid-border-rgb));
+  }
+
+  /* 文档正文：中文长文行高抬高，段间距靠外层，不在正文里塞 margin。 */
+  .avid-prose {
+    line-height: var(--avid-lh-loose);
+    word-break: break-word;
+  }
+}
+
+/*
+ * 动效纪律：尊重系统偏好。不是"降级"，是直接关掉位移与长过渡——
+ * 前庭功能敏感的用户对淡入的容忍度也低于常人，所以连 fade 一起缩短。
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
