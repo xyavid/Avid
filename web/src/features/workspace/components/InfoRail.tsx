@@ -41,7 +41,9 @@ function RailRow({ label, value }: { label: string; value: string }): ReactEleme
   return (
     <div className="flex items-baseline justify-between gap-a8">
       <span className="shrink-0 text-hint text-ink-muted">{label}</span>
-      <span className="min-w-0 truncate text-caption text-ink" title={value}>
+      {/* `tabular-nums` 给整列读数：条数与 tokens 上下对齐，数值刷新时不会左右抖
+          （tokens.css 只对 code/pre 开了等宽数字，这里是普通 span，得自己带）。 */}
+      <span className="min-w-0 truncate text-caption text-ink tabular-nums" title={value}>
         {value}
       </span>
     </div>
