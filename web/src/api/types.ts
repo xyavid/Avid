@@ -265,3 +265,25 @@ export interface StartRunInput {
    */
   full_access_ack?: boolean
 }
+
+/**
+ * 界面模型配置（GET/PUT/DELETE `/api/settings/model`）。
+ * 密钥只入不出：响应里只有 `api_key_set`，任何字段都不回传 api_key 本身。
+ * `overlay_active` = 界面覆盖层（`~/.avid/model.toml`）存在且优先于环境变量。
+ */
+export interface ModelSettings {
+  model: string | null
+  base_url: string | null
+  /** null = 按 base_url 自动识别协议族。 */
+  provider: string | null
+  api_key_set: boolean
+  overlay_active: boolean
+}
+
+/** PUT 载荷：字段全部可选；空串 = 清除该字段回落环境变量。 */
+export interface ModelSettingsInput {
+  model?: string | null
+  base_url?: string | null
+  provider?: 'openai' | 'anthropic' | 'gemini' | '' | null
+  api_key?: string | null
+}

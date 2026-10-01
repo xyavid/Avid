@@ -113,6 +113,30 @@ class CreateWorkspaceIn(BaseModel):
     permission: Literal["manual", "auto"] | None = None
 
 
+class ModelSettingsOut(BaseModel):
+    """Effective model connection for the settings UI; the API key is never returned."""
+
+    model: str | None = None
+    base_url: str | None = None
+    # None = 按 base_url 自动识别协议族（config.detect_provider）
+    provider: str | None = None
+    api_key_set: bool = False
+    # True = 界面覆盖层（~/.avid/model.toml）存在且优先于环境变量
+    overlay_active: bool = False
+
+
+class ModelSettingsIn(BaseModel):
+    """UI overlay payload: every field optional; an empty string clears the field back to env."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
+    base_url: str | None = Field(default=None, max_length=MAX_PATH_CHARS)
+    # An enum, so an invalid provider is a 422 instead of a file written before the failure surfaces.
+    provider: Literal["openai", "anthropic", "gemini"] | None = None
+    api_key: str | None = Field(default=None, max_length=MAX_PATH_CHARS)
+
+
 class SessionSummary(BaseModel):
     id: str
     name: str | None = None

@@ -330,9 +330,7 @@ export function ConversationPage() {
       }
         rail={<ContextRail usage={usage} />}
       />
-      {settingsOpen && (
-        <SettingsModal model={meta?.capabilities.model ?? null} onClose={() => setSettingsOpen(false)} />
-      )}
+      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
     </>
   )
 }

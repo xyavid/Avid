@@ -13,6 +13,8 @@ import type {
   CancelResult,
   EntryPage,
   Meta,
+  ModelSettings,
+  ModelSettingsInput,
   Run,
   RunCreated,
   SessionSummary,
@@ -149,4 +151,23 @@ export function decideApproval(runId: string, approvalId: string, decision: 'all
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ decision }),
   })
+}
+
+/** 界面模型配置：读取生效值（永不回传密钥，只给 api_key_set）。 */
+export function getModelSettings(): Promise<ModelSettings> {
+  return request('/api/settings/model')
+}
+
+/** 写入界面覆盖层（`~/.avid/model.toml`，优先于 .env）；空串 = 清除该字段回落 .env。 */
+export function saveModelSettings(input: ModelSettingsInput): Promise<ModelSettings> {
+  return request('/api/settings/model', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+}
+
+/** 清除界面覆盖层，全部回落环境变量。 */
+export function resetModelSettings(): Promise<void> {
+  return request('/api/settings/model', { method: 'DELETE' })
 }

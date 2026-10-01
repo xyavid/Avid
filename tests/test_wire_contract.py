@@ -45,6 +45,8 @@ from avid.web.schemas import (
     ErrorOut,
     HealthOut,
     MetaOut,
+    ModelSettingsIn,
+    ModelSettingsOut,
     PickFolderOut,
     RunCreatedOut,
     RunOut,
@@ -88,6 +90,9 @@ PAIRS: list[tuple[type, str]] = [
     # 元信息
     (MetaOut, "Meta"),
     (Capabilities, "Capabilities"),
+    # 界面模型配置（阶段 6 补件）：密钥只入不出，PUT 载荷字段全可选
+    (ModelSettingsOut, "ModelSettings"),
+    (ModelSettingsIn, "ModelSettingsInput"),
     (StreamInfo, "StreamInfo"),
     (HealthOut, "Health"),
     (SkillOut, "Skill"),

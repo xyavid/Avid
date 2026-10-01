@@ -1,10 +1,21 @@
-"""Read and validate model configuration from environment variables."""
+"""Read and validate model configuration from environment variables.
+
+界面写入的覆盖层（`~/.avid/model.toml`，由「设置 → 模型」表单维护）**优先于**
+环境变量：界面是最近的显式动作，.env 是初始来源。两者都没有时给出可执行的修复文案。
+"""
 
 from __future__ import annotations
 
+import json
+import logging
 import os
+import tempfile
+import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
+
+logger = logging.getLogger("avid.ai.config")
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 
@@ -40,6 +51,72 @@ DEFAULT_BASE_URLS: dict[str, str] = {
     PROVIDER_ANTHROPIC: "https://api.anthropic.com",
     PROVIDER_GEMINI: "https://generativelanguage.googleapis.com/v1beta",
 }
+
+#: Location of the UI overlay file; an env override exists so tests stay off the real home.
+ENV_SETTINGS_PATH = "AVID_MODEL_CONFIG"
+DEFAULT_SETTINGS_PATH = Path.home() / ".avid" / "model.toml"
+#: The file uses the UI's short field names; the merge maps them onto the env names.
+_SETTINGS_TO_ENV = {
+    "api_key": ENV_API_KEY,
+    "base_url": ENV_BASE_URL,
+    "model": ENV_MODEL,
+    "provider": ENV_PROVIDER,
+    "context_window": ENV_CONTEXT_WINDOW,
+    "max_parallel_tool_calls": ENV_MAX_PARALLEL_TOOL_CALLS,
+}
+
+
+def settings_path() -> Path:
+    """Resolve the overlay file location: AVID_MODEL_CONFIG override or ~/.avid/model.toml."""
+    raw = os.environ.get(ENV_SETTINGS_PATH, "").strip()
+    return Path(raw).expanduser() if raw else DEFAULT_SETTINGS_PATH
+
+
+def read_model_settings(path: Path | None = None) -> dict[str, str]:
+    """Read the UI overlay as short-named fields; a missing or corrupt file degrades to {}."""
+    target = path or settings_path()
+    if not target.is_file():
+        return {}
+    try:
+        raw = tomllib.loads(target.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        logger.warning("界面模型配置读不了（%s），回落环境变量：%s", target, exc)
+        return {}
+    values: dict[str, str] = {}
+    for key in _SETTINGS_TO_ENV:
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip():
+            values[key] = value.strip()
+        elif isinstance(value, int) and not isinstance(value, bool):
+            values[key] = str(value)
+    return values
+
+
+def write_model_settings(values: Mapping[str, str], path: Path | None = None) -> Path:
+    """Write the overlay atomically with owner-only permissions (it may hold an API key)."""
+    target = path or settings_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    body = "\n".join(f"{key} = {json.dumps(value, ensure_ascii=False)}" for key, value in values.items() if value.strip())
+    handle, tmp_name = tempfile.mkstemp(dir=target.parent, prefix=".model-", suffix=".tmp")
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as fh:
+            fh.write(body + "\n")
+        os.chmod(tmp_name, 0o600)
+        os.replace(tmp_name, target)
+    finally:
+        if os.path.exists(tmp_name):
+            os.unlink(tmp_name)
+    return target
+
+
+def clear_model_settings(path: Path | None = None) -> bool:
+    """Drop the overlay so the environment variables take over again."""
+    target = path or settings_path()
+    try:
+        target.unlink()
+        return True
+    except FileNotFoundError:
+        return False
 
 
 def detect_provider(base_url: str) -> str:
@@ -122,22 +199,27 @@ class Config:
         return f"{self.base_url.rstrip('/')}/chat/completions"
 
 
-def load_config(env: Mapping[str, str] | None = None) -> Config:
-    """Build a Config from the given mapping, raising ConfigError when values are missing."""
+def load_config(env: Mapping[str, str] | None = None, *, overlay: Mapping[str, str] | None = None) -> Config:
+    """Build a Config from env plus the UI overlay (overlay wins); overlay={} skips the file."""
     source = os.environ if env is None else env
+    raw_overlay = read_model_settings() if overlay is None else dict(overlay)
+    file_values = {
+        _SETTINGS_TO_ENV[key]: value for key, value in raw_overlay.items() if key in _SETTINGS_TO_ENV
+    }
+    merged: dict[str, str] = {**source, **file_values}
 
-    missing = [name for name in REQUIRED if not source.get(name, "").strip()]
+    missing = [name for name in REQUIRED if not merged.get(name, "").strip()]
     if missing:
         raise ConfigError(
-            "缺少必需的环境变量：" + "、".join(missing) + "\n"
-            "设置方法：cp .env.example .env 填入真实值，然后运行\n"
+            "缺少模型配置：" + "、".join(missing) + "\n"
+            "设置方法：在界面「设置 → 模型」里填写，或 cp .env.example .env 填入真实值后运行\n"
             '  uv run --env-file .env avid "你好"'
         )
 
-    model = source[ENV_MODEL].strip()
+    model = merged[ENV_MODEL].strip()
     # An explicit provider picks its default endpoint; detection follows base_url implicitly.
-    raw_base = source.get(ENV_BASE_URL, "").strip()
-    raw_provider = source.get(ENV_PROVIDER, "").strip()
+    raw_base = merged.get(ENV_BASE_URL, "").strip()
+    raw_provider = merged.get(ENV_PROVIDER, "").strip()
     if raw_provider and raw_provider not in PROVIDERS:
         raise ConfigError(
             f"{ENV_PROVIDER} 必须是 {'、'.join(PROVIDERS)} 之一：{raw_provider!r}"
@@ -145,12 +227,12 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
     provider = raw_provider or None
     base_url = raw_base or DEFAULT_BASE_URLS[provider or PROVIDER_OPENAI]
     return Config(
-        api_key=source[ENV_API_KEY].strip(),
+        api_key=merged[ENV_API_KEY].strip(),
         base_url=base_url,
         model=model,
-        context_window=_context_window(source, model),
+        context_window=_context_window(merged, model),
         provider=provider,
-        max_parallel_tool_calls=_max_parallel_tool_calls(source),
+        max_parallel_tool_calls=_max_parallel_tool_calls(merged),
     )
 
 

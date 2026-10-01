@@ -1,0 +1,71 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+.pytest_cache/
+.ruff_cache/
+.seiso_cache/
+.avid/
+.tasks/
+
+# AvidBench 的运行结果：本地研究材料（轨迹可能很大），不入库。
+# 入库的只有评测集与一行基线数字（docs/status/BENCHMARK.md）。
+benchmarks/runs/
+build/
+dist/
+*.egg-info/
+
+# ---- 前端 ----
+
+# 前端已整体删除（含工具链与契约种子）；产物目录只留占位，
+# 重建前端后在这里追加新的忽略规则。
+/src/avid/web/static/*
+!/src/avid/web/static/.gitkeep
+
+# ---- 文档入库规则：正式文档进 docs/，过程文档留 dev/ ----
+
+# docs/ 白名单：默认全部忽略，只放行下面五类正式文档目录。
+# 新文件落在 docs/ 根目录或未知子目录时自动被忽略，不会误提交。
+/docs/*
+!/docs/README.md
+!/docs/guide/
+!/docs/api/
+!/docs/deploy/
+!/docs/design/
+# status/：项目现状五问集（现状 / 能力 / 基准 / 架构 / 路线），
+# 文件名沿用大写 SCREAMING_SNAKE 以便与 design/ 下的规格文档区分。
+!/docs/status/
+
+# dev/ 过程文档：开发计划、需求草稿、进度跟踪、笔记、会议记录、阶段出图。
+# 只保留在本地，不参与版本管理。
+/dev/
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+node_modules/
+bower_components/
+jspm_packages/
+site-packages/
+venv/
+coverage/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）
