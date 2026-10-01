@@ -128,6 +128,15 @@ export function ConversationPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在缺省时填充一次
   }, [workspaces, selected?.workspace?.id, activeWorkspaceId])
 
+  // 会话由项目管理：切换项目后，当前选中不属于它时，切到该项目下的第一个会话。
+  useEffect(() => {
+    if (!activeWorkspaceId || !sessions) return
+    const inProject = sessions.filter((s) => s.workspace?.id === activeWorkspaceId)
+    if (selectedId && inProject.some((s) => s.id === selectedId)) return
+    setSelectedId(inProject[0]?.id ?? null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只随项目切换与列表刷新而调整
+  }, [activeWorkspaceId, sessions])
+
   const refreshWorkspaces = async (): Promise<WorkspaceSummary[]> => {
     const w = await listWorkspaces()
     setWorkspaces(w.workspaces)
@@ -176,7 +185,7 @@ export function ConversationPage() {
     }
   }
 
-  let body = <Welcome detail="从左侧选择一个会话；发送消息在阶段 5 接线" />
+  let body = <Welcome detail={activeWorkspaceId ? '这个项目还没有会话' : '从左侧选择一个项目'} />
   if (error) {
     body = <p className="px-a8 pt-a8 font-ui text-ui text-danger">{error}</p>
   } else if (selectedId && entries === null) {
@@ -209,7 +218,12 @@ export function ConversationPage() {
             onAddByPicker={addByPicker}
             onAddByPath={addByPath}
           />
-          <SessionNav sessions={sessions ?? []} selectedId={selectedId} onSelect={setSelectedId} />
+          <SessionNav
+            sessions={sessions ?? []}
+            workspaceId={activeWorkspaceId}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+          />
         </div>
       }
       main={

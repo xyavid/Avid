@@ -23,14 +23,17 @@ function formatStamp(createdAtMs: number): string {
 
 export type SessionNavProps = {
   sessions: SessionSummary[]
+  /** 当前项目（工作区）id：列表只显示该项目下的会话；缺省/null = 全部显示（兜底形态）。 */
+  workspaceId?: string | null
   selectedId: string | null
   onSelect: (id: string) => void
 }
 
-export function SessionNav({ sessions, selectedId, onSelect }: SessionNavProps) {
+export function SessionNav({ sessions, workspaceId = null, selectedId, onSelect }: SessionNavProps) {
   const [query, setQuery] = useState('')
   const needle = query.trim().toLowerCase()
-  const filtered = sessions.filter((s) => (s.name ?? '').toLowerCase().includes(needle))
+  const inProject = workspaceId ? sessions.filter((s) => s.workspace?.id === workspaceId) : sessions
+  const filtered = inProject.filter((s) => (s.name ?? '').toLowerCase().includes(needle))
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-a12">
@@ -45,7 +48,11 @@ export function SessionNav({ sessions, selectedId, onSelect }: SessionNavProps) 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {filtered.length === 0 ? (
           <p className="px-a8 font-ui text-hint text-ink-muted">
-            {sessions.length === 0 ? '还没有会话' : '没有匹配的会话'}
+            {workspaceId && inProject.length === 0
+              ? '这个项目还没有会话'
+              : sessions.length === 0
+                ? '还没有会话'
+                : '没有匹配的会话'}
           </p>
         ) : (
           filtered.map((s) => (
