@@ -45,6 +45,20 @@ function AppView() {
   const app = useApp()
   const sessionId = app.activeSession?.id ?? null
 
+  /*
+   * 「现在」由装配层给一次、往下传，而不是让各组件在渲染里读 `Date.now()`。
+   *
+   * 两个理由：
+   *   · 渲染期读时钟是**不纯**的——同一次渲染的不同组件可能拿到不同的值，
+   *     列表分桶（今天/更早）就可能在组头与组项之间不一致；
+   *   · 值稳定之后，`SessionNav` 的分桶与相对时间才有单一参照，测试也能注入。
+   *
+   * 为什么不定期刷新它：这个界面里的时间戳只用于"今天 / 更早"与"3 分钟前"，
+   * 会话列表本来就随轮询重拉（`useSessionData`），分钟级的新鲜度足够。
+   * 每分钟 setState 一次换来的精度不值那次重渲染。
+   */
+  const now = useMemo(() => Date.now(), [])
+
   const runningSessionIds = useMemo(
     () =>
       new Set(
@@ -61,6 +75,7 @@ function AppView() {
       runningSessionIds={runningSessionIds}
       collapsed={app.nav.navCollapsed}
       error={app.error}
+      now={now}
       onToggleCollapsed={app.actions.toggleNav}
       onSelect={app.actions.selectSession}
       onNewSession={() => {

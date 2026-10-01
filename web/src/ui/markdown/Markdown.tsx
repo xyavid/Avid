@@ -68,16 +68,15 @@ const components: Components = {
     <p {...rest} className="my-a8 text-body text-ink first:mt-0 last:mb-0" />
   ),
   /*
-   * 嵌套列表用 circle 与外层 disc 区分：中文正文里项目符号的层级靠形状最省事。
-   * 注意这里用任意值 `list-[circle]`——Tailwind 默认主题的 `listStyleType` 只有
-   * none / disc / decimal 三档，写 `list-circle` 会**静默生成不出任何 CSS**
-   * （类名挂在 DOM 上、构建不报错、嵌套列表看起来还是 disc）。实测：
-   * `grep list-circle dist/assets/*.css` 命中 0。
-   * 这是枚举值不是色值 / 圆角 / 阴影，加进 tailwind.config.js 会动到共享配置
-   * （别人的文件），所以就近用任意值并在此注明。
+   * 嵌套无序列表用 `circle` 标记，与外层 `disc` 区分——中文正文里靠形状分层最省事。
+   * `list-circle` 不在 Tailwind 默认主题里
+   * （默认只有 none / disc / decimal），所以已在 `tailwind.config.js` 的
+   * `listStyleType` 里补了 circle / square 两档——**不要**退回任意值
+   * `list-[circle]`：它能用，但把"标记形状"这种样式值散在了组件里，与
+   * "样式值只在 token 表里有名字"的约定不一致。
    */
   ul: ({ node: _node, ...rest }) => (
-    <ul {...rest} className="my-a6 list-disc pl-a16 text-body text-ink [&_ul]:list-[circle]" />
+    <ul {...rest} className="my-a6 list-disc pl-a16 text-body text-ink [&_ul]:list-circle" />
   ),
   ol: ({ node: _node, ...rest }) => (
     <ol {...rest} className="my-a6 list-decimal pl-a16 text-body text-ink" />

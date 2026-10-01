@@ -147,6 +147,13 @@ export default {
         modal: 'var(--avid-z-modal)',
         tooltip: 'var(--avid-z-tooltip)',
       },
+      /*
+       * 列表标记：Tailwind 默认只有 none / disc / decimal。markdown 的嵌套无序列表
+       * 需要 `circle`，否则组件里只能写任意值 `list-[circle]`（能用，但把"标记形状"
+       * 这种视觉值散在了组件里，与"样式值只在 token 表"的约定不一致）。
+       * 这里补两档，让它有名字。
+       */
+      listStyleType: { circle: 'circle', square: 'square' },
       keyframes: {
         /* 纯透明度：用于一切"出现/消失" */
         'paper-fade-in': { from: { opacity: '0' }, to: { opacity: '1' } },

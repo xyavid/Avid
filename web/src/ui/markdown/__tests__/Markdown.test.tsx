@@ -88,7 +88,7 @@ describe('Markdown 结构', () => {
     expect(lists[0]?.className).toContain('list-disc')
     // Tailwind 默认表里**没有** `list-circle`，写那个类名会静默不生成 CSS，
     // 所以这里钉的是任意值写法；产物侧另有 `list-style-type:circle` 的复核。
-    expect(lists[0]?.className).toContain('[&_ul]:list-[circle]')
+    expect(lists[0]?.className).toContain('[&_ul]:list-circle')
   })
 })
 
