@@ -2,47 +2,60 @@
 import { cleanup, render } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 
+import assetSource from '../../../src/assets/avid-mark.svg?raw'
 import faviconSource from '../../../public/favicon.svg?raw'
-import { AVID_MARK_PATH, AvidMark } from '../Mark'
+import { AvidMark } from '../Mark'
 
 /**
  * 标识的两条纪律，都用会失败的断言钉住：
- *   1. 形状只有一份（Mark.tsx 的常量），favicon 是它的副本——副本漂移必须当场报错；
- *   2. 标记本身不带颜色与尺寸（fill=currentColor、尺寸由调用点给），
- *      因为换肤机制要求「颜色只从 token 来」，写死色值的标记会让青夜主题漏一块。
+ *   1. 同一幅画有两份副本（组件用的 asset 与 favicon）——副本漂移必须当场报错；
+ *   2. 落位不做圆托、不垫色板（背景透明），尺寸由调用点给。
  */
-describe('Avid 标记（阶段 33 · 阶段 7）', () => {
+describe('Avid 标识（阶段 33 · 阶段 7）', () => {
   afterEach(cleanup)
 
-  it('渲染 48 视框的单条轮廓，颜色随 currentColor', () => {
+  it('渲染一张自带配色的图，尺寸由调用点决定', () => {
     const { container } = render(<AvidMark size={24} />)
-    const svg = container.querySelector('svg')
+    const img = container.querySelector('img')
 
-    expect(svg?.getAttribute('viewBox')).toBe('0 0 48 48')
-    expect(svg?.getAttribute('width')).toBe('24')
-    expect(svg?.getAttribute('height')).toBe('24')
-
-    // 单条 path：定稿形状靠外轮廓自身的凹槽读作火，不靠挖空（fill-rule 缺席即是证据）
-    const paths = svg?.querySelectorAll('path') ?? []
-    expect(paths).toHaveLength(1)
-    expect(paths[0]?.getAttribute('d')).toBe(AVID_MARK_PATH)
-    expect(paths[0]?.getAttribute('fill')).toBe('currentColor')
-    expect(paths[0]?.getAttribute('fill-rule')).toBeNull()
+    expect(img).toBeTruthy()
+    expect(img?.getAttribute('width')).toBe('24')
+    expect(img?.getAttribute('height')).toBe('24')
+    // 图是资源，不是内联 SVG：形状与配色留在 asset 文件里，不进组件
+    expect(container.querySelector('svg')).toBeNull()
+    expect(img?.getAttribute('src') ?? '').toContain('avid-mark')
   })
 
-  it('装饰性图形不进无障碍树（名字由旁边的字标给）', () => {
+  it('是装饰性图形：空 alt + aria-hidden（名字由旁边的字标给）', () => {
     const { container } = render(<AvidMark />)
 
-    expect(container.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true')
+    const img = container.querySelector('img')
+    expect(img?.getAttribute('alt')).toBe('')
+    expect(img?.getAttribute('aria-hidden')).toBe('true')
   })
 
-  it('favicon.svg 里的 path 与常量逐字一致（对账门禁）', () => {
-    expect(faviconSource.match(/d="[^"]+"/g)).toHaveLength(1)
-    expect(faviconSource).toContain(AVID_MARK_PATH)
+  it('asset 与 favicon 是同一幅画：两边 path 集合逐字一致（对账门禁）', () => {
+    const paths = (text: string) => (text.match(/ d="[^"]+"/g) ?? []).sort()
+
+    const assetPaths = paths(assetSource)
+    expect(assetPaths.length).toBeGreaterThan(100)
+    expect(paths(faviconSource)).toEqual(assetPaths)
   })
 
-  it('favicon 自带纸底与墨色（浏览器标签栏里没有 currentColor 可继承）', () => {
+  it('favicon 自带纸底（标签栏里没有页面底色可继承）', () => {
     expect(faviconSource).toContain('fill="#F8F4ED"')
-    expect(faviconSource).toContain('fill="#3B3D3F"')
+    expect(assetSource).not.toContain('fill="#F8F4ED"')
+  })
+
+  it('两边的画布视框一致，落位不会因为视框不同而忽大忽小', () => {
+    const viewBox = (text: string) => /viewBox="([^"]+)"/.exec(text)?.[1] ?? null
+    const asset = viewBox(assetSource)
+
+    expect(asset).not.toBeNull()
+    // favicon 用的是原始 512 画布 + 居中缩放，asset 用的是收窄后的正方形视框：
+    // 两边都是正方形，标记在各自框里占的比例也就一致。
+    const fav = viewBox(faviconSource)?.split(' ').map(Number) ?? []
+    expect(fav[2]).toBe(fav[3])
+    expect(Number(asset?.split(' ')[2])).toBeCloseTo(Number(asset?.split(' ')[3]), 5)
   })
 })
