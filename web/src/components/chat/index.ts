@@ -1,3 +1,5 @@
 export { AssistantMessage } from './AssistantMessage'
+export { Composer } from './Composer'
+export { Timeline } from './Timeline'
 export { ToolCard } from './ToolCard'
 export { UserBubble } from './UserBubble'

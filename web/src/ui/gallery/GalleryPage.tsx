@@ -7,8 +7,10 @@
 
 import type { ReactNode } from 'react'
 
-import { AssistantMessage, ToolCard, UserBubble } from '../../components/chat'
-import { SessionItem } from '../../components/session'
+import { AssistantMessage, Composer, ToolCard, UserBubble } from '../../components/chat'
+import { ContextRail } from '../../components/rail'
+import { SessionItem, SessionNav } from '../../components/session'
+import type { Meta, SessionSummary, UsageReport } from '../../api/types'
 import { Badge } from '../Badge'
 import { Button } from '../Button'
 import { Card } from '../Card'
@@ -32,13 +34,32 @@ export function GalleryPage() {
   const only = new URLSearchParams(window.location.search).get('only')
   const show = (id: string) => only === null || only === id
 
+  /* 演示数据：组合组件节的展示样本（不是真连接）——真实数据看主页。 */
+  const demoSessions: SessionSummary[] = [
+    { id: 'd1', name: '整理会议纪要', created_at: Date.now() - 2 * 60_000, storage_version: 1, parent_session_id: null, workspace: null, message_count: 4, active_run_id: 'r1', truncated_tail: false },
+    { id: 'd2', name: '重构 archive 模块', created_at: Date.now() - 3_600_000, storage_version: 1, parent_session_id: null, workspace: null, message_count: 12, active_run_id: null, truncated_tail: false },
+    { id: 'd3', name: '周报草稿', created_at: Date.now() - 86_400_000, storage_version: 1, parent_session_id: null, workspace: null, message_count: 6, active_run_id: null, truncated_tail: false },
+  ]
+  const demoUsage: UsageReport = {
+    context: { tokens: 15_200, window: 200_000, utilization: 0.076, parts: null },
+    cache: { read_tokens: 9_800, write_tokens: 1_200, hit_ratio: 0.808 },
+    compaction: { count: 0, last_compaction_tokens: null, last_step: null },
+  }
+  const demoMeta = {
+    capabilities: { workspace: '/home/fishy/Avid', model: 'deepseek/x', tools: [], skills: [], sandbox: null },
+  } as unknown as Meta
+  const demoSelected: SessionSummary = {
+    ...demoSessions[1]!,
+    workspace: { id: 'w1', root: '/home/fishy/Avid', name: 'Avid', default_permission: 'manual' },
+  }
+
   return (
     <div className="min-h-dvh bg-paper px-[44px] py-[34px] font-ui text-ink">
       {only === null && (
         <>
           <h1 className="font-serif text-[26px] font-medium">Avid 组件墙</h1>
           <p className="mt-a4 font-ui text-caption text-ink-muted">
-            按钮 · 输入 · 标签 · 徽章 · 图标 · 消息 · 会话项 · 卡片 · 标签页 · 工具卡
+            基础 · 按钮 输入 标签 徽章 图标 ｜ 组合 · 消息 会话 卡片 标签页 工具卡 会话列表 右栏 输入区 ｜ 实际页面看主页（不带 ?gallery=1）
           </p>
           <div className="mb-a16 mt-a16 border-t border-hair" />
         </>
@@ -156,6 +177,30 @@ export function GalleryPage() {
             <br />
             --duration-instant / fast / slow
           </ToolCard>
+        </Section>
+      )}
+
+      {show('nav') && (
+        <Section id="nav" title="会话列表（侧栏 240px 实宽）">
+          <div className="w-sidebar rounded-md border-hairline border-hair bg-sidebar p-a12">
+            <SessionNav sessions={demoSessions} selectedId="d1" onSelect={() => {}} />
+          </div>
+        </Section>
+      )}
+
+      {show('rail') && (
+        <Section id="rail" title="右栏 · 工作区与上下文（280px 实宽）">
+          <div className="w-rail">
+            <ContextRail meta={demoMeta} session={demoSelected} usage={demoUsage} />
+          </div>
+        </Section>
+      )}
+
+      {show('composer') && (
+        <Section id="composer" title="输入区（16px 圆角壳；发送阶段 5 接线）">
+          <div className="max-w-chat-input border-hairline border-hair bg-sidebar p-a12">
+            <Composer />
+          </div>
         </Section>
       )}
     </div>
