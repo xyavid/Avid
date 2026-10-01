@@ -12,7 +12,7 @@
  *   3. 没有可用工作区时**禁用**新建（不发一个注定 400 `workspace_required` 的请求）。
  */
 
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { App } from './App'
@@ -52,7 +52,12 @@ const META: Meta = {
   build: { git_sha: null, built_at: null, source: 'test' },
 }
 
-function session(id: string, name: string, createdAt: number): SessionSummary {
+function session(
+  id: string,
+  name: string,
+  createdAt: number,
+  workspaceName = '测试工作区',
+): SessionSummary {
   return {
     id,
     name,
@@ -62,7 +67,7 @@ function session(id: string, name: string, createdAt: number): SessionSummary {
     workspace: {
       id: 'ws-1',
       root: '/tmp/workspace',
-      name: '测试工作区',
+      name: workspaceName,
       default_permission: 'manual',
     },
     message_count: 0,
@@ -113,19 +118,44 @@ describe('App 装配', () => {
   it('没有会话时给空态，并给出下一步动作', async () => {
     renderWith(dataWith({ sessions: [] }))
 
-    expect(await screen.findByText('还没有会话')).toBeTruthy()
-    expect(screen.getByRole('button', { name: '新建会话' })).toBeTruthy()
+    /*
+     * 断言**按区域收窄**（`within(main)`），不用全局查询。
+     *
+     * 为什么：没有会话时，主区的落地页与左栏的会话列表**各自**都有一条空态
+     * 与一个「新建会话」按钮——这是对的（两栏都在说"我这里没有会话"），
+     * 但全局 `getByText` / `getByRole` 会因为命中两个节点而报
+     * "Found multiple elements"。收窄到主区之后，断言才真正表达"主区是落地页"。
+     */
+    const main = document.querySelector('#avid-main') as HTMLElement
+    await waitFor(() => {
+      expect(within(main).getByText('还没有会话')).toBeTruthy()
+    })
+    expect(within(main).getByRole('button', { name: '新建会话' })).toBeTruthy()
+
+    // 左栏是常驻的（jsdom 默认 1024px ≥ 900px 断点），它有自己的列表空态。
+    const nav = document.querySelector('nav[aria-label="会话"]') as HTMLElement
+    expect(within(nav).getByText('还没有会话')).toBeTruthy()
   })
 
   it('会话列表非空时回落选中最新的一条，渲染对话页而不是空态', async () => {
-    const older = session('s-old', '旧会话', 1_000)
-    const newer = session('s-new', '新会话', 2_000)
+    /*
+     * 工作区名刻意用一个**只有注入数据才会出现**的值。
+     *
+     * 为什么：`它`不是这条用例要验的行为，而是**注入链路的锚点**。「没有空态」
+     * 与「没有工作区时禁用新建」这两类断言在"注入生效"和"注入失效（真实数据源为空）"
+     * 两种情况下**都会通过**——它们区分不了装配有没有把数据送到组件树里。
+     * 上一版就吃过这个亏：`App` 内部自己装了 Provider，外层注入被静默覆盖，
+     * 三条用例里两条照样绿，只有一条因为 `h1` 根本不存在才暴露。
+     */
+    const older = session('s-old', '旧会话', 1_000, '注入的工作区')
+    const newer = session('s-new', '新会话', 2_000, '注入的工作区')
+    const injectedWorkspace: WorkspaceSummary = { ...WORKSPACE, name: '注入的工作区' }
 
     /*
      * 故意传**乱序**列表（旧的在前）：reducer 的 `sessions/loaded` 要按
      * `created_at` 降序整理并回落到第一项。这条用例钉住的正是那个回落。
      */
-    renderWith(dataWith({ sessions: [older, newer] }))
+    renderWith(dataWith({ sessions: [older, newer], workspaces: [injectedWorkspace] }))
 
     /*
      * 断言落在**对话页头部的 h1（会话名）**上。
@@ -138,13 +168,17 @@ describe('App 装配', () => {
      */
     const heading = await screen.findByRole('heading', { level: 1 })
     expect(heading.textContent).toBe('新会话')
+    // 注入链路锚点：这个工作区名只可能来自注入数据。
+    expect(await screen.findByText('注入的工作区')).toBeTruthy()
   })
 
   it('没有可用工作区时禁用新建，并说明原因', async () => {
     renderWith(dataWith({ sessions: [], workspaces: [], defaultWorkspace: null }))
 
-    const button = await screen.findByRole('button', { name: '新建会话' })
+    // 同样按区域收窄：左栏头部也有一个「新建会话」按钮（它是可用的，用于新建会话）。
+    const main = document.querySelector('#avid-main') as HTMLElement
+    const button = within(main).getByRole('button', { name: '新建会话' })
     expect(button.hasAttribute('disabled')).toBe(true)
-    expect(screen.getByText(/avid workspace add/)).toBeTruthy()
+    expect(within(main).getByText(/avid workspace add/)).toBeTruthy()
   })
 })
