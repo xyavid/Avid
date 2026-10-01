@@ -117,6 +117,15 @@
   --coral: #EC8F8D;   /* 温和警示 */
   --danger: #8B3A3A;  /* danger · 深朱 */
 
+  /* ---- 叠层 overlay 四档（阶段 3 回补）----
+     用途：图标按钮 hover 底、标签页胶囊容器底这类「纸面上的轻压痕」。
+     --overlay-light 是组件墙标签页容器实绘值 rgba(42,38,34,.04)；
+     其余三档为同色温推断档，阶段 5 状态矩阵校准。只压纸面，不做阴影。 */
+  --overlay-subtle: rgba(42, 38, 34, 0.02);
+  --overlay-light: rgba(42, 38, 34, 0.04);
+  --overlay-medium: rgba(42, 38, 34, 0.08);
+  --overlay-strong: rgba(42, 38, 34, 0.14);
+
   /* 链接默认取 accent */
   --link: var(--accent);
   --link-hover: var(--accent-hover);

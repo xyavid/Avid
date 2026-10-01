@@ -7,10 +7,14 @@
 
 import type { ReactNode } from 'react'
 
+import { AssistantMessage, ToolCard, UserBubble } from '../../components/chat'
+import { SessionItem } from '../../components/session'
 import { Badge } from '../Badge'
 import { Button } from '../Button'
+import { Card } from '../Card'
 import { ICON_NAMES, Icon } from '../Icon'
 import { Input } from '../Input'
+import { Tabs } from '../Tabs'
 import { Tag } from '../Tag'
 
 function Section({ id, title, children }: { id: string; title: string; children: ReactNode }) {
@@ -33,7 +37,9 @@ export function GalleryPage() {
       {only === null && (
         <>
           <h1 className="font-serif text-[26px] font-medium">Avid 组件墙</h1>
-          <p className="mt-a4 font-ui text-caption text-ink-muted">按钮 · 输入 · 标签 · 徽章 · 图标 —— 阶段 2（逐项对照 Hana 组件墙）</p>
+          <p className="mt-a4 font-ui text-caption text-ink-muted">
+            按钮 · 输入 · 标签 · 徽章 · 图标 · 消息 · 会话项 · 卡片 · 标签页 · 工具卡
+          </p>
           <div className="mb-a16 mt-a16 border-t border-hair" />
         </>
       )}
@@ -96,6 +102,60 @@ export function GalleryPage() {
               </span>
             ))}
           </div>
+        </Section>
+      )}
+
+      {show('bubble') && (
+        <Section id="bubble" title="消息 · 用户气泡与助手回复">
+          <div className="max-w-chat">
+            <UserBubble>帮我把这套界面整理成一份可以交给别的 agent 的参考。</UserBubble>
+            <div className="mt-a16">
+              <AssistantMessage>好。我把它拆成三层：全局 token、主题调色板、组件规范。地基是那套 4px 网格和六档字号。</AssistantMessage>
+            </div>
+            <div className="mt-a16">
+              <AssistantMessage streaming />
+            </div>
+          </div>
+        </Section>
+      )}
+
+      {show('session') && (
+        <Section id="session" title="会话列表项">
+          <div className="w-sidebar">
+            <SessionItem title="常态会话标题" meta="09:44 · 昨天" />
+            {/* hover 摆拍：用任意变体选择器把「隐藏直到需要」的按钮直接点亮 */}
+            <SessionItem
+              title="hover 态 · 操作按钮淡入"
+              meta="11:20"
+              className="bg-accent-light [&_[data-testid=session-actions]]:opacity-100"
+            />
+            <SessionItem title="active 会话 · 标题转 accent" meta="进行中" active />
+            <SessionItem title="流式生成中的会话" meta="流式生成中…" streaming />
+          </div>
+        </Section>
+      )}
+
+      {show('card') && (
+        <Section id="card" title="卡片">
+          <div className="max-w-[420px]">
+            <Card title="纸本卡片">抬升面比主面更亮，用发丝线而非阴影分层。圆角 5px，内边距 13–15px。</Card>
+          </div>
+        </Section>
+      )}
+
+      {show('tabs') && (
+        <Section id="tabs" title="标签页（sliding pill）">
+          <Tabs items={['对话', '频道', '便笺', '文件']} value="对话" onChange={() => {}} />
+        </Section>
+      )}
+
+      {show('toolcard') && (
+        <Section id="toolcard" title="工具卡">
+          <ToolCard icon="file-frame" title="读取 styles.css" badge="9 档间距">
+            --space-2 … --space-40
+            <br />
+            --duration-instant / fast / slow
+          </ToolCard>
         </Section>
       )}
     </div>

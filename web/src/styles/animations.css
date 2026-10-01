@@ -36,3 +36,17 @@
 /* 确认栏上升 / 收缩（clip-path 裁剪）—— 审批条的直接候选 */
 @keyframes hana-rise    { from { opacity: 0; transform: translateY(24px); clip-path: inset(100% 0 0 0); } to { opacity: 1; transform: translateY(0); clip-path: inset(0 0 0 0); } }
 @keyframes hana-retract { from { opacity: 1; transform: translateY(0); clip-path: inset(0 0 0 0); } to { opacity: 0; transform: translateY(24px); clip-path: inset(100% 0 0 0); } }
+
+/* ---- 阶段 3 补件（报告 §8.1 的语义、附录无原文数值）----
+   按动效纪律设计：只动 opacity 与微位移，不弹跳不旋转。
+   hana-cycling-dots 是 keyframe 动画，时长由使用点给定（1.2s 循环），
+   不在 transition 三档的管辖区；亮暗幅度对齐 hana-pulse 的默认档。 */
+@keyframes hana-cycling-dots {
+  0%, 60%, 100% { opacity: 0.25; }
+  30%           { opacity: 1; }
+}
+
+@keyframes hana-stream-tail-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}

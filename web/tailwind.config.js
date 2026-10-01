@@ -39,6 +39,13 @@ export default {
         paper: rgb('bg'),
         card: rgb('bg-card'),
         sidebar: rgb('sidebar-bg'),
+        /* 叠层四档：纸面上的轻压痕（图标 hover 底、胶囊容器底） */
+        overlay: {
+          subtle: v('overlay-subtle'),
+          light: v('overlay-light'),
+          medium: v('overlay-medium'),
+          strong: v('overlay-strong'),
+        },
         /* 字：暖墨三档 */
         ink: rgb('text'),
         'ink-light': rgb('text-light'),
@@ -67,6 +74,7 @@ export default {
         caption: v('fs-caption'),
         hint: v('fs-hint'),
         micro: v('fs-micro'),
+        chat: v('chat-message-font-size'),
       },
       spacing: space,
       borderWidth: {
@@ -99,6 +107,8 @@ export default {
       boxShadow: {
         /* focus 光晕（组件墙：边框转 accent + 2px accent-light 光晕） */
         'focus-ring': '0 0 0 2px var(--accent-light)',
+        /* 微阴影（组件墙：标签页选中块 / 工具卡，量化自 --shadow token） */
+        soft: '0 1px 3px var(--shadow)',
       },
       transitionDuration: {
         instant: v('duration-instant'),
