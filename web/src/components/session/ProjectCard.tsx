@@ -13,6 +13,7 @@ import type { WorkspaceSummary } from '../../api/types'
 import { cx } from '../../ui/cx'
 import { Icon } from '../../ui/Icon'
 import { Input } from '../../ui/Input'
+import { useAutoHideScroll } from '../../ui/useAutoHideScroll'
 
 function basename(root: string): string {
   const parts = root.split(/[\\/]/).filter(Boolean)
@@ -47,6 +48,7 @@ export function ProjectCard({
   const [open, setOpen] = useState(true)
   const [manualOpen, setManualOpen] = useState(false)
   const [manualPath, setManualPath] = useState('')
+  const listScrollRef = useAutoHideScroll<HTMLDivElement>()
 
   const submitManual = () => {
     const path = manualPath.trim()
@@ -85,7 +87,7 @@ export function ProjectCard({
       </div>
 
       {open && (
-        <div className="flex max-h-[200px] flex-col gap-a2 overflow-y-auto">
+        <div ref={listScrollRef} className="scroll-auto flex max-h-[200px] flex-col gap-a2 overflow-y-auto">
           {workspaces === null && <p className="px-a8 font-ui text-hint text-ink-muted">正在加载项目…</p>}
           {workspaces?.length === 0 && <p className="px-a8 font-ui text-hint text-ink-muted">还没有项目</p>}
           {workspaces?.map((ws) => {

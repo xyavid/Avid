@@ -28,6 +28,7 @@ import { Timeline, toolIcon } from '../../components/chat/Timeline'
 import { ToolCard } from '../../components/chat/ToolCard'
 import { UserBubble } from '../../components/chat/UserBubble'
 import { useRunStream } from '../../state/useRunStream'
+import { useAutoHideScroll } from '../../ui/useAutoHideScroll'
 import { ContextRail } from '../../components/rail/ContextRail'
 import { ProjectCard } from '../../components/session/ProjectCard'
 import { SessionNav } from '../../components/session/SessionNav'
@@ -66,6 +67,7 @@ export function ConversationPage() {
   // 活运行：一次运行的发送/订阅/终态回拉。liveSession 标记活事件属于哪个会话
   // （切走会话时活区块不跟过去）；attachedRunRef 防重复附着同一运行。
   const [liveSession, setLiveSession] = useState<string | null>(null)
+  const conversationScrollRef = useAutoHideScroll<HTMLDivElement>()
   const selectedIdRef = useRef<string | null>(null)
   selectedIdRef.current = selectedId
   const attachedRunRef = useRef<string | null>(null)
@@ -293,7 +295,9 @@ export function ConversationPage() {
       }
       main={
         <div className="mx-auto flex h-full max-w-chat-input flex-col">
-          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-a16 pt-a16">{body}</div>
+          <div ref={conversationScrollRef} className="scroll-auto flex min-h-0 flex-1 flex-col overflow-y-auto px-a16 pt-a16">
+            {body}
+          </div>
           {live.approvals.length > 0 && liveSession === selectedId && (
             <div className="px-a16 pb-a8">
               <ApprovalBar

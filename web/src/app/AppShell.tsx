@@ -9,6 +9,8 @@
 
 import type { ReactNode } from 'react'
 
+import { useAutoHideScroll } from '../ui/useAutoHideScroll'
+
 function RegionNote({ children }: { children: ReactNode }) {
   return <span className="font-mono text-micro text-ink-muted">{children}</span>
 }
@@ -20,6 +22,7 @@ export type AppShellProps = {
 }
 
 export function AppShell({ sidebar, main, rail }: AppShellProps) {
+  const railScrollRef = useAutoHideScroll<HTMLElement>()
   return (
     <div className="grid h-dvh grid-rows-[var(--titlebar-h)_minmax(0,1fr)] bg-paper font-ui text-ink">
       <header className="flex items-center justify-between border-b border-hair px-a16">
@@ -35,7 +38,7 @@ export function AppShell({ sidebar, main, rail }: AppShellProps) {
 
         <main className="min-h-0 overflow-hidden">{main ?? <RegionNote>对话列 ≤720px · 阶段 4 组装</RegionNote>}</main>
 
-        <aside className="min-h-0 overflow-y-auto border-l border-hair p-a12">
+        <aside ref={railScrollRef} className="scroll-auto min-h-0 overflow-y-auto border-l border-hair p-a12">
           {rail ?? <RegionNote>右栏 280px · 上下文占位</RegionNote>}
         </aside>
       </div>

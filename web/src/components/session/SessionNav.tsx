@@ -9,6 +9,7 @@ import { useState } from 'react'
 
 import type { SessionSummary } from '../../api/types'
 import { Input } from '../../ui/Input'
+import { useAutoHideScroll } from '../../ui/useAutoHideScroll'
 import { SessionItem } from './SessionItem'
 
 /** 今天 → HH:MM；今年 → M-D HH:MM；更早 → YYYY-M-D（created_at 是毫秒）。 */
@@ -31,6 +32,7 @@ export type SessionNavProps = {
 
 export function SessionNav({ sessions, workspaceId = null, selectedId, onSelect }: SessionNavProps) {
   const [query, setQuery] = useState('')
+  const listScrollRef = useAutoHideScroll<HTMLDivElement>()
   const needle = query.trim().toLowerCase()
   const inProject = workspaceId ? sessions.filter((s) => s.workspace?.id === workspaceId) : sessions
   const filtered = inProject.filter((s) => (s.name ?? '').toLowerCase().includes(needle))
@@ -45,7 +47,7 @@ export function SessionNav({ sessions, workspaceId = null, selectedId, onSelect 
         aria-label="搜索会话"
         className="h-[30px] rounded-sm bg-overlay-light px-a8"
       />
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={listScrollRef} className="scroll-auto min-h-0 flex-1 overflow-y-auto">
         {filtered.length === 0 ? (
           <p className="px-a8 font-ui text-hint text-ink-muted">
             {workspaceId && inProject.length === 0

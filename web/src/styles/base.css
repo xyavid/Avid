@@ -61,3 +61,41 @@ textarea {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ---- 滚动条自动隐藏（阶段 5 回补）-----------------------------------------
+   用法：滚动容器挂 `.scroll-auto` 类 + useAutoHideScroll 的 ref。
+   默认：细条 + 全透明（隐形，只占 6px 沟槽）；显现：容器 :hover（CSS）或
+   滚动中（hook 加 is-scrolling，停滚 1 秒后移除）→ thumb 用 overlay-strong
+   淡出/淡入。Firefox 走 scrollbar-width/color，Chromium 两套都认。 */
+.scroll-auto {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.scroll-auto:hover {
+  scrollbar-color: var(--overlay-strong) transparent;
+}
+
+.scroll-auto.is-scrolling {
+  scrollbar-color: var(--overlay-strong) transparent;
+}
+
+.scroll-auto::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.scroll-auto::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scroll-auto::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 3px;
+  transition: background var(--duration-slow) var(--ease-out);
+}
+
+.scroll-auto:hover::-webkit-scrollbar-thumb,
+.scroll-auto.is-scrolling::-webkit-scrollbar-thumb {
+  background: var(--overlay-strong);
+}
