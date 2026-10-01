@@ -69,6 +69,10 @@ export default {
         micro: v('fs-micro'),
       },
       spacing: space,
+      borderWidth: {
+        /* 发丝线宽度：与 border-hair（颜色）分属两个属性，可安全组合 */
+        hairline: v('hairline-width'),
+      },
       borderRadius: {
         /* 覆盖默认刻度：rounded-sm/md/lg 从此等于 token（5/8/12px） */
         xs: v('radius-xs'),
@@ -90,6 +94,11 @@ export default {
       },
       height: {
         titlebar: v('titlebar-h'),
+        control: v('control-h'),
+      },
+      boxShadow: {
+        /* focus 光晕（组件墙：边框转 accent + 2px accent-light 光晕） */
+        'focus-ring': '0 0 0 2px var(--accent-light)',
       },
       transitionDuration: {
         instant: v('duration-instant'),

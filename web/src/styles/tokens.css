@@ -51,6 +51,12 @@
   --radius-chat-card: 8px;
   --radius-chat-card-inner: max(2px, calc(var(--radius-card) - 2px));
   --border-width: 1px;
+  /* 阶段 2 回补：组件墙实绘全部用 0.5px 发丝线（新暖纸主题的「线宽 0.5px」）；
+     --border-width(1px) 保留为报告 §2.3 的表单/section 档，组件描边走发丝线。 */
+  --hairline-width: 0.5px;
+  /* 阶段 2 回补：控件高度。组件墙输入框 34px 为准；报告 §7.6 设置表单的 32px
+     属于表单变体，实做设置页时再定第二档。 */
+  --control-h: 34px;
 
   /* ---- 动效 · 时长 3 档（报告 §2.4：一切 transition 归到这三档） ---- */
   --duration-instant: 0.1s;  /* 瞬：hover、关闭、退场、撤销 */
@@ -104,7 +110,7 @@
   --accent: #537D96;
   --accent-hover: #456A80;
   --accent-light: rgba(83, 125, 150, 0.08);
-  --accent-rgb: 83, 125, 150;
+  --accent-rgb: 83 125 150;
 
   /* 语义色：低饱和 */
   --green: #7BAE7F;   /* success · 墨绿 */
