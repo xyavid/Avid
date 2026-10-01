@@ -24,6 +24,7 @@ import type { Entry, Meta, PermissionMode, SessionSummary, UsageReport, Workspac
 import { Composer } from '../../components/chat/Composer'
 import { Timeline } from '../../components/chat/Timeline'
 import { ContextRail } from '../../components/rail/ContextRail'
+import { ProjectCard } from '../../components/session/ProjectCard'
 import { SessionNav } from '../../components/session/SessionNav'
 import { AppShell } from '../../app/AppShell'
 
@@ -195,29 +196,29 @@ export function ConversationPage() {
 
   return (
     <AppShell
-      sidebar={<SessionNav sessions={sessions ?? []} selectedId={selectedId} onSelect={setSelectedId} />}
+      sidebar={
+        <div className="flex min-h-0 flex-1 flex-col gap-a12">
+          <ProjectCard
+            workspaces={workspaces}
+            activeWorkspaceId={activeWorkspaceId}
+            sessionWorkspaceId={selected?.workspace?.id ?? null}
+            pickerAvailable={meta?.capabilities.workspace_picker != null}
+            busy={wsBusy}
+            hint={wsHint}
+            onSelectWorkspace={setActiveWorkspaceId}
+            onAddByPicker={addByPicker}
+            onAddByPath={addByPath}
+          />
+          <SessionNav sessions={sessions ?? []} selectedId={selectedId} onSelect={setSelectedId} />
+        </div>
+      }
       main={
         <div className="mx-auto flex h-full max-w-chat-input flex-col">
           <div className="min-h-0 flex-1 overflow-y-auto px-a16 pt-a16">{body}</div>
           <Composer permission={permission} onChangePermission={setPermission} />
         </div>
       }
-      rail={
-        <ContextRail
-          meta={meta}
-          session={selected}
-          usage={usage}
-          workspaces={workspaces}
-          activeWorkspaceId={activeWorkspaceId}
-          sessionWorkspaceId={selected?.workspace?.id ?? null}
-          pickerAvailable={meta?.capabilities.workspace_picker != null}
-          busy={wsBusy}
-          hint={wsHint}
-          onSelectWorkspace={setActiveWorkspaceId}
-          onAddByPicker={addByPicker}
-          onAddByPath={addByPath}
-        />
-      }
+      rail={<ContextRail usage={usage} />}
     />
   )
 }
