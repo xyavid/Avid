@@ -1,7 +1,8 @@
 # Avid 内核 ↔ 浏览器接口面
 
 **状态**：本文件只承载内核与浏览器之间**交换什么**——端点、事件、载荷、错误、时序，以及契约的版本与漂移门禁。浏览器内部怎么组织、长什么样，不在本文件范围内。
-**阶段 32**：旧前端（`web/src/**`，123 文件 / 10,433 行：页面、组件、样式、静态资源）已整体删除，它内部的设计（分层与目录结构、组件边界、状态域、视觉语言、性能与验收门禁）随之一并删除，见文末墓碑。现在 `web/` 只剩入口 `main.tsx`、占位壳 `App.tsx`、一条 smoke 测试，以及两份**契约种子** `api/types.ts`、`events/types.ts`。**新的前端设计与视觉语言尚未确认**，本文件不预设。
+**阶段 32**：旧前端（`web/src/**`，123 文件 / 10,433 行：页面、组件、样式、静态资源）已整体删除，它内部的设计（分层与目录结构、组件边界、状态域、视觉语言、性能与验收门禁）随之一并删除，见文末墓碑。
+**2026-10（commit `b1c54cb`）**：阶段 32 保留的骨架（入口 / 占位壳 / smoke 用例）与两份**契约种子** `api/types.ts`、`events/types.ts` 也一并删除，`web/` 目录不再存在；两侧契约门禁（`test_wire_contract.py` / `test_event_contract.py`）随删，新前端落成后按同样的判据重建。**新的前端设计与视觉语言尚未确认**，本文件不预设。
 **依据**：取舍按 `docs/design/architecture-criteria.md` 的检查点推导；每条取舍写「解决了什么 / 牺牲了什么 / 在什么条件下成立 / 什么信号出现时重新考虑」。
 **证据来源**：仓库内文件用 `path:line`；调研结论用 `dev/research/*.md:line`（过程文档，不入库，引用时同时写明样本与 commit）。2026-09-22 清理冗余调研产物时删除了 `agent-frontend-survey-addendum.md` 与 `agent-frontend-impl-survey.md` 两份并发稿，下文引用它们的锚点已就地标注为不可复核；合并定稿 `agent-frontend-survey-final.md` 与详情分册 `agent-frontend-survey-deepdive.md` 保留。
 **前置阅读**：`docs/design/runtime-architecture.md`（内核四层与不变量 I1–I7）、`dev/plan/roadmap.md`（已完成阶段）。
@@ -51,6 +52,8 @@
 | 团队从 1 变 10 | 部分成立：契约与层禁规则让并行改动有边界，但 `web/schemas.py` 会成为合并热点 |
 
 ### 4.3 交付形态：分离开发、单进程交付
+
+> **2026-10**：前端与 `copy-dist.mjs` 交付链已整体删除，`app.py` 的产物漂移告警随删；本节记的是旧前端的既定取舍，供新前端重建时参考，交付形态届时重新论证。
 
 - **开发期两个进程**：`uv run avid web --port 8765`（只提供 API 与 SSE）+ `pnpm -C web dev`（Vite，代理 `/api` → `127.0.0.1:8765`）。Open WebUI 就是这套代理（`/api` 与 `/ws` 均 `ws: true`，`dev/research/agent-frontend-survey-final.md:427`）。
 - **交付期一个进程**：`pnpm -C web build` → `scripts/copy-dist.mjs` 复制到 `src/avid/web/static/` → wheel 内含产物 → `avid web` 用 uvicorn 同时提供 API 与静态资源（SPA fallback）。**安装者不需要 Node**（Open WebUI 的发布者侧构建模型，`dev/research/agent-frontend-stack-survey.md:419`）。
@@ -234,7 +237,7 @@ data: {"run_id":"run_...","seq":null,"text":"…"}      ← 无 id 行，不参�
 - `GET /api/meta` 返回 `api_version`（整数，破坏性变更时 +1）、`event_types`（完整清单）与 **`features`（特性表）**。
 - **按特性分支，不按版本号分支**：客户端读 `features`（例如 `{"deltas":1,"branches":1,"usage":1}`）决定启用哪些能力，只在客户端构建的 `api_version` 与内核声明**不兼容**时才失败收敛。形态取自 OpenHands 的两层防护——构建期钉死版本 + 运行期按特性协商（`AGENT_SERVER_VERSION_TOO_OLD` + feature→minVersion 表 + `/server_info` 缓存，`dev/research/agent-frontend-survey-verified-addendum.md:418-423`）。特性表比单一版本号更耐漂移：加一个可选事件不会让所有旧前端罢工。
 - 失败收敛的具体表现：不尽力渲染，而是显式报出「界面与内核版本不兼容」并要求重新构建 `web/`（LibreChat 的协议协商就是这个形状，`dev/research/agent-frontend-impl-survey.md:274`；**该文件已于 2026-09-22 清理中删除，锚点不可复核**）。
-- **机械检查（先做这个，不上生成器）**：`tests/test_event_contract.py` 解析 `web/src/events/types.ts` 的联合类型成员集合，与 `runtime/events.py` 的 `EVENT_TYPES` 比较集合相等。理由：生成式契约不是免费的——Dify 生成前要打 6 类规范化补丁、OpenHands 要维护公开面过滤 + 人工 `allowClientOnly` 清单并已出现生成源 1.47.0 与运行时 1.49.1 的静默漂移（`dev/research/agent-frontend-survey-final.md:41`）。在「事件数量 × 变更频率」超过人工同步成本之前，一条集合相等测试比一套生成器便宜（这条判据取自 `dev/research/agent-frontend-survey-final.md:478`）。
+- **机械检查（先做这个，不上生成器）**：`tests/test_event_contract.py` 解析 `web/src/events/types.ts` 的联合类型成员集合，与 `runtime/events.py` 的 `EVENT_TYPES` 比较集合相等（该测试已随 2026-10 的前端删除一并移除，新前端落成后按同判据重建）。理由：生成式契约不是免费的——Dify 生成前要打 6 类规范化补丁、OpenHands 要维护公开面过滤 + 人工 `allowClientOnly` 清单并已出现生成源 1.47.0 与运行时 1.49.1 的静默漂移（`dev/research/agent-frontend-survey-final.md:41`）。在「事件数量 × 变更频率」超过人工同步成本之前，一条集合相等测试比一套生成器便宜（这条判据取自 `dev/research/agent-frontend-survey-final.md:478`）。
 - **升级到生成器的条件与路径**（写清以便将来照做）：事件类型 ≥ 25 个，或单次迭代要改 ≥ 3 个事件的载荷结构时，改用 FastAPI 的 OpenAPI 做**类型生成**（hey-api，只生成类型不生成方法体，OpenHands 的形态），门禁用 Dify 的「CI 先删再生成再 diff」（`dev/research/agent-frontend-survey-final.md:118`）。
 - **破坏性变更的跑道**（生成器时代才需要，先行记录以免将来临时发明）：OpenHands 的做法是 5 个 minor 版本的弃用跑道 + 用 `oasdiff` 对比上一个 PyPI 发布 + CI 校验弃用话术；弱 schema 的允许清单必须带 `reason` / `owner` / `expiry` / `follow_up` 四个字段（`dev/research/agent-frontend-survey-verified-addendum.md:435-439`）。Avid 的规模还不需要它，但**契约一旦开始生成，废弃就必须有到期日**，否则抽象会永久滞留。
 

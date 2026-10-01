@@ -4,8 +4,8 @@
 
 **当前进度**：内核（模型调用、循环、工具、会话持久化、事件层）与**本地 Web 服务**
 （FastAPI 路由、pydantic DTO、SSE 事件流、静态资源服务）都已跑通。
-**前端在阶段 32 已整体删除重建**：`web/src/` 只剩骨架（入口、占位壳与两份
-契约种子），页面设计与视觉语言待定，本次不实现（见 `docs/status/CAPABILITIES.md` §11）。
+**前端已整体删除**（页面、契约种子、e2e 与 pnpm 工具链），待讨论定稿后从零重建
+（见 `docs/status/CAPABILITIES.md` §11）。
 
 正式文档在 `docs/`，收录标准见 `docs/README.md`；开发过程文档在 `dev/`，只留本地、不入库。协作约定见 `AGENTS.md`。
 
@@ -64,21 +64,17 @@ uv run --env-file .env avid web --port 8765      # API + SSE + 静态资源
 # → http://127.0.0.1:8765
 ```
 
-开发期前端热更新：另起 `pnpm -C web install && pnpm -C web dev`（Vite 代理 `/api`）。
-交付形态是「分离开发、单进程交付」：`pnpm -C web build && pnpm -C web run copy:dist`
-把产物复制进 `src/avid/web/static/`，随 wheel 分发，安装者不需要 Node。
-现在能打开的是重建后的骨架页，不是可用界面。
+浏览器端目前没有页面：前端连同其构建工具链已整体删除，`avid web` 现在只提供
+API 与 SSE；访问非 `/api` 路径会得到一条「前端尚未重建」的提示（HTTP 503）。
 
-Web 服务的接口、SSE 消费规则与信任边界见 `docs/guide/web-ui.md`；前端页面与接口的对应关系
-待新前端定稿后补。
+Web 服务的接口、SSE 消费规则与信任边界见 `docs/guide/web-ui.md`；新前端定稿后
+在此补页面说明与交付形态。
 
 ## 开发
 
 ```bash
-uv run pytest              # 内核与 API 全部测试，不联网
-pnpm -C web run typecheck  # 前端类型检查（骨架）
-pnpm -C web run test       # 前端单测（目前只有 2 条骨架 smoke）
+uv run pytest                                 # 内核与 API 全部测试，不联网
+uv run ruff check src tests && uv run mypy    # 与 CI 同一套静态检查
 ```
 
-前端原有的分层 / token / 样式 / 对比度 / 体积门禁与浏览器 e2e 已随阶段 32 的清空一并删除
-（`web/` 只剩 `copy:dist` 这一个脚本），新的门禁待前端设计定稿后重建。
+前端（页面、契约种子、浏览器 e2e 与各项门禁）已整体删除；新的工具链与门禁待前端设计定稿后随新结构建立。

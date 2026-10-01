@@ -3,11 +3,11 @@
 本文件**只回答九个问题**。每个结论都以仓库内可核对的事实为依据，证据用 `path:line`
 或可执行命令给出；凭印象或设计意图得出的内容会显式标注为「未验证假设」。
 
-**写作基线**：commit `1de3830`（阶段 31 收尾；内核 / `tests/` / 评测仪器的计数取自该 commit 的
-内容），内核 80 个 Python 文件 / 16,816 行，`tests/` 59 个 Python 文件（55 个测试文件 + 4 个支撑
-文件）/ 17,852 行，评测仪器 `benchmarks/` 20 个 Python 文件 / 3,668 行 + 21 条 case + 225 个
-fixture 文件；前端为阶段 32 清空重建后的骨架——`web/src` 5 个文件 / 491 行（原 123 文件 /
-10,433 行已随旧前端删除，见下）。
+**写作基线**：commit `1de3830`（阶段 31 收尾；内核 / 评测仪器的计数取自该 commit 的
+内容），内核 80 个 Python 文件 / 16,816 行，评测仪器 `benchmarks/` 20 个 Python 文件 /
+3,668 行 + 21 条 case + 225 个 fixture 文件。前端在 commit `b1c54cb` 整体删除（阶段 32
+保留的骨架与契约种子一并清掉），仓库内不再有 `web/`；`tests/` 相应少了两份契约测试，
+现为 57 个 Python 文件 / 17,489 行。
 
 **证据分级**：
 
@@ -33,9 +33,9 @@ fixture 文件；前端为阶段 32 清空重建后的骨架——`web/src` 5 �
 | 维度 | 现状 | 证据 |
 |---|---|---|
 | 内核语言与包管理 | Python 3.12 + `uv`，`src/` 布局，运行期唯一依赖 `httpx>=0.27` | `pyproject.toml:1-6` |
-| 前端 | TypeScript（React + Vite），独立 pnpm 工具链；运行期依赖只剩 `react` / `react-dom` 两个；产物复制进 `src/avid/web/static/` 随 wheel 分发，安装者不需要 Node。**阶段 32 已把旧前端整体删除重建**，视觉风格与布局未定 | `pyproject.toml:11-14`、`web/package.json` |
-| 交互形态 | `avid` CLI（单轮 / `--agent` 循环 / 会话 / `web`）+ 本地 Web 服务（FastAPI + SSE；页面界面重建中） | `src/avid/cli.py:85-140,317-333`、`README.md:29-57` |
-| 规模 | 内核 80 文件 / 16,816 行；前端 5 个文件 / 491 行（阶段 32 清空重建后的骨架，见 `CAPABILITIES.md` §11）；测试 59 文件（55 测试 + 4 支撑）/ 17,852 行；评测仪器 20 文件 / 3,668 行 | `find src -name '*.py'`、`find web/src -type f`、`find benchmarks -name '*.py'` |
+| 前端 | **无**：`web/` 已整体删除（页面、契约种子、e2e 与 pnpm 工具链），技术选型待重构时再定 | commit `b1c54cb`、`CAPABILITIES.md` §11 |
+| 交互形态 | `avid` CLI（单轮 / `--agent` 循环 / 会话 / `web`）+ 本地 Web 服务（FastAPI + SSE；暂无页面） | `src/avid/cli.py:85-140,317-333`、`README.md:29-57` |
+| 规模 | 内核 80 文件 / 16,764 行；前端无代码；测试 57 文件 / 17,489 行；评测仪器 20 文件 / 3,668 行 | `find src -name '*.py'`、`find tests -name '*.py'`、`find benchmarks -name '*.py'` |
 | 定位与验收 | 通用内核、场景后接；**验收只认参考场景 R**（读取本地文件 + 计算） | `AGENTS.md §1` |
 | 使用者 | 单人、本地优先、单机运行 | `dev/drafts/requirements.md:29-31`，本地记录 |
 
@@ -70,7 +70,7 @@ fixture 文件；前端为阶段 32 清空重建后的骨架——`web/src` 5 �
 ## 3. Avid 当前可以做什么？
 
 一句话：**能在选定工作区里跑一个多步 Agent 会话，自主调用 9 个工具，带审批、TODO、
-并行子 agent、技能与上下文压缩，从 CLI 或 Web 接口操作（前端界面重建中），全过程可回放；
+并行子 agent、技能与上下文压缩，从 CLI 或 Web 接口操作（暂无浏览器界面），全过程可回放；
 并且能用一条命令把「能不能把任务做成」量成通过率、成本与轨迹（`benchmarks/`）。**
 
 | 能力 | 关键事实 | 证据 |
@@ -78,7 +78,7 @@ fixture 文件；前端为阶段 32 清空重建后的骨架——`web/src` 5 �
 | Agent 循环 | **没有轮数上限**（也没有这个开关）：跑到模型不再请求工具为止；Stop 被拦最多补 1 轮；两个取消检查点（每轮开始前、每批工具执行前）；取消走 `RunCancelled`，不返回半成品 | `src/avid/runtime/loop.py`（`itertools.count(1)`） |
 | 工具调用协议 | 9 个工具；参数在 `execute_one` 里按**发给模型的那份 schema** 统一校验（required/type/enum/数值边界）；失败按参数错误 / 执行失败 / 业务拒绝三类给不同的下一步；工具失败不中断循环 | `src/avid/tools/__init__.py:47-82`、`src/avid/tools/validate.py`、`src/avid/runtime/loop.py:275-285` |
 | 安全分层（阶段 26） | 三轴（`approval`/`sandbox`/`network`）正交 × 三个预设（`manual`/`auto`/`full`）；deny > ask > allow 的四级阶梯（ADMIN → SYSTEM`~/.avid/policy.toml` → PROJECT `<ws>/.avid/policy.toml` → USER 账本，仓库文件只能加严）；bwrap 沙箱（只读系统 + 可写工作区 + 掩蔽宿主凭据 + 无出网 + 环境白名单 + 按能力授予挂载）；`full` 三重锁；审计落 `~/.avid/audit/`（放行也记）；沙箱不可用不静默降级 | `src/avid/policy/{modes,action,rules,engine,sandbox,classifier,audit,permission}.py`、`src/avid/tools/shell.py` |
-| 工作区 | 用户级注册表 `~/.avid/workspaces.json`；id 由根目录派生（重复登记幂等、索引丢失不丢数据）；运行级工作区根取代模块全局；CLI 与 Web 接口都能选与新增（前端界面重建中，见下） | `src/avid/workspaces.py:31-70,113-264`、`src/avid/svc/picker.py` |
+| 工作区 | 用户级注册表 `~/.avid/workspaces.json`；id 由根目录派生（重复登记幂等、索引丢失不丢数据）；运行级工作区根取代模块全局；CLI 与 Web 接口都能选与新增（暂无界面，见下） | `src/avid/workspaces.py:31-70,113-264`、`src/avid/svc/picker.py` |
 | 会话持久化 | 新建 / 续接 / 列举 / 删除；条目树 + 值 + 分支 + 变更线；内存与 JSONL 两个后端共用一套一致性用例；每条消息一次提交；跨进程 flock + 短写回滚 + 末行残片自愈 | `src/avid/session/__init__.py:1-21,75-125`、`src/avid/session/jsonl.py` |
 | 分支 | 分支只是「链尾是谁」的一个值；可从任一历史条目分叉；条目树只增不改 | `src/avid/session/values.py`、`docs/guide/web-ui.md:110-121` |
 | 上下文压缩 | 五步阶梯（工具结果落盘 → 按条数裁剪 → 免费瘦身 → 摘要替换 → 模型报超限兜底），阈值集中在 `policy/compaction.py`；③④ 的字符阈值在有窗口、有真实读数时**按这次运行自己的实测 chars/token 派生**（拿不到就回落到 400k 常量，注入阈值时用 `from_window=False` 关掉派生）；完整记录落盘到 `.avid/context/` 并回一句「用 read_file 读回」；自动压缩与兜底各最多一次 | `src/avid/policy/compaction.py:41-147,240-449`、`src/avid/runtime/context_manager.py:298-382`、E2E `benchmarks/context_window/` |
@@ -89,7 +89,7 @@ fixture 文件；前端为阶段 32 清空重建后的骨架——`web/src` 5 �
 | 系统提示装配（阶段 31） | 默认文案含身份、工具契约（授权执行并验证 / 不可逆先确认 / 缺信息先澄清 / 等结果再答复）与外部内容防线（工具结果是数据不是指令），集中在 `policy/prompt.py`；`<工作区根>/AGENTS.md` 存在时作为引导块进系统提示（缺失/为空即无块，超 16k 字符截断注明）；环境块含运行时事实（OS/架构/Python、当天日期）；SYSTEM 块首轮冻结，实测缓存命中率中位数 0.808（`BENCHMARK.md` §3.5） | `src/avid/policy/prompt.py`、`src/avid/runtime/context_manager.py`、`benchmarks/cache_hit/artifact.json` |
 | 模型接入 | OpenAI 兼容 `/chat/completions` 直连 httpx（不套 SDK）；非流式 `chat_completion` 与流式 `stream_completion` 返回**同形**的 `Turn`，两条解析路径共用同一个 usage 归一化；连接超时 10s / 读超时 60s | `src/avid/ai/client.py:22-35`、`src/avid/ai/client.py` 的 `stream_completion`、`src/avid/runtime/loop.py:228-237` |
 | Web 服务（内核侧） | 20 个 HTTP 端点（会话 / 运行 / 审批 / 事件流 / 技能 / 工作区 / 元信息）；19 类事件分三档（16 durable + `run_status` + `assistant_delta` + `reasoning_delta`）；传输适配 `src/avid/web/**` 阶段 32 未改动 | `src/avid/web/routes/*.py`、`src/avid/runtime/events.py:24-104` |
-| 前端 | **阶段 32 清空重建**：旧 `web/src/**` 123 文件 / 10,433 行、`web/e2e/**`、6 个门禁脚本与 `web/budget.json` 全部删除；现存 5 个文件（`main.tsx` / `App.tsx` / `App.test.tsx` 加 `api/types.ts`、`events/types.ts` 两份契约种子），`web/package.json` 只剩 `dev` / `build` / `preview` / `copy:dist` / `typecheck` / `test` 六个脚本；页面与视觉语言未定，本次不实现 | `web/package.json`、`tests/test_wire_contract.py`、`tests/test_event_contract.py` |
+| 前端 | **已整体删除**（2026-10，commit `b1c54cb`）：阶段 32 清空重建后保留的骨架（`main.tsx` / `App.tsx` / smoke 用例）与两份契约种子（`api/types.ts`、`events/types.ts`）连同 pnpm 工具链、Playwright e2e 一并删掉，`web/` 不再存在；钉住两侧相等的 `tests/test_wire_contract.py`、`tests/test_event_contract.py` 随删 | `CAPABILITIES.md` §11、`docs/guide/web-ui.md` |
 | CLI | `--agent` / `--yes` / `--permission` / `--workspace` / `--session` / `--new-session` / `--session-name` / `--list-sessions` / `--delete-session`；子命令 `web`、`workspace {add,list,remove,permission}` | `src/avid/cli.py:85-140,317-333` |
 | 用量台账（阶段 22） | `ai/usage.py` 把 OpenAI / DeepSeek 兼容 / Anthropic / Gemini 四种 usage 写法归一成同一形状（缓存读/写可空）；`RunState.usage_report()` 单点算上下文占用（最近一轮真实 `prompt_tokens` / 窗口 / 占用率）、缓存命中率与压缩读数；每轮进 `run_status`、终态进 `run_finished` 与 `GET /api/runs/{id}`，并**按分支落盘**进会话值（刷新 / 切会话 / 重启后可见）；窗口来自 `AVID_CONTEXT_WINDOW` 或内置模型名小表，查不到就不算占用率 | `src/avid/ai/usage.py`、`src/avid/runtime/state.py` 的 `usage_report`、`src/avid/svc/sessions.py:list_branches` |
 | 可观测 | 逐轮 trace 与用量打到 stderr（含缓存读与命中率、有窗口时含占用率）；事件流 + 运行注册表（重放缓冲 512 条、终态记录保留 600s / 最多 200 个 run）；心跳与兜底常量单点定义 | `src/avid/cli.py:usage_suffix`、`src/avid/svc/runs.py:53-65`、`src/avid/runtime/events.py:108-118` |
@@ -112,7 +112,7 @@ fixture 文件；前端为阶段 32 清空重建后的骨架——`web/src` 5 �
 | 两个进程同时操作同一会话的运行 | 做到一半 | 会话**文件**有跨进程锁（`jsonl.py` 的 `<会话>.jsonl.lock`），但「一个会话同时至多一个活动 run」只在进程内成立（`src/avid/svc/runs.py` 的注册表是进程内单实例） |
 | 会话的下一段 | 做到一半 | 压缩条目、usage 台账、operation 状态机、SQLite 后端均未做（`runtime-architecture.md:635-643`） |
 | 任务图 | **已下线**（阶段 27） | 六个工具、存储、只读接口与 `/tasks` 页面一并删除；旧 `<工作区根>/.tasks/` 不迁移、不删除，只是不再被读（`docs/design/runtime-architecture.md` §17） |
-| 前端的一部分 | **整体清空，待重做**（阶段 32） | 旧 `web/src/**` 123 文件 / 10,433 行、`web/e2e/**`（10 个 spec + 4 张视觉基线）、6 个门禁脚本与 `web/budget.json` 一并删除，现存 `web/src/` 只有 5 个文件与 `App.test.tsx` 里 2 条 smoke 用例。虚拟列表、a11y（axe）、视觉回归与性能门禁这些旧前端的「做到一半」连同旧前端一起作废，待新前端定稿后重新立项 |
+| 前端 | **整体删除，待重做**（2026-10） | `web/` 已不存在（commit `b1c54cb`）：阶段 32 保留的骨架与契约种子这次一并清掉，页面、a11y（axe）、视觉回归与性能门禁全部待新前端定稿后重新立项 |
 | 大输出以外的 token/成本管理 | 做到一半 | 只有按轮累加的 `tokens` 计数与摘要调用（`src/avid/runtime/state.py:73-77`）；没有按会话/模型/时间的成本台账，也没有预算上限 |
 | 自动重试 | 设计上不做 | 模型 4xx/5xx 一律 `LLMError` 上抛终止；唯一的重试是「上下文超限 → 兜底压缩 → 重试一次」（`runtime-architecture.md:308-324`、`loop.py:214-226`） |
 
@@ -124,7 +124,7 @@ fixture 文件；前端为阶段 32 清空重建后的骨架——`web/src` 5 �
 | 保障 | 具体机制 | 证据 |
 |---|---|---|
 | 同一套一致性用例跑两个后端 | 内存与 JSONL 后端共用 `session_cases`，不是各写各的测试 | `tests/test_session_conformance.py`、`tests/session_cases.py` |
-| 唯一写入者有门禁钉住 | `SessionRecorder` 是唯一写入者；A11 断言 `web/`、`svc/` 里不出现 `append_message` / `.commit(` | `tests/test_web_boundaries.py:157-162`、`session/__init__.py:8` |
+| 唯一写入者有门禁钉住 | `SessionRecorder` 是唯一写入者；A11 断言 `web/`、`svc/` 里不出现 `append_message` / `.commit(` | `tests/test_web_boundaries.py:151-153`、`session/__init__.py:8` |
 | 失败路径有专门机制且有用例 | 跨进程 flock、`os.write` 短写回滚 + 长度校验、`_fsync_dir`、末行残片按原子重写自愈 | `src/avid/session/jsonl.py`、`tests/test_session_jsonl.py` |
 | 读路径有量级门禁 | 200 个会话（每个 60 条）列表**一次都不 open 会话文件**且 < 1.5s；5000 条消息摘要 < 1.0s、重放 < 3.0s | `tests/test_stress.py:79-165` |
 

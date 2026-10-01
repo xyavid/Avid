@@ -2,7 +2,7 @@
 
 Avid 的本地 Web 服务：内核与浏览器之间**交换什么**——端点、载荷、事件分档、错误与信任边界。
 接口面设计依据见 `docs/design/frontend-architecture.md`（该文件现在只承载内核 ↔ 浏览器接口面）。
-页面与视觉设计已随旧前端在阶段 32 删除，新的前端设计待确认，本文件不描述页面。
+页面与视觉设计已随前端整体删除（阶段 32 清空旧前端；2026-10 连阶段 32 保留的骨架与契约种子一并删除），新的前端设计待确认，本文件不描述页面。
 
 ## 1. 启动
 
@@ -20,38 +20,12 @@ uv run --env-file .env avid web --port 8765
 uv run --env-file .env avid web --port 8765 --workspace /path/to/project
 ```
 
-开发期（前端热更新）两个进程：
+前端已整体删除（含构建工具链），`src/avid/web/static/` 没有产物：访问任何非 `/api`
+路径会得到 HTTP 503 `static_missing`（「前端尚未重建」）。API 与 SSE 不受影响；
+新前端落成后，交付形态（产物如何进 `src/avid/web/static/`）随新前端的工具链一并确定。
 
-```bash
-uv run --env-file .env avid web --port 8765     # 终端 A：API 与事件流
-pnpm -C web dev                                 # 终端 B：Vite，代理 /api → 8765
-# → http://127.0.0.1:5173
-```
-
-**端口必须对上**：Vite 的代理目标硬编码在 `web/vite.config.ts` 的 `server.proxy`
-里（默认 `http://127.0.0.1:8765`）。终端 A 换了 `--port` 而代理没跟着改，浏览器里
-每个 `/api` 请求都会拿到一条**代理自己生成的 `500` + 空正文**——界面会显示
-「连不上本地服务：…请确认后端已起、且端口与 Vite 代理目标一致」。
-
-这条提示是前端专门为这种情况准备的（`web/src/api/client.ts` 在遇到"非 2xx 且响应
-不是约定的 JSON 信封"时会额外探一次 `/api/health` 来区分"后端不在这儿"与"后端答坏了"）。
-换端口时两边一起改；从 checkout 直接跑也可用 `pnpm -C web build && pnpm -C web run copy:dist`
-把产物交给 `avid web` 同源发出，就不存在这个耦合。
-
-交付形态（一个进程、安装者不需要 Node）：
-
-```bash
-pnpm -C web install
-pnpm -C web build
-pnpm -C web run copy:dist        # dist → src/avid/web/static + 构建戳（`avid web` 发的是这一份）
-uv run avid web --port 8765      # 静态资源与 API 同源
-```
-
-前端脚本与命令的清单以 `web/README.md` 为准；
-旧前端的门禁脚本（分层 / token / 样式 / 对比度 / 体积）已随前端删除。
-
-`GET /api/meta` 的 `build` 字段返回构建戳（`git_sha` + `built_at`）；从 checkout 直接跑而
-没有产物时这个字段没有戳值。
+`GET /api/meta` 的 `build` 字段返回构建戳（`git_sha` + `built_at`）；没有产物时这个
+字段没有戳值。
 
 ## 2. 端点与数据
 
@@ -169,13 +143,6 @@ uv run pytest -q tests/test_approvals.py           # 审批挂起/幂等/超时/
 uv run pytest -q tests/test_web_api.py             # 端点契约、分页、SSE 分帧、分支端点
 uv run pytest -q tests/test_branches.py            # 分叉语义：前缀共享、分支隔离、活动 run 拒绝
 uv run pytest -q tests/test_web_boundaries.py      # grep 门禁：内核不 import 框架、web 不写会话
-uv run pytest -q tests/test_wire_contract.py       # REST 线格式与 TS 契约种子逐字段一致
-
-# 前端侧（`web/` 现在只有这六个脚本）
-pnpm -C web typecheck                              # tsc -b --noEmit
-pnpm -C web test                                   # vitest（目前只有一条骨架 smoke 用例）
-pnpm -C web build                                  # tsc -b + vite build → dist/
-pnpm -C web run copy:dist                          # dist → src/avid/web/static + 构建戳
 
 # 手验
 curl -s localhost:8765/api/meta | head -c 300   # 其中的 build.git_sha 是那种产物的提交戳

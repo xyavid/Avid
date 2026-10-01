@@ -27,7 +27,7 @@
 | 子 agent 并行派发 | 已落地 | 模型调 `subagent`（≤4 个子任务） | `src/avid/tools/subagent.py` |
 | 技能系统 | 已落地 | `skills/*/SKILL.md` + `load_skill`；`always: true` 的技能正文常驻系统提示；`GET /api/skills` | `src/avid/policy/skills.py` |
 | 流式模型调用 | 已落地 | Web 运行路径（`?deltas=1` 订阅） | `src/avid/ai/client.py` 的 `stream_completion`、`src/avid/svc/runs.py` |
-| 本地 Web 界面 | 内核侧已落地；前端阶段 32 清空重建中 | `avid web --port 8765`（路由 / pydantic DTO / SSE 编帧 / 静态资源服务都未变） | `src/avid/web/`；`web/src/` 现存 5 个文件，见 §11 |
+| 本地 Web 界面 | 仅内核侧；**前端已整体删除** | `avid web --port 8765` 只提供 API 与 SSE，非 `/api` 路径回 503 `static_missing` | `src/avid/web/`；见 §11 |
 | CLI | 已落地 | `avid`、`avid web`、`avid workspace` | `src/avid/cli.py` |
 | 可观测（trace / 事件流 / 运行时状态） | 已落地 | stderr trace、`GET /api/runs/{id}/events`、`GET /api/runs/{id}` | `src/avid/runtime/events.py` |
 | 评测与基准（AvidBench v0.1） | 已落地（第一层） | `python -m benchmarks.run`、`pytest -m eval` / `-m eval_smoke` | `benchmarks/README.md`、`benchmarks/avidbench/`、`BENCHMARK.md` §9 |
@@ -200,7 +200,7 @@
 | 残片自愈 | 末行非法 → 当残片丢弃并原子重写；中间行非法 → 报错带行号（不静默丢数据） | `jsonl.py:585-611` |
 | 短写回滚 | 一次 `os.write` + 长度校验，短写截回原大小再抛错 | `jsonl.py:414-452` |
 | 投影 | `messages_for_branch` / `entries_to_messages` / `repair_incomplete_batches` 是唯一的「读出来」路径 | `session/__init__.py:8-9` |
-| 唯一写入者 | `SessionRecorder`；A11 门禁断言 `web/`、`svc/` 不直接写 | `tests/test_web_boundaries.py:157-162` |
+| 唯一写入者 | `SessionRecorder`；A11 门禁断言 `web/`、`svc/` 不直接写 | `tests/test_web_boundaries.py:151-153` |
 | 变更线 | `MutationLine`：单写者，同线程重入抛 `SessionBusyError`，关闭时先 seal 再等空闲 | `src/avid/session/mutation.py:23-70` |
 
 ---
@@ -324,43 +324,21 @@ durable、事件总数上限 4096、终态记录保留 600s 或最多 200 个 ru
 
 ## 11. 前端
 
-**阶段 32 已把旧前端整体删除重建，现在只有骨架。** 视觉风格与布局方案尚未确认，本次不实现任何
-页面设计；本节只记现状与仍然生效的契约。
+**前端已整体删除（2026-10，commit `b1c54cb`）。** 阶段 32 清空重建后剩下的骨架（`main.tsx` /
+`App.tsx` / smoke 用例）与两份契约种子这次一并删掉，`web/` 目录（页面、组件、样式、pnpm 工具链、
+Playwright e2e）不再存在。页面结构与视觉语言待讨论定稿后从零重建。
 
-`web/src/` 现存 5 个文件：
+**随之删除的契约门禁**：`tests/test_wire_contract.py`（pydantic DTO ↔ TS interface 逐字段）、
+`tests/test_event_contract.py`（`EVENT_TYPES` ↔ 前端联合类型集合相等）、`test_web_boundaries.py`
+的 A12 前端节（`web/src` 无第三方直连）。`test_modes.py` 的权限模式词表对账从四处退回三处——
+新前端落成后应把 TS 联合类型那一条加回来。
 
-| 文件 | 作用 |
-|---|---|
-| `main.tsx` | 挂载点 |
-| `App.tsx` | 骨架根组件（无页面） |
-| `App.test.tsx` | vitest 骨架 smoke，2 条用例（挂载与「设计未定」的显式声明） |
-| `api/types.ts` | REST 契约种子：与 `src/avid/web/schemas.py` 的 pydantic DTO 逐字段对应 |
-| `events/types.ts` | 事件契约种子：`EVENTS:BEGIN/END` 块与 `runtime/events.py` 的 `EVENT_TYPES` 集合相等 |
+**保留的**：后端传输适配 `src/avid/web/**`（FastAPI 路由 / pydantic DTO / SSE 编帧 / 静态资源
+服务）未动，端点与事件表见 §10；`src/avid/web/static/` 只留 `.gitkeep` 占位；`GET /api/meta`
+的 `build` 字段保留（无产物时无戳值）。
 
-两份 types 是**契约种子，不是普通源码**：`tests/test_wire_contract.py` 逐字段比对 pydantic DTO
-与 interface，`tests/test_event_contract.py` 要求事件名集合两侧相等。删掉它们或改字段名，
-Python 侧的契约门禁就会失败——改动这两份文件等于改内核契约，不是前端内部事务。
-
-**脚本与依赖**：`web/package.json` 只剩 `dev` / `build` / `preview` / `copy:dist` / `typecheck` /
-`test` 六个；运行期依赖只剩 `react` / `react-dom`，`tailwind.config.js` 里的设计 token 已清空。
-`pnpm run verify`、`check:layers`、`check:tokens`、`lint`、`check:contrast`、`gate:size`、
-`test:e2e` 都已不存在。
-
-**阶段 32 删除的**：`web/src/**` 123 文件 / 10,433 行（`ui/` 20、`features/` 59、`routes/` 8、
-`layouts/` 5、`lib/` 12、`state/` 4，以及 `api/`、`events/` 里除两份 types 以外的全部、
-`App`/`main`/`router`）；`web/e2e/**`（Playwright 10 个 spec + 4 张视觉基线 PNG）；
-`web/scripts/` 的 6 个门禁脚本（`check-layers` / `check-tokens` / `check-style` /
-`check-contrast` / `gate-size` / `measure-glass`）；`web/budget.json`；`web/playwright.config.ts`
-与 `@playwright/test` 依赖。
-
-**保留的**：`web/scripts/copy-dist.mjs`（唯一剩下的脚本，产物交付链：把 `web/dist/**` 复制进
-`src/avid/web/static/` 并写构建戳，`avid web` 服务的是这一份而不是 `web/dist`——源码比产物新时
-启动会打一条 ⚠ 告警指出该跑它）、`web/.npmrc`、`web/postcss.config.js`。
-
-**待新前端定稿后重新确立的**：页面结构与分层（旧的 L0–L4 是**那份已被删掉的**前端的结构，
-不再成立，也不要预先建空目录）、网络出口约定、设计 token 与对比度门禁、体积预算与新基线、
-e2e 与视觉回归。内核侧与传输适配 `src/avid/web/**`（FastAPI 路由 / pydantic DTO / SSE 编帧 /
-静态资源服务）阶段 32 未改动，端点与事件表见 §10。
+**待新前端定稿后重新确立的**：页面结构与分层、目录结构与网络出口约定、契约种子与两侧门禁、
+设计 token 与对比度门禁、体积预算与新基线、e2e 与视觉回归。不要预先建空目录。
 
 ---
 

@@ -9,8 +9,8 @@ Avid 是一个自建的 agent 运行时（harness）：模型调用、工具执�
 - **核心用途**：先做通用内核，场景后接；用同一个内核承载编码、检索、业务流等不同任务。
 - **目标**：改动任一模块（模型 / 工具 / 记忆 / 上下文策略）不需要动其它部分，且改动前后有可对比的评测数字。
 - **验收基准**：参考场景 **R**（读取本地文件 + 计算）——首个工具与后续评测集都从它长出来。
-- **技术栈**：内核 Python 3.12，环境与依赖管理用 `uv`，运行期依赖只有 `httpx`；前端 TypeScript（React + Vite），独立 pnpm 工具链，产物复制进 `src/avid/web/static/` 随 wheel 分发。
-- **现状**：模型调用 → 循环 → 9 个内置工具 + stdio MCP → 权限三轴预设（四级 deny 阶梯 + bwrap 沙箱 + 审计）→ hook 四事件 → 技能 → 上下文压缩 → 会话持久化 → 本地 Web 服务，端到端可用。**浏览器界面已在阶段 32 清空重建**：`web/src/` 只剩骨架（见 `docs/status/CAPABILITIES.md` §11），页面结构与视觉语言待定。
+- **技术栈**：内核 Python 3.12，环境与依赖管理用 `uv`，运行期依赖只有 `httpx`。前端已整体删除（含 pnpm 工具链与契约种子），技术选型待重构时再定。
+- **现状**：模型调用 → 循环 → 9 个内置工具 + stdio MCP → 权限三轴预设（四级 deny 阶梯 + bwrap 沙箱 + 审计）→ hook 四事件 → 技能 → 上下文压缩 → 会话持久化 → 本地 Web 服务，端到端可用。**浏览器界面已整体删除**（见 `docs/status/CAPABILITIES.md` §11），页面结构与视觉语言待讨论后从零重建。
 
 本文件只写**跨阶段的稳定约定**；会随阶段变化的现状、数字与阶段账本各有归属：
 
@@ -35,12 +35,9 @@ uv run pytest -m stress          # 复杂度与长会话门禁
 uv run --env-file .env pytest -q -m eval_smoke -s   # 评测冒烟（真模型，有成本）
 uv run ruff check src/avid && uv run mypy           # 与 CI 同一套静态检查
 seiso check                       # 文档规范（kind 映射与豁免见 seiso.toml；--preview 另有实验规则）
-
-pnpm -C web build && pnpm -C web run copy:dist   # 产物进 src/avid/web/static/，随 wheel 分发
-pnpm -C web run typecheck && pnpm -C web test    # 前端类型检查与骨架单测
 ```
 
-评测仪器（真模型，不是门禁）：`uv run --env-file .env python -m benchmarks.run --smoke`，参数见 `benchmarks/README.md`。安装、配置项、CLI 全量参数与 Web 交付形态见 `README.md`。阶段 32 删掉旧前端时，`pnpm run verify` 与六项前端门禁（分层 / token / 样式 / 对比度 / 体积）、`budget.json` 与 Playwright e2e 一并删除——它们检查的目录结构与 token 表都不存在了，待新的前端设计定稿后重建。
+评测仪器（真模型，不是门禁）：`uv run --env-file .env python -m benchmarks.run --smoke`，参数见 `benchmarks/README.md`。安装、配置项、CLI 全量参数与 Web 交付形态见 `README.md`。前端（页面、契约种子、门禁与 e2e）已整体删除；新的工具链与门禁待新前端设计定稿后随新结构建立。
 
 ### 1.2 数据流
 
@@ -58,7 +55,7 @@ Web  POST /api/sessions/{id}/runs ─┴─► svc/runs.RunRegistry（线程 + �
                                 ├ policy/sandbox 按能力账本组装 bwrap argv
                                 └ 工具 handler（tools/*，含 MCP 包装）
        on_message ─► SessionRecorder ─► <工作区>/.avid/sessions/*.jsonl（durable 真相）
-       on_event   ─► RunRegistry 缓冲 ─► SSE ─► 浏览器消费方（前端骨架，页面待建）
+       on_event   ─► RunRegistry 缓冲 ─► SSE ─► 浏览器消费方（前端待重建）
 ```
 
 - **`on_message` 是消息的唯一出口**：循环不 import 会话层，落库与否由回调决定。
@@ -78,7 +75,7 @@ Web  POST /api/sessions/{id}/runs ─┴─► svc/runs.RunRegistry（线程 + �
 | 传输适配 | `web/`：FastAPI 路由 + pydantic DTO + SSE 编帧 + 静态资源 | 线格式的唯一所有者 |
 | 工具 | `tools/`：`registry` 单点声明、`files`/`shell`/`subagent`/`skill`/`web_search`/`mcp`、`validate` 参数校验 | 9 个内置工具 + 该工作区声明的 MCP 工具 |
 | 工作区 | `workspaces.py` + `~/.avid/workspaces.json` | 用户级注册表（索引，非权威） |
-| 前端 | `web/`：入口 + 占位壳 + 两份**契约种子**（`src/api/types.ts` · `src/events/types.ts`） | 浏览器侧全部代码。**阶段 32 已把旧前端整体删除**（原 L0–L4 分层不再存在），页面结构与视觉语言待定 |
+| 前端 | 暂无（`web/` 已整体删除） | 浏览器侧全部代码，待重构时再落位；后端线格式以 `src/avid/web/schemas.py` 与 `runtime/events.py` 为准 |
 | 评测仪器 | `benchmarks/`：21 条 case × 3 变体、五种判定器、轨迹落盘 | **不进 wheel**，产品代码反过来不许依赖它 |
 
 ### 1.4 入口点
@@ -98,8 +95,8 @@ Web  POST /api/sessions/{id}/runs ─┴─► svc/runs.RunRegistry（线程 + �
 | 新增模型协议 | `ai/providers/` 加一个 provider，对循环返回**同形** `Turn` |
 | 新增一类上下文 | `ContextManager.register_source(kind, fn)` 一行 |
 | 调阈值 / 规则 / 文案 | `policy/` |
-| 加一个事件 | `runtime/events.py`（唯一单点）+ 前端联合类型，`tests/test_event_contract.py` 钉住两边相等 |
-| 加一个界面 | 阶段 32 已把旧前端删空，新的分层与门禁尚未确立——先定视觉与布局方案，再按新结构落 `web/src/`（不要预先建空目录） |
+| 加一个事件 | `runtime/events.py`（唯一单点）；前端联合类型的对账门禁已随前端删除，重建时恢复 |
+| 加一个界面 | 前端已整体删除——先讨论定页面结构与视觉语言，再建立新的前端结构（不要预先建空目录） |
 
 ## 2. 提交规范
 
@@ -180,7 +177,7 @@ fix(tools): 读取不存在文件时回传错误文本而非中断循环
 
 **检索范围**：`dev/` 只存本地、不入库，其中 `dev/tmp/` 还放着参考项目的完整副本
 （实测 5.8 GB / 4.3 万个文件）。全仓 `grep` / `rg` / `find` 会把它们一起扫进来，
-既慢又噪声大——按需把范围限定到 `src/`、`tests/`、`web/src/`、`docs/`、`skills/`。
+既慢又噪声大——按需把范围限定到 `src/`、`tests/`、`docs/`、`skills/`。
 
 ## 5. 架构推导判据
 

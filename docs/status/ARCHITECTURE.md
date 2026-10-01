@@ -43,14 +43,13 @@
 | 会话 | `session/` | 条目树 / 值 / 分支 / 变更线 / 两后端 / 投影 | **磁盘上的会话真相**（JSONL） | 无（零 avid 内部依赖） |
 | 能力 | `tools/*` | 9 个工具的 schema 与实现 | 无（写文件系统、进程与外部检索 API） | policy.todo、ai（`subagent`） |
 | 顶层 | `workspaces.py` | 用户级工作区注册表（**索引，非权威**） | `~/.avid/workspaces.json` | 无 |
-| 前端 | `web/`（仓库根，源码在 `web/src/`） | 全部浏览器代码；**阶段 32 清空重建后只有骨架 5 个文件**（`main.tsx` / `App.tsx` / `App.test.tsx` 与 `api/types.ts`、`events/types.ts` 两份契约种子），无页面 | 界面域状态（localStorage）——待新前端重新确立 | 无（旧的「网络出口只能在 `web/src/api/`」是已删除的分层规则；现存代码不含任何网络调用） |
+| 前端 | 暂无（`web/` 已整体删除，commit `b1c54cb`） | 无浏览器代码——阶段 32 清空重建后的骨架与两份契约种子也已删除，页面待重新设计 | 界面域状态（localStorage）——待新前端重新确立 | 无（旧的「网络出口只能在 `web/src/api/`」是已删除的分层规则） |
 | 评测仪器 | `benchmarks/`（仓库根，**不进 wheel**） | AvidBench：case 加载、工作区物化、变体装配、判定器、报表与轨迹落盘 | 只读 case / fixture 与 `runs/` 结果（本地，不入库） | `avid` 的**任意层**——它是叶子消费者，只经既有注入点驱动内核（A14）；产品代码反向不许依赖它 |
 
 边界依据（每条来自设计文档，不在此重推）：`web/`↔`svc/` 隔离**传输形态**；`svc/`↔内核隔离
 **多一个调用方**（内核不知道有几个调用方）；前端↔内核隔离**语言与部署单元**，契约是唯一耦合面
-——阶段 32 清空前端后这条更清楚：两侧的耦合只剩 `web/src/api/types.ts` 与
-`web/src/events/types.ts` 两份契约种子，由 `tests/test_wire_contract.py` 与
-`tests/test_event_contract.py` 钉住；
+——前端删除后浏览器侧暂无消费者，内核的线格式以 `src/avid/web/schemas.py` 与
+`runtime/events.py` 为准（原先钉住两侧的 wire / event 契约测试已随前端删除，重建时恢复）；
 `session/` 零内部依赖，隔离**持久化格式**（路径与时钟构造期注入）；`workspaces.py` 只做索引，
 隔离**跨工作区的目录知识**——放进 `session/` 会让会话存储承担它不该有的知识
 （`session/__init__.py:19-20`、`runtime-architecture.md:1221`）。
@@ -143,25 +142,25 @@ Web:  POST /api/sessions/{id}/runs                │
 
 | 门禁 | 钉住什么 | 位置 |
 |---|---|---|
-| A1 | 内核六包（`ai`/`runtime`/`policy`/`session`/`tools`/`svc`）不出现 `fastapi`/`pydantic`/`starlette`/`uvicorn` | `test_web_boundaries.py:58-59, 76-79` |
-| A2 | `fastapi` 只允许出现在 `web/`；`uvicorn` 只允许出现在 `cli.py` | `:62-73` |
-| A3 | 循环只表达调度：只有 2 个 hook 触发点、无手写 `while`、`agent_loop` 的调用点固定为 4 个文件（定义、CLI、svc、subagent）；svc/web 不按轮次自推调度 | `:85-111`（计数只覆盖 `src/`；包外第 5 个调用点见 §1 的叶子消费者说明） |
-| A4 | `svc/` 不 import `web/` | `:117-118` |
-| A5 | `LLMError` 一类的内核异常只在 `svc/runs.py` 被捕获并映射 | `:121-126` |
-| A6 | 事件名字面量只允许出现在 `runtime/events.py`（其余用常量） | `:132-141` |
-| A10 | `on_message` 的接线只允许在 4 个文件（循环、recorder、CLI、svc） | `:144-154` |
-| A11 | `web/`、`svc/` 里不出现 `append_message` / `.commit(`——recorder 是唯一写入者 | `:157-162` |
-| A12 | 前端在 `src/api/` 之外不直连第三方 URL（`__tests__/` 夹具豁免）。阶段 32 后 `web/src` 只有 5 个文件、不含 URL，这条因此近乎空集合断言——`test_frontend_sources_exist` 是它的前提，防止目录被删后假通过 | `:168-182` |
-| 前端样式与体积门禁 | **已随阶段 32 的前端清空一并删除**：`check:tokens` / `check:contrast` / `gate:size` 检查的目录结构、token 表与产物都不存在，`web/budget.json` 的冻结体积也一并作废。现存前端脚本只有 `web/scripts/copy-dist.mjs`（产物交付链），新门禁待新前端定稿后重建 | `web/README.md` |
-| A13 | `runtime/` → `policy/` 的边**双向**钉住（见下表） | `:245-276` |
-| A14 | **产品代码不许 import `benchmarks`**；仪器留在 `src/` 之外，`runs/` 不入库 | `:311-328` |
-| 事件契约 | 内核 `EVENT_TYPES` 与前端联合类型成员集合相等；三档声明一致；心跳/兜底常量三处同一个对象 | `tests/test_event_contract.py` |
-| 线格式契约 | 26 对 pydantic DTO ↔ 前端 TS interface 的字段名双向相等（比对表 `PAIRS` 逐对参数化）；真实载荷覆盖每个声明字段 | `tests/test_wire_contract.py` |
+| A1 | 内核六包（`ai`/`runtime`/`policy`/`session`/`tools`/`svc`）不出现 `fastapi`/`pydantic`/`starlette`/`uvicorn` | `test_web_boundaries.py:49-50, 67-70` |
+| A2 | `fastapi` 只允许出现在 `web/`；`uvicorn` 只允许出现在 `cli.py` | `:53-64` |
+| A3 | 循环只表达调度：只有 2 个 hook 触发点、无手写 `while`、`agent_loop` 的调用点固定为 4 个文件（定义、CLI、svc、subagent）；svc/web 不按轮次自推调度 | `:76-102`（计数只覆盖 `src/`；包外第 5 个调用点见 §1 的叶子消费者说明） |
+| A4 | `svc/` 不 import `web/` | `:108-109` |
+| A5 | `LLMError` 一类的内核异常只在 `svc/runs.py` 被捕获并映射 | `:112-117` |
+| A6 | 事件名字面量只允许出现在 `runtime/events.py`（其余用常量） | `:123-131` |
+| A10 | `on_message` 的接线只允许在 4 个文件（循环、recorder、CLI、svc） | `:135-144` |
+| A11 | `web/`、`svc/` 里不出现 `append_message` / `.commit(`——recorder 是唯一写入者 | `:151-153` |
+| A12 | **已随前端整体删除**（2026-10）：原规则是「前端在 `src/api/` 之外不直连第三方 URL」，检查对象 `web/src` 不复存在，新前端落成后按同判据重建 | — |
+| 前端样式与体积门禁 | **已随前端整体删除**：`check:tokens` / `check:contrast` / `gate:size` 与产物交付链 `copy-dist.mjs` 都不存在，`web/budget.json` 的冻结体积一并作废；新工具链与新门禁待新前端定稿后重建 | — |
+| A13 | `runtime/` → `policy/` 的边**双向**钉住（见下表） | `:217-248` |
+| A14 | **产品代码不许 import `benchmarks`**；仪器留在 `src/` 之外，`runs/` 不入库 | `:291-300` |
+| 事件契约 | **已随前端删除**（2026-10）：内核 `EVENT_TYPES` ↔ 前端联合类型的集合相等测试不再存在，新前端落成后重建；三档声明与心跳/兜底常量单点仍在 `runtime/events.py` | — |
+| 线格式契约 | **已随前端删除**（2026-10）：26 对 pydantic DTO ↔ 前端 TS interface 的字段名双向相等测试不再存在，新前端落成后重建；线格式本身以 `src/avid/web/schemas.py` 为准 | — |
 | 会话门面 | `session.__all__` 恰好是那份清单；内部件不进 `__all__` 但可子模块导入 | `tests/test_session_facade.py` |
 | 工具契约 | 定义与实现一一对应；`STATEFUL_TOOLS` == 真接受 `state=` 的 handler；审批规则只点名已注册工具；`--agent` help 与注册表一致 | `tests/test_tools_contract.py` |
 
 **A13：`runtime/` → `policy/` 的三条边（只读数据，不是豁免名单）**
-（`test_web_boundaries.py:233-242`、`docs/design/runtime-architecture.md:456`）：
+（`test_web_boundaries.py:205-213`、`docs/design/runtime-architecture.md:456`）：
 
 | 文件 | 允许的 policy 依赖 | 理由 |
 |---|---|---|
