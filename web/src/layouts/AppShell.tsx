@@ -40,18 +40,22 @@ export function AppShell({
   navInline,
 }: AppShellProps) {
   return (
-    <div className="relative h-dvh w-full overflow-hidden bg-canvas">
-      {/*
-        纸面肌理：两层极淡的 radial-gradient，纯 CSS、零字节、无位图。
-        铺在 `-z-10`——在内容之下、且不属于任何滚动容器，所以消息区滚动时纸面不动
-        （纸在内容之下，而不是内容之上）。
-      */}
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-0 -z-10"
-        style={{ backgroundImage: 'var(--avid-paper-fiber)' }}
-      />
-
+    /*
+     * 纸面肌理**挂在根元素自己的 background-image 上**，不另起一个
+     * `absolute inset-0 -z-10` 的兄弟层。
+     *
+     * 原因（实测踩过）：父元素一旦有不透明背景色（这里是 `bg-canvas`），
+     * 子元素的负 z-index 依然会被**父元素自己的背景**盖住——`-z-10` 只保证它在
+     * 兄弟内容之下，不保证在父元素背景之下。表现是纸纹完全看不见，而 DOM 里那个
+     * div 还在、`background-image` 也解析正常，光看结构查不出来。
+     *
+     * 挂在根上就是标准的多层背景：`background-image` 永远画在 `background-color`
+     * 之上，颗粒感可见，且不额外产生一个节点、不参与 z-index 计算。
+     */
+    <div
+      className="relative h-dvh w-full overflow-hidden bg-canvas"
+      style={{ backgroundImage: 'var(--avid-paper-fiber)' }}
+    >
       {/*
         跳到主内容：键盘用户的第一个 Tab 落点。`sr-only` + `focus:` 展开，不占布局。
         报告 §9 把"重投影/发光"列进黑名单，所以可见态也只有实底 + 发丝线，没有光晕。
