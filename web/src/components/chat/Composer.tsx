@@ -24,9 +24,9 @@ export function Composer({ permission, onChangePermission }: ComposerProps) {
         <Input bare placeholder="给 Avid 发消息…" aria-label="消息输入" disabled />
         <div className="mt-a8 flex items-center justify-between">
           <div className="flex items-center gap-a8">
-            <PermissionButton mode={permission} onChange={onChangePermission} />
             <IconButton icon="plus" label="附加" disabled />
             <IconButton icon="paperclip" label="附件" disabled />
+            <PermissionButton mode={permission} onChange={onChangePermission} />
           </div>
           <IconButton icon="send" label="发送" variant="primary" disabled title="阶段 5 接线：发送与流式" />
         </div>
