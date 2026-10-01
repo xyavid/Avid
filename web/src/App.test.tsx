@@ -168,8 +168,15 @@ describe('App 装配', () => {
      */
     const heading = await screen.findByRole('heading', { level: 1 })
     expect(heading.textContent).toBe('新会话')
-    // 注入链路锚点：这个工作区名只可能来自注入数据。
-    expect(await screen.findByText('注入的工作区')).toBeTruthy()
+    /*
+     * 注入链路锚点：这个工作区名只可能来自注入数据。
+     * 收窄到左栏：左栏改版后同一个名字可能出现两处（分组头 + 组内的归属提示），
+     * 全局查询会因命中多个节点而报 "Found multiple elements"。
+     */
+    const nav = document.querySelector('nav[aria-label="会话"]') as HTMLElement
+    await waitFor(() => {
+      expect(within(nav).getAllByText('注入的工作区').length).toBeGreaterThan(0)
+    })
   })
 
   it('没有可用工作区时禁用新建，并说明原因', async () => {

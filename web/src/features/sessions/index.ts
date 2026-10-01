@@ -23,7 +23,17 @@ export type { WorkspaceFolderProps } from './components/WorkspaceFolder'
 export { DeleteSessionDialog } from './components/DeleteSessionDialog'
 export type { DeleteSessionDialogProps } from './components/DeleteSessionDialog'
 
-export { ORPHAN_GROUP_KEY, filterSessions, groupSessions, sessionLabel } from './lib/navTree'
-export type { NavGroup } from './lib/navTree'
+export {
+  BUCKET_WINDOW_MS,
+  ORPHAN_GROUP_KEY,
+  ORPHAN_LABEL,
+  bucketOf,
+  filterSessions,
+  groupByBucket,
+  groupSessions,
+  sessionLabel,
+  sessionWorkspaceLabel,
+} from './lib/navTree'
+export type { BucketGroup, NavGroup, TimeBucket } from './lib/navTree'
 
 export { relativeTime } from './lib/relativeTime'

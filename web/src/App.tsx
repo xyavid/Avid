@@ -92,6 +92,8 @@ function AppView() {
           permission={app.permission}
           onPermissionChange={app.setPermission}
           sandbox={app.sandbox}
+          model={app.meta?.capabilities.model ?? null}
+          workspaces={app.workspaces}
           navCollapsed={app.nav.navCollapsed}
           inspectorToolCallId={app.nav.inspectorToolCallId}
           inspectorTab={app.nav.inspectorTab}

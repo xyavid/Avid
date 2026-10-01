@@ -151,7 +151,7 @@ test.describe('布局与视觉', () => {
    * 或者被顺手删掉（于是这条断言永远没人写）。`fixme` 在报告里显式列出"未运行"，
    * 依赖落地后删掉这一行即可。
    */
-  test.fixme('助手正文里的 markdown 被渲染成结构，而不是原样字符', async ({ page, stubApi }) => {
+  test('助手正文里的 markdown 被渲染成结构，而不是原样字符', async ({ page, stubApi }) => {
     await stubApi({
       sessions: [defaultSession('s-1', 'markdown 会话')],
       entries: {

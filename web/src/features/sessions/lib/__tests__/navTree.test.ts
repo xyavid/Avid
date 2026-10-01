@@ -8,7 +8,17 @@
 import { describe, expect, it } from 'vitest'
 
 import type { SessionSummary, WorkspaceSummary } from '../../../../api/types'
-import { ORPHAN_GROUP_KEY, filterSessions, groupSessions, sessionLabel } from '../navTree'
+import {
+  BUCKET_WINDOW_MS,
+  ORPHAN_GROUP_KEY,
+  ORPHAN_LABEL,
+  bucketOf,
+  filterSessions,
+  groupByBucket,
+  groupSessions,
+  sessionLabel,
+  sessionWorkspaceLabel,
+} from '../navTree'
 
 function ws(
   id: string,
@@ -143,5 +153,89 @@ describe('sessionLabel', () => {
 
   it('短 id 短于 6 位时原样给出', () => {
     expect(sessionLabel(sess('ab', null, 'ws-a', 1))).toBe('未命名会话 · ab')
+  })
+})
+
+/*
+ * 时间分桶的边界要**逐毫秒**钉住：这条规则的全部内容就是那一条比较，
+ * 差一毫秒就把"今天刚建的会话"推进"更早"，而那种错误很难从界面上看出来。
+ */
+describe('bucketOf', () => {
+  const NOW = Date.UTC(2024, 0, 10, 12, 0, 0)
+
+  it('24 小时内（含正好 24h）算今天', () => {
+    expect(bucketOf(NOW, NOW)).toBe('today')
+    expect(bucketOf(NOW - 60_000, NOW)).toBe('today')
+    expect(bucketOf(NOW - (BUCKET_WINDOW_MS - 1), NOW)).toBe('today')
+    // 描述写的是"超过 24h 归更早"，所以临界值本身属于今天。
+    expect(bucketOf(NOW - BUCKET_WINDOW_MS, NOW)).toBe('today')
+  })
+
+  it('超过 24h 归更早', () => {
+    expect(bucketOf(NOW - BUCKET_WINDOW_MS - 1, NOW)).toBe('earlier')
+    expect(bucketOf(NOW - 10 * BUCKET_WINDOW_MS, NOW)).toBe('earlier')
+  })
+
+  it('未来时间归今天；非法时间归更早（宁可放到旧的桶里，也不假装它新鲜）', () => {
+    expect(bucketOf(NOW + 5_000, NOW)).toBe('today')
+    expect(bucketOf(Number.NaN, NOW)).toBe('earlier')
+  })
+})
+
+describe('groupByBucket', () => {
+  const NOW = Date.UTC(2024, 0, 10, 12, 0, 0)
+
+  it('分成今天 / 更早两组，组内按创建时间降序', () => {
+    const groups = groupByBucket(
+      [
+        sess('old', '旧', 'ws-a', NOW - 3 * BUCKET_WINDOW_MS),
+        sess('new', '新', 'ws-a', NOW - 1_000),
+        sess('mid', '中', 'ws-a', NOW - 2 * 60 * 60_000),
+      ],
+      NOW,
+    )
+
+    expect(groups.map((g) => g.bucket)).toEqual(['today', 'earlier'])
+    expect(groups.map((g) => g.label)).toEqual(['今天', '更早'])
+    expect(groups[0]?.sessions.map((s) => s.id)).toEqual(['new', 'mid'])
+    expect(groups[1]?.sessions.map((s) => s.id)).toEqual(['old'])
+  })
+
+  it('空桶不出，且条目守恒：分桶后总数 = 输入总数', () => {
+    const input = [sess('a', '甲', 'ws-a', NOW - 1_000), sess('b', '乙', null, NOW - 5 * BUCKET_WINDOW_MS)]
+    const groups = groupByBucket(input, NOW)
+
+    expect(groups.map((g) => g.bucket)).toEqual(['today', 'earlier'])
+    expect(groups.reduce((sum, g) => sum + g.sessions.length, 0)).toBe(input.length)
+
+    // 只有"更早"里有会话时，今天那一组不该留一个空标题。
+    const onlyOld = groupByBucket([sess('c', '丙', 'ws-a', NOW - 5 * BUCKET_WINDOW_MS)], NOW)
+    expect(onlyOld.map((g) => g.bucket)).toEqual(['earlier'])
+    expect(onlyOld[0]?.label).toBe('更早')
+  })
+
+  it('不修改输入数组的顺序', () => {
+    const input = [sess('a', '甲', 'ws-a', NOW - 5 * BUCKET_WINDOW_MS), sess('b', '乙', 'ws-a', NOW - 1_000)]
+    const snapshot = input.map((s) => s.id)
+
+    groupByBucket(input, NOW)
+
+    expect(input.map((s) => s.id)).toEqual(snapshot)
+  })
+})
+
+describe('sessionWorkspaceLabel', () => {
+  it('在册工作区用它的名字；名字为空时回落 root', () => {
+    expect(sessionWorkspaceLabel(sess('a', '甲', 'ws-a', 1), [ws('ws-a', '甲项目')])).toBe('甲项目')
+    expect(sessionWorkspaceLabel(sess('a', '甲', 'ws-a', 1), [ws('ws-a', null, 0, '/srv/code')])).toBe(
+      '/srv/code',
+    )
+  })
+
+  it('归属缺失或已从注册表摘掉时回落「未归属工作区」，绝不返回空串', () => {
+    expect(sessionWorkspaceLabel(sess('a', '甲', null, 1), [ws('ws-a', '甲项目')])).toBe(ORPHAN_LABEL)
+    expect(sessionWorkspaceLabel(sess('a', '甲', 'ws-gone', 1), [ws('ws-a', '甲项目')])).toBe(
+      ORPHAN_LABEL,
+    )
   })
 })

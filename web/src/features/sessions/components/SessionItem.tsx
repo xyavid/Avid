@@ -35,6 +35,13 @@ export interface SessionItemProps {
   running: boolean
   /** 相对时间的"现在"；由上层给，便于测试。缺省不显示时间。 */
   now?: number
+  /**
+   * 所属工作区的显示标签（`sessionWorkspaceLabel` 的结果）。
+   *
+   * 本轮分组从"按工作区"改成"按时间"，工作区信息下沉成行内的小标记：
+   * 不传就不画标记（组件不知道也不猜归属），传了就在元信息行右侧出现一个安静的凹槽。
+   */
+  workspaceLabel?: string
 }
 
 export function SessionItem({
@@ -45,6 +52,7 @@ export function SessionItem({
   onDelete,
   running,
   now,
+  workspaceLabel,
 }: SessionItemProps): ReactElement {
   const label = sessionLabel(session)
   const [editing, setEditing] = useState(false)
@@ -164,11 +172,27 @@ export function SessionItem({
             >
               {label}
             </span>
-            <span className="mt-a2 block truncate text-hint text-ink-faint">
-              {/* now 缺省就不显示时间：本组件不该自己读时钟（渲染期读时钟不可测，
-                  也会让同一行在两次渲染间显示不同文案），时钟归上层。 */}
-              {session.message_count} 条
-              {now === undefined ? null : ` · ${relativeTime(session.created_at, now)}`}
+            {/*
+              元信息行：条数 / 相对时间是"这条会话本身"的读数，工作区标记是"它属于哪"，
+              两者靠右对齐的一小块凹槽分开。标记只截断不改行高——窄栏里换行会让每项高度不一，
+              列表就会看起来在抖。
+              `title` 给全名：240px 宽里工作区名几乎必然被截断，完整值得有地方能读到。
+            */}
+            <span className="mt-a2 flex min-w-0 items-center gap-a4">
+              <span className="min-w-0 flex-1 truncate text-hint text-ink-faint">
+                {/* now 缺省就不显示时间：本组件不该自己读时钟（渲染期读时钟不可测，
+                    也会让同一行在两次渲染间显示不同文案），时钟归上层。 */}
+                {session.message_count} 条
+                {now === undefined ? null : ` · ${relativeTime(session.created_at, now)}`}
+              </span>
+              {workspaceLabel === undefined ? null : (
+                <span
+                  title={workspaceLabel}
+                  className="max-w-[96px] shrink-0 truncate rounded-xs bg-inset px-a4 text-hint text-ink-muted"
+                >
+                  {workspaceLabel}
+                </span>
+              )}
             </span>
           </button>
         )}

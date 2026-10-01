@@ -18,11 +18,18 @@ test.describe('E2E 基座', () => {
 
     await page.goto('/', { waitUntil: 'domcontentloaded' })
 
-    // 会话名出现在对话页头部的 h1（唯一的无歧义锚点：左栏也有会话名。
-    // 但这里恰好只有一个会话，所以断言落到 h1 上更稳）。
+    // 会话名出现在对话页头部的 h1。
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('E2E 的会话')
-    // 工作区名来自桩数据，出现在左栏分组里。
-    await expect(page.getByText('E2E 工作区')).toBeVisible()
+
+    /*
+     * 工作区名来自桩数据，**在两处**出现，所以要按区域断言而不是全局 `getByText`：
+     *   · 左栏的会话项徽标里（每一项标注它属于哪个工作区）；
+     *   · 右栏信息面板的「工作区」区域。
+     * 两处都是正确的呈现。全局查询会因 strict mode 命中两个元素而失败——
+     * 这是 Playwright 在替我们拒绝一个**本来就有歧义**的断言。
+     */
+    await expect(page.locator('nav[aria-label="会话"]').getByText('E2E 工作区').first()).toBeVisible()
+    await expect(page.getByRole('region', { name: '工作区' }).getByText('E2E 工作区').first()).toBeVisible()
   })
 
   test('桩里记录到界面实际发出的请求', async ({ page, stubApi }) => {

@@ -4,12 +4,17 @@
  * 视觉取舍（hana 报告 §7.3）：用户组右对齐、给一张纸色底；assistant 组左对齐、
  * **无底无边框**，只靠 8px 左内边距与正文列对齐——气泡一多，方框会把对话切成表格。
  *
- * 正文一律当**纯文本**渲染并保留换行（`whitespace-pre-wrap`）：
- * 本次范围明确不引入 markdown 渲染库，宁可少一层富文本，也不为它背一个依赖。
+ * 正文渲染分两种，这是**有意的区分**，不是漏改：
+ *   · assistant 走 `<Markdown>`：模型输出本来就是 markdown，标题 / 列表 / 行内 code
+ *     该成为结构元素，而不是让读者在脑子里解析 `##` 与 `-`；
+ *   · user 保持纯文本 + `whitespace-pre-wrap`：用户打进来的 `*` / `#` 就该原样显示，
+ *     把用户的话当 markdown 解析等于替他"翻译"一遍输入，还可能把一行 `- - -`
+ *     变成分割线——那是对输入内容的篡改。
  */
 import type { ReactElement } from 'react'
 
 import type { TimelineEntry } from '../../../events/reducer'
+import { Markdown } from '../../../ui/markdown'
 import { Tooltip } from '../../../ui/primitives'
 import { relativeTime } from '../lib/relativeTime'
 
@@ -65,13 +70,20 @@ export function MessageBubble({ entry, streaming, now }: MessageBubbleProps): Re
 
   return (
     <div className="flex items-end gap-a8">
-      <div className="avid-prose max-w-chat-col whitespace-pre-wrap pl-a8 text-body text-ink">
-        {entry.text}
+      {/*
+        `avid-prose` 留在外层：它管行高（中文长文 1.75）与断词，markdown 的**结构**
+        由 Markdown 自己负责，两者不重叠。
+        流式呼吸点改成 flex 里的末项（`items-end` 让它贴住正文底边）：markdown 渲染出的
+        是块级元素，把点写在块后面会掉到下一行去。点只动透明度不动位移（§8.2 禁弹跳）。
+      */}
+      <div className="avid-prose flex max-w-chat-col items-end gap-a6 pl-a8 text-body text-ink">
+        <div className="min-w-0 flex-1">
+          <Markdown source={entry.text} streaming={isStreaming} />
+        </div>
         {isStreaming ? (
-          // 4px 呼吸点：只动透明度不动位移（§8.2 禁弹跳），比闪烁光标安静得多。
           <span
             aria-hidden="true"
-            className="ml-a6 inline-block h-a4 w-a4 animate-pulse rounded-full bg-ink-faint align-middle"
+            className="mb-a6 h-a4 w-a4 shrink-0 animate-pulse rounded-full bg-ink-faint"
           />
         ) : null}
       </div>

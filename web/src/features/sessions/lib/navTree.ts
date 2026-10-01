@@ -22,6 +22,9 @@ import type { SessionSummary, WorkspaceSummary } from '../../../api/types'
  */
 export const ORPHAN_GROUP_KEY = 'unknown'
 
+/** 兜底组的标题。会话与「未归属工作区」这个说法在各处必须一致。 */
+export const ORPHAN_LABEL = '未归属工作区'
+
 export interface NavGroup {
   key: string
   label: string
@@ -64,7 +67,7 @@ export function groupSessions(
 
   const orphan: NavGroup = {
     key: ORPHAN_GROUP_KEY,
-    label: '未归属工作区',
+    label: ORPHAN_LABEL,
     root: null,
     sessions: [],
   }
@@ -108,3 +111,82 @@ export function sessionLabel(session: SessionSummary): string {
   if (name) return name
   return `未命名会话 · ${shortId(session.id)}`
 }
+
+/*
+ * ---------------------------------------------------------------------------
+ * 时间分桶（截图里的「今天 / 更早」）
+ * ---------------------------------------------------------------------------
+ */
+
+export type TimeBucket = 'today' | 'earlier'
+
+export interface BucketGroup {
+  bucket: TimeBucket
+  label: string
+  sessions: SessionSummary[]
+}
+
+/** 分桶窗口：24 小时。 */
+export const BUCKET_WINDOW_MS = 24 * 60 * 60 * 1000
+
+const BUCKET_LABELS: Record<TimeBucket, string> = { today: '今天', earlier: '更早' }
+
+/**
+ * 一条会话落在哪个时间桶里。
+ *
+ * 边界按"**超过** 24h 才归更早"取：正好 24h 仍算今天。未来时间（负 elapsed）也归
+ * 今天——客户端与服务端时钟差几毫秒是常态，把刚创建的会话判进"更早"会很刺眼。
+ *
+ * `now` 必须是参数：在函数里读 `Date.now()` 会让这条规则不可测，也会让同一份数据
+ * 在两次调用间得到不同分桶。
+ */
+export function bucketOf(createdAt: number, now: number): TimeBucket {
+  if (!Number.isFinite(createdAt)) return 'earlier'
+  return now - createdAt > BUCKET_WINDOW_MS ? 'earlier' : 'today'
+}
+
+/**
+ * 按时间分桶，供左栏列表渲染。
+ *
+ * 两处刻意决定：
+ *   · **空桶不出**（与 `groupSessions` 同一条规矩）：没有"更早"的会话时不该留一个空标题；
+ *   · 组内**按 created_at 降序**，与 `groupSessions` 的组内序一致——时间桶是外层结构，
+ *     下沉的那层排序规则不该因为换了外层就变。
+ * 输入数组不被改动（先 spread 再 sort），调用方拿到的还是同一份会话列表。
+ */
+export function groupByBucket(sessions: SessionSummary[], now: number): BucketGroup[] {
+  const today: SessionSummary[] = []
+  const earlier: SessionSummary[] = []
+  for (const session of sessions) {
+    if (bucketOf(session.created_at, now) === 'today') today.push(session)
+    else earlier.push(session)
+  }
+
+  const newestFirst = (a: SessionSummary, b: SessionSummary): number => b.created_at - a.created_at
+  const groups: BucketGroup[] = [
+    { bucket: 'today', label: BUCKET_LABELS.today, sessions: today.sort(newestFirst) },
+    { bucket: 'earlier', label: BUCKET_LABELS.earlier, sessions: earlier.sort(newestFirst) },
+  ]
+  // 条目守恒由结构保证：每个输入会话必进 today 或 earlier 之一，这里只丢掉空桶。
+  return groups.filter((group) => group.sessions.length > 0)
+}
+
+/**
+ * 会话所属工作区的**显示标签**，用于列表项上的小标记。
+ *
+ * 为什么要有这个函数：本轮分组从"按工作区"改成"按时间"，工作区信息下沉成组内标记，
+ * 于是"这条会话属于哪个目录"变成逐条计算的规则——把它留在 TSX 里就只能靠渲染结果反推。
+ *
+ * 归属对不上（header 里没有 workspace，或工作区已从注册表摘掉）时给「未归属工作区」，
+ * 与会话列表的空档情况同一套说法；**绝不返回空串**，否则标记会变成一块看不见的凹槽。
+ */
+export function sessionWorkspaceLabel(
+  session: SessionSummary,
+  workspaces: WorkspaceSummary[],
+): string {
+  const id = session.workspace?.id
+  if (id === undefined) return ORPHAN_LABEL
+  const workspace = workspaces.find((item) => item.id === id)
+  return workspace === undefined ? ORPHAN_LABEL : workspaceLabel(workspace)
+}
+

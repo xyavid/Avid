@@ -17,6 +17,14 @@ export interface SessionListHeaderProps {
   onToggleCollapsed: () => void
   collapsed: boolean
   busy?: boolean
+  /**
+   * 栏标题文案。缺省「会话」（task-3 的既定契约，不改）。
+   *
+   * 做成可选参数而不是改字面量：参考截图里这一行是「对话」，而"导航列叫什么"是
+   * **调用方**的决定（同一个头部也可以被别的列表复用），组件不该替它定死；
+   * 缺省值保持原样，于是不传的调用点行为与之前完全一致。
+   */
+  title?: string
 }
 
 export function SessionListHeader({
@@ -24,6 +32,7 @@ export function SessionListHeader({
   onToggleCollapsed,
   collapsed,
   busy = false,
+  title = '会话',
 }: SessionListHeaderProps): ReactElement {
   return (
     <div
@@ -33,7 +42,7 @@ export function SessionListHeader({
       )}
     >
       {collapsed ? null : (
-        <h2 className="min-w-0 flex-1 truncate text-caption font-medium text-ink-muted">会话</h2>
+        <h2 className="min-w-0 flex-1 truncate text-caption font-medium text-ink-muted">{title}</h2>
       )}
 
       {/* loading 走 Button 自己的 loading：它在禁用按钮的同时把图标换成转圈，
