@@ -9,6 +9,7 @@ import type { ReactNode } from 'react'
 
 import { Badge } from '../Badge'
 import { Button } from '../Button'
+import { ICON_NAMES, Icon } from '../Icon'
 import { Input } from '../Input'
 import { Tag } from '../Tag'
 
@@ -32,7 +33,7 @@ export function GalleryPage() {
       {only === null && (
         <>
           <h1 className="font-serif text-[26px] font-medium">Avid 组件墙</h1>
-          <p className="mt-a4 font-ui text-caption text-ink-muted">按钮 · 输入 · 标签 · 徽章 —— 阶段 2（逐项对照 Hana 组件墙）</p>
+          <p className="mt-a4 font-ui text-caption text-ink-muted">按钮 · 输入 · 标签 · 徽章 · 图标 —— 阶段 2（逐项对照 Hana 组件墙）</p>
           <div className="mb-a16 mt-a16 border-t border-hair" />
         </>
       )}
@@ -78,6 +79,22 @@ export function GalleryPage() {
           <div className="flex flex-wrap items-center gap-a8">
             <Badge icon="check">已编译</Badge>
             <Badge variant="danger">danger</Badge>
+          </div>
+        </Section>
+      )}
+
+      {show('icons') && (
+        <Section id="icons" title="图标 · 线性 SVG（stroke 1.5 / currentColor / 无实心）">
+          <div className="flex flex-wrap gap-a12">
+            {ICON_NAMES.map((name) => (
+              <span
+                key={name}
+                className="flex w-[76px] flex-col items-center gap-a4 rounded-sm border-hairline border-hair bg-card px-a8 py-a8 text-ink-light"
+              >
+                <Icon name={name} size={16} />
+                <span className="font-mono text-micro text-ink-muted">{name}</span>
+              </span>
+            ))}
           </div>
         </Section>
       )}
