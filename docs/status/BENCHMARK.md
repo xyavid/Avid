@@ -65,37 +65,37 @@ stress job 跑 `pytest -q -m stress`（`.github/workflows/ci.yml:25-37`）。
 （平方级、每会话全量重放），不是几个百分点的抖动。写用例时优先断言机制（"一次都没 open"），
 时间只是第二道保险。」* 它是**防退化下限**，不是性能指标——别把它当基准读。
 
-### 3.2 前端体积预算：**预算文件已随前端删除，数字作废**（阶段 32）
+### 3.2 前端体积预算：**已按阶段 33 新前端重冻**（2026-10，收口）
 
-`web/budget.json`（`entry_gzip_bytes` / `chunk_gzip_bytes` / `font_bytes` / `texture_bytes` /
-`frozen_at` / `EXEMPT`）连同 `web/scripts/gate-size.mjs`（npm 脚本 `gate:size`）已在阶段 32 删除，触发它删除的是同一件事：
-**旧前端整体被清空重建**。
+`web/budget.json` + `web/scripts/gate-size.mjs`（npm 脚本 `gate:size`，进 CI web job）按新
+前端的实测产物重新冻结。旧前端（玻璃视觉，187 kB 时代）的冻结值与历次实测**一律作废**——
+产物没有对应关系。
 
-- 它量的产物不存在了：首屏 JS 4 个 chunk、样式表、字体与纹理都是被删掉的那份前端的 bundle，
-  `web/` 目录已整体删除（2026-10，连阶段 32 的骨架与契约种子一并），构建产物与旧数字没有对应关系。
-- 因此本文此前记录的冻结值与历次实测（首屏 JS gzip 184,160 B / 188,165 B、样式表 5,630 B /
-  5,553 B、字体 0 B 等）**一律作废**，不得再作为上限或基线引用；`frozen_at` 记的测量环境
-  （commit `de3035c`）也随之失去意义。
-- **新前端的体积门禁与基线待新前端定稿后重新测量并重冻**：视觉语言与布局未确认，
-  现在测任何数字都只是骨架的体积，不构成预算。重冻时要同时写清测量命令、环境与「为什么是这个上限」（§8）。
-
-本节不再是「仓库内确实存在的数字」，保留标题只为记下这次作废的原因。
+- **实测**（`pnpm -C web build && pnpm -C web run gate:size`，WSL2 / node 24，分支
+  `refactor/web-hana-ui`）：首屏 JS 单块 raw 224,453 B / **gzip 70,192 B**；样式表
+  28,279 B / **gzip 6,806 B**；字体 24 文件 **814,756 B**（4 套 @fontsource，子集裁到
+  latin + latin-ext，浏览器按 unicode-range 实取约 150 kB）；位图纹理 **0 B**。
+- **上限**：首屏 JS 90,112 B（88 KiB，约 28% 余量）、样式表 16,384 B、字体 1,048,576 B、
+  纹理 32,768 B。上限才是要守的东西；`frozen_at` 里记测量命令与环境。
+- **与旧预算的两处口径差**：① `font_bytes` 从 0 放宽到 1 MiB——纸本视觉刻意带回四套
+  自托管衬线字体（旧涂鸦语言是「不许有字体」）；② 门禁把 `.woff` 回退与 `.woff2` 一起
+  计入字体档（旧脚本只数 `.woff2`）。
 
 ### 3.3 测试规模（**静态计数**，不是 pytest 收集数）
 
 | 指标 | 值 | 怎么数的 |
 |---|---|---|
-| 内核测试函数 | **725** 个，分布在 **44** 个 `tests/test_*.py`（另有 3 个支撑文件，`tests/` 共 47 个 `.py`） | `grep -h '^def test_' tests/*.py \| wc -l` |
-| 内核测试收集数（**阶段 26 重测**） | **1098 收集**，其中 **1093 passed / 5 deselected**（本机 WSL2 / Python 3.12.3；5 = 3 条 stress + 2 条 eval 薄壳） | `uv run pytest -q` |
-| `parametrize` | **32** 处 | `grep -c parametrize` 逐个文件求和 |
-| 内核测试代码量 | 13,560 行（`tests/*.py`） | `wc -l tests/*.py` |
+| 内核测试函数 | **931** 个，分布在 **56** 个 `tests/test_*.py`（另有 3 个支撑文件，`tests/` 共 59 个 `.py`） | `grep -h '^def test_' tests/*.py \| wc -l` |
+| 内核测试收集数（**阶段 33 收口重测**） | **1205 收集**，其中 **1200 passed / 5 deselected**（本机 WSL2 / Python 3.12.3；5 = 3 条 stress + 2 条 eval 薄壳；含恢复的 wire / event 契约测试） | `uv run pytest -q --collect-only` |
+| `parametrize` | **42** 处 | `grep -c parametrize` 逐个文件求和 |
+| 内核测试代码量 | 18,018 行（`tests/*.py`） | `wc -l tests/*.py` |
 | 评测仪器规模 | 16 个 Python 文件 / 1,738 行，外带 **21 条 case**（v0 12 + v1 9）与 **225 个 fixture 文件**（`benchmarks/`，**不进 wheel**） | `find benchmarks -name '*.py' \| wc -l`、`wc -l` |
-| 前端 vitest | **2** 条，1 个文件（`web/src/App.test.tsx` 的骨架 smoke） | `pnpm -C web run test`；阶段 32 前的 92 条 / 12 个文件随旧前端一并删除 |
-| 浏览器 e2e | **0**：`web/e2e/**` 已在阶段 32 删除（原 9 个 spec / 37 条 `test(`） | `ls web/e2e` → 不存在 |
+| 前端 vitest | **204** 条，33 个文件（组件 / 纯函数 / 流处理，阶段 33 重建） | `pnpm -C web run test` |
+| 浏览器 e2e | **0**：旧 Playwright 套件已删，界面验收走实机 CDP 脚本（`dev/evidence/`） | `ls web/e2e` → 不存在 |
 | `skip` / `xfail` / `skipif` | **0** | `grep` 零命中——没有靠跳过兜绿的用例；评测的 `eval` marker 是「默认不跑」，不是 skip |
 
-**口径警告**：674 是**函数数**；pytest 的收集数会被 `parametrize` 展开，所以上表把两者分开列，
-并给出**本轮实测的收集数**（1015 收集 / 1010 passed / 5 deselected）。测试项数增长在任何情况下都
+**口径警告**：931 是**函数数**；pytest 的收集数会被 `parametrize` 展开，所以上表把两者分开列，
+并给出**本轮实测的收集数**（1205 收集 / 1200 passed / 5 deselected）。测试项数增长在任何情况下都
 **不能**当作能力或性能指标——它只说明实现规模。
 
 ### 3.4 门禁与 CI：抓什么、抓不到什么
@@ -106,11 +106,10 @@ stress job 跑 `pytest -q -m stress`（`.github/workflows/ci.yml:25-37`）。
 | `mypy` | CI kernel job | `src/avid` 的类型错误 |
 | `pytest -q` | CI kernel job | 627 个测试函数展开后的全部普通用例（不含 stress） |
 | `pytest -q -m stress` | CI **独立 job** | §3.1 的 3 条复杂度门禁 |
-| `pnpm -C web run build` + `typecheck` + `test` | CI web job | 打包链能跑、类型自洽、用例非空转（阶段 32 起；`verify` 与它串起的六项门禁脚本已随旧前端删除） |
+| `pnpm -C web run build` + `gate:size` + `typecheck` + `test` | CI web job | 打包链能跑、类型自洽、用例非空转、体积在预算内（阶段 33 收口起；wire / event 契约与模式词表在 kernel job 的 pytest 里） |
 
-**抓不到的**：效果类指标（没有）；前端 a11y、视觉回归与体积回归——测试、基线、预算文件与门禁
-脚本都已随阶段 32 的前端清空删除，这不是「没有用例」而是「没有那份前端」；性能回归只剩 stress
-的复杂度下限。
+**抓不到的**：效果类指标（没有）；前端 a11y、视觉回归——用例与基线尚未重建；分层 / token
+白名单 / 对比度门禁未重建。前端体积回归已由 `gate:size` 守住。
 
 ### 3.5 前缀缓存命中率：`benchmarks/cache_hit/`（2026-09-30，阶段 31）
 
@@ -332,5 +331,5 @@ stress job 跑 `pytest -q -m stress`（`.github/workflows/ci.yml:25-37`）。
   就新建 `cases/v2` 并各自记一行基线。`--suite` 是唯一选择器。
 - **不设通过率门禁**：评测要真模型、有抖动、默认不跑；把某次运行的通过率写成 CI 阈值，等于把
   一次测量当成结论。留下的门禁只有"仪器可用"（跑不完、`error` / `llm_error` 态）。
-- **前端体积阈值**：`web/budget.json` 已随阶段 32 的前端清空删除，原冻结数字作废——新的门禁与
-  基线要等新前端定稿后重新测量并重冻（§3.2）。
+- **前端体积阈值**：已按阶段 33 新前端重新冻结（首屏 JS gzip 70,192 B / 88 KiB 等，见 §3.2）；
+  旧冻结数字作废。

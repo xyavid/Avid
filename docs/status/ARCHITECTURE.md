@@ -25,7 +25,7 @@
 （详细断言见 §4）。这张表是 `docs/design/runtime-architecture.md:47-68`
 （内核四层）与 `docs/design/frontend-architecture.md` §4（交付形态：分离开发、单进程交付）
 的合并视图，并补上两份设计文档成文后才出现的 `session/`、`workspaces.py`
-（前端分层那一节已随阶段 32 的前端清空删除，表中前端行只记现存的契约种子）：
+（前端分层那一节已随阶段 32 的前端清空删除，前端行按阶段 33 重建后的现状记录）：
 
 | 层 | 单元 | 一句话职责 | 它拥有什么数据 | 允许依赖 |
 |---|---|---|---|---|
@@ -43,13 +43,14 @@
 | 会话 | `session/` | 条目树 / 值 / 分支 / 变更线 / 两后端 / 投影 | **磁盘上的会话真相**（JSONL） | 无（零 avid 内部依赖） |
 | 能力 | `tools/*` | 9 个工具的 schema 与实现 | 无（写文件系统、进程与外部检索 API） | policy.todo、ai（`subagent`） |
 | 顶层 | `workspaces.py` | 用户级工作区注册表（**索引，非权威**） | `~/.avid/workspaces.json` | 无 |
-| 前端 | 暂无（`web/` 已整体删除，commit `b1c54cb`） | 无浏览器代码——阶段 32 清空重建后的骨架与两份契约种子也已删除，页面待重新设计 | 界面域状态（localStorage）——待新前端重新确立 | 无（旧的「网络出口只能在 `web/src/api/`」是已删除的分层规则） |
+| 前端 | `web/`（阶段 33 重建，分支 `refactor/web-hana-ui`：React 18 + Vite + pnpm） | 浏览器侧全部代码：`api/types.ts` / `events/types.ts` 契约种子、`styles/tokens.css` 纸本 token 层、`markdown/` 自研渲染与语法高亮、`surfaces/` 对话 / 会话 / 设置页面 | 界面域状态（localStorage：主题 / 外观偏好） | 无——仅经 HTTP/SSE 与内核交换；契约由对账门禁钉住 |
 | 评测仪器 | `benchmarks/`（仓库根，**不进 wheel**） | AvidBench：case 加载、工作区物化、变体装配、判定器、报表与轨迹落盘 | 只读 case / fixture 与 `runs/` 结果（本地，不入库） | `avid` 的**任意层**——它是叶子消费者，只经既有注入点驱动内核（A14）；产品代码反向不许依赖它 |
 
 边界依据（每条来自设计文档，不在此重推）：`web/`↔`svc/` 隔离**传输形态**；`svc/`↔内核隔离
 **多一个调用方**（内核不知道有几个调用方）；前端↔内核隔离**语言与部署单元**，契约是唯一耦合面
-——前端删除后浏览器侧暂无消费者，内核的线格式以 `src/avid/web/schemas.py` 与
-`runtime/events.py` 为准（原先钉住两侧的 wire / event 契约测试已随前端删除，重建时恢复）；
+——`tests/test_wire_contract.py` / `test_event_contract.py` 钉住两侧字段名与事件集合相等，
+模式词表第四处在 `test_modes.py`；线格式的权威仍是 `src/avid/web/schemas.py` 与
+`runtime/events.py`；
 `session/` 零内部依赖，隔离**持久化格式**（路径与时钟构造期注入）；`workspaces.py` 只做索引，
 隔离**跨工作区的目录知识**——放进 `session/` 会让会话存储承担它不该有的知识
 （`session/__init__.py:19-20`、`runtime-architecture.md:1221`）。
@@ -150,12 +151,12 @@ Web:  POST /api/sessions/{id}/runs                │
 | A6 | 事件名字面量只允许出现在 `runtime/events.py`（其余用常量） | `:123-131` |
 | A10 | `on_message` 的接线只允许在 4 个文件（循环、recorder、CLI、svc） | `:135-144` |
 | A11 | `web/`、`svc/` 里不出现 `append_message` / `.commit(`——recorder 是唯一写入者 | `:151-153` |
-| A12 | **已随前端整体删除**（2026-10）：原规则是「前端在 `src/api/` 之外不直连第三方 URL」，检查对象 `web/src` 不复存在，新前端落成后按同判据重建 | — |
-| 前端样式与体积门禁 | **已随前端整体删除**：`check:tokens` / `check:contrast` / `gate:size` 与产物交付链 `copy-dist.mjs` 都不存在，`web/budget.json` 的冻结体积一并作废；新工具链与新门禁待新前端定稿后重建 | — |
+| A12 | 前端在 `web/src/api/` 之外不直连第三方 URL。两类例外都不是「直连」：`__tests__/` 的 URL 夹具、`www.w3.org/`（XML 命名空间标识）；`test_frontend_sources_exist` 钉住目录非空，防「空集合断言假通过」 | `:165-190` |
+| 前端体积门禁 | `gate:size` 按首屏引用逐块量 gzip，对 `web/budget.json` 的预算（首屏 JS / 单块 / 样式表 / 字体 / 位图纹理 / 外部字体请求）；`pnpm -C web run verify` 串 typecheck + vitest + build + gate。**分层 / token 白名单 / 对比度门禁尚未重建**——旧脚本按玻璃视觉的规则集写的，纸本 token 层需要自己的一套 | `web/scripts/gate-size.mjs` |
 | A13 | `runtime/` → `policy/` 的边**双向**钉住（见下表） | `:217-248` |
 | A14 | **产品代码不许 import `benchmarks`**；仪器留在 `src/` 之外，`runs/` 不入库 | `:291-300` |
-| 事件契约 | **已随前端删除**（2026-10）：内核 `EVENT_TYPES` ↔ 前端联合类型的集合相等测试不再存在，新前端落成后重建；三档声明与心跳/兜底常量单点仍在 `runtime/events.py` | — |
-| 线格式契约 | **已随前端删除**（2026-10）：26 对 pydantic DTO ↔ 前端 TS interface 的字段名双向相等测试不再存在，新前端落成后重建；线格式本身以 `src/avid/web/schemas.py` 为准 | — |
+| 事件契约 | 内核 `EVENT_TYPES` ↔ 前端 `EVENTS:BEGIN/END` 联合类型**集合相等**；三档声明与心跳/兜底常量单点仍在 `runtime/events.py` | `tests/test_event_contract.py` |
+| 线格式契约 | 27 对 pydantic DTO ↔ 前端 TS interface 字段名**双向相等** + 真实响应带齐模型声明的每个字段（抓 svc 手写 dict 漂移） | `tests/test_wire_contract.py` |
 | 会话门面 | `session.__all__` 恰好是那份清单；内部件不进 `__all__` 但可子模块导入 | `tests/test_session_facade.py` |
 | 工具契约 | 定义与实现一一对应；`STATEFUL_TOOLS` == 真接受 `state=` 的 handler；审批规则只点名已注册工具；`--agent` help 与注册表一致 | `tests/test_tools_contract.py` |
 
@@ -215,8 +216,10 @@ Web 与前端的不变量原先逐条记在 `docs/design/frontend-architecture.m
 条目提交后不可变、durable `seq` 严格单调、不丢（要么重放要么显式 `resync`）、未决审批默认拒绝、
 内核不 import Web 框架、取消不丢消息也不产生伪造工具结果、权威终止以运行注册表 + 已提交条目为准、
 列表必须有界、delta 不落盘（见上文 §4 的 A1/A2/A11/A14 与 §5 的重放纪律）。
-前端专属的两条——不复制内核判断、乱序收敛（delta 先 flush 再渲染 durable）——随旧前端作废，
-待新前端定稿后重新提出。
+前端专属的两条——不复制内核判断、乱序收敛（durable 是权威，终态消息取代 delta 累积）——
+已随阶段 33 新前端重新成立：前者是设计纪律（`api/` 只做传输，不做裁决），后者实现在
+`web/src/state/useRunStream.ts`（重连/回拉时 durable 重建视图、丢弃丢失的 delta），目前
+靠单测与实机验收守着，没有专门门禁。
 
 ## 7. 失败与恢复
 
@@ -305,7 +308,7 @@ Web 与前端的不变量原先逐条记在 `docs/design/frontend-architecture.m
 | 任务图（**已下线，阶段 27**）的数据结构与状态机设计 | 同上 §17（开头有下线横幅） |
 | 工作区与安全分层（三轴 / 阶梯 / 沙箱 / 审计） | `docs/design/workspace-permission.md`；阶段 18 的落地记录见 `runtime-architecture.md` §19，阶段 26 见 `docs/status/CAPABILITIES.md` §3.1 与 `benchmarks/sandbox_boundary/README.md` |
 | Web 的 API 方案、交付形态、事件三档与前后端接口约定 | `docs/design/frontend-architecture.md` §4–§7（前端分层、视觉语言、性能与不变量章节已在阶段 32 随旧前端删除） |
-| Web 服务的接口、SSE 消费规则与信任边界 | `docs/guide/web-ui.md`（前端页面 ↔ 接口的对应关系待新前端定稿后补） |
+| Web 服务的接口、SSE 消费规则与信任边界 | `docs/guide/web-ui.md`（页面 ↔ 接口的对应关系见 `web/src/api/client.ts` 的客户端函数与 `web/src/surfaces/`） |
 | 能力清单与参数细节 | `docs/status/CAPABILITIES.md` |
 | 性能与效果数字现状 | `docs/status/BENCHMARK.md` |
 | 未来方向 | `docs/status/ROADMAP.md` |

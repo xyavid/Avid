@@ -9,8 +9,8 @@ Avid 是一个自建的 agent 运行时（harness）：模型调用、工具执�
 - **核心用途**：先做通用内核，场景后接；用同一个内核承载编码、检索、业务流等不同任务。
 - **目标**：改动任一模块（模型 / 工具 / 记忆 / 上下文策略）不需要动其它部分，且改动前后有可对比的评测数字。
 - **验收基准**：参考场景 **R**（读取本地文件 + 计算）——首个工具与后续评测集都从它长出来。
-- **技术栈**：内核 Python 3.12，环境与依赖管理用 `uv`，运行期依赖只有 `httpx`。前端已整体删除（含 pnpm 工具链与契约种子），技术选型待重构时再定。
-- **现状**：模型调用 → 循环 → 9 个内置工具 + stdio MCP → 权限三轴预设（四级 deny 阶梯 + bwrap 沙箱 + 审计）→ hook 四事件 → 技能 → 上下文压缩 → 会话持久化 → 本地 Web 服务，端到端可用。**浏览器界面已整体删除**（见 `docs/status/CAPABILITIES.md` §11），页面结构与视觉语言待讨论后从零重建。
+- **技术栈**：内核 Python 3.12，环境与依赖管理用 `uv`，运行期依赖只有 `httpx`。前端在 `web/`（React 18 + Vite + pnpm + TypeScript），纸本视觉与渲染层自研。
+- **现状**：模型调用 → 循环 → 9 个内置工具 + stdio MCP → 权限三轴预设（四级 deny 阶梯 + bwrap 沙箱 + 审计）→ hook 四事件 → 技能 → 上下文压缩 → 会话持久化 → 本地 Web 服务，端到端可用。**浏览器界面已随阶段 33 重建**（纸本视觉对话界面 + 会话/工作区管理 + 设置，分支 `refactor/web-hana-ui`），见 `docs/status/CAPABILITIES.md` §11。
 
 本文件只写**跨阶段的稳定约定**；会随阶段变化的现状、数字与阶段账本各有归属：
 
@@ -35,9 +35,13 @@ uv run pytest -m stress          # 复杂度与长会话门禁
 uv run --env-file .env pytest -q -m eval_smoke -s   # 评测冒烟（真模型，有成本）
 uv run ruff check src/avid && uv run mypy           # 与 CI 同一套静态检查
 seiso check                       # 文档规范（kind 映射与豁免见 seiso.toml；--preview 另有实验规则）
+
+pnpm -C web install               # 前端依赖（pnpm 9）
+pnpm -C web run verify            # 前端门禁：typecheck + vitest + build + gate:size（体积预算）
+pnpm -C web run copy:dist         # 构建产物交付到 src/avid/web/static/（avid web 服务它）
 ```
 
-评测仪器（真模型，不是门禁）：`uv run --env-file .env python -m benchmarks.run --smoke`，参数见 `benchmarks/README.md`。安装、配置项、CLI 全量参数与 Web 交付形态见 `README.md`。前端（页面、契约种子、门禁与 e2e）已整体删除；新的工具链与门禁待新前端设计定稿后随新结构建立。
+评测仪器（真模型，不是门禁）：`uv run --env-file .env python -m benchmarks.run --smoke`，参数见 `benchmarks/README.md`。安装、配置项、CLI 全量参数与 Web 交付形态见 `README.md`。前端的对账门禁（wire/event 契约、模式词表、体积预算）已随阶段 33 收口恢复；e2e 尚未重建，界面验收走实机 CDP 脚本（`dev/evidence/`）。
 
 ### 1.2 数据流
 
@@ -55,7 +59,7 @@ Web  POST /api/sessions/{id}/runs ─┴─► svc/runs.RunRegistry（线程 + �
                                 ├ policy/sandbox 按能力账本组装 bwrap argv
                                 └ 工具 handler（tools/*，含 MCP 包装）
        on_message ─► SessionRecorder ─► <工作区>/.avid/sessions/*.jsonl（durable 真相）
-       on_event   ─► RunRegistry 缓冲 ─► SSE ─► 浏览器消费方（前端待重建）
+       on_event   ─► RunRegistry 缓冲 ─► SSE ─► 浏览器消费方（React 前端 web/）
 ```
 
 - **`on_message` 是消息的唯一出口**：循环不 import 会话层，落库与否由回调决定。
@@ -75,7 +79,7 @@ Web  POST /api/sessions/{id}/runs ─┴─► svc/runs.RunRegistry（线程 + �
 | 传输适配 | `web/`：FastAPI 路由 + pydantic DTO + SSE 编帧 + 静态资源 | 线格式的唯一所有者 |
 | 工具 | `tools/`：`registry` 单点声明、`files`/`shell`/`subagent`/`skill`/`web_search`/`mcp`、`validate` 参数校验 | 9 个内置工具 + 该工作区声明的 MCP 工具 |
 | 工作区 | `workspaces.py` + `~/.avid/workspaces.json` | 用户级注册表（索引，非权威） |
-| 前端 | 暂无（`web/` 已整体删除） | 浏览器侧全部代码，待重构时再落位；后端线格式以 `src/avid/web/schemas.py` 与 `runtime/events.py` 为准 |
+| 前端 | `web/`（React 18 + Vite + pnpm）：`api/types.ts` 与 `events/types.ts` 契约种子、`styles/tokens.css` 纸本 token 层、`markdown/` 自研渲染、`surfaces/` 页面 | 浏览器侧全部代码；线格式契约由对账门禁钉住（`test_wire_contract.py` / `test_event_contract.py`），交付走 `copy:dist` 进 `src/avid/web/static/` |
 | 评测仪器 | `benchmarks/`：21 条 case × 3 变体、五种判定器、轨迹落盘 | **不进 wheel**，产品代码反过来不许依赖它 |
 
 ### 1.4 入口点
@@ -95,8 +99,8 @@ Web  POST /api/sessions/{id}/runs ─┴─► svc/runs.RunRegistry（线程 + �
 | 新增模型协议 | `ai/providers/` 加一个 provider，对循环返回**同形** `Turn` |
 | 新增一类上下文 | `ContextManager.register_source(kind, fn)` 一行 |
 | 调阈值 / 规则 / 文案 | `policy/` |
-| 加一个事件 | `runtime/events.py`（唯一单点）；前端联合类型的对账门禁已随前端删除，重建时恢复 |
-| 加一个界面 | 前端已整体删除——先讨论定页面结构与视觉语言，再建立新的前端结构（不要预先建空目录） |
+| 加一个事件 | `runtime/events.py`（唯一单点）；同时在 `web/src/events/types.ts` 的 EVENTS 块里加同名成员——`tests/test_event_contract.py` 拦住两侧漂移 |
+| 加一个界面 | `web/src/surfaces/` 加页面并在 `app/App.tsx` 挂路由；颜色 / 字号 / 圆角只取 `styles/tokens.css` 的 token，不写散档 |
 
 ## 2. 提交规范
 

@@ -2,7 +2,9 @@
 
 Avid 的本地 Web 服务：内核与浏览器之间**交换什么**——端点、载荷、事件分档、错误与信任边界。
 接口面设计依据见 `docs/design/frontend-architecture.md`（该文件现在只承载内核 ↔ 浏览器接口面）。
-页面与视觉设计已随前端整体删除（阶段 32 清空旧前端；2026-10 连阶段 32 保留的骨架与契约种子一并删除），新的前端设计待确认，本文件不描述页面。
+页面与视觉设计随阶段 33 在 `refactor/web-hana-ui` 分支重建（纸本视觉对话界面，源码在
+仓库根 `web/`）；页面结构以该分支的 `web/src/surfaces/` 为准，本文件仍只描述内核 ↔
+浏览器交换什么。
 
 ## 1. 启动
 
@@ -20,9 +22,9 @@ uv run --env-file .env avid web --port 8765
 uv run --env-file .env avid web --port 8765 --workspace /path/to/project
 ```
 
-前端已整体删除（含构建工具链），`src/avid/web/static/` 没有产物：访问任何非 `/api`
-路径会得到 HTTP 503 `static_missing`（「前端尚未重建」）。API 与 SSE 不受影响；
-新前端落成后，交付形态（产物如何进 `src/avid/web/static/`）随新前端的工具链一并确定。
+前端源码在仓库根 `web/`（React 18 + Vite + pnpm）；构建产物经 `pnpm -C web run copy:dist`
+交付到 `src/avid/web/static/`，由本服务托管。没有产物时访问任何非 `/api` 路径会得到
+HTTP 503 `static_missing`（「前端尚未构建」）。API 与 SSE 不受影响。
 
 `GET /api/meta` 的 `build` 字段返回构建戳（`git_sha` + `built_at`）；没有产物时这个
 字段没有戳值。
@@ -149,9 +151,11 @@ curl -s localhost:8765/api/meta | head -c 300   # 其中的 build.git_sha 是那
 curl -s -o /dev/null -w '%{http_code} %{content_type}\n' localhost:8765/api/nope   # 404 application/json
 ```
 
-**浏览器 e2e 与视觉基线已随前端删除，待新门禁重建**：Playwright 用例、a11y（axe）门禁、
-`web/e2e/` 与 `web/scripts/` 下的分层 / token / 样式 / 对比度 / 体积脚本、`budget.json`
-都不在了，`pnpm -C web run verify` 与 `test:e2e` 也随之不存在。
+**前端门禁（阶段 33 收口恢复）**：`pnpm -C web run verify` = typecheck + vitest + build +
+`gate:size`（体积预算 `web/budget.json`）；两侧对账由 `tests/test_wire_contract.py`、
+`tests/test_event_contract.py` 与模式词表第四处（`test_modes.py`）守着。**浏览器 e2e
+尚未重建**：旧 Playwright 用例已随前端清空删除，界面验收走实机 CDP 脚本（`dev/evidence/`）；
+a11y 与视觉回归门禁也还没有，重开信号见 `docs/status/ROADMAP.md`。
 
 > **§5–§6 已于阶段 32 随旧前端一并删除。** §5 是与当时范围对应的「明确未做」清单（成本与
 > 延迟台账、前端写文件 / Web 终端 / 桌面壳、流式渲染库、Playwright 用例），§6 是布局与交互

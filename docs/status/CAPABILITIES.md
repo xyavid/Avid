@@ -23,11 +23,11 @@
 | 会话持久化与分支 | 已落地 | `--session`/`--new-session`/`--list-sessions`/`--delete-session`、Web 分支选择器 | `src/avid/session/` |
 | 上下文压缩（五步阶梯） | 已落地 | 自动（每轮 `context.prepare`） | `src/avid/policy/compaction.py`、`src/avid/runtime/context.py` |
 | TODO 清单与提醒 | 已落地 | 模型调 `todo_write` | `src/avid/policy/todo.py`、`src/avid/runtime/state.py:179-187` |
-| 待办清单面板 | **已下线**（阶段 32） | 旧前端在输入条正上方常驻显示 `todo_write` 的清单；实现它的 `web/src/features/conversation/**` 随旧前端整体删除，界面不再有这一块。`todo_write` 工具本身未变（见 §2） | — |
+| 待办清单面板 | 未重建 | 旧前端曾在输入条正上方常驻显示 `todo_write` 的清单，随阶段 32 删除；阶段 33 新前端尚未做这块，`todo_write` 工具本身未变（见 §2） | — |
 | 子 agent 并行派发 | 已落地 | 模型调 `subagent`（≤4 个子任务） | `src/avid/tools/subagent.py` |
 | 技能系统 | 已落地 | `skills/*/SKILL.md` + `load_skill`；`always: true` 的技能正文常驻系统提示；`GET /api/skills` | `src/avid/policy/skills.py` |
 | 流式模型调用 | 已落地 | Web 运行路径（`?deltas=1` 订阅） | `src/avid/ai/client.py` 的 `stream_completion`、`src/avid/svc/runs.py` |
-| 本地 Web 界面 | 仅内核侧；**前端已整体删除** | `avid web --port 8765` 只提供 API 与 SSE，非 `/api` 路径回 503 `static_missing` | `src/avid/web/`；见 §11 |
+| 本地 Web 界面 | 已落地（阶段 33 重建） | `avid web --port 8765` 服务 API + SSE + 静态产物；产物由 `pnpm -C web run copy:dist` 交付，缺产物时非 `/api` 路径回 503 `static_missing` | `web/`、`src/avid/web/`；见 §11 |
 | CLI | 已落地 | `avid`、`avid web`、`avid workspace` | `src/avid/cli.py` |
 | 可观测（trace / 事件流 / 运行时状态） | 已落地 | stderr trace、`GET /api/runs/{id}/events`、`GET /api/runs/{id}` | `src/avid/runtime/events.py` |
 | 评测与基准（AvidBench v0.1） | 已落地（第一层） | `python -m benchmarks.run`、`pytest -m eval` / `-m eval_smoke` | `benchmarks/README.md`、`benchmarks/avidbench/`、`BENCHMARK.md` §9 |
@@ -214,7 +214,7 @@
 
 删除理由与当时的实现记录见 `docs/design/runtime-architecture.md` §17（该章开头有下线横幅）。
 一句话：它的**唯一消费者**是那个只读页面，而"这次对话拆成了哪几步、走到第几步"由 `todo_write`
-承接。旧前端曾把它推导成输入条上方的待办清单，那块面板已随阶段 32 的前端清空一并删除（见 §11）。
+承接。旧前端曾把它推导成输入条上方的待办清单；阶段 33 的新前端尚未重建这块面板（见 §11）。
 旧的 `<工作区根>/.tasks/` 数据不迁移、不删除，只是不再被读。
 
 ---
@@ -324,21 +324,29 @@ durable、事件总数上限 4096、终态记录保留 600s 或最多 200 个 ru
 
 ## 11. 前端
 
-**前端已整体删除（2026-10，commit `b1c54cb`）。** 阶段 32 清空重建后剩下的骨架（`main.tsx` /
-`App.tsx` / smoke 用例）与两份契约种子这次一并删掉，`web/` 目录（页面、组件、样式、pnpm 工具链、
-Playwright e2e）不再存在。页面结构与视觉语言待讨论定稿后从零重建。
+**已随阶段 33 在分支 `refactor/web-hana-ui` 从零重建（2026-10）。** 技术栈 React 18 +
+TypeScript + Vite + pnpm 10；视觉是**纸本语言**（暖纸 / 青夜两主题，token 层
+`web/src/styles/tokens.css`；EB Garamond / PT Serif / Inter / JetBrains Mono 四套自托管
+字体，子集裁到 latin + latin-ext，CJK 走系统回退）。渲染层自研：`markdown/`（块级 +
+行内 + 渲染，全程 React 元素、无 `dangerouslySetInnerHTML`、SVG 走 `data:` `<img>`）
+与语法高亮 tokenizer（九种语言，token 拼回逐字等于原文）。
 
-**随之删除的契约门禁**：`tests/test_wire_contract.py`（pydantic DTO ↔ TS interface 逐字段）、
-`tests/test_event_contract.py`（`EVENT_TYPES` ↔ 前端联合类型集合相等）、`test_web_boundaries.py`
-的 A12 前端节（`web/src` 无第三方直连）。`test_modes.py` 的权限模式词表对账从四处退回三处——
-新前端落成后应把 TS 联合类型那一条加回来。
+**页面**（`web/src/surfaces/conversation/`）：时间线（思考块 / 工具卡 / 消息动作行的复制
+与分支 / 用量卡）、输入区（发送/停止、权限胶囊、按运行的模型选择）、会话管理（新建 /
+行内重命名 / 确认删除）、工作区文件夹式分组与删除、设置面板、组件墙（`?gallery=1`）。
+状态三件：`api/client.ts`（网络出口唯一层）、`api/events.ts`（SSE 消费，`after` 游标 +
+deltas）、`state/useRunStream.ts`（事件收敛）。
 
-**保留的**：后端传输适配 `src/avid/web/**`（FastAPI 路由 / pydantic DTO / SSE 编帧 / 静态资源
-服务）未动，端点与事件表见 §10；`src/avid/web/static/` 只留 `.gitkeep` 占位；`GET /api/meta`
-的 `build` 字段保留（无产物时无戳值）。
+**门禁（收口恢复）**：`pnpm -C web run verify` = typecheck + vitest（204 用例）+ build +
+`gate:size`（体积预算 `web/budget.json`：首屏 JS gzip 70,192 B / 上限 88 KiB、样式表
+6,806 B / 16 KiB、字体 24 文件 815 kB / 1 MiB、位图纹理 0）；两侧对账接回——
+`tests/test_wire_contract.py`（27 对 DTO 字段名双向相等）、`tests/test_event_contract.py`
+（事件集合相等）、`test_modes.py` 词表第四处、A12 第三方直连门禁（阶段 9 已恢复）。
+产物交付 `pnpm -C web run copy:dist` → `src/avid/web/static/`。
 
-**待新前端定稿后重新确立的**：页面结构与分层、目录结构与网络出口约定、契约种子与两侧门禁、
-设计 token 与对比度门禁、体积预算与新基线、e2e 与视觉回归。不要预先建空目录。
+**尚未重建**：浏览器 e2e（旧 Playwright 套件已删，界面验收走实机 CDP 脚本
+`dev/evidence/`）、a11y 与视觉回归基线、分层 / token 白名单 / 对比度门禁（旧脚本按
+玻璃视觉的规则集写，纸本 token 层需要自己的一套）。
 
 ---
 
@@ -397,8 +405,8 @@ Playwright e2e）不再存在。页面结构与视觉语言待讨论定稿后从
 - **交付**：`uv build` 出 wheel，前端产物作为静态资源随 wheel 分发；安装者不需要 Node。
 - **静态门禁**：`ruff`（规则集显式钉住，不跟默认值漂）、`mypy`（`files = ["src/avid"]`）。
 - **CI 三个 job**（`.github/workflows/ci.yml`）：内核（ruff + mypy + `pytest -q`）、
-  stress（`pytest -q -m stress`）、前端（`build` + `typecheck` + `test`——`verify` 与它串起的
-  六项门禁脚本已随旧前端删除，见 §11；这个 job 现在只守打包链能跑、类型自洽、用例非空转）。
+  stress（`pytest -q -m stress`）、前端（build + `gate:size` + typecheck + test——收口恢复的
+  体积门禁已进 CI；分层 / token / 对比度与 e2e 尚未重建，见 §11）。
 
 ---
 
@@ -407,5 +415,5 @@ Playwright e2e）不再存在。页面结构与视觉语言待讨论定稿后从
 长期记忆、沙箱执行、多 provider、多用户与鉴权、中断后恢复运行、SQLite 后端、
 **成本估算**（token 用量台账本身已落地，阶段 22——占用、缓存读写与命中率、压缩次数，
 按分支落盘）、跨进程的「一个会话一个活动 run」互斥、subagent 子事件转发、前端虚拟列表
-（旧前端已整体删除，虚拟化要等新前端定稿）
+（新前端暂无虚拟列表，条目量大时立项）
 ——逐条证据与分类见 `CURRENT_STATE.md` §4，数字现状见 `BENCHMARK.md`。
