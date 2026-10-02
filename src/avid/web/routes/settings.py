@@ -1,14 +1,13 @@
 """BYOK 设置端点：读整份配置、整体保存、两步连通校验、重置回落。
 
 - GET /api/settings/byok：providers + bindings + 每家的 key_set；密钥明文**只入不出**，
-  任何响应都不回传。`legacy` 块仅在 BYOK 文件不存在时返回（设置面板拿它预填
-  「导入旧配置」草稿）。
+  任何响应都不回传。这是模型连接的唯一来源——没有配置时运行会报 config_error。
 - PUT /api/settings/byok：整体保存。载荷里的 api_key（只入）剥出写进 secrets.json
   （引用缺省 = provider id），配置文件里只留 secret_ref；validate 不过就不落盘
   （invalid_request），也不会留下半份密钥。
 - POST /api/settings/byok/test：对载荷里的提供商+模型跑两步探测（真请求：一次
   max_tokens=1 + 一次工具冒烟）；密钥走载荷，不读也不写密钥文件。
-- DELETE /api/settings/byok：删配置与密钥两份文件，回落 model.toml 覆盖层 / env。
+- DELETE /api/settings/byok：删配置与密钥两份文件（之后运行会报「还没有模型配置」）。
 
 生效路径：`resolve_chat` 每次运行都重读文件，保存后对下一条消息立即生效，无需重启。
 """
@@ -16,7 +15,6 @@
 from __future__ import annotations
 
 import contextlib
-import os
 
 from fastapi import APIRouter, Response, status
 
@@ -29,15 +27,7 @@ from ...ai.byok import (
     ModelDecl,
     ProviderDecl,
 )
-from ...ai.config import (
-    DEFAULT_BASE_URLS,
-    ENV_API_KEY,
-    ENV_BASE_URL,
-    ENV_MODEL,
-    ENV_PROVIDER,
-    ConfigError,
-    read_model_settings,
-)
+from ...ai.config import ConfigError
 from ...ai.verify import verify_provider
 from ...svc.errors import InvalidRequest
 from ..schemas import (
@@ -49,7 +39,6 @@ from ..schemas import (
     ByokTestIn,
     ByokTestOut,
     CapabilityFlags,
-    LegacyConnectionOut,
     VerifyStepOut,
 )
 
@@ -118,27 +107,6 @@ def _out(config: ByokConfig) -> ByokSettingsOut:
     return ByokSettingsOut(
         providers=[_provider_out(p, secrets) for p in config.providers.values()],
         bindings=dict(config.bindings),
-        legacy=None,
-    )
-
-
-def _legacy_effective() -> LegacyConnectionOut:
-    """Legacy 生效值，叠加规则与 load_config 一致：界面覆盖层优先，其次环境变量。"""
-    overlay = read_model_settings()
-
-    def pick(short: str, env_name: str) -> str | None:
-        value = overlay.get(short) or os.environ.get(env_name, "").strip()
-        return value or None
-
-    provider = pick("provider", ENV_PROVIDER)
-    base_url = pick("base_url", ENV_BASE_URL)
-    if base_url is None and provider in DEFAULT_BASE_URLS:
-        base_url = DEFAULT_BASE_URLS[provider]
-    return LegacyConnectionOut(
-        model=pick("model", ENV_MODEL),
-        base_url=base_url,
-        provider=provider,
-        api_key_set=pick("api_key", ENV_API_KEY) is not None,
     )
 
 
@@ -146,7 +114,7 @@ def _legacy_effective() -> LegacyConnectionOut:
 def get_byok_settings() -> ByokSettingsOut:
     config = byok.load_byok()
     if config is None:
-        return ByokSettingsOut(bindings={"chat": None}, legacy=_legacy_effective())
+        return ByokSettingsOut(bindings={"chat": None})
     return _out(config)
 
 
@@ -194,7 +162,7 @@ def post_byok_test(body: ByokTestIn) -> ByokTestOut:
 
 @router.delete("/settings/byok", status_code=status.HTTP_204_NO_CONTENT)
 def delete_byok_settings() -> Response:
-    """Drop both files so the legacy overlay / environment variables take over again."""
+    """Drop both files; runs will fail with the no-config error until a new config is saved."""
     for target in (byok.config_path(), byok.secrets_path()):
         with contextlib.suppress(FileNotFoundError):
             target.unlink()

@@ -21,13 +21,6 @@ def run(payload, **kwargs):
     return subagent(payload, state=RunState(), **kwargs)
 
 
-@pytest.fixture(autouse=True)
-def fake_env(monkeypatch):
-    """run() 会读环境变量建配置；测试里给一份假的。"""
-    monkeypatch.setenv("AVID_API_KEY", "test-key")
-    monkeypatch.setenv("AVID_MODEL", "test-model")
-
-
 def task(description="干点活", prompt="把这件事做完"):
     return {"description": description, "prompt": prompt}
 

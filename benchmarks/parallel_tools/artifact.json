@@ -34,13 +34,13 @@
       "max_parallel": 10,
       "status": "finished",
       "final_text": "三个文件都读完了，out.txt 也写好了。",
-      "wall_clock_ms": 323,
+      "wall_clock_ms": 355,
       "tool_events": [
         {
           "type": "tool_call_started",
           "tool": "read_file",
           "tool_call_id": "c1",
-          "ts": 1790225714820,
+          "ts": 1790951039267,
           "parallel": 4,
           "duration_ms": null
         },
@@ -48,7 +48,7 @@
           "type": "tool_call_started",
           "tool": "read_file",
           "tool_call_id": "c2",
-          "ts": 1790225714821,
+          "ts": 1790951039270,
           "parallel": 4,
           "duration_ms": null
         },
@@ -56,7 +56,7 @@
           "type": "tool_call_started",
           "tool": "glob",
           "tool_call_id": "c3",
-          "ts": 1790225714821,
+          "ts": 1790951039271,
           "parallel": 4,
           "duration_ms": null
         },
@@ -64,7 +64,7 @@
           "type": "tool_call_started",
           "tool": "read_file",
           "tool_call_id": "c4",
-          "ts": 1790225714822,
+          "ts": 1790951039272,
           "parallel": 4,
           "duration_ms": null
         },
@@ -72,39 +72,39 @@
           "type": "tool_call_finished",
           "tool": "read_file",
           "tool_call_id": "c1",
-          "ts": 1790225714971,
+          "ts": 1790951039423,
           "parallel": 4,
-          "duration_ms": 151
+          "duration_ms": 155
         },
         {
           "type": "tool_call_finished",
           "tool": "glob",
           "tool_call_id": "c3",
-          "ts": 1790225714972,
+          "ts": 1790951039425,
           "parallel": 4,
-          "duration_ms": 150
+          "duration_ms": 154
         },
         {
           "type": "tool_call_finished",
           "tool": "read_file",
           "tool_call_id": "c2",
-          "ts": 1790225714973,
+          "ts": 1790951039427,
           "parallel": 4,
-          "duration_ms": 151
+          "duration_ms": 157
         },
         {
           "type": "tool_call_finished",
           "tool": "read_file",
           "tool_call_id": "c4",
-          "ts": 1790225714973,
+          "ts": 1790951039427,
           "parallel": 4,
-          "duration_ms": 151
+          "duration_ms": 155
         },
         {
           "type": "tool_call_started",
           "tool": "write_file",
           "tool_call_id": "c5",
-          "ts": 1790225714973,
+          "ts": 1790951039428,
           "parallel": 1,
           "duration_ms": null
         },
@@ -112,9 +112,9 @@
           "type": "tool_call_finished",
           "tool": "write_file",
           "tool_call_id": "c5",
-          "ts": 1790225715124,
+          "ts": 1790951039582,
           "parallel": 1,
-          "duration_ms": 150
+          "duration_ms": 153
         }
       ],
       "tool_messages": [
@@ -147,28 +147,28 @@
       "spans": [
         {
           "tool": "read_file",
-          "start": 3471.4161,
-          "end": 3471.5664
+          "start": 88381.5366,
+          "end": 88381.6873
         },
         {
           "tool": "glob",
-          "start": 3471.4167,
-          "end": 3471.5673
+          "start": 88381.5389,
+          "end": 88381.6898
         },
         {
           "tool": "read_file",
-          "start": 3471.4175,
-          "end": 3471.5679
+          "start": 88381.5404,
+          "end": 88381.6919
         },
         {
           "tool": "read_file",
-          "start": 3471.4177,
-          "end": 3471.5682
+          "start": 88381.5405,
+          "end": 88381.6922
         },
         {
           "tool": "write_file",
-          "start": 3471.5689,
-          "end": 3471.7194
+          "start": 88381.6954,
+          "end": 88381.8464
         }
       ]
     },
@@ -176,13 +176,13 @@
       "max_parallel": 2,
       "status": "finished",
       "final_text": "三个文件都读完了，out.txt 也写好了。",
-      "wall_clock_ms": 475,
+      "wall_clock_ms": 487,
       "tool_events": [
         {
           "type": "tool_call_started",
           "tool": "read_file",
           "tool_call_id": "c1",
-          "ts": 1790225715152,
+          "ts": 1790951039619,
           "parallel": 2,
           "duration_ms": null
         },
@@ -190,7 +190,23 @@
           "type": "tool_call_started",
           "tool": "read_file",
           "tool_call_id": "c2",
-          "ts": 1790225715152,
+          "ts": 1790951039620,
+          "parallel": 2,
+          "duration_ms": null
+        },
+        {
+          "type": "tool_call_finished",
+          "tool": "read_file",
+          "tool_call_id": "c2",
+          "ts": 1790951039773,
+          "parallel": 2,
+          "duration_ms": 153
+        },
+        {
+          "type": "tool_call_started",
+          "tool": "glob",
+          "tool_call_id": "c3",
+          "ts": 1790951039774,
           "parallel": 2,
           "duration_ms": null
         },
@@ -198,31 +214,15 @@
           "type": "tool_call_finished",
           "tool": "read_file",
           "tool_call_id": "c1",
-          "ts": 1790225715303,
+          "ts": 1790951039775,
           "parallel": 2,
-          "duration_ms": 151
-        },
-        {
-          "type": "tool_call_started",
-          "tool": "glob",
-          "tool_call_id": "c3",
-          "ts": 1790225715303,
-          "parallel": 2,
-          "duration_ms": null
-        },
-        {
-          "type": "tool_call_finished",
-          "tool": "read_file",
-          "tool_call_id": "c2",
-          "ts": 1790225715304,
-          "parallel": 2,
-          "duration_ms": 151
+          "duration_ms": 155
         },
         {
           "type": "tool_call_started",
           "tool": "read_file",
           "tool_call_id": "c4",
-          "ts": 1790225715304,
+          "ts": 1790951039775,
           "parallel": 2,
           "duration_ms": null
         },
@@ -230,23 +230,23 @@
           "type": "tool_call_finished",
           "tool": "glob",
           "tool_call_id": "c3",
-          "ts": 1790225715454,
+          "ts": 1790951039926,
           "parallel": 2,
-          "duration_ms": 150
+          "duration_ms": 152
         },
         {
           "type": "tool_call_finished",
           "tool": "read_file",
           "tool_call_id": "c4",
-          "ts": 1790225715454,
+          "ts": 1790951039927,
           "parallel": 2,
-          "duration_ms": 150
+          "duration_ms": 152
         },
         {
           "type": "tool_call_started",
           "tool": "write_file",
           "tool_call_id": "c5",
-          "ts": 1790225715455,
+          "ts": 1790951039927,
           "parallel": 1,
           "duration_ms": null
         },
@@ -254,9 +254,9 @@
           "type": "tool_call_finished",
           "tool": "write_file",
           "tool_call_id": "c5",
-          "ts": 1790225715605,
+          "ts": 1790951040080,
           "parallel": 1,
-          "duration_ms": 150
+          "duration_ms": 152
         }
       ],
       "tool_messages": [
@@ -289,28 +289,28 @@
       "spans": [
         {
           "tool": "read_file",
-          "start": 3471.7482,
-          "end": 3471.8986
+          "start": 88381.8872,
+          "end": 88382.0382
         },
         {
           "tool": "read_file",
-          "start": 3471.7484,
-          "end": 3471.8991
+          "start": 88381.8875,
+          "end": 88382.0393
         },
         {
           "tool": "glob",
-          "start": 3471.8988,
-          "end": 3472.0492
+          "start": 88382.0402,
+          "end": 88382.1909
         },
         {
           "tool": "read_file",
-          "start": 3471.8995,
-          "end": 3472.0497
+          "start": 88382.0409,
+          "end": 88382.1916
         },
         {
           "tool": "write_file",
-          "start": 3472.0503,
-          "end": 3472.2007
+          "start": 88382.1935,
+          "end": 88382.3445
         }
       ]
     },
@@ -318,13 +318,13 @@
       "max_parallel": 1,
       "status": "finished",
       "final_text": "三个文件都读完了，out.txt 也写好了。",
-      "wall_clock_ms": 778,
+      "wall_clock_ms": 792,
       "tool_events": [
         {
           "type": "tool_call_started",
           "tool": "read_file",
           "tool_call_id": "c1",
-          "ts": 1790225715633,
+          "ts": 1790951040116,
           "parallel": 1,
           "duration_ms": null
         },
@@ -332,15 +332,15 @@
           "type": "tool_call_finished",
           "tool": "read_file",
           "tool_call_id": "c1",
-          "ts": 1790225715784,
+          "ts": 1790951040268,
           "parallel": 1,
-          "duration_ms": 150
+          "duration_ms": 152
         },
         {
           "type": "tool_call_started",
           "tool": "read_file",
           "tool_call_id": "c2",
-          "ts": 1790225715784,
+          "ts": 1790951040268,
           "parallel": 1,
           "duration_ms": null
         },
@@ -348,15 +348,15 @@
           "type": "tool_call_finished",
           "tool": "read_file",
           "tool_call_id": "c2",
-          "ts": 1790225715935,
+          "ts": 1790951040420,
           "parallel": 1,
-          "duration_ms": 150
+          "duration_ms": 152
         },
         {
           "type": "tool_call_started",
           "tool": "glob",
           "tool_call_id": "c3",
-          "ts": 1790225715935,
+          "ts": 1790951040420,
           "parallel": 1,
           "duration_ms": null
         },
@@ -364,15 +364,15 @@
           "type": "tool_call_finished",
           "tool": "glob",
           "tool_call_id": "c3",
-          "ts": 1790225716085,
+          "ts": 1790951040572,
           "parallel": 1,
-          "duration_ms": 150
+          "duration_ms": 151
         },
         {
           "type": "tool_call_started",
           "tool": "read_file",
           "tool_call_id": "c4",
-          "ts": 1790225716085,
+          "ts": 1790951040572,
           "parallel": 1,
           "duration_ms": null
         },
@@ -380,15 +380,15 @@
           "type": "tool_call_finished",
           "tool": "read_file",
           "tool_call_id": "c4",
-          "ts": 1790225716236,
+          "ts": 1790951040724,
           "parallel": 1,
-          "duration_ms": 150
+          "duration_ms": 151
         },
         {
           "type": "tool_call_started",
           "tool": "write_file",
           "tool_call_id": "c5",
-          "ts": 1790225716236,
+          "ts": 1790951040724,
           "parallel": 1,
           "duration_ms": null
         },
@@ -396,9 +396,9 @@
           "type": "tool_call_finished",
           "tool": "write_file",
           "tool_call_id": "c5",
-          "ts": 1790225716387,
+          "ts": 1790951040877,
           "parallel": 1,
-          "duration_ms": 150
+          "duration_ms": 152
         }
       ],
       "tool_messages": [
@@ -431,28 +431,28 @@
       "spans": [
         {
           "tool": "read_file",
-          "start": 3472.229,
-          "end": 3472.3793
+          "start": 88382.3819,
+          "end": 88382.5327
         },
         {
           "tool": "read_file",
-          "start": 3472.3797,
-          "end": 3472.53
+          "start": 88382.5336,
+          "end": 88382.6851
         },
         {
           "tool": "glob",
-          "start": 3472.5301,
-          "end": 3472.6806
+          "start": 88382.6858,
+          "end": 88382.8368
         },
         {
           "tool": "read_file",
-          "start": 3472.6809,
-          "end": 3472.8312
+          "start": 88382.8381,
+          "end": 88382.9889
         },
         {
           "tool": "write_file",
-          "start": 3472.8317,
-          "end": 3472.9821
+          "start": 88382.9907,
+          "end": 88383.142
         }
       ]
     }
@@ -496,7 +496,7 @@
           "c2"
         ],
         [
-          "c2",
+          "c1",
           "c3"
         ],
         [
@@ -507,9 +507,9 @@
       "parallel_1": []
     },
     "wall_clock_ms": {
-      "parallel_10": 323,
-      "parallel_2": 475,
-      "parallel_1": 778
+      "parallel_10": 355,
+      "parallel_2": 487,
+      "parallel_1": 792
     }
   },
   "checks": {

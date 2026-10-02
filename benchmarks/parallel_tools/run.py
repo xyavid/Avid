@@ -224,6 +224,39 @@ def max_in_flight(arm: dict[str, Any]) -> int:
     return peak
 
 
+def _seed_scripted_byok() -> None:
+    """模型是脚本：种一份最小 BYOK 配置，让 resolve_chat() 有东西可解析。
+
+    base_url 指到 .invalid——脚本 chat 根本不发请求；配置存在的意义是让
+    「没有模型配置」这条错误路径闭嘴。
+    """
+    byok_dir = Path(tempfile.mkdtemp(prefix="avid-e2e-byok-"))
+    (byok_dir / "models.json").write_text(
+        json.dumps(
+            {
+                "providers": [
+                    {
+                        "id": "scripted",
+                        "label": "Scripted",
+                        "protocol": "openai-compatible",
+                        "base_url": "https://scripted.invalid/v1",
+                        "auth": {"type": "bearer", "secret_ref": "scripted"},
+                        "models": [{"id": "scripted"}],
+                    }
+                ],
+                "bindings": {"chat": "scripted/scripted"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (byok_dir / "secrets.json").write_text(
+        json.dumps({"scripted": "e2e-not-a-real-key"}), encoding="utf-8"
+    )
+    os.environ["AVID_BYOK_CONFIG"] = str(byok_dir / "models.json")
+    os.environ["AVID_BYOK_SECRETS"] = str(byok_dir / "secrets.json")
+    os.environ["AVID_MODEL_INFO"] = "off"  # 不打真实端点
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="并行工具调用 E2E（产出可重复的 JSON）")
     parser.add_argument("--latency-ms", type=int, default=150, help="注入到每个工具调用的延迟")
@@ -235,9 +268,7 @@ def main() -> int:
     parser.add_argument("--arms", default="10,2,1", help="逗号分隔的并发上限")
     args = parser.parse_args()
 
-    os.environ.setdefault("AVID_API_KEY", "e2e-not-a-real-key")
-    os.environ.setdefault("AVID_MODEL", "scripted")
-    os.environ["AVID_MODEL_INFO"] = "off"  # 不打真实端点
+    _seed_scripted_byok()
 
     arms: dict[str, dict[str, Any]] = {}
     with tempfile.TemporaryDirectory(prefix="avid-parallel-e2e-") as tmp:

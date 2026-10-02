@@ -148,15 +148,6 @@ class ByokModel(BaseModel):
     capabilities: CapabilityFlags = Field(default_factory=CapabilityFlags)
 
 
-class LegacyConnectionOut(BaseModel):
-    """Legacy 生效值（model.toml 覆盖层 → env）；密钥只给 api_key_set。"""
-
-    model: str | None = None
-    base_url: str | None = None
-    provider: str | None = None
-    api_key_set: bool = False
-
-
 class ByokProviderIn(BaseModel):
     """一个接入端点：协议 + base URL + 鉴权引用。api_key 只入不出，落 secrets.json。"""
 
@@ -208,10 +199,10 @@ class ByokSettingsIn(BaseModel):
 
 
 class ByokSettingsOut(BaseModel):
+    """模型连接的唯一来源；没有文件时 providers 为空、chat 绑定为 null。"""
+
     providers: list[ByokProviderOut] = Field(default_factory=list)
     bindings: dict[str, str | None] = Field(default_factory=dict)
-    # 仅在 BYOK 文件不存在时返回：设置面板拿它预填「导入旧配置」草稿。
-    legacy: LegacyConnectionOut | None = None
 
 
 class ByokTestIn(BaseModel):

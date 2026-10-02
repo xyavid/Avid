@@ -21,7 +21,7 @@ import pytest
 
 from avid.ai import transport
 from avid.ai.client import ask, chat_completion, stream_completion
-from avid.ai.config import Config, ConfigError, detect_provider, window_for
+from avid.ai.config import Config, ConfigError, window_for
 from avid.ai.protocol import LLMError, PromptTooLongError
 from avid.ai.providers import anthropic, gemini
 from avid.ai.transport import RetryPolicy
@@ -181,43 +181,15 @@ class TestRetry:
         assert body == ['data: {"ok": true}', ""]
 
 
-# ---------------- config：provider 探测 ----------------
+# ---------------- config：协议族与窗口表 ----------------
 
 
 class TestProviderDetection:
-    def test_detect_from_base_url(self):
-        assert detect_provider("https://api.openai.com/v1") == "openai"
-        assert detect_provider("https://api.anthropic.com") == "anthropic"
-        assert (
-            detect_provider("https://generativelanguage.googleapis.com/v1beta") == "gemini"
-        )
-        assert detect_provider("https://api.commandcode.ai/v1") == "openai"
-
-    def test_env_override_wins_and_supplies_default_base_url(self):
-        from avid.ai.config import load_config
-
-        config = load_config(
-            {"AVID_API_KEY": "k", "AVID_MODEL": "m", "AVID_PROVIDER": "anthropic"}
-        )
-        assert config.resolved_provider == "anthropic"
-        assert config.base_url == "https://api.anthropic.com"
-
-        config = load_config(
-            {
-                "AVID_API_KEY": "k",
-                "AVID_MODEL": "m",
-                "AVID_BASE_URL": "https://api.anthropic.com",
-            }
-        )
-        assert config.resolved_provider == "anthropic"
-
-    def test_unknown_provider_is_a_config_error(self):
-        from avid.ai.config import load_config
-
-        with pytest.raises(ConfigError, match="AVID_PROVIDER"):
-            load_config(
-                {"AVID_API_KEY": "k", "AVID_MODEL": "m", "AVID_PROVIDER": "palm"}
-            )
+    def test_resolved_provider_validates_the_family(self):
+        """协议族来自 BYOK 的显式声明；非法值报错而不是猜。"""
+        assert Config(api_key="k", base_url="https://x/v1", model="m", provider="anthropic").resolved_provider == "anthropic"
+        with pytest.raises(ConfigError, match="provider"):
+            Config(api_key="k", base_url="https://x/v1", model="m", provider="palm").resolved_provider
 
     def test_window_table_knows_newer_prefixes(self):
         assert window_for("claude-sonnet-4-5") == 200_000

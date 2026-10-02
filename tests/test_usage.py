@@ -1,7 +1,8 @@
 """阶段 22：provider usage 的归一化与上下文窗口解析。
 
 这一层只测 `ai/`：四家写法 → 同一个 ``Usage``（缺失一律 ``None``，不是 0）、
-命中率的定义域，以及窗口的取值顺序（显式 > 内置表 > 不知道）。
+命中率的定义域，以及内置窗口表（显式声明的窗口来自 BYOK 模型声明，
+解析链在 ``test_ai_byok.py``）。
 派生量与落盘（``usage_report`` / 会话值 / HTTP）在 ``test_usage_ledger.py``。
 """
 
@@ -9,13 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from avid.ai.config import (
-    ENV_CONTEXT_WINDOW,
-    Config,
-    ConfigError,
-    load_config,
-    window_for,
-)
+from avid.ai.config import Config, window_for
 from avid.ai.usage import Usage, hit_ratio, normalize_usage
 
 # ---------------- provider adapter ----------------
@@ -141,28 +136,6 @@ def test_window_table_uses_longest_prefix():
 
 def test_unknown_model_has_no_window_instead_of_a_guess():
     assert window_for("test-model") is None
-    assert load_config({"AVID_API_KEY": "k", "AVID_MODEL": "test-model"}).context_window is None
-
-
-def test_explicit_window_wins_and_falls_back_to_the_table():
-    explicit = load_config(
-        {"AVID_API_KEY": "k", "AVID_MODEL": "test-model", ENV_CONTEXT_WINDOW: "12345"}
-    )
-    assert explicit.context_window == 12345
-    fallback = load_config({"AVID_API_KEY": "k", "AVID_MODEL": "gpt-4o-mini"})
-    assert fallback.context_window == 128_000
-
-
-@pytest.mark.parametrize("raw", ["128k", "0", "-1", ""])
-def test_invalid_explicit_window_fails_loudly(raw):
-    """非法值必须报错而不是静默回落：静默回落会让用户以为看的是自己设的分母。"""
-    env = {"AVID_API_KEY": "k", "AVID_MODEL": "gpt-4o-mini", ENV_CONTEXT_WINDOW: raw}
-    if raw == "":
-        # 空串 = 没设：走内置表。
-        assert load_config(env).context_window == 128_000
-        return
-    with pytest.raises(ConfigError):
-        load_config(env)
 
 
 # ---------------- 窗口探测（问 provider 的 /models） ----------------

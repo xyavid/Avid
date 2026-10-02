@@ -675,6 +675,39 @@ def build_checks(arms: dict[str, dict[str, Any]], probe_count: int) -> dict[str,
     }
 
 
+def _seed_scripted_byok() -> None:
+    """模型是脚本：种一份最小 BYOK 配置，让 resolve_chat() 有东西可解析。
+
+    base_url 指到 .invalid——脚本 chat 根本不发请求；配置存在的意义是让
+    「没有模型配置」这条错误路径闭嘴。
+    """
+    byok_dir = Path(tempfile.mkdtemp(prefix="avid-e2e-byok-"))
+    (byok_dir / "models.json").write_text(
+        json.dumps(
+            {
+                "providers": [
+                    {
+                        "id": "scripted",
+                        "label": "Scripted",
+                        "protocol": "openai-compatible",
+                        "base_url": "https://scripted.invalid/v1",
+                        "auth": {"type": "bearer", "secret_ref": "scripted"},
+                        "models": [{"id": "scripted"}],
+                    }
+                ],
+                "bindings": {"chat": "scripted/scripted"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (byok_dir / "secrets.json").write_text(
+        json.dumps({"scripted": "e2e-not-a-real-key"}), encoding="utf-8"
+    )
+    os.environ["AVID_BYOK_CONFIG"] = str(byok_dir / "models.json")
+    os.environ["AVID_BYOK_SECRETS"] = str(byok_dir / "secrets.json")
+    os.environ["AVID_MODEL_INFO"] = "off"  # 不打真实端点
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="安全分层 E2E")
     parser.add_argument("--arms", default="manual,manual_yes,auto,full")
@@ -686,10 +719,8 @@ def main() -> int:
     home = tempfile.mkdtemp(prefix="avid-e2e-home-")
     os.environ["AVID_HOME"] = home
     os.environ["AVID_AUDIT_DIR"] = str(Path(home) / "audit")
-    # 模型是脚本，但 load_config() 仍然要求这两个变量存在。
-    os.environ["AVID_API_KEY"] = "e2e-key"
-    os.environ["AVID_MODEL"] = "scripted"
-    os.environ["AVID_MODEL_INFO"] = "off"
+    # 模型是脚本：种一份最小 BYOK 配置（见 _seed_scripted_byok）。
+    _seed_scripted_byok()
 
     prepare_canaries()
     probes_list = probes()

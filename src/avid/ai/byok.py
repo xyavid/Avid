@@ -1,6 +1,7 @@
 """BYOK 模型配置：三层（Provider / Model / Binding）与 secret 引用解析。
 
-设计（参照 BYOK 配置规格，两处刻意偏离）：
+模型连接的**唯一**来源（阶段 34b 起）：没有 BYOK 配置就没有模型可用，不存在
+env / 旧覆盖层回落。设计（参照 BYOK 配置规格，两处刻意偏离）：
 - 文件键名用 snake_case——Avid 全仓约定，文件是私有格式，没有外部互操作，
   不值得为规格里的 camelCase 多一层名字映射；
 - auth 只做 bearer / header / none——oauth 需要授权流基础设施，query 型自定义鉴权
@@ -12,10 +13,10 @@
 - `secrets.json`：secret_ref → 明文密钥，0600、临时文件 + os.replace 原子写。
 
 解析入口只有一个：`resolve_chat()`。优先级为本次运行覆盖（`providerId/modelId`
-ref，或命中绑定提供商的裸模型名）> chat 绑定 > legacy（旧 model.toml 覆盖层 →
-环境变量，即 `ai/config.load_config`）。损坏降级分两档：JSON 解析失败按「没有
-配置」回落 legacy 并警告；结构非法（协议未知、引用不存在……）抛 ConfigError——
-文件可读但内容错时，静默换端点比报错更危险。
+ref，或命中绑定提供商的裸模型名）> chat 绑定；两者都不成立就是 ConfigError，
+文案给出可执行的修复步骤。损坏降级分两档：JSON 解析失败按「没有配置」处理并
+警告；结构非法（协议未知、引用不存在……）抛 ConfigError——文件可读但内容错时，
+静默换端点比报错更危险。
 """
 
 from __future__ import annotations
@@ -30,15 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .config import (
-    _SETTINGS_TO_ENV,
-    Config,
-    ConfigError,
-    _max_parallel_tool_calls,
-    load_config,
-    read_model_settings,
-    window_for,
-)
+from .config import Config, ConfigError, max_parallel_tool_calls, window_for
 
 logger = logging.getLogger("avid.ai.byok")
 
@@ -431,14 +424,8 @@ def delete_secret(ref: str) -> None:
 
 
 def _parallel_cap(env: Mapping[str, str] | None) -> int:
-    """max_parallel_tool_calls 不是 per-provider 的，继续从 legacy 来源读。"""
-    source = dict(os.environ if env is None else env)
-    overlay = read_model_settings()
-    for key, env_name in _SETTINGS_TO_ENV.items():
-        value = overlay.get(key)
-        if value:
-            source[env_name] = value
-    return _max_parallel_tool_calls(source)
+    """max_parallel_tool_calls 是运行期开关，不是 per-provider 的，直接读环境。"""
+    return max_parallel_tool_calls(env)
 
 
 def config_from_provider(
@@ -503,29 +490,45 @@ def _resolve_ref(config: ByokConfig, ref: str, env=None) -> Config:
         raise _err(f"提供商 {provider.id} 下没有模型 {model_id!r}")
     return config_from_provider(provider, model_id, env)
 
+_NO_CONFIG_MESSAGE = (
+    "还没有模型配置：在界面「设置 → 模型」里添加提供商并绑定 chat 槽位，\n"
+    "或手编 ~/.avid/models.json（providers + bindings，结构见 ai/byok.py 模块注释），\n"
+    "密钥放 ~/.avid/secrets.json"
+)
+
 
 def resolve_chat(model: str | None = None, env: Mapping[str, str] | None = None) -> Config:
-    """唯一解析入口：本次覆盖 > chat 绑定 > legacy（load_config）。
+    """唯一解析入口：本次覆盖 > chat 绑定；没有可用的绑定就是 ConfigError。
 
-    `model` 是「本次运行用哪个模型」：`providerId/modelId` ref 直接定位 BYOK；
-    裸模型名先在 chat 绑定的提供商目录里找，找不到回落 legacy 的按名覆盖。
-    `env` 只作用于 legacy 回落侧（BYOK 文件照常读取）。
+    `model` 是「本次运行用哪个模型」：`providerId/modelId` ref 直接定位；
+    裸模型名在 chat 绑定的提供商目录里找，找不到就报错（不再有 env 回落）。
+    `env` 只作用于运行期开关（并行工具上限）的读取来源。
     """
     override = (model or "").strip() or None
     byok = load_byok()
-    if byok is not None:
-        if override is not None and "/" in override:
-            return _resolve_ref(byok, override, env)
-        binding = byok.bindings.get(CHAT_SLOT)
-        match = _REF_PATTERN.match(binding) if binding else None
-        if match:
-            provider = _pick_provider(byok, match.group(1))
-            if override is None:
-                return config_from_provider(provider, match.group(2), env)
-            # 裸名覆盖：绑定提供商目录里有就按 BYOK 走，否则 legacy 的按名覆盖。
-            if provider.model(override) is not None:
-                return config_from_provider(provider, override, env)
-    return load_config(env=env, model=override)
+    if byok is None:
+        raise _err(_NO_CONFIG_MESSAGE)
+    if override is not None and "/" in override:
+        return _resolve_ref(byok, override, env)
+    binding = byok.bindings.get(CHAT_SLOT)
+    if not binding:
+        raise _err(
+            "chat 槽位还没有绑定模型：在「设置 → 模型」的 chat 下拉里选一个，"
+            "或把 bindings.chat 设为 providerId/modelId"
+        )
+    match = _REF_PATTERN.match(binding)
+    if match is None:  # validate_byok 已挡；防御手编文件绕过校验的路径
+        raise _err(f"绑定 chat 的值必须是 providerId/modelId 形式：{binding!r}")
+    provider = _pick_provider(byok, match.group(1))
+    model_id = match.group(2)
+    if override is not None:
+        if provider.model(override) is None:
+            raise _err(
+                f"模型 {override!r} 不在绑定的提供商 {provider.id} 里："
+                "先在「设置 → 模型」里给它加上，或用 providerId/modelId 形式指定其他提供商的模型"
+            )
+        model_id = override
+    return config_from_provider(provider, model_id, env)
 
 
 def byok_model_candidates() -> list[dict[str, str]]:

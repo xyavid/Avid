@@ -109,14 +109,15 @@ INFRA_STATUSES = ("error", "llm_error")
 def real_config_or_skip():
     """真模型评测用的模型配置。
 
-    `tests/conftest.py` 的 `model_env` 是 autouse 的，会给**每个**测试塞
-    `test-key` / `test-model`。那对 eval 是致命的：运行会全部 401（实测踩到过一次），
-    所以这里显式挡一道——缺配置跳过，拿到夹具的假配置直接失败。
+    `tests/conftest.py` 的 `model_env` 是 autouse 的，会给**每个**测试种一份
+    `test-key` / `test-model` 的 BYOK 配置。那对 eval 是致命的：运行会全部 401
+    （实测踩到过一次），所以这里显式挡一道——缺配置跳过，拿到夹具的假配置直接失败。
     """
-    from avid.ai.config import ConfigError, load_config
+    from avid.ai.byok import resolve_chat
+    from avid.ai.config import ConfigError
 
     try:
-        config = load_config()
+        config = resolve_chat()
     except ConfigError as exc:
         pytest.skip(f"没有模型配置，跳过真模型评测：{exc}")
     if config.api_key == "test-key" or config.model == "test-model":

@@ -59,9 +59,8 @@ class Model:
 
 @pytest.fixture
 def sandbox(monkeypatch, tmp_path: Path, hook_registry) -> Path:
+    # 模型配置由 conftest 的 model_env 种好（test/test-model）
     monkeypatch.setattr(workspace, "WORKSPACE_ROOT", tmp_path)
-    monkeypatch.setenv("AVID_API_KEY", "test-key")
-    monkeypatch.setenv("AVID_MODEL", "test-model")
     return tmp_path
 
 

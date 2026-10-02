@@ -17,7 +17,8 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
-from avid.ai.config import ConfigError, load_config
+from avid.ai.byok import resolve_chat
+from avid.ai.config import ConfigError
 
 from .avidbench import VARIANTS, load_suite, suites
 from .avidbench.case import CaseError
@@ -58,7 +59,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
             "overrides。不给就是内核默认（40 万）"
         ),
     )
-    parser.add_argument("--model", help="覆盖 AVID_MODEL（会写进结果文件）")
+    parser.add_argument("--model", help="覆盖解析出的模型名（会写进结果文件）")
     parser.add_argument("--out", help="结果目录；默认 benchmarks/runs/<时间>-<commit>")
     parser.add_argument("--list", action="store_true", help="只列出评测集")
     args = parser.parse_args(argv)
@@ -115,7 +116,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
-        config = load_config()
+        config = resolve_chat()
     except ConfigError as exc:
         print(f"配置错误：{exc}", file=sys.stderr)
         return 2

@@ -19,14 +19,16 @@ from fastapi.testclient import TestClient
 from support import collect  # noqa: F401  (统一收集器，保持与其它 web 用例同构)
 
 from avid.ai.byok import config_path, load_byok, read_secrets, resolve_chat, secrets_path
+from avid.ai.config import ConfigError
 from avid.svc import Services
 from avid.web import create_app
 
 
 @pytest.fixture(autouse=True)
 def byok_paths(tmp_path, monkeypatch):
-    monkeypatch.setenv("AVID_BYOK_CONFIG", str(tmp_path / "byok" / "models.json"))
-    monkeypatch.setenv("AVID_BYOK_SECRETS", str(tmp_path / "byok" / "secrets.json"))
+    """指向本文件专用的空目录（盖掉 conftest 的种子配置，从空状态测起）。"""
+    monkeypatch.setenv("AVID_BYOK_CONFIG", str(tmp_path / "settings-byok" / "models.json"))
+    monkeypatch.setenv("AVID_BYOK_SECRETS", str(tmp_path / "settings-byok" / "secrets.json"))
 
 
 def provider_payload(**overrides) -> dict:
@@ -56,16 +58,15 @@ def client(tmp_path) -> TestClient:
 # ---------------- GET：读与密钥边界 ----------------
 
 
-def test_get_empty_state_returns_legacy_block(tmp_path):
+def test_get_empty_state_has_no_legacy_block(tmp_path):
     http = client(tmp_path)
 
     body = http.get("/api/settings/byok").json()
 
     assert body["providers"] == []
     assert body["bindings"] == {"chat": None}
-    # 没有 BYOK 文件时给 legacy 生效值（conftest 的 env 基线），供界面预填导入草稿
-    assert body["legacy"]["model"] == "test-model"
-    assert body["legacy"]["api_key_set"] is True
+    # BYOK 是唯一来源：没有 legacy 块，空态由界面自己引导
+    assert "legacy" not in body
 
 
 def test_get_hides_key_but_shows_key_set(tmp_path):
@@ -258,7 +259,8 @@ def test_delete_drops_both_files_and_falls_back(tmp_path):
     assert res.status_code == 204
     assert not config_path().exists()
     assert not secrets_path().exists()
-    assert resolve_chat().model == "test-model"  # 回落 conftest 的 env 基线
+    with pytest.raises(ConfigError, match="还没有模型配置"):
+        resolve_chat()
     assert load_byok() is None
 
 
@@ -281,8 +283,9 @@ def test_byok_binding_beats_legacy_env(tmp_path):
     assert config.provider == "openai"  # openai-compatible → openai 协议族
 
 
-def test_unbound_config_falls_back_to_legacy(tmp_path):
+def test_unbound_config_cannot_resolve(tmp_path):
     http = client(tmp_path)
     http.put("/api/settings/byok", json={"providers": [provider_payload()], "bindings": {}})
 
-    assert resolve_chat().model == "test-model"
+    with pytest.raises(ConfigError, match="chat 槽位还没有绑定"):
+        resolve_chat()

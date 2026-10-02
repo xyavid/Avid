@@ -262,7 +262,7 @@
           "enforced": true,
           "degraded": false,
           "reason": null,
-          "root": "/tmp/avid-e2e-boundary-g2wxz1cy/manual",
+          "root": "/tmp/avid-e2e-boundary-95t7ayg9/manual",
           "notes": []
         }
       },
@@ -288,20 +288,20 @@
         "--tmpfs",
         "/home/fishy/.config/gh",
         "--ro-bind",
-        "/tmp/avid-e2e-home-r7hzt8kd/run/empty-mask",
+        "/tmp/avid-e2e-home-kjiuf7du/run/empty-mask",
         "/home/fishy/.docker/config.json",
         "--ro-bind",
-        "/tmp/avid-e2e-home-r7hzt8kd/run/empty-mask",
+        "/tmp/avid-e2e-home-kjiuf7du/run/empty-mask",
         "/home/fishy/.bashrc",
         "--ro-bind",
-        "/tmp/avid-e2e-home-r7hzt8kd/run/empty-mask",
+        "/tmp/avid-e2e-home-kjiuf7du/run/empty-mask",
         "/home/fishy/.profile",
         "--ro-bind",
-        "/tmp/avid-e2e-home-r7hzt8kd/run/empty-mask",
+        "/tmp/avid-e2e-home-kjiuf7du/run/empty-mask",
         "/home/fishy/.bash_history",
         "--bind",
-        "/tmp/avid-e2e-boundary-g2wxz1cy/manual",
-        "/tmp/avid-e2e-boundary-g2wxz1cy/manual",
+        "/tmp/avid-e2e-boundary-95t7ayg9/manual",
+        "/tmp/avid-e2e-boundary-95t7ayg9/manual",
         "--unshare-net",
         "--unshare-pid",
         "--unshare-uts",
@@ -343,7 +343,7 @@
         "VIRTUAL_ENV",
         "/home/fishy/Avid/.venv",
         "--chdir",
-        "/tmp/avid-e2e-boundary-g2wxz1cy/manual",
+        "/tmp/avid-e2e-boundary-95t7ayg9/manual",
         "--",
         "bash",
         "-c",
@@ -370,14 +370,14 @@
           "enforced": true,
           "degraded": false,
           "reason": null,
-          "root": "/tmp/avid-e2e-boundary-g2wxz1cy/manual",
+          "root": "/tmp/avid-e2e-boundary-95t7ayg9/manual",
           "notes": []
         },
         "sample": [
           {
-            "ts": 1790659429826,
+            "ts": 1790951064897,
             "kind": "decision",
-            "run": "run_e26987093c58",
+            "run": "run_661a22e3369d",
             "mode": "manual",
             "axes": {
               "approval": "user",
@@ -392,7 +392,7 @@
               "enforced": true,
               "degraded": false,
               "reason": null,
-              "root": "/tmp/avid-e2e-boundary-g2wxz1cy/manual",
+              "root": "/tmp/avid-e2e-boundary-95t7ayg9/manual",
               "notes": []
             },
             "tool": "bash",
@@ -420,9 +420,9 @@
             "reason": "删除根目录或家目录"
           },
           {
-            "ts": 1790659429834,
+            "ts": 1790951064904,
             "kind": "decision",
-            "run": "run_e26987093c58",
+            "run": "run_661a22e3369d",
             "mode": "manual",
             "axes": {
               "approval": "user",
@@ -437,7 +437,7 @@
               "enforced": true,
               "degraded": false,
               "reason": null,
-              "root": "/tmp/avid-e2e-boundary-g2wxz1cy/manual",
+              "root": "/tmp/avid-e2e-boundary-95t7ayg9/manual",
               "notes": []
             },
             "tool": "read_file",
@@ -801,7 +801,7 @@
           "enforced": true,
           "degraded": false,
           "reason": null,
-          "root": "/tmp/avid-e2e-boundary-g2wxz1cy/manual_yes",
+          "root": "/tmp/avid-e2e-boundary-95t7ayg9/manual_yes",
           "notes": []
         }
       },
@@ -827,20 +827,20 @@
         "--tmpfs",
         "/home/fishy/.config/gh",
         "--ro-bind",
-        "/tmp/avid-e2e-home-r7hzt8kd/run/empty-mask",
+        "/tmp/avid-e2e-home-kjiuf7du/run/empty-mask",
         "/home/fishy/.docker/config.json",
         "--ro-bind",
-        "/tmp/avid-e2e-home-r7hzt8kd/run/empty-mask",
+        "/tmp/avid-e2e-home-kjiuf7du/run/empty-mask",
         "/home/fishy/.bashrc",
         "--ro-bind",
-        "/tmp/avid-e2e-home-r7hzt8kd/run/empty-mask",
+        "/tmp/avid-e2e-home-kjiuf7du/run/empty-mask",
         "/home/fishy/.profile",
         "--ro-bind",
-        "/tmp/avid-e2e-home-r7hzt8kd/run/empty-mask",
+        "/tmp/avid-e2e-home-kjiuf7du/run/empty-mask",
         "/home/fishy/.bash_history",
         "--bind",
-        "/tmp/avid-e2e-boundary-g2wxz1cy/manual_yes",
-        "/tmp/avid-e2e-boundary-g2wxz1cy/manual_yes",
+        "/tmp/avid-e2e-boundary-95t7ayg9/manual_yes",
+        "/tmp/avid-e2e-boundary-95t7ayg9/manual_yes",
         "--unshare-net",
         "--unshare-pid",
         "--unshare-uts",
@@ -882,7 +882,7 @@
         "VIRTUAL_ENV",
         "/home/fishy/Avid/.venv",
         "--chdir",
-        "/tmp/avid-e2e-boundary-g2wxz1cy/manual_yes",
+        "/tmp/avid-e2e-boundary-95t7ayg9/manual_yes",
         "--",
         "bash",
         "-c",
@@ -909,14 +909,14 @@
           "enforced": true,
           "degraded": false,
           "reason": null,
-          "root": "/tmp/avid-e2e-boundary-g2wxz1cy/manual_yes",
+          "root": "/tmp/avid-e2e-boundary-95t7ayg9/manual_yes",
           "notes": []
         },
         "sample": [
           {
-            "ts": 1790659430099,
+            "ts": 1790951065203,
             "kind": "decision",
-            "run": "run_c965ada9cb48",
+            "run": "run_daab6cc8d865",
             "mode": "manual",
             "axes": {
               "approval": "user",
@@ -931,7 +931,7 @@
               "enforced": true,
               "degraded": false,
               "reason": null,
-              "root": "/tmp/avid-e2e-boundary-g2wxz1cy/manual_yes",
+              "root": "/tmp/avid-e2e-boundary-95t7ayg9/manual_yes",
               "notes": []
             },
             "tool": "bash",
@@ -959,9 +959,9 @@
             "reason": "删除根目录或家目录"
           },
           {
-            "ts": 1790659430103,
+            "ts": 1790951065208,
             "kind": "decision",
-            "run": "run_c965ada9cb48",
+            "run": "run_daab6cc8d865",
             "mode": "manual",
             "axes": {
               "approval": "user",
@@ -976,7 +976,7 @@
               "enforced": true,
               "degraded": false,
               "reason": null,
-              "root": "/tmp/avid-e2e-boundary-g2wxz1cy/manual_yes",
+              "root": "/tmp/avid-e2e-boundary-95t7ayg9/manual_yes",
               "notes": []
             },
             "tool": "read_file",
@@ -1304,7 +1304,7 @@
           "enforced": true,
           "degraded": false,
           "reason": null,
-          "root": "/tmp/avid-e2e-boundary-g2wxz1cy/auto",
+          "root": "/tmp/avid-e2e-boundary-95t7ayg9/auto",
           "notes": []
         }
       },
@@ -1330,20 +1330,20 @@
         "--tmpfs",
         "/home/fishy/.config/gh",
         "--ro-bind",
-        "/tmp/avid-e2e-home-r7hzt8kd/run/empty-mask",
+        "/tmp/avid-e2e-home-kjiuf7du/run/empty-mask",
         "/home/fishy/.docker/config.json",
         "--ro-bind",
-        "/tmp/avid-e2e-home-r7hzt8kd/run/empty-mask",
+        "/tmp/avid-e2e-home-kjiuf7du/run/empty-mask",
         "/home/fishy/.bashrc",
         "--ro-bind",
-        "/tmp/avid-e2e-home-r7hzt8kd/run/empty-mask",
+        "/tmp/avid-e2e-home-kjiuf7du/run/empty-mask",
         "/home/fishy/.profile",
         "--ro-bind",
-        "/tmp/avid-e2e-home-r7hzt8kd/run/empty-mask",
+        "/tmp/avid-e2e-home-kjiuf7du/run/empty-mask",
         "/home/fishy/.bash_history",
         "--bind",
-        "/tmp/avid-e2e-boundary-g2wxz1cy/auto",
-        "/tmp/avid-e2e-boundary-g2wxz1cy/auto",
+        "/tmp/avid-e2e-boundary-95t7ayg9/auto",
+        "/tmp/avid-e2e-boundary-95t7ayg9/auto",
         "--unshare-net",
         "--unshare-pid",
         "--unshare-uts",
@@ -1385,7 +1385,7 @@
         "VIRTUAL_ENV",
         "/home/fishy/Avid/.venv",
         "--chdir",
-        "/tmp/avid-e2e-boundary-g2wxz1cy/auto",
+        "/tmp/avid-e2e-boundary-95t7ayg9/auto",
         "--",
         "bash",
         "-c",
@@ -1412,14 +1412,14 @@
           "enforced": true,
           "degraded": false,
           "reason": null,
-          "root": "/tmp/avid-e2e-boundary-g2wxz1cy/auto",
+          "root": "/tmp/avid-e2e-boundary-95t7ayg9/auto",
           "notes": []
         },
         "sample": [
           {
-            "ts": 1790659430496,
+            "ts": 1790951065674,
             "kind": "decision",
-            "run": "run_af24b9e3ec78",
+            "run": "run_e4df1837dfcc",
             "mode": "auto",
             "axes": {
               "approval": "classifier",
@@ -1434,7 +1434,7 @@
               "enforced": true,
               "degraded": false,
               "reason": null,
-              "root": "/tmp/avid-e2e-boundary-g2wxz1cy/auto",
+              "root": "/tmp/avid-e2e-boundary-95t7ayg9/auto",
               "notes": []
             },
             "tool": "bash",
@@ -1462,9 +1462,9 @@
             "reason": "删除根目录或家目录"
           },
           {
-            "ts": 1790659430500,
+            "ts": 1790951065678,
             "kind": "decision",
-            "run": "run_af24b9e3ec78",
+            "run": "run_e4df1837dfcc",
             "mode": "auto",
             "axes": {
               "approval": "classifier",
@@ -1479,7 +1479,7 @@
               "enforced": true,
               "degraded": false,
               "reason": null,
-              "root": "/tmp/avid-e2e-boundary-g2wxz1cy/auto",
+              "root": "/tmp/avid-e2e-boundary-95t7ayg9/auto",
               "notes": []
             },
             "tool": "read_file",
@@ -1807,7 +1807,7 @@
           "enforced": false,
           "degraded": false,
           "reason": "沙箱被显式关闭（full）",
-          "root": "/tmp/avid-e2e-boundary-g2wxz1cy/full",
+          "root": "/tmp/avid-e2e-boundary-95t7ayg9/full",
           "notes": []
         }
       },
@@ -1837,14 +1837,14 @@
           "enforced": false,
           "degraded": false,
           "reason": "沙箱被显式关闭（full）",
-          "root": "/tmp/avid-e2e-boundary-g2wxz1cy/full",
+          "root": "/tmp/avid-e2e-boundary-95t7ayg9/full",
           "notes": []
         },
         "sample": [
           {
-            "ts": 1790659430680,
+            "ts": 1790951065892,
             "kind": "decision",
-            "run": "run_d22431982c46",
+            "run": "run_a4a0e3789a34",
             "mode": "full",
             "axes": {
               "approval": "none",
@@ -1859,7 +1859,7 @@
               "enforced": false,
               "degraded": false,
               "reason": "沙箱被显式关闭（full）",
-              "root": "/tmp/avid-e2e-boundary-g2wxz1cy/full",
+              "root": "/tmp/avid-e2e-boundary-95t7ayg9/full",
               "notes": []
             },
             "tool": "bash",
@@ -1887,9 +1887,9 @@
             "reason": "删除根目录或家目录"
           },
           {
-            "ts": 1790659430684,
+            "ts": 1790951065897,
             "kind": "decision",
-            "run": "run_d22431982c46",
+            "run": "run_a4a0e3789a34",
             "mode": "full",
             "axes": {
               "approval": "none",
@@ -1904,7 +1904,7 @@
               "enforced": false,
               "degraded": false,
               "reason": "沙箱被显式关闭（full）",
-              "root": "/tmp/avid-e2e-boundary-g2wxz1cy/full",
+              "root": "/tmp/avid-e2e-boundary-95t7ayg9/full",
               "notes": []
             },
             "tool": "read_file",

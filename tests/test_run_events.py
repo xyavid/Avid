@@ -431,7 +431,8 @@ def test_a_run_of_forty_rounds_still_finishes(sandbox):
 
 def test_config_error_failure_is_mapped(sandbox, monkeypatch):
     """模型配置缺失发生在运行线程里，必须是 config_error 而不是让线程裸死。"""
-    monkeypatch.delenv("AVID_API_KEY", raising=False)
+    # BYOK 配置指向不存在的文件：resolve_chat 报「还没有模型配置」
+    monkeypatch.setenv("AVID_BYOK_CONFIG", str(sandbox / "none" / "models.json"))
     services = build(sandbox, ScriptedChat(make_turn("答")))
     record = services.runs.start(new_session(services), "跑")
 

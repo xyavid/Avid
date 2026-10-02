@@ -66,7 +66,8 @@ def test_disabled_log_returns_the_record_without_touching_disk(tmp_path):
     record = entry.write("decision", tool="bash")
     assert record is not None and record["tool"] == "bash"
     assert entry.path() is None
-    assert list(tmp_path.iterdir()) == []
+    # byok/ 是 conftest model_env 种的模型配置，与审计无关
+    assert [p for p in tmp_path.iterdir() if p.name != "byok"] == []
 
 
 def test_run_tag_is_the_fallback_identity(tmp_path):

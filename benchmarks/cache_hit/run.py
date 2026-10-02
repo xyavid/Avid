@@ -44,8 +44,9 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
+from avid.ai.byok import resolve_chat  # noqa: E402
 from avid.ai.client import Turn, Usage, chat_completion  # noqa: E402
-from avid.ai.config import Config, load_config  # noqa: E402
+from avid.ai.config import Config  # noqa: E402
 from avid.ai.transcript import text_of  # noqa: E402
 from avid.runtime.loop import agent_loop  # noqa: E402
 from avid.runtime.state import RunState  # noqa: E402
@@ -194,7 +195,7 @@ def run_frozen_prefix(rounds: int) -> dict[str, Any]:
 
 def run_live(min_ratio: float) -> dict[str, Any]:
     recorder = Recorder()
-    config = load_config()
+    config = resolve_chat()
 
     with tempfile.TemporaryDirectory(prefix="avid-cache-hit-live-") as workdir:
         for name, content in LIVE_FILES.items():
