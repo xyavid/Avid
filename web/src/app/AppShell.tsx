@@ -20,7 +20,7 @@ export type AppShellProps = {
   sidebar?: ReactNode
   main?: ReactNode
   rail?: ReactNode
-  /** 顶栏右侧操作区（设置按钮等）；缺省显示占位标注。 */
+  /** 顶栏右侧操作区。不给就留白——设置入口已挪到侧栏底栏，顶栏只留标识与字标。 */
   actions?: ReactNode
 }
 
@@ -35,7 +35,7 @@ export function AppShell({ sidebar, main, rail, actions }: AppShellProps) {
           <AvidMark size={22} />
           <span className="font-serif text-title tracking-[0.01em]">Avid</span>
         </span>
-        {actions ?? <RegionNote>主题 · 状态占位</RegionNote>}
+        {actions}
       </header>
 
       <div className="grid min-h-0 grid-cols-[var(--sidebar-width)_minmax(0,1fr)_var(--channel-inspector-width)]">

@@ -28,13 +28,13 @@ import { Timeline, toolIcon } from '../../components/chat/Timeline'
 import { ToolCard } from '../../components/chat/ToolCard'
 import { UserBubble } from '../../components/chat/UserBubble'
 import { useRunStream } from '../../state/useRunStream'
-import { IconButton } from '../../ui/IconButton'
 import { AvidMark } from '../../ui/Mark'
 import { useAutoHideScroll } from '../../ui/useAutoHideScroll'
 import { ContextRail } from '../../components/rail/ContextRail'
 import { SettingsModal } from '../../components/settings/SettingsModal'
 import { ProjectCard } from '../../components/session/ProjectCard'
 import { SessionNav } from '../../components/session/SessionNav'
+import { SidebarFooter } from '../../components/session/SidebarFooter'
 import { AppShell } from '../../app/AppShell'
 
 /** 欢迎态（报告 §6 底部欢迎态）：标识 + 衬线欢迎语（letter-spacing .06em）。
@@ -276,7 +276,6 @@ export function ConversationPage() {
   return (
     <>
       <AppShell
-        actions={<IconButton icon="settings" label="设置" onClick={() => setSettingsOpen(true)} />}
       sidebar={
         <div className="flex min-h-0 flex-1 flex-col gap-a12">
           <ProjectCard
@@ -295,6 +294,8 @@ export function ConversationPage() {
             selectedId={selectedId}
             onSelect={setSelectedId}
           />
+          {/* 设置入口在侧栏最底部、单开一栏（原先挂在顶栏右上角） */}
+          <SidebarFooter onOpenSettings={() => setSettingsOpen(true)} />
         </div>
       }
       main={

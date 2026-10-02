@@ -9,7 +9,7 @@ import type { ReactNode } from 'react'
 
 import { AssistantMessage, Composer, ToolCard, UserBubble } from '../../components/chat'
 import { ContextRail } from '../../components/rail'
-import { ProjectCard, SessionItem, SessionNav } from '../../components/session'
+import { ProjectCard, SessionItem, SessionNav, SidebarFooter } from '../../components/session'
 import type { SessionSummary, UsageReport } from '../../api/types'
 import { Badge } from '../Badge'
 import { Button } from '../Button'
@@ -233,9 +233,11 @@ export function GalleryPage() {
       )}
 
       {show('nav') && (
-        <Section id="nav" title="会话列表（侧栏 240px 实宽）">
-          <div className="w-sidebar rounded-md border-hairline border-hair bg-sidebar p-a12">
+        <Section id="nav" title="会话列表（侧栏 240px 实宽）+ 侧栏底栏">
+          <div className="flex h-[420px] w-sidebar flex-col rounded-md border-hairline border-hair bg-sidebar p-a12">
             <SessionNav sessions={demoSessions} selectedId="d1" onSelect={() => {}} />
+            {/* 底栏单开一栏：顶发丝线 + mt-auto 贴住栏底，设置入口在会话列表之后 */}
+            <SidebarFooter onOpenSettings={() => {}} />
           </div>
         </Section>
       )}
