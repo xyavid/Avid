@@ -53,7 +53,7 @@ export function GalleryPage() {
         <>
           <h1 className="font-serif text-[26px] font-medium">Avid 组件墙</h1>
           <p className="mt-a4 font-ui text-caption text-ink-muted">
-            标识 · 焰 ｜ 基础 · 按钮 输入 标签 徽章 图标 ｜ 组合 · 消息 会话 卡片 标签页 工具卡 会话列表 项目卡 右栏 输入区 ｜ 实际页面看主页（不带 ?gallery=1）
+            标识 · 荷花 ｜ markdown ｜ 基础 · 按钮 输入 标签 徽章 图标 ｜ 组合 · 消息 会话 卡片 标签页 工具卡 会话列表 项目卡 右栏 输入区 ｜ 实际页面看主页（不带 ?gallery=1）
           </p>
           <div className="mb-a16 mt-a16 border-t border-hair" />
         </>
@@ -169,6 +169,43 @@ export function GalleryPage() {
                 <span className="font-serif text-title tracking-[0.01em]">Avid</span>
               </span>
             </div>
+          </div>
+        </Section>
+      )}
+
+      {show('markdown') && (
+        <Section id="markdown" title="markdown 渲染（助手正文：模型输出直接进 DOM，全程不注入 HTML）">
+          <div className="max-w-chat rounded-md border-hairline border-hair bg-card px-a16 py-a12">
+            {/* 样本覆盖：标题 / 段落（含行内码·粗体·链接）/ 有序与无序列表（含嵌套）/
+                引用 / 表格 / 围栏代码 / 分隔线 / svg 围栏（渲染成图，不内联） */}
+            <AssistantMessage>{`## 结论
+
+读完了 \`pyproject.toml\`，项目名是 **avid**，要求 Python >= 3.12。参考 [PEP 621](https://peps.python.org/pep-0621/)。
+
+### 要点
+
+1. 依赖只有 \`httpx\`
+2. 开发依赖用 \`uv\` 管理
+   - \`uv sync\` 装内核依赖
+   - \`uv sync --extra web\` 追加 Web 依赖
+
+> 需要联网的只有 \`web_search\`，Key 走环境变量。
+
+| 项 | 值 | 备注 |
+| :--- | ---: | :--- |
+| 包名 | avid | 与项目名一致 |
+| 入口 | avid.cli | \`python -m avid\` 亦可 |
+
+\`\`\`python
+def main() -> int:
+    return 0
+\`\`\`
+
+---
+
+\`\`\`svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 40"><rect width="120" height="40" rx="6" fill="#537D96"/><text x="12" y="26" font-family="serif" font-size="16" fill="#F8F4ED">Avid</text></svg>
+\`\`\``}</AssistantMessage>
           </div>
         </Section>
       )}
