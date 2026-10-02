@@ -31,9 +31,9 @@ from pathlib import Path
 from typing import Any
 
 from .config import (
+    _SETTINGS_TO_ENV,
     Config,
     ConfigError,
-    _SETTINGS_TO_ENV,
     _max_parallel_tool_calls,
     load_config,
     read_model_settings,
@@ -170,12 +170,13 @@ def _validate_provider(provider: ProviderDecl) -> None:
             f"provider {provider.id} 的 auth.type 必须是 {'、'.join(AUTH_TYPES)} 之一："
             f"{provider.auth.type!r}"
         )
-    if provider.auth.type in (AUTH_BEARER, AUTH_HEADER):
-        if not provider.auth.secret_ref or not _ID_PATTERN.match(provider.auth.secret_ref):
-            raise _err(
-                f"provider {provider.id} 的 auth.secret_ref 只能用小写字母、数字与连字符："
-                f"{provider.auth.secret_ref!r}"
-            )
+    if provider.auth.type in (AUTH_BEARER, AUTH_HEADER) and (
+        not provider.auth.secret_ref or not _ID_PATTERN.match(provider.auth.secret_ref)
+    ):
+        raise _err(
+            f"provider {provider.id} 的 auth.secret_ref 只能用小写字母、数字与连字符："
+            f"{provider.auth.secret_ref!r}"
+        )
     if provider.auth.type == AUTH_HEADER and not (provider.auth.header_name or "").strip():
         raise _err(f"provider {provider.id} 用 header 鉴权时必须给 header_name")
     if provider.models and len({m.id for m in provider.models}) != len(provider.models):
@@ -207,12 +208,12 @@ def validate_byok(config: ByokConfig) -> None:
         if match is None:
             raise _err(f"绑定 {slot} 的值必须是 providerId/modelId 形式：{binding!r}")
         pid, mid = match.group(1), match.group(2)
-        provider = config.providers.get(pid)
-        if provider is None:
+        bound = config.providers.get(pid)
+        if bound is None:
             raise _err(f"绑定 {slot} 指向不存在的提供商：{pid}")
-        if not provider.enabled:
+        if not bound.enabled:
             raise _err(f"绑定 {slot} 指向已停用的提供商：{pid}")
-        model = provider.model(mid)
+        model = bound.model(mid)
         if model is None:
             raise _err(f"绑定 {slot} 指向 {pid} 下不存在的模型：{binding}")
         if model.capabilities.tool_calling is False:
@@ -332,7 +333,9 @@ def _parse_provider(raw: Any) -> ProviderDecl:
                 label=item.get("label"),
                 context_window=item.get("context_window"),
                 max_output=item.get("max_output"),
-                capabilities=_parse_capabilities(item.get("capabilities"), f"{where} 模型 {item['id']}"),
+                capabilities=_parse_capabilities(
+                    item.get("capabilities"), f"{where} 模型 {item['id']}"
+                ),
             )
         )
     return ProviderDecl(
@@ -438,10 +441,15 @@ def _parallel_cap(env: Mapping[str, str] | None) -> int:
     return _max_parallel_tool_calls(source)
 
 
-def config_from_provider(provider: ProviderDecl, model_id: str, env=None) -> Config:
-    """Resolve one provider+model into the runtime Config (secret plaintext included)."""
-    secret = ""
-    if provider.auth.type in (AUTH_BEARER, AUTH_HEADER):
+def config_from_provider(
+    provider: ProviderDecl, model_id: str, env=None, *, secret: str | None = None
+) -> Config:
+    """Resolve one provider+model into the runtime Config (secret plaintext included).
+
+    `secret` 覆盖密钥库查找——连通校验要在保存前对未落盘的 key 发请求，但不能有
+    写文件的副作用，所以明文走参数、只活在内存里。
+    """
+    if secret is None and provider.auth.type in (AUTH_BEARER, AUTH_HEADER):
         ref = provider.auth.secret_ref or provider.id
         secret = read_secrets().get(ref, "")
         if not secret:
@@ -449,6 +457,8 @@ def config_from_provider(provider: ProviderDecl, model_id: str, env=None) -> Con
                 f"缺少 {provider.label} 的密钥（secret_ref={ref!r}）："
                 "在「设置 → 模型」里填入，或直接编辑 ~/.avid/secrets.json"
             )
+    if secret is None:
+        secret = ""
     model = provider.model(model_id)
     capabilities = model.capabilities if model else ModelCapabilities()
     if capabilities.tool_calling is False:

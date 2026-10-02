@@ -44,12 +44,21 @@ class BuildInfo(BaseModel):
     source: str = "dev"
 
 
+class ModelCandidate(BaseModel):
+    """按运行换模型的 BYOK 候选：`ref` 是 providerId/modelId，label 是展示名。"""
+
+    ref: str = Field(max_length=MAX_NAME_CHARS)
+    label: str = Field(max_length=MAX_NAME_CHARS)
+
+
 class Capabilities(BaseModel):
     tools: list[str]
     skills: list[SkillOut]
     model: str | None = None
     # 可切换的模型候选（本次运行的覆盖用）；取自内核的窗口表，不是提供商目录。
     known_models: list[str] = Field(default_factory=list)
+    # BYOK 候选（providerId/modelId ref）；没有 BYOK 配置时为空，界面回落 known_models。
+    models: list[ModelCandidate] = Field(default_factory=list)
     workspace: str
     # Declared because the response model silently drops undeclared keys, which would read as absent.
     workspace_picker: str | None = None
@@ -115,28 +124,114 @@ class CreateWorkspaceIn(BaseModel):
     permission: Literal["manual", "auto"] | None = None
 
 
-class ModelSettingsOut(BaseModel):
-    """Effective model connection for the settings UI; the API key is never returned."""
-
-    model: str | None = None
-    base_url: str | None = None
-    # None = 按 base_url 自动识别协议族（config.detect_provider）
-    provider: str | None = None
-    api_key_set: bool = False
-    # True = 界面覆盖层（~/.avid/model.toml）存在且优先于环境变量
-    overlay_active: bool = False
-
-
-class ModelSettingsIn(BaseModel):
-    """UI overlay payload: every field optional; an empty string clears the field back to env."""
+class CapabilityFlags(BaseModel):
+    """模型能力声明；None = 未声明（保守处理：运行期不据此短路，只有显式 false 才拦）。"""
 
     model_config = ConfigDict(extra="forbid")
 
-    model: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
-    base_url: str | None = Field(default=None, max_length=MAX_PATH_CHARS)
-    # An enum, so an invalid provider is a 422 instead of a file written before the failure surfaces.
-    provider: Literal["openai", "anthropic", "gemini"] | None = None
+    tool_calling: bool | None = None
+    vision: bool | None = None
+    json_mode: bool | None = None
+    streaming: bool | None = None
+    reasoning: bool | None = None
+
+
+class ByokModel(BaseModel):
+    """一个具体模型：id + 可选展示名 / 窗口 / 输出上限 / 能力声明（读写同形）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(max_length=MAX_NAME_CHARS)
+    label: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
+    context_window: int | None = Field(default=None, ge=1)
+    max_output: int | None = Field(default=None, ge=1)
+    capabilities: CapabilityFlags = Field(default_factory=CapabilityFlags)
+
+
+class LegacyConnectionOut(BaseModel):
+    """Legacy 生效值（model.toml 覆盖层 → env）；密钥只给 api_key_set。"""
+
+    model: str | None = None
+    base_url: str | None = None
+    provider: str | None = None
+    api_key_set: bool = False
+
+
+class ByokProviderIn(BaseModel):
+    """一个接入端点：协议 + base URL + 鉴权引用。api_key 只入不出，落 secrets.json。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(max_length=MAX_ID_CHARS, pattern=r"^[a-z0-9-]+$")
+    label: str = Field(max_length=MAX_NAME_CHARS)
+    protocol: Literal["openai-compatible", "anthropic", "google", "ollama"]
+    base_url: str = Field(max_length=MAX_PATH_CHARS)
+    auth_type: Literal["bearer", "header", "none"] = "bearer"
+    # 缺省 = provider id；只存引用，明文由 api_key 字段（只入）写进 secrets.json。
+    secret_ref: str | None = Field(default=None, max_length=MAX_ID_CHARS, pattern=r"^[a-z0-9-]+$")
+    header_name: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
+    headers: dict[str, str] = Field(default_factory=dict)
+    extra_body: dict[str, Any] = Field(default_factory=dict)
+    enabled: bool = True
+    models: list[ByokModel] = Field(default_factory=list)
     api_key: str | None = Field(default=None, max_length=MAX_PATH_CHARS)
+
+
+class ByokProviderOut(BaseModel):
+    """GET 回显：与 In 同形但**没有 api_key**，多一个 key_set 布尔。
+
+    protocol / auth_type 收宽成 str：值来自已通过 validate 的配置，回显侧不再用
+    Literal 收紧一遍（In 侧的 Literal 负责把非法值挡在 422）。
+    """
+
+    id: str
+    label: str
+    protocol: str
+    base_url: str
+    auth_type: str
+    secret_ref: str | None = None
+    header_name: str | None = None
+    headers: dict[str, str] = Field(default_factory=dict)
+    extra_body: dict[str, Any] = Field(default_factory=dict)
+    enabled: bool = True
+    models: list[ByokModel] = Field(default_factory=list)
+    key_set: bool = False
+
+
+class ByokSettingsIn(BaseModel):
+    """整体保存：providers 全量 + chat 绑定；服务端先 validate 再落盘。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    providers: list[ByokProviderIn] = Field(default_factory=list)
+    bindings: dict[str, str | None] = Field(default_factory=dict)
+
+
+class ByokSettingsOut(BaseModel):
+    providers: list[ByokProviderOut] = Field(default_factory=list)
+    bindings: dict[str, str | None] = Field(default_factory=dict)
+    # 仅在 BYOK 文件不存在时返回：设置面板拿它预填「导入旧配置」草稿。
+    legacy: LegacyConnectionOut | None = None
+
+
+class ByokTestIn(BaseModel):
+    """连通校验载荷：携带**未保存也能测**的完整提供商声明 + 要测的模型 id。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider: ByokProviderIn
+    model_id: str = Field(max_length=MAX_NAME_CHARS)
+
+
+class VerifyStepOut(BaseModel):
+    step: str
+    ok: bool
+    detail: str
+
+
+class ByokTestOut(BaseModel):
+    ok: bool
+    steps: list[VerifyStepOut] = Field(default_factory=list)
 
 
 class SessionSummary(BaseModel):
@@ -276,9 +371,7 @@ class StartRunIn(BaseModel):
 
     @model_validator(mode="after")
     def _full_needs_ack(self) -> "StartRunIn":
-        problem = full_grant_error(
-            self.permission, acknowledged=self.full_access_ack, source="web"
-        )
+        problem = full_grant_error(self.permission, acknowledged=self.full_access_ack, source="web")
         if problem is not None:
             raise ValueError(problem)
         return self
@@ -375,9 +468,7 @@ def event_payload(event: RunEvent, session_id: str) -> dict[str, Any]:
     data = dict(event.data)
     if event.type == events.TOOL_CALL_FINISHED:
         content = data.pop("content", "")
-        data["status"] = classify_tool_status(
-            content, truncated=bool(data.get("truncated"))
-        )
+        data["status"] = classify_tool_status(content, truncated=bool(data.get("truncated")))
         data["content_chars"] = len(content) if isinstance(content, str) else 0
     elif event.type == events.TOOL_CALL_DENIED:
         data["status"] = classify_tool_status("", denied_kind=str(data.get("kind") or "user"))

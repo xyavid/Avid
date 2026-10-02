@@ -61,8 +61,10 @@ def chat_completion(
     client: httpx.Client | None = None,
 ) -> Turn:
     """Run a non-streaming completion through the provider named by config.resolved_provider."""
+    # An unset max_tokens falls back to the BYOK per-model output cap when one is declared.
+    cap = max_tokens if max_tokens is not None else config.max_output
     return _impl(config.resolved_provider).chat(
-        config, messages, system=system, tools=tools, max_tokens=max_tokens, client=client
+        config, messages, system=system, tools=tools, max_tokens=cap, client=client
     )
 
 
@@ -83,7 +85,7 @@ def stream_completion(
         messages,
         system=system,
         tools=tools,
-        max_tokens=max_tokens,
+        max_tokens=max_tokens if max_tokens is not None else config.max_output,
         on_delta=on_delta,
         on_reasoning=on_reasoning,
         client=client,

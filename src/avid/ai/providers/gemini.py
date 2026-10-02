@@ -42,7 +42,13 @@ def generate_url(config: Config, *, streaming: bool = False) -> str:
 
 
 def _headers(config: Config) -> dict[str, str]:
-    return {"x-goog-api-key": config.api_key, "Content-Type": "application/json"}
+    # BYOK extra headers merge last (a relay may demand its own auth header).
+    headers = {"Content-Type": "application/json"}
+    if config.api_key:
+        headers["x-goog-api-key"] = config.api_key
+    if config.extra_headers:
+        headers.update(config.extra_headers)
+    return headers
 
 
 def _text_of(raw: Any) -> str:
@@ -132,6 +138,9 @@ def build_request(
         ]
     if max_tokens is not None:
         request["generationConfig"] = {"maxOutputTokens": max_tokens}
+    # BYOK passthrough (routing params etc.) merges last: an explicit override is deliberate.
+    if config.extra_body:
+        request.update(config.extra_body)
     return request
 
 

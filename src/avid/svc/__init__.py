@@ -7,7 +7,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ..ai.config import KNOWN_MODELS, ConfigError, load_config
+from ..ai.byok import byok_model_candidates, resolve_chat
+from ..ai.config import KNOWN_MODELS, ConfigError
 from ..policy.sandbox import default_backend_summary
 from ..policy.skills import SkillLoader, default_skills_dir
 from ..runtime.events import (
@@ -176,6 +177,9 @@ class Services:
                 "model": self.model_name(),
                 # 可切换的候选（本次运行的模型覆盖用）；空内核配置下也能列出来。
                 "known_models": list(KNOWN_MODELS),
+                # BYOK 候选（providerId/modelId ref + 展示名）；没有 BYOK 配置时为空，
+                # 界面回落 known_models。
+                "models": self.model_candidates(),
                 # Root of the process-bound workspace; candidates come from the workspaces endpoint.
                 "workspace": (
                     self.workspaces.default.root
@@ -213,9 +217,21 @@ class Services:
     def model_name() -> str | None:
         """Configured model name, or None when unconfigured so the UI can still load."""
         try:
-            return load_config().model
+            return resolve_chat().model
         except ConfigError:
             return None
+
+    @staticmethod
+    def model_candidates() -> list[dict[str, str]]:
+        """Per-run model picker candidates: BYOK refs first; empty when unconfigured.
+
+        未配置任何 BYOK 提供商时返回空列表，界面回落内核窗口表的 known_models。
+        """
+        try:
+            return byok_model_candidates()
+        except ConfigError:
+            # 配置文件坏了也要让界面能加载——错误文案会在设置面板里暴露。
+            return []
 
     def close(self) -> None:
         self.workspaces.close()

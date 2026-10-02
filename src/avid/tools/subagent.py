@@ -16,8 +16,9 @@ from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
+from ..ai.byok import resolve_chat
 from ..ai.client import chat_completion
-from ..ai.config import Config, load_config
+from ..ai.config import Config
 from ..policy.permission import DEFAULT_MODE
 from .registry import tool
 
@@ -97,7 +98,7 @@ def run_subagent(
         system=SUB_SYSTEM,
         tools=SUB_TOOLS,
         registry=SUB_HANDLERS,
-        config=config or load_config(),
+        config=config or resolve_chat(),
         chat=chat,
         state=child_state,
     )
@@ -216,7 +217,7 @@ def subagent(
         return f"错误：{exc}"
 
     run = run_subagent if runner is None else runner
-    config = load_config()
+    config = resolve_chat()
     # Auto-approval, the ask callback, the permission mode and the ledger are read from the run
     # state and passed explicitly, since implicit state does not follow a child to its thread.
     auto_approve = state.auto_approve

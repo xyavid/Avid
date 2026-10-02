@@ -29,10 +29,13 @@ from ..usage import Usage
 
 def build_payload(config: Config, prompt: str) -> dict[str, Any]:
     """Build the minimal request body for a single user prompt."""
-    return {
+    payload = {
         "model": config.model,
         "messages": [{"role": "user", "content": prompt}],
     }
+    if config.extra_body:
+        payload.update(config.extra_body)
+    return payload
 
 
 def build_request(
@@ -53,7 +56,22 @@ def build_request(
         request["max_tokens"] = max_tokens
     if tools:
         request["tools"] = list(tools)
+    # BYOK passthrough (routing params etc.) merges last: an explicit override is deliberate.
+    if config.extra_body:
+        request.update(config.extra_body)
     return request
+
+
+def _headers(config: Config, *, stream: bool = False) -> dict[str, str]:
+    """Bearer auth only when a key exists (local Ollama has none); BYOK extra headers merge last."""
+    headers = {"Content-Type": "application/json"}
+    if config.api_key:
+        headers["Authorization"] = f"Bearer {config.api_key}"
+    if stream:
+        headers["Accept"] = "text/event-stream"
+    if config.extra_headers:
+        headers.update(config.extra_headers)
+    return headers
 
 
 def _reasoning_text(raw: Mapping[str, Any]) -> str:
@@ -110,10 +128,7 @@ def post(
     policy: RetryPolicy | None = None,
 ) -> dict:
     """POST a request and return the decoded JSON body, raising LLMError on failure."""
-    headers = {
-        "Authorization": f"Bearer {config.api_key}",
-        "Content-Type": "application/json",
-    }
+    headers = _headers(config)
 
     # An injected client belongs to the caller; otherwise the shared process client is reused.
     http = client or shared_client()
@@ -261,11 +276,7 @@ def stream(
     request["stream"] = True
     # include_usage asks for a final usage frame; endpoints that ignore it only lose usage.
     request["stream_options"] = {"include_usage": True}
-    headers = {
-        "Authorization": f"Bearer {config.api_key}",
-        "Content-Type": "application/json",
-        "Accept": "text/event-stream",
-    }
+    headers = _headers(config, stream=True)
 
     http = client or shared_client()
     state = StreamState()

@@ -64,7 +64,12 @@ def classify_error(message: str) -> str:
     if status == 429:
         return "触发限流或额度用尽：换个 key 或稍后再试"
     lowered = message.lower()
-    if "timed out" in lowered or "timeout" in lowered or "connect" in lowered or "network" in lowered:
+    if (
+        "timed out" in lowered
+        or "timeout" in lowered
+        or "connect" in lowered
+        or "network" in lowered
+    ):
         return "连不上端点：检查地址、代理与网络"
     return message
 
@@ -75,10 +80,15 @@ def _fail_detail(message: str) -> str:
     return reason if reason == message else f"{reason}（{excerpt}）"
 
 
-def verify_provider(provider: ProviderDecl, model_id: str) -> VerifyReport:
-    """Run both probes against a real endpoint; never raises for expected failures."""
+def verify_provider(
+    provider: ProviderDecl, model_id: str, *, secret: str | None = None
+) -> VerifyReport:
+    """Run both probes against a real endpoint; never raises for expected failures.
+
+    `secret` 覆盖密钥库：设置面板在保存前就能测（不产生写文件的副作用）。
+    """
     try:
-        config = byok.config_from_provider(provider, model_id)
+        config = byok.config_from_provider(provider, model_id, secret=secret)
     except ConfigError as exc:
         return VerifyReport(False, (VerifyStep("chat", False, str(exc)),))
     steps: list[VerifyStep] = []
@@ -95,7 +105,12 @@ def verify_provider(provider: ProviderDecl, model_id: str) -> VerifyReport:
     try:
         turn = chat_completion(
             config,
-            [{"role": "user", "content": "现在几点？必须调用 get_time 工具查询，timezone 填 local。"}],
+            [
+                {
+                    "role": "user",
+                    "content": "现在几点？必须调用 get_time 工具查询，timezone 填 local。",
+                }
+            ],
             tools=[dict(SMOKE_TOOL)],
             max_tokens=256,
         )

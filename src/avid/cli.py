@@ -9,8 +9,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from .ai.byok import resolve_chat
 from .ai.client import LLMError, ask
-from .ai.config import Config, ConfigError, load_config
+from .ai.config import Config, ConfigError
 from .ai.usage import Usage, hit_ratio
 from .policy.permission import (
     DEFAULT_MODE,
@@ -198,7 +199,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(problem)
 
     try:
-        config = load_config()
+        config = resolve_chat()
     except ConfigError as exc:
         print(f"配置错误：{exc}", file=sys.stderr)
         return 2

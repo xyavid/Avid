@@ -11,8 +11,9 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..ai.byok import resolve_chat
 from ..ai.client import LLMError, chat_completion, stream_completion
-from ..ai.config import ConfigError, load_config
+from ..ai.config import ConfigError
 from ..policy.permission import build_run_security, full_grant_error
 from ..runtime import events
 from ..runtime.events import STREAM_HEARTBEAT_SECONDS, RunEvent
@@ -691,10 +692,10 @@ class RunRegistry:
             workspace=workspace.id,
             prompt_chars=len(prompt),
         )
-        # The recorder is built inside the try: if load_config fails it never exists, and
+        # The recorder is built inside the try: if resolve_chat fails it never exists, and
         # _finish then has no usage to persist because record.recorder stays None.
         try:
-            config = load_config(model=record.model)
+            config = resolve_chat(model=record.model)
             recorder = SessionRecorder(session, branch)
             # Hand it to the record so _finish can persist usage before announcing the end.
             record.recorder = recorder

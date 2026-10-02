@@ -45,11 +45,17 @@ def messages_url(config: Config) -> str:
 
 
 def _headers(config: Config) -> dict[str, str]:
-    return {
-        "x-api-key": config.api_key,
+    # A missing key still sends the version header so the error comes from the endpoint,
+    # not from a malformed request; BYOK extra headers merge last.
+    headers = {
         "anthropic-version": ANTHROPIC_VERSION,
         "Content-Type": "application/json",
     }
+    if config.api_key:
+        headers["x-api-key"] = config.api_key
+    if config.extra_headers:
+        headers.update(config.extra_headers)
+    return headers
 
 
 def _text_of(raw: Any) -> str:
@@ -141,6 +147,9 @@ def build_request(
             }
             for item in tools
         ]
+    # BYOK passthrough (routing params etc.) merges last: an explicit override is deliberate.
+    if config.extra_body:
+        request.update(config.extra_body)
     return request
 
 

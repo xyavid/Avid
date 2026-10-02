@@ -1,43 +1,51 @@
-"""界面模型配置（`~/.avid/model.toml` 叠加 .env）与 GET/PUT/DELETE /api/settings/model。
+"""BYOK 设置端点（GET/PUT/DELETE+POST /api/settings/byok）与三层配置的线格式。
 
 契约要点：
-- 叠加优先级：界面配置文件 > 环境变量（界面是最近的显式动作；.env 是初始来源）；
-- 密钥只入不出：任何响应都不返回 api_key，只给 api_key_set 布尔；
-- 文件损坏降级为「没有文件」（警告 + 回落 .env），不阻断启动；
-- 生效路径：load_config 每次运行都会调用，保存后对新消息立即生效，无需重启。
+- 密钥只入不出：任何响应都不返回 api_key 明文，GET 只给每家的 key_set 布尔；
+- PUT 是整体保存：providers 全量 + chat 绑定；载荷里的 api_key 剥出落
+  `~/.avid/secrets.json`（0600），配置文件里只有 secret_ref 引用；
+- validate 不过就不落盘（invalid_request 信封），也不会留下半份密钥；
+- 测试端点针对**载荷**而不是已保存配置：保存前就能测，且不产生写密钥文件的副作用；
+- 生效路径：resolve_chat 每次运行都重读文件，保存后对新消息立即生效，无需重启。
 """
 
 from __future__ import annotations
 
+import json
 import stat
 
 import pytest
 from fastapi.testclient import TestClient
 from support import collect  # noqa: F401  (统一收集器，保持与其它 web 用例同构)
 
-from avid.ai.config import (
-    ENV_API_KEY,
-    ENV_BASE_URL,
-    ENV_MODEL,
-    ENV_PROVIDER,
-    load_config,
-    read_model_settings,
-    write_model_settings,
-)
+from avid.ai.byok import config_path, load_byok, read_secrets, resolve_chat, secrets_path
 from avid.svc import Services
 from avid.web import create_app
 
 
-@pytest.fixture
-def settings_env(tmp_path, monkeypatch):
-    """把界面配置指向临时文件，并给 .env 侧一组基线值。"""
-    path = tmp_path / "model.toml"
-    monkeypatch.setenv("AVID_MODEL_CONFIG", str(path))
-    monkeypatch.setenv(ENV_API_KEY, "env-key")
-    monkeypatch.setenv(ENV_MODEL, "env-model")
-    monkeypatch.setenv(ENV_BASE_URL, "https://env.example/v1")
-    monkeypatch.delenv(ENV_PROVIDER, raising=False)
-    return path
+@pytest.fixture(autouse=True)
+def byok_paths(tmp_path, monkeypatch):
+    monkeypatch.setenv("AVID_BYOK_CONFIG", str(tmp_path / "byok" / "models.json"))
+    monkeypatch.setenv("AVID_BYOK_SECRETS", str(tmp_path / "byok" / "secrets.json"))
+
+
+def provider_payload(**overrides) -> dict:
+    base = {
+        "id": "deepseek",
+        "label": "DeepSeek",
+        "protocol": "openai-compatible",
+        "base_url": "https://api.deepseek.example/v1",
+        "auth_type": "bearer",
+        "models": [
+            {
+                "id": "deepseek-chat",
+                "context_window": 65536,
+                "capabilities": {"tool_calling": True},
+            }
+        ],
+    }
+    base.update(overrides)
+    return base
 
 
 def client(tmp_path) -> TestClient:
@@ -45,140 +53,236 @@ def client(tmp_path) -> TestClient:
     return TestClient(create_app(services=services), base_url="http://127.0.0.1:8765")
 
 
-# ---------------- 叠加与文件 ----------------
+# ---------------- GET：读与密钥边界 ----------------
 
 
-def test_overlay_wins_over_env(settings_env):
-    write_model_settings({"model": "file-model", "base_url": "https://file.example/v1"})
-
-    config = load_config()
-
-    assert config.model == "file-model"
-    assert config.base_url == "https://file.example/v1"
-    assert config.api_key == "env-key"  # 文件没写的字段回落 .env
-
-
-def test_api_key_written_to_file_is_effective(settings_env):
-    write_model_settings({"api_key": "file-key", "model": "m"})
-
-    assert load_config().api_key == "file-key"
-
-
-def test_file_roundtrip_merges_fields(settings_env):
-    write_model_settings({"model": "m1"})
-    write_model_settings({**read_model_settings(), "base_url": "https://b.example"})
-
-    data = read_model_settings()
-    assert data == {"model": "m1", "base_url": "https://b.example"}
-
-
-def test_corrupt_file_degrades_to_env(settings_env):
-    settings_env.write_text("{oops", encoding="utf-8")
-
-    assert read_model_settings() == {}
-    assert load_config().model == "env-model"
-
-
-def test_written_file_is_owner_only(settings_env):
-    write_model_settings({"api_key": "secret"})
-
-    mode = stat.S_IMODE(settings_env.stat().st_mode)
-    assert mode == 0o600, f"含密钥的配置文件权限应为 0600，实际 {oct(mode)}"
-
-
-# ---------------- HTTP 端点 ----------------
-
-
-def test_get_returns_effective_config_without_key(settings_env, tmp_path):
-    write_model_settings({"model": "file-model"})
+def test_get_empty_state_returns_legacy_block(tmp_path):
     http = client(tmp_path)
 
-    body = http.get("/api/settings/model").json()
+    body = http.get("/api/settings/byok").json()
 
-    assert body["model"] == "file-model"
-    assert body["base_url"] == "https://env.example/v1"
-    assert body["api_key_set"] is True
-    assert body["overlay_active"] is True
-    assert "api_key" not in body
+    assert body["providers"] == []
+    assert body["bindings"] == {"chat": None}
+    # 没有 BYOK 文件时给 legacy 生效值（conftest 的 env 基线），供界面预填导入草稿
+    assert body["legacy"]["model"] == "test-model"
+    assert body["legacy"]["api_key_set"] is True
 
 
-def test_put_writes_overlay_and_takes_effect(settings_env, tmp_path):
+def test_get_hides_key_but_shows_key_set(tmp_path):
+    http = client(tmp_path)
+    http.put("/api/settings/byok", json={"providers": [provider_payload()], "bindings": {}})
+
+    body = http.get("/api/settings/byok").json()
+
+    assert "api_key" not in json.dumps(body)
+    assert body["providers"][0]["key_set"] is False  # 还没填过密钥
+
+
+# ---------------- PUT：保存、密钥落盘、立即生效 ----------------
+
+
+def test_put_writes_config_and_secret_and_takes_effect(tmp_path):
     http = client(tmp_path)
 
     res = http.put(
-        "/api/settings/model",
-        json={"model": "ui-model", "base_url": "https://ui.example/v1", "api_key": "ui-key", "provider": "openai"},
+        "/api/settings/byok",
+        json={
+            "providers": [provider_payload(api_key="sk-ui")],
+            "bindings": {"chat": "deepseek/deepseek-chat"},
+        },
     )
 
     assert res.status_code == 200
     body = res.json()
-    assert body["model"] == "ui-model"
-    assert body["api_key_set"] is True
-    assert "api_key" not in body
+    assert body["providers"][0]["key_set"] is True
+    assert "sk-ui" not in json.dumps(body)  # 只入不出
 
-    # 立即生效：下一次 load_config 就是界面值
-    config = load_config()
-    assert (config.model, config.base_url, config.api_key, config.provider) == (
-        "ui-model",
-        "https://ui.example/v1",
-        "ui-key",
-        "openai",
+    # 配置文件只有引用，明文在 0600 的密钥文件里
+    raw = json.loads(config_path().read_text(encoding="utf-8"))
+    assert "sk-ui" not in json.dumps(raw)
+    assert raw["providers"][0]["auth"]["secret_ref"] == "deepseek"
+    assert read_secrets() == {"deepseek": "sk-ui"}
+    assert stat.S_IMODE(secrets_path().stat().st_mode) == 0o600
+
+    # 立即生效：下一次 resolve_chat 就是界面保存的这份
+    config = resolve_chat()
+    assert (config.model, config.base_url, config.api_key) == (
+        "deepseek-chat",
+        "https://api.deepseek.example/v1",
+        "sk-ui",
+    )
+    # meta 的 model 与 BYOK 候选同步变化
+    meta = http.get("/api/meta").json()["capabilities"]
+    assert meta["model"] == "deepseek-chat"
+    assert meta["models"] == [{"ref": "deepseek/deepseek-chat", "label": "DeepSeek · deepseek-chat"}]
+
+
+def test_put_without_key_keeps_existing_secret(tmp_path):
+    http = client(tmp_path)
+    http.put(
+        "/api/settings/byok",
+        json={"providers": [provider_payload(api_key="sk-keep")], "bindings": {}},
     )
 
-    # 且 meta 的 model 同步变化（svc 每次查询都 load_config）
-    assert http.get("/api/meta").json()["capabilities"]["model"] == "ui-model"
+    # 第二次保存不带 api_key 字段（界面没动密钥输入框）
+    http.put("/api/settings/byok", json={"providers": [provider_payload()], "bindings": {}})
+
+    assert read_secrets() == {"deepseek": "sk-keep"}
 
 
-def test_put_empty_string_clears_field_back_to_env(settings_env, tmp_path):
-    write_model_settings({"model": "file-model"})
+def test_put_empty_key_clears_secret(tmp_path):
+    http = client(tmp_path)
+    http.put(
+        "/api/settings/byok",
+        json={"providers": [provider_payload(api_key="sk-gone")], "bindings": {}},
+    )
+
+    http.put(
+        "/api/settings/byok",
+        json={"providers": [provider_payload(api_key="")], "bindings": {}},
+    )
+
+    assert read_secrets() == {}
+
+
+def test_put_rejects_invalid_config_without_writing(tmp_path):
     http = client(tmp_path)
 
-    res = http.put("/api/settings/model", json={"model": ""})
+    res = http.put(
+        "/api/settings/byok",
+        json={
+            "providers": [
+                provider_payload(
+                    id="ds",
+                    models=[
+                        {"id": "m1", "capabilities": {"tool_calling": False}}
+                    ],
+                )
+            ],
+            "bindings": {"chat": "ds/m1"},
+        },
+    )
+
+    assert res.status_code == 400
+    assert res.json()["error"]["code"] == "invalid_request"
+    assert not config_path().exists()
+    assert read_secrets() == {}  # 没有留下半份密钥
+
+
+def test_put_rejects_unknown_binding_slot(tmp_path):
+    http = client(tmp_path)
+
+    res = http.put(
+        "/api/settings/byok",
+        json={"providers": [provider_payload()], "bindings": {"vision": "deepseek/deepseek-chat"}},
+    )
+
+    assert res.status_code == 400
+    assert res.json()["error"]["code"] == "invalid_request"
+
+
+# ---------------- 测试端点：保存前就能测 ----------------
+
+
+def test_test_endpoint_reports_both_steps(tmp_path, monkeypatch):
+    from avid.ai import verify as verify_module
+    from avid.ai.protocol import Turn, Usage
+
+    def fake(config, messages, *, system=None, tools=None, max_tokens=None, client=None):
+        return Turn(
+            message={"role": "assistant", "content": "ok"},
+            text="ok",
+            tool_calls=[{"id": "t1"}] if tools else [],
+            usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            model="deepseek-chat",
+            finish_reason="stop",
+        )
+
+    monkeypatch.setattr(verify_module, "chat_completion", fake)
+    http = client(tmp_path)
+
+    res = http.post(
+        "/api/settings/byok/test",
+        json={"provider": provider_payload(api_key="sk-test"), "model_id": "deepseek-chat"},
+    )
 
     assert res.status_code == 200
-    assert res.json()["model"] == "env-model"
+    body = res.json()
+    assert body["ok"] is True
+    assert [s["step"] for s in body["steps"]] == ["chat", "tool"]
 
 
-def test_put_without_key_change_keeps_existing_key(settings_env, tmp_path):
-    write_model_settings({"api_key": "kept-key"})
+def test_test_endpoint_reports_smoke_failure(tmp_path, monkeypatch):
+    from avid.ai import verify as verify_module
+    from avid.ai.protocol import Turn, Usage
+
+    def fake(config, messages, *, system=None, tools=None, max_tokens=None, client=None):
+        return Turn(
+            message={"role": "assistant", "content": "好的"},
+            text="好的",
+            tool_calls=[],
+            usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            model="deepseek-chat",
+            finish_reason="stop",
+        )
+
+    monkeypatch.setattr(verify_module, "chat_completion", fake)
     http = client(tmp_path)
 
-    res = http.put("/api/settings/model", json={"model": "m2"})
+    body = http.post(
+        "/api/settings/byok/test",
+        json={"provider": provider_payload(api_key="sk-test"), "model_id": "deepseek-chat"},
+    ).json()
 
-    assert res.status_code == 200
-    assert res.json()["api_key_set"] is True
-    assert load_config().api_key == "kept-key"
+    assert body["ok"] is False
+    assert body["steps"][1]["ok"] is False
+    assert "工具" in body["steps"][1]["detail"]
 
 
-def test_put_rejects_unknown_provider(settings_env, tmp_path):
+# ---------------- DELETE：重置回落 ----------------
+
+
+def test_delete_drops_both_files_and_falls_back(tmp_path):
     http = client(tmp_path)
+    http.put(
+        "/api/settings/byok",
+        json={
+            "providers": [provider_payload(api_key="sk-bye")],
+            "bindings": {"chat": "deepseek/deepseek-chat"},
+        },
+    )
+    assert config_path().exists()
 
-    res = http.put("/api/settings/model", json={"provider": "not-a-provider"})
-
-    assert res.status_code == 422
-
-
-def test_delete_resets_to_env(settings_env, tmp_path):
-    write_model_settings({"model": "file-model", "api_key": "file-key"})
-    http = client(tmp_path)
-
-    res = http.delete("/api/settings/model")
+    res = http.delete("/api/settings/byok")
 
     assert res.status_code == 204
-    assert not settings_env.exists()
-    assert load_config().model == "env-model"
-    assert load_config().api_key == "env-key"
-    assert http.get("/api/settings/model").json()["overlay_active"] is False
+    assert not config_path().exists()
+    assert not secrets_path().exists()
+    assert resolve_chat().model == "test-model"  # 回落 conftest 的 env 基线
+    assert load_byok() is None
 
 
-def test_get_degrades_without_any_config(tmp_path, monkeypatch):
-    monkeypatch.setenv("AVID_MODEL_CONFIG", str(tmp_path / "none.toml"))
-    for name in (ENV_API_KEY, ENV_MODEL, ENV_BASE_URL, ENV_PROVIDER):
-        monkeypatch.delenv(name, raising=False)
+# ---------------- 解析优先级（BYOK 胜过 legacy） ----------------
+
+
+def test_byok_binding_beats_legacy_env(tmp_path):
     http = client(tmp_path)
+    http.put(
+        "/api/settings/byok",
+        json={
+            "providers": [provider_payload(api_key="sk-live")],
+            "bindings": {"chat": "deepseek/deepseek-chat"},
+        },
+    )
 
-    body = http.get("/api/settings/model").json()
+    config = resolve_chat()
 
-    assert body["model"] is None
-    assert body["base_url"] is None
-    assert body["api_key_set"] is False
+    assert config.api_key == "sk-live"  # 不是 conftest 基线的 test-key
+    assert config.provider == "openai"  # openai-compatible → openai 协议族
+
+
+def test_unbound_config_falls_back_to_legacy(tmp_path):
+    http = client(tmp_path)
+    http.put("/api/settings/byok", json={"providers": [provider_payload()], "bindings": {}})
+
+    assert resolve_chat().model == "test-model"

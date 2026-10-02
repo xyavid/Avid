@@ -9,6 +9,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
+from ..ai.byok import resolve_chat
 from ..ai.client import (
     DEFAULT_MAX_TOKENS,
     PromptTooLongError,
@@ -16,7 +17,7 @@ from ..ai.client import (
     chat_completion,
     fetch_context_length,
 )
-from ..ai.config import Config, load_config
+from ..ai.config import Config
 from ..ai.transcript import Transcript
 from ..tools import TOOL_IMPLS, TOOLS, ToolImpl
 from . import events
@@ -125,7 +126,7 @@ def agent_loop(
     hooks: HookRegistry | None = None,
 ) -> str:
     """Cycle model calls and tool batches until the model stops asking; returns the final text."""
-    config = config or load_config()
+    config = config or resolve_chat()
     if config.context_window is None:
         # Ask the provider once per process when neither the environment nor the built-in
         # table knows the window; every run path passes through here, so no caller repeats it.
