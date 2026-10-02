@@ -34,7 +34,6 @@ def model_env(request, tmp_path, monkeypatch):
                         "label": "Test",
                         "protocol": "openai-compatible",
                         "base_url": "https://test.example/v1",
-                        "auth": {"type": "bearer", "secret_ref": "test"},
                         "models": [{"id": "test-model"}],
                     }
                 ],

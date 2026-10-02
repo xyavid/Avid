@@ -1,12 +1,12 @@
 """BYOK 连通校验：把「填完能不能用」在配置阶段就回答掉。
 
 两步（参照 BYOK 规格 §7，省掉列模型——Avid 的模型目录本来就手填，不拉 /models）：
-① 最小对话：`max_tokens=1`，验证鉴权、端点与网络；
+① 最小对话：`max_tokens=1`，验证密钥（若配了）、端点与网络；
 ② 工具冒烟：给一个必答参数的 `get_time` 工具定义，模型必须真的回 tool_calls——
    「能聊天、一干活就废」的模型在这一步被筛掉，而不是接进 agent 后每次运行都废。
 
 错误分类只认 LLMError 消息里的已知信号（三个适配器统一写 `HTTP <status> — body`），
-认不出时原样透出消息摘录，不编造原因。缺密钥（ConfigError）不算端点问题，
+认不出时原样透出消息摘录，不编造原因。配置解析失败（ConfigError）不算端点问题，
 也走报告而不是异常——调用方是设置界面，它不会区分这两类。
 """
 
@@ -97,7 +97,7 @@ def verify_provider(
         chat_completion(
             config, [{"role": "user", "content": "请回复 ok"}], max_tokens=1, tools=None
         )
-        steps.append(VerifyStep("chat", True, "鉴权、端点与网络可用"))
+        steps.append(VerifyStep("chat", True, "密钥（如已配置）、端点与网络可用"))
     except LLMError as exc:
         steps.append(VerifyStep("chat", False, _fail_detail(str(exc))))
         return VerifyReport(False, tuple(steps))

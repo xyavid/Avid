@@ -29,9 +29,6 @@ const WIRED: ByokSettings = {
       label: 'DeepSeek',
       protocol: 'openai-compatible',
       base_url: 'https://api.deepseek.example/v1',
-      auth_type: 'bearer',
-      secret_ref: 'deepseek',
-      header_name: null,
       headers: {},
       extra_body: {},
       enabled: true,
@@ -62,7 +59,7 @@ beforeEach(() => {
   testByokModel.mockReset().mockResolvedValue({
     ok: true,
     steps: [
-      { step: 'chat', ok: true, detail: '鉴权、端点与网络可用' },
+      { step: 'chat', ok: true, detail: '密钥（如已配置）、端点与网络可用' },
       { step: 'tool', ok: true, detail: '模型正确返回了工具调用' },
     ],
   })
@@ -104,7 +101,7 @@ describe('SettingsModal（设置界面 · BYOK 模型段）', () => {
     fireEvent.change(screen.getByPlaceholderText('中转站 / 自部署服务的接口地址'), {
       target: { value: 'https://api.deepseek.example/v1' },
     })
-    fireEvent.change(screen.getByPlaceholderText('输入 API 密钥'), { target: { value: 'sk-new' } })
+    fireEvent.change(screen.getByPlaceholderText('输入 API 密钥（可留空）'), { target: { value: 'sk-new' } })
     fireEvent.change(screen.getByPlaceholderText('模型 id，例如 deepseek-chat'), {
       target: { value: 'deepseek-chat' },
     })

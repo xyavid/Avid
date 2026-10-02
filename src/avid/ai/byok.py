@@ -4,8 +4,9 @@
 env / 旧覆盖层回落。设计（参照 BYOK 配置规格，两处刻意偏离）：
 - 文件键名用 snake_case——Avid 全仓约定，文件是私有格式，没有外部互操作，
   不值得为规格里的 camelCase 多一层名字映射；
-- auth 只做 bearer / header / none——oauth 需要授权流基础设施，query 型自定义鉴权
-  还没有真实需求，出现时再加。
+- **鉴权是隐式的**：密钥库里按 provider id 存了密钥，就按协议标准头发送
+  （Authorization / x-api-key / x-goog-api-key）；没存就不带鉴权头（本地服务）。
+  不再提供 bearer/header/none 的选择——那个维度只制造配置负担。
 
 两份文件（默认 `~/.avid/`，可用环境变量指到别处）：
 - `models.json`：providers + bindings，**只存引用不存明文**——按「配置会被泄露」
@@ -57,12 +58,7 @@ DEFAULT_PROTOCOL_BASE_URLS = {
     PROTOCOL_GOOGLE: "https://generativelanguage.googleapis.com/v1beta",
 }
 
-AUTH_BEARER = "bearer"
-AUTH_HEADER = "header"
-AUTH_NONE = "none"
-AUTH_TYPES = (AUTH_BEARER, AUTH_HEADER, AUTH_NONE)
-
-#: 唯一的角色槽位。binding 值形如 "providerId/modelId"，null = 未绑定（回落 legacy）。
+#: 唯一的角色槽位。binding 值形如 "providerId/modelId"，null = 未绑定。
 CHAT_SLOT = "chat"
 BINDING_SLOTS = (CHAT_SLOT,)
 
@@ -83,13 +79,6 @@ def secrets_path() -> Path:
 
 
 # ---------------- 声明模型（内存态） ----------------
-
-
-@dataclass(frozen=True)
-class ModelAuth:
-    type: str = AUTH_BEARER
-    secret_ref: str | None = None
-    header_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -116,7 +105,6 @@ class ProviderDecl:
     label: str
     protocol: str
     base_url: str
-    auth: ModelAuth = field(default_factory=ModelAuth)
     headers: dict[str, str] = field(default_factory=dict)
     extra_body: dict[str, Any] = field(default_factory=dict)
     enabled: bool = True
@@ -158,20 +146,6 @@ def _validate_provider(provider: ProviderDecl) -> None:
             f"provider {provider.id} 的 base_url 必须以 http(s):// 开头：{base!r}\n"
             "OpenAI 兼容端点通常要以 /v1 结尾"
         )
-    if provider.auth.type not in AUTH_TYPES:
-        raise _err(
-            f"provider {provider.id} 的 auth.type 必须是 {'、'.join(AUTH_TYPES)} 之一："
-            f"{provider.auth.type!r}"
-        )
-    if provider.auth.type in (AUTH_BEARER, AUTH_HEADER) and (
-        not provider.auth.secret_ref or not _ID_PATTERN.match(provider.auth.secret_ref)
-    ):
-        raise _err(
-            f"provider {provider.id} 的 auth.secret_ref 只能用小写字母、数字与连字符："
-            f"{provider.auth.secret_ref!r}"
-        )
-    if provider.auth.type == AUTH_HEADER and not (provider.auth.header_name or "").strip():
-        raise _err(f"provider {provider.id} 用 header 鉴权时必须给 header_name")
     if provider.models and len({m.id for m in provider.models}) != len(provider.models):
         raise _err(f"provider {provider.id} 有重复的模型 id")
     for model in provider.models:
@@ -241,11 +215,6 @@ def _decl_to_json(provider: ProviderDecl) -> dict[str, Any]:
         "label": provider.label,
         "protocol": provider.protocol,
         "base_url": provider.base_url,
-        "auth": {
-            "type": provider.auth.type,
-            "secret_ref": provider.auth.secret_ref,
-            "header_name": provider.auth.header_name,
-        },
         "headers": provider.headers,
         "extra_body": provider.extra_body,
         "enabled": provider.enabled,
@@ -296,9 +265,8 @@ def _parse_provider(raw: Any) -> ProviderDecl:
     for key in ("id", "label", "protocol", "base_url"):
         if not str(raw.get(key, "")).strip():
             raise _err(f"{where} 缺少 {key}")
-    auth_raw = raw.get("auth") or {}
-    if not isinstance(auth_raw, dict):
-        raise _err(f"{where} 的 auth 必须是对象")
+    # 旧版写下的 auth 块（bearer/header/none）不再有意义：鉴权已隐式化（见模块
+    # 注释），解析时静默忽略，免得打断已经存在的配置文件。
     headers = raw.get("headers") or {}
     extra_body = raw.get("extra_body") or {}
     if not isinstance(headers, dict) or not all(
@@ -336,11 +304,6 @@ def _parse_provider(raw: Any) -> ProviderDecl:
         label=str(raw["label"]),
         protocol=str(raw["protocol"]),
         base_url=str(raw["base_url"]),
-        auth=ModelAuth(
-            type=str(auth_raw.get("type", AUTH_BEARER)),
-            secret_ref=auth_raw.get("secret_ref"),
-            header_name=auth_raw.get("header_name"),
-        ),
         headers=dict(headers),
         extra_body=dict(extra_body),
         enabled=bool(raw.get("enabled", True)),
@@ -435,17 +398,11 @@ def config_from_provider(
 
     `secret` 覆盖密钥库查找——连通校验要在保存前对未落盘的 key 发请求，但不能有
     写文件的副作用，所以明文走参数、只活在内存里。
+    鉴权隐式：密钥库有 provider id 的条目就带上（协议模块负责标准头），没有就
+    不带——本地服务（如 Ollama）不需要密钥，缺密钥不再是错误。
     """
-    if secret is None and provider.auth.type in (AUTH_BEARER, AUTH_HEADER):
-        ref = provider.auth.secret_ref or provider.id
-        secret = read_secrets().get(ref, "")
-        if not secret:
-            raise _err(
-                f"缺少 {provider.label} 的密钥（secret_ref={ref!r}）："
-                "在「设置 → 模型」里填入，或直接编辑 ~/.avid/secrets.json"
-            )
     if secret is None:
-        secret = ""
+        secret = read_secrets().get(provider.id, "")
     model = provider.model(model_id)
     capabilities = model.capabilities if model else ModelCapabilities()
     if capabilities.tool_calling is False:
@@ -453,8 +410,6 @@ def config_from_provider(
             f"模型 {provider.id}/{model_id} 声明不支持工具调用；agent 的 chat 槽位需要能调工具的模型"
         )
     extra_headers = dict(provider.headers)
-    if provider.auth.type == AUTH_HEADER:
-        extra_headers[provider.auth.header_name or ""] = secret
     window = model.context_window if model else None
     return Config(
         api_key=secret,
@@ -553,11 +508,9 @@ def byok_model_candidates() -> list[dict[str, str]]:
 
 
 __all__ = [
-    "AUTH_TYPES",
     "BINDING_SLOTS",
     "CHAT_SLOT",
     "ByokConfig",
-    "ModelAuth",
     "ModelCapabilities",
     "ModelDecl",
     "PROTOCOLS",

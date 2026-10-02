@@ -13,7 +13,6 @@ from avid.ai.config import (
     ConfigError,
     max_parallel_tool_calls,
     model_info_enabled,
-    window_for,
 )
 
 
@@ -43,7 +42,7 @@ def test_config_carries_no_round_limit():
 
 def test_resolved_provider_rejects_unknown_family():
     with pytest.raises(ConfigError, match="provider"):
-        make_config(provider="bogus").resolved_provider
+        _ = make_config(provider="bogus").resolved_provider
 
 
 # ---------- AVID_MAX_PARALLEL_TOOL_CALLS ----------

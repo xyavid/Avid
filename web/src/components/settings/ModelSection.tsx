@@ -3,9 +3,10 @@
  *
  * 三层模型：Provider（接入端点）1—N Model（id + 能力声明），Binding 把 Model 挂到
  * chat 槽位；「新增一个模型提供商只改配置，不改代码」。密钥只入不出：输入框永远
- * 不预填，GET 只给 key_set；保存走整体 PUT（providers 全量 + 绑定），服务端
- * validate 不过就不落盘。「测试连接」对**当前表单值**跑两步探测（最小对话 +
- * 工具冒烟），保存前就能测。
+ * 不预填，GET 只给 key_set；**鉴权隐式**——填了密钥就按协议标准头发送，留空就
+ * 不带（本地服务），没有 bearer/header 的选择。保存走整体 PUT（providers 全量 +
+ * 绑定），服务端 validate 不过就不落盘。「测试连接」对**当前表单值**跑两步探测
+ * （最小对话 + 工具冒烟），保存前就能测。
  *
  * 空态引导：没有任何提供商时提示先新增并在下方绑定 chat 槽位——BYOK 是模型
  * 连接的唯一来源，未绑定时运行会报「还没有模型配置」。
@@ -21,7 +22,6 @@ import {
   testByokModel,
 } from '../../api/client'
 import type {
-  ByokAuthType,
   ByokProtocol,
   ByokSettings,
   ByokTestResult,
@@ -39,12 +39,6 @@ const PROTOCOL_OPTIONS: { value: ByokProtocol; label: string }[] = [
   { value: 'ollama', label: 'Ollama（本地）' },
 ]
 
-const AUTH_OPTIONS: { value: ByokAuthType; label: string }[] = [
-  { value: 'bearer', label: 'Bearer（Authorization 头）' },
-  { value: 'header', label: '自定义请求头' },
-  { value: 'none', label: '无需鉴权（本地服务）' },
-]
-
 const PROTOCOL_LABELS: Record<ByokProtocol, string> = {
   'openai-compatible': 'OpenAI 兼容',
   anthropic: 'Anthropic',
@@ -60,9 +54,6 @@ function emptyDraft(): ProviderInput {
     label: '',
     protocol: 'openai-compatible',
     base_url: '',
-    auth_type: 'bearer',
-    secret_ref: null,
-    header_name: null,
     headers: {},
     extra_body: {},
     enabled: true,
@@ -233,11 +224,9 @@ export function ModelSection() {
             </div>
             <p className="mt-a4 truncate font-ui text-micro text-ink-muted">{p.base_url}</p>
             <p className="mt-a4 font-ui text-micro text-ink-muted">
-              {p.auth_type === 'none'
-                ? '无需密钥'
-                : (entry?.key_set || Boolean(p.api_key))
-                  ? '密钥已配置'
-                  : '尚未配置密钥（编辑后填入）'}
+              {entry?.key_set || Boolean(p.api_key)
+                ? '密钥已配置'
+                : '未配密钥（留空 = 不发送鉴权头，本地服务适用）'}
             </p>
             {p.models.length > 0 && (
               <ul className="mt-a8 flex flex-col gap-a4">
@@ -369,10 +358,6 @@ function ProviderEditor({ draft, isNew, onSave, onCancel }: EditorProps) {
       setError('接口地址要以 http(s):// 开头；OpenAI 兼容端点通常以 /v1 结尾')
       return
     }
-    if (form.auth_type === 'bearer' && form.api_key === null && isNew) {
-      setError('bearer 鉴权需要填 API 密钥')
-      return
-    }
     let headers: Record<string, string>
     let extraBody: Record<string, unknown>
     try {
@@ -388,7 +373,6 @@ function ProviderEditor({ draft, isNew, onSave, onCancel }: EditorProps) {
       base_url: form.base_url.trim(),
       headers,
       extra_body: extraBody,
-      header_name: form.auth_type === 'header' ? form.header_name : null,
     })
   }
 
@@ -426,33 +410,15 @@ function ProviderEditor({ draft, isNew, onSave, onCancel }: EditorProps) {
         />
       </Field>
 
-      <Field label="鉴权">
-        <select value={form.auth_type} onChange={(e) => patch({ auth_type: e.target.value as ByokAuthType })} className={SELECT_CLS}>
-          {AUTH_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
+      <Field label="API 密钥" hint="留空 = 不发送鉴权头（本地服务）；已配置时留空 = 保持不变">
+        <Input
+          type="password"
+          value={form.api_key ?? ''}
+          onChange={(e) => patch({ api_key: e.target.value === '' ? null : e.target.value })}
+          autoComplete="off"
+          placeholder={isNew ? '输入 API 密钥（可留空）' : '已配置 · 输入新值以替换，空值并保存 = 清除'}
+        />
       </Field>
-
-      {form.auth_type === 'header' && (
-        <Field label="鉴权头名称" hint="密钥会放进这个请求头">
-          <Input value={form.header_name ?? ''} onChange={(e) => patch({ header_name: e.target.value })} placeholder="X-Key" />
-        </Field>
-      )}
-
-      {form.auth_type !== 'none' && (
-        <Field label="API 密钥" hint={isNew ? undefined : '留空 = 保持已存密钥不变'}>
-          <Input
-            type="password"
-            value={form.api_key ?? ''}
-            onChange={(e) => patch({ api_key: e.target.value === '' ? null : e.target.value })}
-            autoComplete="off"
-            placeholder={isNew ? '输入 API 密钥' : '已配置 · 输入新值以替换，空值并保存 = 清除'}
-          />
-        </Field>
-      )}
 
       <Field label="模型" hint="至少一个；绑到 chat 槽位需要支持工具调用">
         <div className="flex flex-col gap-a4">

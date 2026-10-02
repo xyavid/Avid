@@ -149,7 +149,11 @@ class ByokModel(BaseModel):
 
 
 class ByokProviderIn(BaseModel):
-    """一个接入端点：协议 + base URL + 鉴权引用。api_key 只入不出，落 secrets.json。"""
+    """一个接入端点：协议 + base URL + 可选密钥。api_key 只入不出，落 secrets.json。
+
+    鉴权隐式：密钥库按 provider id 存了密钥就按协议标准头发送，没存就不带鉴权头
+    （本地服务）——没有 auth_type/header_name 这类选择。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -157,10 +161,6 @@ class ByokProviderIn(BaseModel):
     label: str = Field(max_length=MAX_NAME_CHARS)
     protocol: Literal["openai-compatible", "anthropic", "google", "ollama"]
     base_url: str = Field(max_length=MAX_PATH_CHARS)
-    auth_type: Literal["bearer", "header", "none"] = "bearer"
-    # 缺省 = provider id；只存引用，明文由 api_key 字段（只入）写进 secrets.json。
-    secret_ref: str | None = Field(default=None, max_length=MAX_ID_CHARS, pattern=r"^[a-z0-9-]+$")
-    header_name: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
     headers: dict[str, str] = Field(default_factory=dict)
     extra_body: dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
@@ -171,7 +171,7 @@ class ByokProviderIn(BaseModel):
 class ByokProviderOut(BaseModel):
     """GET 回显：与 In 同形但**没有 api_key**，多一个 key_set 布尔。
 
-    protocol / auth_type 收宽成 str：值来自已通过 validate 的配置，回显侧不再用
+    protocol 收宽成 str：值来自已通过 validate 的配置，回显侧不再用
     Literal 收紧一遍（In 侧的 Literal 负责把非法值挡在 422）。
     """
 
@@ -179,9 +179,6 @@ class ByokProviderOut(BaseModel):
     label: str
     protocol: str
     base_url: str
-    auth_type: str
-    secret_ref: str | None = None
-    header_name: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
     extra_body: dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True

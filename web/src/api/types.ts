@@ -281,10 +281,10 @@ export interface StartRunInput {
  *
  * 三层模型：Provider（接入端点）1—N Model（具体模型 + 能力声明），Binding 把
  * Model 挂到角色槽位（当前只有 chat 一槽）。**密钥只入不出**：PUT 载荷里的
- * `api_key` 有去无回，GET 只给每家的 `key_set` 布尔；配置文件里只有 secretRef 引用。
+ * `api_key` 有去无回，GET 只给每家的 `key_set` 布尔；鉴权隐式——密钥库里按
+ * provider id 存了密钥就按协议标准头发送，没存就不带（本地服务）。
  */
 export type ByokProtocol = 'openai-compatible' | 'anthropic' | 'google' | 'ollama'
-export type ByokAuthType = 'bearer' | 'header' | 'none'
 
 /** 能力声明；null = 未声明。只有显式 false 才会被运行期拦截。 */
 export interface CapabilityFlags {
@@ -310,9 +310,6 @@ export interface ProviderEntry {
   label: string
   protocol: ByokProtocol
   base_url: string
-  auth_type: ByokAuthType
-  secret_ref?: string | null
-  header_name?: string | null
   headers: Record<string, string>
   extra_body: Record<string, unknown>
   enabled: boolean
@@ -326,9 +323,6 @@ export interface ProviderInput {
   label: string
   protocol: ByokProtocol
   base_url: string
-  auth_type: ByokAuthType
-  secret_ref?: string | null
-  header_name?: string | null
   headers: Record<string, string>
   extra_body: Record<string, unknown>
   enabled: boolean

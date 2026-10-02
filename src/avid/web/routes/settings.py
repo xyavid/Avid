@@ -3,7 +3,7 @@
 - GET /api/settings/byok：providers + bindings + 每家的 key_set；密钥明文**只入不出**，
   任何响应都不回传。这是模型连接的唯一来源——没有配置时运行会报 config_error。
 - PUT /api/settings/byok：整体保存。载荷里的 api_key（只入）剥出写进 secrets.json
-  （引用缺省 = provider id），配置文件里只留 secret_ref；validate 不过就不落盘
+  （按 provider id 存；鉴权隐式：有密钥就按协议标准头发送），validate 不过就不落盘
   （invalid_request），也不会留下半份密钥。
 - POST /api/settings/byok/test：对载荷里的提供商+模型跑两步探测（真请求：一次
   max_tokens=1 + 一次工具冒烟）；密钥走载荷，不读也不写密钥文件。
@@ -22,7 +22,6 @@ from ...ai import byok
 from ...ai.byok import (
     CAPABILITY_FIELDS,
     ByokConfig,
-    ModelAuth,
     ModelCapabilities,
     ModelDecl,
     ProviderDecl,
@@ -47,15 +46,11 @@ router = APIRouter()
 
 def _to_decl(body: ByokProviderIn) -> ProviderDecl:
     """Wire payload → in-memory declaration; the plaintext key never rides along."""
-    secret_ref = body.secret_ref
-    if secret_ref is None and body.auth_type != "none":
-        secret_ref = body.id
     return ProviderDecl(
         id=body.id,
         label=body.label,
         protocol=body.protocol,
         base_url=body.base_url,
-        auth=ModelAuth(type=body.auth_type, secret_ref=secret_ref, header_name=body.header_name),
         headers=dict(body.headers),
         extra_body=dict(body.extra_body),
         enabled=body.enabled,
@@ -73,15 +68,11 @@ def _to_decl(body: ByokProviderIn) -> ProviderDecl:
 
 
 def _provider_out(provider: ProviderDecl, secrets: dict[str, str]) -> ByokProviderOut:
-    ref = provider.auth.secret_ref or provider.id
     return ByokProviderOut(
         id=provider.id,
         label=provider.label,
         protocol=provider.protocol,
         base_url=provider.base_url,
-        auth_type=provider.auth.type,
-        secret_ref=provider.auth.secret_ref,
-        header_name=provider.auth.header_name,
         headers=dict(provider.headers),
         extra_body=dict(provider.extra_body),
         enabled=provider.enabled,
@@ -98,7 +89,7 @@ def _provider_out(provider: ProviderDecl, secrets: dict[str, str]) -> ByokProvid
             )
             for m in provider.models
         ],
-        key_set=provider.auth.type == "none" or bool(secrets.get(ref)),
+        key_set=bool(secrets.get(provider.id)),
     )
 
 
@@ -137,13 +128,12 @@ def put_byok_settings(body: ByokSettingsIn) -> ByokSettingsOut:
     except ConfigError as exc:
         raise InvalidRequest(str(exc)) from exc
     for item in body.providers:
-        if item.api_key is None or item.auth_type == "none":
+        if item.api_key is None:
             continue
-        ref = item.secret_ref or item.id
         if item.api_key == "":
-            byok.delete_secret(ref)
+            byok.delete_secret(item.id)
         else:
-            byok.set_secret(ref, item.api_key)
+            byok.set_secret(item.id, item.api_key)
     return _out(config)
 
 

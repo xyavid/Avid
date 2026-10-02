@@ -3,7 +3,8 @@
 契约要点：
 - 密钥只入不出：任何响应都不返回 api_key 明文，GET 只给每家的 key_set 布尔；
 - PUT 是整体保存：providers 全量 + chat 绑定；载荷里的 api_key 剥出落
-  `~/.avid/secrets.json`（0600），配置文件里只有 secret_ref 引用；
+  `~/.avid/secrets.json`（0600，按 provider id 索引），配置文件里不存明文；
+- 鉴权隐式：有密钥就按协议标准头发送，没存就不带——没有 auth_type 可选；
 - validate 不过就不落盘（invalid_request 信封），也不会留下半份密钥；
 - 测试端点针对**载荷**而不是已保存配置：保存前就能测，且不产生写密钥文件的副作用；
 - 生效路径：resolve_chat 每次运行都重读文件，保存后对新消息立即生效，无需重启。
@@ -37,7 +38,6 @@ def provider_payload(**overrides) -> dict:
         "label": "DeepSeek",
         "protocol": "openai-compatible",
         "base_url": "https://api.deepseek.example/v1",
-        "auth_type": "bearer",
         "models": [
             {
                 "id": "deepseek-chat",
@@ -98,10 +98,10 @@ def test_put_writes_config_and_secret_and_takes_effect(tmp_path):
     assert body["providers"][0]["key_set"] is True
     assert "sk-ui" not in json.dumps(body)  # 只入不出
 
-    # 配置文件只有引用，明文在 0600 的密钥文件里
+    # 配置文件不存明文、也不再有 auth 块；明文在 0600 的密钥文件里，按 provider id 索引
     raw = json.loads(config_path().read_text(encoding="utf-8"))
     assert "sk-ui" not in json.dumps(raw)
-    assert raw["providers"][0]["auth"]["secret_ref"] == "deepseek"
+    assert "auth" not in json.dumps(raw)
     assert read_secrets() == {"deepseek": "sk-ui"}
     assert stat.S_IMODE(secrets_path().stat().st_mode) == 0o600
 

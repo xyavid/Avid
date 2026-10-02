@@ -1,12 +1,12 @@
 """BYOK 连通校验：两步（最小对话 + 工具冒烟）与错误分类。
 
 契约要点：
-- ① 最小对话 `max_tokens=1`，验证鉴权、端点与网络；
+- ① 最小对话 `max_tokens=1`，验证密钥（若已配置）、端点与网络；
 - ② 工具冒烟带一个工具定义，模型没回 tool_calls 就是失败——「能聊天不能干活」
   的模型在这一步被筛掉，而不是接进 agent 后每次运行都废；
 - 错误分类只认 LLMError 消息里的已知信号（HTTP 状态码 / 网络措辞），认不出时原样
   透出消息摘录，绝不编造原因；
-- 缺密钥（ConfigError）不算端点问题，也走报告而不是异常——调用方是设置界面。
+- 配置解析失败（ConfigError）不算端点问题，也走报告而不是异常——调用方是设置界面。
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from __future__ import annotations
 import pytest
 
 from avid.ai import verify as verify_module
-from avid.ai.byok import ModelAuth, ModelCapabilities, ModelDecl, ProviderDecl, set_secret
+from avid.ai.byok import ModelCapabilities, ModelDecl, ProviderDecl, set_secret
 from avid.ai.config import ConfigError
 from avid.ai.protocol import LLMError, Turn, Usage
 
@@ -32,7 +32,6 @@ def provider_decl(**overrides) -> ProviderDecl:
         "label": "DeepSeek",
         "protocol": "openai-compatible",
         "base_url": "https://api.deepseek.example/v1",
-        "auth": ModelAuth(type="bearer", secret_ref="deepseek"),
         "models": (ModelDecl(id="deepseek-chat", capabilities=ModelCapabilities(tool_calling=True)),),
     }
     fields.update(overrides)
@@ -128,14 +127,14 @@ def test_llm_errors_are_classified(monkeypatch, message, signal):
     assert signal in chat.detail
 
 
-def test_missing_secret_reports_instead_of_raising(monkeypatch):
+def test_config_error_reports_instead_of_raising(monkeypatch):
     def fake(config, messages, **_):
-        raise AssertionError("缺密钥时不应发起请求")
+        raise AssertionError("配置解析失败时不应发起请求")
 
     monkeypatch.setattr(verify_module, "chat_completion", fake)
 
     def boom():
-        raise ConfigError("缺少 DeepSeek 的密钥")
+        raise ConfigError("chat 槽位还没有绑定模型")
 
     from avid.ai import byok as byok_module
 
@@ -144,4 +143,4 @@ def test_missing_secret_reports_instead_of_raising(monkeypatch):
     report = verify_module.verify_provider(provider_decl(), "deepseek-chat")
 
     assert report.ok is False
-    assert "密钥" in report.steps[0].detail
+    assert "绑定" in report.steps[0].detail

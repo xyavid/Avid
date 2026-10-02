@@ -189,7 +189,7 @@ class TestProviderDetection:
         """协议族来自 BYOK 的显式声明；非法值报错而不是猜。"""
         assert Config(api_key="k", base_url="https://x/v1", model="m", provider="anthropic").resolved_provider == "anthropic"
         with pytest.raises(ConfigError, match="provider"):
-            Config(api_key="k", base_url="https://x/v1", model="m", provider="palm").resolved_provider
+            _ = Config(api_key="k", base_url="https://x/v1", model="m", provider="palm").resolved_provider
 
     def test_window_table_knows_newer_prefixes(self):
         assert window_for("claude-sonnet-4-5") == 200_000
