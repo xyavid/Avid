@@ -83,6 +83,23 @@ describe('markdown 渲染', () => {
     expect(container.querySelectorAll('a')).toHaveLength(1)
   })
 
+  it('小节标题居中（h2/h3），文档标题 h1 与更深的层级仍左对齐', () => {
+    const { container } = render(<Markdown>{'# 大标题\n\n## 小节\n\n### 三级\n\n#### 四级'}</Markdown>)
+
+    expect(container.querySelector('h1')?.className).not.toContain('text-center')
+    expect(container.querySelector('h2')?.className).toContain('text-center')
+    expect(container.querySelector('h3')?.className).toContain('text-center')
+    expect(container.querySelector('h4')?.className).not.toContain('text-center')
+  })
+
+  it('表格：表头有底色、单元格是发丝线整格', () => {
+    const { container } = render(<Markdown>{'| 甲 | 乙 |\n| --- | --- |\n| 1 | 2 |'}</Markdown>)
+
+    expect(container.querySelector('thead tr')?.className).toContain('bg-overlay-light')
+    expect(container.querySelector('th')?.className).toContain('border-hairline')
+    expect(container.querySelector('td')?.className).toContain('border-hairline')
+  })
+
   it('软换行渲染成换行（不并成一行、也不多个空格）', () => {
     const { container } = render(<Markdown>{'第一行\n第二行'}</Markdown>)
 

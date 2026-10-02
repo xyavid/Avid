@@ -50,10 +50,13 @@ function renderBlock(block: Block, key: number, trailing?: ReactNode) {
       const Tag = (`h${block.level}` as unknown) as 'h2'
       const size =
         block.level === 1 ? 'text-title' : block.level === 2 ? 'text-body' : 'text-ui'
+      // 小节标题（h2/h3）居中、文档标题与更深层级左对齐——与参考界面一致：
+      // 居中把长回答切成几个明显的段落，h1 是这条消息自己的标题、居中反而怪。
+      const align = block.level === 2 || block.level === 3 ? 'text-center' : ''
       return (
         <Tag
           key={key}
-          className={`mt-a16 mb-a8 font-serif font-medium tracking-[0.01em] text-ink first:mt-0 ${size}`}
+          className={`mt-a16 mb-a8 font-serif font-medium tracking-[0.01em] text-ink first:mt-0 ${size} ${align}`}
         >
           {parseInline(block.text).map(renderInline)}
         </Tag>
@@ -88,7 +91,7 @@ function renderBlock(block: Block, key: number, trailing?: ReactNode) {
         <div key={key} className="scroll-auto my-a12 overflow-x-auto">
           <table className="w-full border-collapse text-ui">
             <thead>
-              <tr className="bg-overlay-subtle">
+              <tr className="bg-overlay-light">
                 {block.head.map((cell, i) => (
                   <th
                     key={i}
