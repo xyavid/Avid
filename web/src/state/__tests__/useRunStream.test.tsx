@@ -56,6 +56,39 @@ describe('useRunStream（发送 → 订阅 → 活事件 → 终态回拉）', (
     })
   })
 
+  it('reasoning_delta 单独累积：思考不进正文，正文也不进思考', async () => {
+    const { result } = renderHook(() => useRunStream('s1', () => {}))
+    await act(async () => {
+      await result.current.send('跑一下', 'manual')
+    })
+    const { send } = emitter()
+
+    act(() => {
+      send('reasoning_delta', { text: '先看 ' })
+      send('reasoning_delta', { text: '五层状态' })
+      send('assistant_delta', { text: '结论是' })
+      send('reasoning_delta', { text: '…再想想' })
+      send('assistant_delta', { text: '这样' })
+    })
+
+    expect(result.current.reasoning).toBe('先看 五层状态…再想想')
+    expect(result.current.assistantText).toBe('结论是这样')
+  })
+
+  it('新一次发送会清掉上一轮的思考（它只属于那一次运行）', async () => {
+    const { result } = renderHook(() => useRunStream('s1', () => {}))
+    await act(async () => {
+      await result.current.send('第一轮', 'manual')
+    })
+    act(() => emitter().send('reasoning_delta', { text: '上一轮的思考' }))
+    expect(result.current.reasoning).toBe('上一轮的思考')
+
+    await act(async () => {
+      await result.current.send('第二轮', 'manual')
+    })
+    expect(result.current.reasoning).toBe('')
+  })
+
   it('活事件：delta 累积、工具行登记与状态迁移、审批入列', async () => {
     const onSettled = vi.fn()
     const { result } = renderHook(() => useRunStream('s1', onSettled))

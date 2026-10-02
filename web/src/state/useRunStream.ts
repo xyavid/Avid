@@ -8,6 +8,8 @@
  *   靠重放；assistant 的最终消息取代 delta 累积（deltas 永不重放）；
  * - 工具行由 tool_call_started 登记、finished/denied 迁移状态；
  * - 审批入列/出列；终态（finished/failed/cancelled）→ settling + onSettled()
+ * - reasoning_delta 单独累积（思考 ≠ 正文）：它属于 delta 档，不落盘、不重放，
+ *   只在流里存在——所以刷新或切走会话后就没了，这是刻意的（见 ReasoningBlock）
  *   （页面回拉 entries/usage/sessions 后调 reset）。
  * 流异常断开：轮询 getRun 到终态（web-ui §终端兜底），不无限重连。
  */
@@ -33,6 +35,7 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
   const [runId, setRunId] = useState<string | null>(null)
   const [userText, setUserText] = useState<string | null>(null)
   const [assistantText, setAssistantText] = useState('')
+  const [reasoning, setReasoning] = useState('')
   const [tools, setTools] = useState<LiveTool[]>([])
   const [approvals, setApprovals] = useState<LiveApproval[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -49,6 +52,7 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
     setRunId(null)
     setUserText(null)
     setAssistantText('')
+    setReasoning('')
     setTools([])
     setApprovals([])
     setError(null)
@@ -97,6 +101,11 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
         }
         case 'assistant_delta': {
           if (typeof data.text === 'string') setAssistantText((cur) => cur + (data.text as string))
+          break
+        }
+        case 'reasoning_delta': {
+          // 思考与正文分开累积：它们在同一次运行里交替到达，混在一起会串行
+          if (typeof data.text === 'string') setReasoning((cur) => cur + (data.text as string))
           break
         }
         case 'approval_requested': {
@@ -179,6 +188,7 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
       setError(null)
       setUserText(prompt)
       setAssistantText('')
+      setReasoning('')
       setTools([])
       setApprovals([])
       try {
@@ -223,5 +233,19 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
     [],
   )
 
-  return { phase, runId, userText, assistantText, tools, approvals, error, send, stop, decide, attach, reset }
+  return {
+    phase,
+    runId,
+    userText,
+    assistantText,
+    reasoning,
+    tools,
+    approvals,
+    error,
+    send,
+    stop,
+    decide,
+    attach,
+    reset,
+  }
 }

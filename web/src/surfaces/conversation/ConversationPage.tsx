@@ -29,6 +29,7 @@ import type { Entry, Meta, PermissionMode, SessionSummary, UsageReport, Workspac
 import { ApprovalBar } from '../../components/chat/ApprovalBar'
 import { AssistantMessage } from '../../components/chat/AssistantMessage'
 import { Composer } from '../../components/chat/Composer'
+import { ReasoningBlock } from '../../components/chat/ReasoningBlock'
 import { Timeline, toolIcon } from '../../components/chat/Timeline'
 import { ToolCard } from '../../components/chat/ToolCard'
 import { UserBubble } from '../../components/chat/UserBubble'
@@ -364,6 +365,8 @@ export function ConversationPage() {
                 status={t.status === 'denied' ? 'failed' : t.status}
               />
             ))}
+            {/* 思考块在正文之前：它是过程，正文是结论（思考只在流里存在，不落盘） */}
+            <ReasoningBlock text={live.reasoning} streaming={liveActive} />
             {(live.assistantText || (!hasEntries && live.tools.length === 0)) && (
               <AssistantMessage streaming>{live.assistantText}</AssistantMessage>
             )}
