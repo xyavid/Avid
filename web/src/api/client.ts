@@ -217,7 +217,7 @@ export function decideApproval(runId: string, approvalId: string, decision: 'all
  * GET 只给每家的 key_set。保存后对下一条消息立即生效，无需重启。
  */
 
-/** 读整份 BYOK 配置（providers + chat 绑定 + legacy 生效值）。 */
+/** 读整份 BYOK 配置（providers + chat 绑定）。 */
 export function getByokSettings(): Promise<ByokSettings> {
   return request('/api/settings/byok')
 }
@@ -246,7 +246,7 @@ export function testByokModel(
   })
 }
 
-/** 重置：删配置与密钥两份文件，回落旧 model.toml 覆盖层 / .env。 */
+/** 重置：删配置与密钥两份文件；之后运行会报「还没有模型配置」，直到重新保存。 */
 export function resetByokSettings(): Promise<void> {
   return request('/api/settings/byok', { method: 'DELETE' })
 }

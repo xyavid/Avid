@@ -20,7 +20,6 @@ vi.mock('../../../api/client', () => ({
 const EMPTY: ByokSettings = {
   providers: [],
   bindings: { chat: null },
-  legacy: { model: 'env-model', base_url: 'https://env.example/v1', provider: null, api_key_set: true },
 }
 
 const WIRED: ByokSettings = {
@@ -43,7 +42,6 @@ const WIRED: ByokSettings = {
     },
   ],
   bindings: { chat: 'deepseek/deepseek-chat' },
-  legacy: null,
 }
 
 /** PUT 载荷 → 回显：key_set 按载荷里是否带 api_key 生成。 */
@@ -52,7 +50,6 @@ function savedState(input: unknown): ByokSettings {
   return {
     providers: providers.map((p) => ({ ...p, key_set: Boolean(p.api_key) })) as ByokSettings['providers'],
     bindings: { chat: 'deepseek/deepseek-chat' },
-    legacy: null,
   }
 }
 
@@ -73,11 +70,11 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('SettingsModal（设置界面 · BYOK 模型段）', () => {
-  it('空配置 + legacy 横幅：显示回落来源与导入按钮，不预填任何密钥', async () => {
+  it('空配置：显示引导文案（BYOK 是唯一来源），不预填任何密钥', async () => {
     render(<SettingsModal onClose={() => {}} />)
 
-    await waitFor(() => expect(screen.getByText(/当前使用 \.env \/ 旧配置/)).toBeTruthy())
-    expect(screen.getByText('导入旧配置为提供商')).toBeTruthy()
+    await waitFor(() => expect(screen.getByText(/还没有模型配置/)).toBeTruthy())
+    expect(screen.getByRole('button', { name: '新增提供商' })).toBeTruthy()
     // 密钥输入框（若有）必须是 password 且不预填——只入不出
     const passwords = document.querySelectorAll('input[type="password"]')
     passwords.forEach((el) => expect((el as HTMLInputElement).value).toBe(''))
@@ -175,7 +172,7 @@ describe('SettingsModal（设置界面 · BYOK 模型段）', () => {
     await waitFor(() => expect(screen.getByText(/已清除 BYOK 配置与密钥/)).toBeTruthy())
   })
 
-  it('chat 绑定切回「跟随 .env / 旧配置」时载荷为 null', async () => {
+  it('chat 绑定切回「未绑定」时载荷为 null', async () => {
     getByokSettings.mockResolvedValue(WIRED)
     render(<SettingsModal onClose={() => {}} />)
     await waitFor(() => expect(screen.getByText('DeepSeek')).toBeTruthy())

@@ -7,8 +7,8 @@
  * validate 不过就不落盘。「测试连接」对**当前表单值**跑两步探测（最小对话 +
  * 工具冒烟），保存前就能测。
  *
- * legacy 横幅：没有 BYOK 文件时展示 .env / 旧 model.toml 的生效值，可一键导入成
- * 草稿（密钥读不到，需要重新粘贴）。
+ * 空态引导：没有任何提供商时提示先新增并在下方绑定 chat 槽位——BYOK 是模型
+ * 连接的唯一来源，未绑定时运行会报「还没有模型配置」。
  */
 
 import { useEffect, useState } from 'react'
@@ -50,12 +50,6 @@ const PROTOCOL_LABELS: Record<ByokProtocol, string> = {
   anthropic: 'Anthropic',
   google: 'Gemini',
   ollama: 'Ollama',
-}
-
-const LEGACY_FAMILY_TO_PROTOCOL: Record<string, ByokProtocol> = {
-  openai: 'openai-compatible',
-  anthropic: 'anthropic',
-  gemini: 'google',
 }
 
 const STATUS = 'mt-a8 font-ui text-hint'
@@ -155,7 +149,7 @@ export function ModelSection() {
       setProviders(next.providers.map(entryToInput))
       setChatBinding(next.bindings.chat ?? '')
       setTestResults({})
-      setStatus({ kind: 'ok', text: '已清除 BYOK 配置与密钥，回落 .env / 旧配置' })
+      setStatus({ kind: 'ok', text: '已清除 BYOK 配置与密钥' })
     } catch (e) {
       setStatus({ kind: 'error', text: e instanceof Error ? e.message : String(e) })
     } finally {
@@ -185,23 +179,6 @@ export function ModelSection() {
     setDraft(null)
   }
 
-  const importLegacy = () => {
-    const legacy = settings?.legacy
-    if (!legacy) return
-    setDraftIsNew(true)
-    setDraft({
-      ...emptyDraft(),
-      id: 'default',
-      label: '导入的旧配置',
-      protocol: LEGACY_FAMILY_TO_PROTOCOL[legacy.provider ?? ''] ?? 'openai-compatible',
-      base_url: legacy.base_url ?? '',
-      models: legacy.model
-        ? [{ id: legacy.model, label: null, context_window: null, max_output: null, capabilities: { tool_calling: true } }]
-        : [],
-      api_key: null,
-    })
-  }
-
   const bindingOptions = providers.flatMap((p) =>
     p.enabled
       ? p.models
@@ -212,22 +189,13 @@ export function ModelSection() {
 
   return (
     <div>
-      {/* legacy 横幅：BYOK 文件不存在时，生效的是 .env / 旧 model.toml */}
-      {settings?.legacy && (
+      {/* 空态引导：模型连接只认 BYOK，没有任何提供商时先指路 */}
+      {settings !== null && providers.length === 0 && (
         <div className="mt-a8 rounded-md border-hairline border-hair bg-card p-a12">
           <p className="font-ui text-hint leading-[1.6] text-ink-muted">
-            当前使用 .env / 旧配置
-            {settings.legacy.model ? `（模型：${settings.legacy.model}）` : ''}
-            。在下面添加提供商并绑定 chat 槽位后，BYOK 配置优先生效。
+            还没有模型配置：点「新增提供商」填入接口地址与密钥，然后在下方把 chat 槽位
+            绑定到一个模型。没有绑定时，发送消息会报「还没有模型配置」。
           </p>
-          <button
-            type="button"
-            onClick={importLegacy}
-            disabled={busy}
-            className="mt-a8 rounded-sm border-hairline border-hair px-a12 py-a4 font-ui text-hint font-medium text-ink-light transition-colors duration-fast ease-out hover:bg-overlay-light hover:text-ink disabled:opacity-40"
-          >
-            导入旧配置为提供商
-          </button>
         </div>
       )}
 
@@ -329,13 +297,13 @@ export function ModelSection() {
       )}
 
       {/* chat 绑定 + 保存 / 重置 */}
-      <Field label="chat 槽位（主对话模型）" hint="未绑定 = 回落 .env / 旧配置">
+      <Field label="chat 槽位（主对话模型）" hint="必须绑定，未绑定时无法运行">
         <select
           value={chatBinding}
           onChange={(e) => setChatBinding(e.target.value)}
           className={SELECT_CLS}
         >
-          <option value="">跟随 .env / 旧配置</option>
+          <option value="">未绑定（发送消息会报配置错误）</option>
           {bindingOptions.map((o) => (
             <option key={o.ref} value={o.ref}>
               {o.label}

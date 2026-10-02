@@ -336,19 +336,10 @@ export interface ProviderInput {
   api_key?: string | null
 }
 
-/** Legacy 生效值（旧 model.toml 覆盖层 → env）；仅在 BYOK 文件不存在时返回。 */
-export interface LegacyConnection {
-  model: string | null
-  base_url: string | null
-  provider: string | null
-  api_key_set: boolean
-}
-
-/** GET /api/settings/byok 的响应。 */
+/** GET /api/settings/byok 的响应：模型连接的唯一来源。 */
 export interface ByokSettings {
   providers: ProviderEntry[]
   bindings: Record<string, string | null>
-  legacy: LegacyConnection | null
 }
 
 /** PUT 载荷：providers 全量 + chat 绑定；服务端 validate 不过就不落盘。 */
