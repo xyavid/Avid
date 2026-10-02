@@ -8,23 +8,23 @@ describe('IconButton（报告 §7.6：26px 图标按钮）', () => {
   afterEach(cleanup)
 
   it('渲染指定图标，aria-label 必填（图标按钮没有文字）', () => {
-    render(<IconButton icon="pin" label="置顶" />)
+    render(<IconButton icon="settings" label="设置" />)
 
-    const btn = screen.getByRole('button', { name: '置顶' })
+    const btn = screen.getByRole('button', { name: '设置' })
     expect(btn.querySelector('svg')).toBeTruthy()
     expect(btn.className).toContain('h-[26px]')
     expect(btn.className).toContain('rounded-sm')
   })
 
   it('hover 底用 overlay-light（纸面轻压痕）', () => {
-    render(<IconButton icon="archive" label="归档" />)
+    render(<IconButton icon="copy" label="复制" />)
 
     expect(screen.getByRole('button').className).toContain('hover:bg-overlay-light')
   })
 
   it('点击回调生效', () => {
     const onClick = vi.fn()
-    render(<IconButton icon="pin" label="置顶" onClick={onClick} />)
+    render(<IconButton icon="pencil" label="重命名" onClick={onClick} />)
 
     screen.getByRole('button').click()
     expect(onClick).toHaveBeenCalledOnce()

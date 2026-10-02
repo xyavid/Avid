@@ -9,10 +9,13 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 
 import {
   ApiError,
+  createSession,
   createWorkspace,
+  deleteSession,
   deleteWorkspace,
   getMeta,
   listBranches,
@@ -20,6 +23,7 @@ import {
   listSessions,
   listWorkspaces,
   pickFolder,
+  renameSession,
 } from '../../api/client'
 import type { Entry, Meta, PermissionMode, SessionSummary, UsageReport, WorkspaceSummary } from '../../api/types'
 import { ApprovalBar } from '../../components/chat/ApprovalBar'
@@ -29,6 +33,7 @@ import { Timeline, toolIcon } from '../../components/chat/Timeline'
 import { ToolCard } from '../../components/chat/ToolCard'
 import { UserBubble } from '../../components/chat/UserBubble'
 import { useRunStream } from '../../state/useRunStream'
+import { Button } from '../../ui/Button'
 import { AvidMark } from '../../ui/Mark'
 import { useAutoHideScroll } from '../../ui/useAutoHideScroll'
 import { ContextRail } from '../../components/rail/ContextRail'
@@ -38,14 +43,25 @@ import { SessionNav } from '../../components/session/SessionNav'
 import { SidebarFooter } from '../../components/session/SidebarFooter'
 import { AppShell } from '../../app/AppShell'
 
+/** 会话动作的失败说法：服务端消息多半够用，个别码换成更可执行的下一步。 */
+function sessionErrorText(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.code === 'session_busy') return '会话还在运行中——先停止这次运行，再删除'
+    return error.message
+  }
+  return String(error)
+}
+
 /** 欢迎态（报告 §6 底部欢迎态）：标识 + 衬线欢迎语（letter-spacing .06em）。
-    标识直接贴在纸面上，不做圆托——图案自带配色，透明底。 */
-function Welcome({ detail }: { detail: string }) {
+    标识直接贴在纸面上，不做圆托——图案自带配色，透明底。
+    空项目时给一个主行动（新建会话）——每屏 ≤1 个 primary，按 Button 的使用约定。 */
+function Welcome({ detail, action }: { detail: string; action?: ReactNode }) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-a16">
       <AvidMark size={96} />
       <p className="font-serif text-[20px] tracking-[0.06em] text-ink">有什么可以帮你？</p>
       <p className="font-ui text-hint text-ink-muted">{detail}</p>
+      {action}
     </div>
   )
 }
@@ -64,6 +80,9 @@ export function ConversationPage() {
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null)
   const [wsBusy, setWsBusy] = useState(false)
   const [wsHint, setWsHint] = useState<string | null>(null)
+  // 会话动作（新建 / 重命名 / 删除）：在飞时禁用新建，结果或失败都落一行提示。
+  const [sessionsBusy, setSessionsBusy] = useState(false)
+  const [sessionsHint, setSessionsHint] = useState<string | null>(null)
   // 活运行：一次运行的发送/订阅/终态回拉。liveSession 标记活事件属于哪个会话
   // （切走会话时活区块不跟过去）；attachedRunRef 防重复附着同一运行。
   const [liveSession, setLiveSession] = useState<string | null>(null)
@@ -252,11 +271,76 @@ export function ConversationPage() {
     }
   }
 
+  const refreshSessions = async (): Promise<SessionSummary[]> => {
+    const list = await listSessions()
+    setSessions(list.sessions)
+    return list.sessions
+  }
+
+  /** 在当前项目下新建会话并选中它（workspace 是服务端必填项，没有默认工作区）。 */
+  const createSessionInProject = async () => {
+    if (!activeWorkspaceId || sessionsBusy) return
+    setSessionsBusy(true)
+    setSessionsHint(null)
+    try {
+      const created = await createSession({ workspace: activeWorkspaceId })
+      await refreshSessions()
+      setSelectedId(created.id)
+    } catch (e) {
+      setSessionsHint(sessionErrorText(e))
+    } finally {
+      setSessionsBusy(false)
+    }
+  }
+
+  const renameSessionById = async (id: string, name: string) => {
+    setSessionsBusy(true)
+    setSessionsHint(null)
+    try {
+      await renameSession(id, name)
+      await refreshSessions()
+    } catch (e) {
+      setSessionsHint(sessionErrorText(e))
+    } finally {
+      setSessionsBusy(false)
+    }
+  }
+
+  /** 删除会话（组件内已二次确认）：销毁磁盘记录文件；删的是选中项就换选同项目第一条。 */
+  const deleteSessionById = async (id: string) => {
+    setSessionsBusy(true)
+    setSessionsHint(null)
+    try {
+      await deleteSession(id)
+      const list = await refreshSessions()
+      if (selectedIdRef.current === id) {
+        const inProject = list.filter((s) => s.workspace?.id === activeWorkspaceId)
+        setSelectedId(inProject[0]?.id ?? null)
+      }
+      setSessionsHint('会话已删除（磁盘上的记录文件一并销毁）')
+    } catch (e) {
+      setSessionsHint(sessionErrorText(e))
+    } finally {
+      setSessionsBusy(false)
+    }
+  }
+
   const liveActive = live.phase === 'starting' || live.phase === 'running' || live.phase === 'settling'
   const liveHere = liveActive && liveSession === selectedId
   const displayError = error ?? (live.phase === 'error' && liveSession === selectedId ? live.error : null)
 
-  let body = <Welcome detail={activeWorkspaceId ? '这个项目还没有会话' : '从左侧选择一个项目'} />
+  let body = (
+    <Welcome
+      detail={activeWorkspaceId ? '这个项目还没有会话' : '从左侧选择一个项目'}
+      action={
+        activeWorkspaceId ? (
+          <Button variant="primary" onClick={() => void createSessionInProject()} disabled={sessionsBusy}>
+            新建会话
+          </Button>
+        ) : undefined
+      }
+    />
+  )
   if (displayError) {
     body = <p className="px-a8 pt-a8 font-ui text-ui text-danger">{displayError}</p>
   } else if (selectedId && entries === null) {
@@ -311,6 +395,11 @@ export function ConversationPage() {
             workspaceId={activeWorkspaceId}
             selectedId={selectedId}
             onSelect={setSelectedId}
+            onCreateSession={() => void createSessionInProject()}
+            onRenameSession={(id, name) => void renameSessionById(id, name)}
+            onDeleteSession={(id) => void deleteSessionById(id)}
+            creating={sessionsBusy}
+            notice={sessionsHint}
           />
           {/* 设置入口在侧栏最底部、单开一栏（原先挂在顶栏右上角） */}
           <SidebarFooter onOpenSettings={() => setSettingsOpen(true)} />

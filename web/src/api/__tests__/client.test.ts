@@ -1,6 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { ApiError, createWorkspace, getMeta, listEntries, listSessions, pickFolder } from '../client'
+import {
+  ApiError,
+  createSession,
+  createWorkspace,
+  deleteSession,
+  getMeta,
+  listEntries,
+  listSessions,
+  pickFolder,
+  renameSession,
+} from '../client'
 
 function jsonResponse(status: number, body: unknown): Response {
   return { ok: status < 400, status, json: async () => body } as Response
@@ -92,5 +102,37 @@ describe('api/client（网络出口唯一层）', () => {
     const init = fetchMock.mock.calls[0]?.[1] as RequestInit
     expect(init.method).toBe('POST')
     expect(init.body).toBe(JSON.stringify({ path: '/tmp/x' }))
+  })
+
+  it('createSession POST /api/sessions，载荷带 workspace（服务端把它当必填项）', async () => {
+    const created = { id: 's9', name: null, branch: 'main' }
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(201, created))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(createSession({ workspace: 'w1' })).resolves.toEqual(created)
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/sessions')
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit
+    expect(init.method).toBe('POST')
+    expect(init.body).toBe(JSON.stringify({ workspace: 'w1' }))
+  })
+
+  it('renameSession PATCH /api/sessions/{id}，载荷只有 name', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { id: 's1', name: '新名字' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await renameSession('s1', '新名字')
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/sessions/s1')
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit
+    expect(init.method).toBe('PATCH')
+    expect(init.body).toBe(JSON.stringify({ name: '新名字' }))
+  })
+
+  it('deleteSession DELETE /api/sessions/{id}：204 无正文，不解析 JSON', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(204, null))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(deleteSession('s 1')).resolves.toBeUndefined()
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/sessions/s%201')
+    expect((fetchMock.mock.calls[0]?.[1] as RequestInit).method).toBe('DELETE')
   })
 })

@@ -66,4 +66,72 @@ describe('SessionNav（会话按项目管理）', () => {
     fireEvent.click(screen.getByText('Avid 的会话'))
     expect(onSelect).toHaveBeenCalledWith('s1')
   })
+
+  it('标题行「会话」+ 新建：有项目才可点，点了回调 onCreateSession', () => {
+    const onCreateSession = vi.fn()
+    render(
+      <SessionNav
+        sessions={SESSIONS}
+        workspaceId="w1"
+        selectedId={null}
+        onSelect={() => {}}
+        onCreateSession={onCreateSession}
+      />,
+    )
+
+    expect(screen.getByText('会话')).toBeTruthy()
+    const create = screen.getByRole('button', { name: '新建会话' }) as HTMLButtonElement
+    expect(create.disabled).toBe(false)
+    fireEvent.click(create)
+    expect(onCreateSession).toHaveBeenCalledOnce()
+  })
+
+  it('没有选中项目：新建按钮禁用并说明（workspace 是服务端必填项）', () => {
+    render(
+      <SessionNav sessions={SESSIONS} workspaceId={null} selectedId={null} onSelect={() => {}} onCreateSession={() => {}} />,
+    )
+
+    const create = screen.getByRole('button', { name: '新建会话' }) as HTMLButtonElement
+    expect(create.disabled).toBe(true)
+    expect(create.title).toContain('项目')
+  })
+
+  it('动作透传：重命名给 (id, 新名字)，删除给 (id)', () => {
+    const onRenameSession = vi.fn()
+    const onDeleteSession = vi.fn()
+    render(
+      <SessionNav
+        sessions={SESSIONS}
+        workspaceId="w1"
+        selectedId="s1"
+        onSelect={() => {}}
+        onRenameSession={onRenameSession}
+        onDeleteSession={onDeleteSession}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: '重命名：Avid 的会话' }))
+    const input = screen.getByLabelText('会话名称')
+    fireEvent.change(input, { target: { value: '改名后的会话' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onRenameSession).toHaveBeenCalledWith('s1', '改名后的会话')
+
+    fireEvent.click(screen.getByRole('button', { name: '删除：同项目另一会话' }))
+    fireEvent.click(screen.getByRole('button', { name: '确认删除' }))
+    expect(onDeleteSession).toHaveBeenCalledWith('s2')
+  })
+
+  it('notice：动作结果与失败原因各是一句人话，挂在列表下方', () => {
+    render(
+      <SessionNav
+        sessions={SESSIONS}
+        workspaceId="w1"
+        selectedId={null}
+        onSelect={() => {}}
+        notice="有活动 run 的会话不能删除"
+      />,
+    )
+
+    expect(screen.getByText('有活动 run 的会话不能删除')).toBeTruthy()
+  })
 })

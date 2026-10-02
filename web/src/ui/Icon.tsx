@@ -3,17 +3,18 @@
  * stroke-width 1.5、fill none、round 端点；不用 emoji、不用实心 fill。
  *
  * 纪律：**每个图标都有真实使用点**（下表锚定到组件与阶段），不做"可能用得上"
- * 的预置集；新增图标先在表里登记用途再画。墙上已有的图标（check / pin /
- * archive / file-frame）逐字取自 Hana 组件墙，其余按同族 feather 风补齐。
+ * 的预置集；新增图标先在表里登记用途再画。墙上已有的图标（check / file-frame）
+ * 逐字取自 Hana 组件墙，其余按同族 feather 风补齐。
  *
  * | 图标 | 首个使用点 |
  * |---|---|
  * | check | 成功徽章「已编译」等（阶段 2 ✓） |
  * | user-check | 权限模式「手动」（人审，阶段 4 ✓） |
  * | x | 审批拒绝、对话框关闭、清空搜索（阶段 3–4） |
- * | plus | 新建会话、composer 附加（阶段 3–4） |
+ * | plus | 新建会话、composer 附加（阶段 3–4；阶段 13 落成侧栏新建） |
  * | search | 侧栏会话搜索框（阶段 3） |
- * | pin / archive | 会话项 hover 才现形的操作按钮（阶段 3，墙原件） |
+ * | pencil | 会话行的「重命名」（悬停现形，行内编辑，阶段 13） |
+ * | trash-2 | 会话行的「删除」（悬停现形，确认条先行，阶段 13） |
  * | message-square | 会话列表空态（阶段 3） |
  * | send / paperclip / square | composer 发送 / 附件 / 停止运行（阶段 4） |
  * | copy | 消息动作「复制回复」（阶段 4） |
@@ -54,20 +55,17 @@ const PATHS = {
       <path d="m21 21-4.3-4.3" />
     </>
   ),
-  pin: (
+  pencil: <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />,
+  'trash-2': (
     <>
-      <path d="M12 17v5" />
-      <path d="M9 3h6l-1 6 4 3v2H6v-2l4-3z" />
+      <path d="M3 6h18" />
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
     </>
   ),
-  archive: (
-    <>
-      <rect x="3" y="4" width="18" height="4" />
-      <path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8" />
-    </>
-  ),
-  'message-square': <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />,
-  send: (
+  'message-square': <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />,  send: (
     <>
       <path d="M22 2 11 13" />
       <path d="m22 2-7 20-4-9-9-4Z" />

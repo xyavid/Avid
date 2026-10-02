@@ -233,13 +233,16 @@ print("hi")
       )}
 
       {show('session') && (
-        <Section id="session" title="会话列表项">
+        <Section id="session" title="会话列表项（行内动作：重命名 / 删除）">
           <div className="w-sidebar">
             <SessionItem title="常态会话标题" meta="09:44 · 昨天" />
-            {/* hover 摆拍：用任意变体选择器把「隐藏直到需要」的按钮直接点亮 */}
+            {/* hover 摆拍：用任意变体选择器把「隐藏直到需要」的按钮直接点亮；
+                给了回调才有按钮——只读形态（上面的常态行）一个都不渲染 */}
             <SessionItem
               title="hover 态 · 操作按钮淡入"
               meta="11:20"
+              onRename={() => {}}
+              onDelete={() => {}}
               className="bg-accent-light [&_[data-testid=session-actions]]:opacity-100"
             />
             <SessionItem title="active 会话 · 标题转 accent" meta="进行中" active />

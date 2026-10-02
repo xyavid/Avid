@@ -1,13 +1,18 @@
 /**
- * 侧栏会话区（参考图）：搜索框（30px 高，报告 §7.2）+ 会话列表。
+ * 侧栏会话区（参考图）：标题行（「会话」+ 新建）+ 搜索框（30px 高，报告 §7.2）
+ * + 会话列表 + 结果提示行。
  * 列表按 created_at 降序；标题取会话名，缺名显示「未命名会话」；
  * 流式中的会话（active_run_id 非空）带呼吸点——真实状态，不是装饰。
  * 分组（置顶/今天/昨天）等后端有置顶概念后再立——现在拍平，不造假分组。
+ *
+ * 组件只发意图：新建/重命名/删除都回调给装配层（它独占状态与副作用），
+ * 因此同一套组件既能接真后端，也能在组件墙里当静态演示（不给回调即只读）。
  */
 
 import { useState } from 'react'
 
 import type { SessionSummary } from '../../api/types'
+import { Icon } from '../../ui/Icon'
 import { Input } from '../../ui/Input'
 import { useAutoHideScroll } from '../../ui/useAutoHideScroll'
 import { SessionItem } from './SessionItem'
@@ -28,9 +33,32 @@ export type SessionNavProps = {
   workspaceId?: string | null
   selectedId: string | null
   onSelect: (id: string) => void
+  /**
+   * 在当前项目下新建会话。**workspace 是服务端的必填项**，所以没有选中项目时
+   * 按钮禁用并说明；不给回调 = 只读演示（组件墙）。
+   */
+  onCreateSession?: () => void
+  /** 行内重命名（名字已 trim、非空）；不给则该动作不渲染。 */
+  onRenameSession?: (id: string, name: string) => void
+  /** 删除（组件内已先确认）；不给则该动作不渲染。 */
+  onDeleteSession?: (id: string) => void
+  /** 新建在飞：按钮落 disabled，避免连点建出几个空会话。 */
+  creating?: boolean
+  /** 动作结果或失败原因，一句人话（删除不可逆，成功也要说话）。 */
+  notice?: string | null
 }
 
-export function SessionNav({ sessions, workspaceId = null, selectedId, onSelect }: SessionNavProps) {
+export function SessionNav({
+  sessions,
+  workspaceId = null,
+  selectedId,
+  onSelect,
+  onCreateSession,
+  onRenameSession,
+  onDeleteSession,
+  creating = false,
+  notice = null,
+}: SessionNavProps) {
   const [query, setQuery] = useState('')
   const listScrollRef = useAutoHideScroll<HTMLDivElement>()
   const needle = query.trim().toLowerCase()
@@ -39,6 +67,23 @@ export function SessionNav({ sessions, workspaceId = null, selectedId, onSelect 
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-a12">
+      <div className="flex items-center justify-between">
+        <span className="font-ui text-hint font-medium text-ink-muted">会话</span>
+        <button
+          type="button"
+          onClick={onCreateSession}
+          disabled={creating || !workspaceId || !onCreateSession}
+          aria-label="新建会话"
+          title={
+            workspaceId
+              ? '在当前项目下新建会话'
+              : '先在项目里选择一个项目，再新建会话（归属不可改）'
+          }
+          className="inline-flex h-[22px] w-[22px] items-center justify-center rounded-sm text-ink-muted transition-colors duration-fast ease-out hover:bg-overlay-light hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <Icon name="plus" size={12} />
+        </button>
+      </div>
       <Input
         bare
         value={query}
@@ -65,10 +110,13 @@ export function SessionNav({ sessions, workspaceId = null, selectedId, onSelect 
               active={s.id === selectedId}
               streaming={s.active_run_id !== null}
               onSelect={() => onSelect(s.id)}
+              onRename={onRenameSession && ((name) => onRenameSession(s.id, name))}
+              onDelete={onDeleteSession && (() => onDeleteSession(s.id))}
             />
           ))
         )}
       </div>
+      {notice && <p className="px-a8 font-ui text-micro text-ink-light">{notice}</p>}
     </div>
   )
 }

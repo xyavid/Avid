@@ -17,6 +17,7 @@ import type {
   ModelSettingsInput,
   Run,
   RunCreated,
+  SessionDetail,
   SessionSummary,
   WorkspaceSummary,
 } from './types'
@@ -80,6 +81,37 @@ export function getMeta(): Promise<Meta> {
 
 export function listSessions(): Promise<{ sessions: SessionSummary[] }> {
   return request('/api/sessions')
+}
+
+export type CreateSessionInput = { workspace: string; name?: string | null }
+
+/**
+ * 新建会话（201 → SessionDetail）。`workspace` 是服务端的必填项——归属是一经写入
+ * 不可变的既成事实，没有「默认工作区」这回事；服务端负责生成 id 与磁盘文件。
+ */
+export function createSession(input: CreateSessionInput): Promise<SessionDetail> {
+  return request('/api/sessions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+}
+
+/** 重命名（PATCH 只带 name）。空名字服务端不拒，但 UI 在本地就不提交。 */
+export function renameSession(sessionId: string, name: string): Promise<SessionDetail> {
+  return request(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+}
+
+/**
+ * 删除会话（204 无正文）。这会**销毁磁盘上的会话记录文件**——与「从项目列表移除、
+ * 会话文件还在」的工作区删除不同，删完不可恢复；有活动 run 时服务端回 409 session_busy。
+ */
+export function deleteSession(sessionId: string): Promise<void> {
+  return request(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
 }
 
 export type ListEntriesOptions = { branch?: string; limit?: number; cursorSeq?: number }
