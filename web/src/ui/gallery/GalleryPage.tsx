@@ -182,6 +182,8 @@ export function GalleryPage() {
 
 读完了 \`pyproject.toml\`，项目名是 **avid**，要求 Python >= 3.12。参考 [标识一节](#markdown)。
 
+---
+
 ### 要点
 
 1. 依赖只有 \`httpx\`

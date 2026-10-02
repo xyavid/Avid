@@ -10,9 +10,17 @@
  *      一个 delta 都在正文与代码之间跳）；
  *   2. **软换行保留**：段落里的换行原样带下去（渲染成 <br>）。模型排版里的换行是
  *      它组织内容的一部分；中文之间补空格比保留换行更糟。
+ *
+ * 一个解析期的合并：**分隔线紧跟标题**时合成 `section`（带线小节标题）。参考界面里
+ * 「一条线 + 居中标题」是**一节的开头**，不是「所有小节标题都长这样」——把它写成
+ * 按层级固定居中会很死板（模型随手写个二级标题也居中，读起来到处是断点）。
+ * 让原文决定：写了线才起一节，没写就还是普通标题。
  */
 
 export type Align = 'left' | 'center' | 'right'
+
+/** 标题层级（1–6）。 */
+export type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6
 
 export type ListItem = {
   /** 项自身的文本（多行用 \n 连），渲染时走行内解析 */
@@ -23,7 +31,9 @@ export type ListItem = {
 
 export type Block =
   | { kind: 'paragraph'; text: string }
-  | { kind: 'heading'; level: 1 | 2 | 3 | 4 | 5 | 6; text: string }
+  /** 带线小节标题：原本写的是「分隔线 + 标题」，合成一块，渲染成线在上、标题居中。 */
+  | { kind: 'section'; level: HeadingLevel; text: string }
+  | { kind: 'heading'; level: HeadingLevel; text: string }
   | { kind: 'code'; lang: string | null; text: string }
   | { kind: 'list'; ordered: boolean; start: number; items: ListItem[] }
   | { kind: 'quote'; blocks: Block[] }
@@ -72,7 +82,23 @@ function indentOf(line: string): number {
 }
 
 export function parseBlocks(src: string): Block[] {
-  return parseRange(src.split('\n'))
+  return mergeSections(parseRange(src.split('\n')))
+}
+
+/** 分隔线紧跟标题 → 合成一块（见文件头：一节的开头由原文的线决定，不按层级写死）。 */
+function mergeSections(blocks: Block[]): Block[] {
+  const out: Block[] = []
+  for (let i = 0; i < blocks.length; i++) {
+    const cur = blocks[i]
+    const next = blocks[i + 1]
+    if (cur?.kind === 'hr' && next?.kind === 'heading') {
+      out.push({ kind: 'section', level: next.level, text: next.text })
+      i += 1
+      continue
+    }
+    if (cur) out.push(cur)
+  }
+  return out
 }
 
 function parseRange(lines: string[]): Block[] {
@@ -117,7 +143,7 @@ function parseRange(lines: string[]): Block[] {
     const heading = HEADING.exec(line)
     if (heading) {
       flushPara()
-      blocks.push({ kind: 'heading', level: (heading[2] ?? '#').length as 1 | 2 | 3 | 4 | 5 | 6, text: heading[3] ?? '' })
+      blocks.push({ kind: 'heading', level: (heading[2] ?? '#').length as HeadingLevel, text: heading[3] ?? '' })
       i++
       continue
     }

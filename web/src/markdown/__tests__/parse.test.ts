@@ -100,6 +100,33 @@ describe('markdown 块级解析', () => {
     expect(para.text).toBe('第一行\n第二行')
   })
 
+  it('分割线紧跟标题 → 合并成「带线小节标题」（不是每个标题都居中，由原文决定）', () => {
+    const blocks = parseBlocks('前文\n\n---\n\n## 选型决策线\n\n正文')
+
+    expect(blocks.map((b) => b.kind)).toEqual(['paragraph', 'section', 'paragraph'])
+    const section = blocks[1]
+    if (section?.kind !== 'section') throw new Error('应为带线小节标题')
+    expect(section.level).toBe(2)
+    expect(section.text).toBe('选型决策线')
+  })
+
+  it('标题前没有分割线时保持普通标题（不居中、不加线）', () => {
+    const blocks = parseBlocks('## 普通小节\n\n正文')
+
+    expect(blocks.map((b) => b.kind)).toEqual(['heading', 'paragraph'])
+  })
+
+  it('分割线后面不是标题时仍是普通分割线', () => {
+    expect(parseBlocks('a\n\n---\n\nb').map((b) => b.kind)).toEqual(['paragraph', 'hr', 'paragraph'])
+  })
+
+  it('任意层级跟着分割线都算小节标题（不写死 h2/h3）', () => {
+    for (const marks of ['##', '###', '####']) {
+      const [section] = parseBlocks(`${'---'}\n\n${marks} 小节`)
+      expect(section?.kind, marks).toBe('section')
+    }
+  })
+
   it('空输入与纯空白不产出块', () => {
     expect(parseBlocks('')).toEqual([])
     expect(parseBlocks('\n\n   \n')).toEqual([])

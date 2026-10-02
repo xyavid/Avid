@@ -17,7 +17,7 @@ import { useMemo, useState, type ReactNode } from 'react'
 import { CodeBlock } from './CodeBlock'
 import { copyText } from './clipboard'
 import { parseInline, type Inline } from './inline'
-import { parseBlocks, type Align, type Block, type ListItem } from './parse'
+import { parseBlocks, type Align, type Block, type HeadingLevel, type ListItem } from './parse'
 
 export type MarkdownProps = {
   children: string
@@ -48,18 +48,30 @@ function renderBlock(block: Block, key: number, trailing?: ReactNode) {
       )
     case 'heading': {
       const Tag = (`h${block.level}` as unknown) as 'h2'
-      const size =
-        block.level === 1 ? 'text-title' : block.level === 2 ? 'text-body' : 'text-ui'
-      // 小节标题（h2/h3）居中、文档标题与更深层级左对齐——与参考界面一致：
-      // 居中把长回答切成几个明显的段落，h1 是这条消息自己的标题、居中反而怪。
-      const align = block.level === 2 || block.level === 3 ? 'text-center' : ''
+      // 普通标题：一律左对齐。居中留给「带线小节标题」（section）——按层级写死居中
+      // 会很死板，模型随手写的二级标题也会被居中。
       return (
         <Tag
           key={key}
-          className={`mt-a16 mb-a8 font-serif font-medium tracking-[0.01em] text-ink first:mt-0 ${size} ${align}`}
+          className={`mt-a16 mb-a8 font-serif font-medium tracking-[0.01em] text-ink first:mt-0 ${headingSize(block.level)}`}
         >
           {parseInline(block.text).map(renderInline)}
         </Tag>
+      )
+    }
+    case 'section': {
+      // 一节的开头：线在上、标题居中。线是这一节的一部分（原文里的那条 ---），
+      // 所以不另画横线。
+      const Tag = (`h${block.level}` as unknown) as 'h2'
+      return (
+        <div key={key} className="mt-a24 mb-a12 first:mt-0">
+          <hr className="border-t border-hair" />
+          <Tag
+            className={`mt-a12 mb-a8 text-center font-serif font-medium tracking-[0.01em] text-ink ${headingSize(block.level)}`}
+          >
+            {parseInline(block.text).map(renderInline)}
+          </Tag>
+        </div>
       )
     }
     case 'code':
@@ -133,6 +145,11 @@ function renderItem(item: ListItem, key: number) {
       {item.children.map((b, i) => renderBlock(b, i))}
     </li>
   )
+}
+
+/** 标题字号：一档文档标题、二档节标题、其余同正文标题档。 */
+function headingSize(level: HeadingLevel): string {
+  return level === 1 ? 'text-title' : level === 2 ? 'text-body' : 'text-ui'
 }
 
 function alignOf(align: Align[], i: number): Align {

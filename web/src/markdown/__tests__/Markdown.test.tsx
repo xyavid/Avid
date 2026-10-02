@@ -83,13 +83,29 @@ describe('markdown 渲染', () => {
     expect(container.querySelectorAll('a')).toHaveLength(1)
   })
 
-  it('小节标题居中（h2/h3），文档标题 h1 与更深的层级仍左对齐', () => {
-    const { container } = render(<Markdown>{'# 大标题\n\n## 小节\n\n### 三级\n\n#### 四级'}</Markdown>)
+  it('带分割线的小节标题：线在上、标题居中', () => {
+    const { container } = render(<Markdown>{'前文\n\n---\n\n## 选型决策线'}</Markdown>)
 
-    expect(container.querySelector('h1')?.className).not.toContain('text-center')
-    expect(container.querySelector('h2')?.className).toContain('text-center')
-    expect(container.querySelector('h3')?.className).toContain('text-center')
-    expect(container.querySelector('h4')?.className).not.toContain('text-center')
+    const heading = container.querySelector('h2')
+    expect(heading?.textContent).toBe('选型决策线')
+    expect(heading?.className).toContain('text-center')
+    // 线属于这一节，画在标题上方
+    expect(container.querySelectorAll('hr')).toHaveLength(1)
+  })
+
+  it('没有分割线的标题不居中、也不凭空加线（别把居中写死在层级上）', () => {
+    const { container } = render(<Markdown>{'## 普通小节\n\n### 三级\n\n# 大标题'}</Markdown>)
+
+    expect(container.querySelectorAll('hr')).toHaveLength(0)
+    for (const tag of ['h1', 'h2', 'h3']) {
+      expect(container.querySelector(tag)?.className, tag).not.toContain('text-center')
+    }
+  })
+
+  it('单独的分割线仍是普通横线（后面没跟标题）', () => {
+    const { container } = render(<Markdown>{'甲\n\n---\n\n乙'}</Markdown>)
+
+    expect(container.querySelectorAll('hr')).toHaveLength(1)
   })
 
   it('表格：表头有底色、单元格是发丝线整格', () => {
