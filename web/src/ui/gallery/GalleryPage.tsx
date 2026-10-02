@@ -180,7 +180,7 @@ export function GalleryPage() {
                 引用 / 表格 / 围栏代码 / 分隔线 / svg 围栏（渲染成图，不内联） */}
             <AssistantMessage>{`## 结论
 
-读完了 \`pyproject.toml\`，项目名是 **avid**，要求 Python >= 3.12。参考 [PEP 621](https://peps.python.org/pep-0621/)。
+读完了 \`pyproject.toml\`，项目名是 **avid**，要求 Python >= 3.12。参考 [标识一节](#markdown)。
 
 ### 要点
 
