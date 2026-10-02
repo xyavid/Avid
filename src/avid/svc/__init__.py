@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ..ai.config import ConfigError, load_config
+from ..ai.config import KNOWN_MODELS, ConfigError, load_config
 from ..policy.sandbox import default_backend_summary
 from ..policy.skills import SkillLoader, default_skills_dir
 from ..runtime.events import (
@@ -174,6 +174,8 @@ class Services:
                 "tools": [item["function"]["name"] for item in TOOLS],
                 "skills": self.skills(),
                 "model": self.model_name(),
+                # 可切换的候选（本次运行的模型覆盖用）；空内核配置下也能列出来。
+                "known_models": list(KNOWN_MODELS),
                 # Root of the process-bound workspace; candidates come from the workspaces endpoint.
                 "workspace": (
                     self.workspaces.default.root

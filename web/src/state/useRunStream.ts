@@ -182,7 +182,7 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
   )
 
   const send = useCallback(
-    async (prompt: string, permission: PermissionMode) => {
+    async (prompt: string, permission: PermissionMode, model?: string | null) => {
       if (!sessionId) return
       setPhase('starting')
       setError(null)
@@ -195,6 +195,8 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
         const created = await startRun(sessionId, {
           prompt,
           permission,
+          // 只在选了覆盖时才带 model：不带 = 服务端按设置解析（与旧行为逐字一致）
+          ...(model ? { model } : {}),
           ...(permission === 'full' ? { full_access_ack: true } : {}),
         })
         runIdRef.current = created.run_id

@@ -54,6 +54,21 @@ describe('useRunStream（发送 → 订阅 → 活事件 → 终态回拉）', (
       permission: 'full',
       full_access_ack: true,
     })
+
+    // 选了模型才带 model；不选时载荷与旧行为逐字一致（服务端按设置解析）
+    await act(async () => {
+      await result.current.send('换个模型', 'manual', 'deepseek-reasoner')
+    })
+    expect(startRun).toHaveBeenLastCalledWith('s1', {
+      prompt: '换个模型',
+      permission: 'manual',
+      model: 'deepseek-reasoner',
+    })
+
+    await act(async () => {
+      await result.current.send('还是跟随设置', 'manual', null)
+    })
+    expect(startRun).toHaveBeenLastCalledWith('s1', { prompt: '还是跟随设置', permission: 'manual' })
   })
 
   it('reasoning_delta 单独累积：思考不进正文，正文也不进思考', async () => {

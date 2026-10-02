@@ -14,6 +14,7 @@ import type { PermissionMode } from '../../api/types'
 import { Icon, type IconName } from '../../ui/Icon'
 import { IconButton } from '../../ui/IconButton'
 import { Input } from '../../ui/Input'
+import { ModelButton } from './ModelButton'
 import { PermissionButton } from './PermissionButton'
 
 export type ComposerProps = {
@@ -25,9 +26,26 @@ export type ComposerProps = {
   busy?: boolean
   onSend: (text: string) => void
   onStop: () => void
+  /** 本次运行的模型覆盖；null = 跟随设置。 */
+  model?: string | null
+  onChangeModel?: (model: string | null) => void
+  /** 设置里解析出来的模型（展示用）。 */
+  effectiveModel?: string | null
+  knownModels?: string[]
 }
 
-export function Composer({ permission, onChangePermission, disabled = false, busy = false, onSend, onStop }: ComposerProps) {
+export function Composer({
+  permission,
+  onChangePermission,
+  disabled = false,
+  busy = false,
+  onSend,
+  onStop,
+  model = null,
+  onChangeModel,
+  effectiveModel = null,
+  knownModels = [],
+}: ComposerProps) {
   const [text, setText] = useState('')
   const locked = disabled || busy
   const canSend = !locked && text.trim().length > 0
@@ -60,6 +78,14 @@ export function Composer({ permission, onChangePermission, disabled = false, bus
             <IconButton icon="plus" label="附加" disabled />
             <IconButton icon="paperclip" label="附件" disabled />
             <PermissionButton mode={permission} onChange={onChangePermission} />
+            {onChangeModel && (
+              <ModelButton
+                model={model}
+                onChange={onChangeModel}
+                effective={effectiveModel}
+                known={knownModels}
+              />
+            )}
           </div>
           {busy ? (
             <ActionButton icon="square" label="停止" onClick={onStop} />

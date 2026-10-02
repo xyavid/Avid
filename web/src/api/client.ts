@@ -162,6 +162,8 @@ export type StartRunInput = {
   /** 这次运行接在哪条链尾上；缺省 = main。 */  branch?: string
   /** 权限模式；缺省由服务端按会话所属工作区的默认权限回落。 */
   permission?: 'manual' | 'auto' | 'full'
+  /** 本次运行的模型覆盖；缺省 = 按设置解析（.env + 界面覆盖层）。 */
+  model?: string
   /** permission: 'full' 的显式授权凭据——少了它服务端 422（full 三重锁）。 */
   full_access_ack?: boolean
 }

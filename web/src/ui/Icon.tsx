@@ -31,6 +31,7 @@
  * | sun / moon | 主题切换（阶段 6） |
  * | user | 消息组的用户侧标识（阶段 4） |
  * | more-horizontal | 项目行的「更多」（悬停现形，按下出删除，阶段 12） |
+ * | sparkle | 输入区的模型选择胶囊（阶段 13） |
  */
 
 import type { ReactNode } from 'react'
@@ -168,6 +169,18 @@ const PATHS = {
     <>
       <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
       <circle cx="12" cy="7" r="4" />
+    </>
+  ),
+  sparkle: (
+    <>
+      <path d="M12 3v4" />
+      <path d="M12 17v4" />
+      <path d="M3 12h4" />
+      <path d="M17 12h4" />
+      <path d="m6.3 6.3 2.8 2.8" />
+      <path d="m14.9 14.9 2.8 2.8" />
+      <path d="m17.7 6.3-2.8 2.8" />
+      <path d="m9.1 14.9-2.8 2.8" />
     </>
   ),
   'more-horizontal': (

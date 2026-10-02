@@ -156,6 +156,15 @@ MODEL_CONTEXT_WINDOWS: tuple[tuple[str, int], ...] = (
 )
 
 
+#: 界面上可以直接切换的模型（`GET /api/meta` 的 capabilities.known_models）。
+#: 取自窗口表的**具体条目**——族回退（`claude-`、`gemini-` 这种）不是模型 id，滤掉。
+#: 它不是提供商的模型目录：列出来的只是「内核认得上下文窗口的模型」，
+#: 选了一个你的中转站没有的名字，会由提供方在调用时报错。
+KNOWN_MODELS: tuple[str, ...] = tuple(
+    name for name, _ in MODEL_CONTEXT_WINDOWS if not name.endswith("-")
+)
+
+
 def window_for(model: str) -> int | None:
     """Look up the built-in window table by longest matching model-name prefix."""
     name = model.strip().lower()
@@ -199,8 +208,18 @@ class Config:
         return f"{self.base_url.rstrip('/')}/chat/completions"
 
 
-def load_config(env: Mapping[str, str] | None = None, *, overlay: Mapping[str, str] | None = None) -> Config:
-    """Build a Config from env plus the UI overlay (overlay wins); overlay={} skips the file."""
+def load_config(
+    env: Mapping[str, str] | None = None,
+    *,
+    overlay: Mapping[str, str] | None = None,
+    model: str | None = None,
+) -> Config:
+    """Build a Config from env plus the UI overlay (overlay wins); overlay={} skips the file.
+
+    `model` is a **per-run** override (界面上的「本次运行用哪个模型」)：它只改这一次运行的
+    模型名，其余（地址/密钥/协议）仍按配置走；上下文窗口跟着重算——窗口是按模型名查的，
+    换了模型不重算，占用率读数就会拿错分母。
+    """
     source = os.environ if env is None else env
     raw_overlay = read_model_settings() if overlay is None else dict(overlay)
     file_values = {
@@ -216,7 +235,7 @@ def load_config(env: Mapping[str, str] | None = None, *, overlay: Mapping[str, s
             '  uv run --env-file .env avid "你好"'
         )
 
-    model = merged[ENV_MODEL].strip()
+    model = (model or "").strip() or merged[ENV_MODEL].strip()
     # An explicit provider picks its default endpoint; detection follows base_url implicitly.
     raw_base = merged.get(ENV_BASE_URL, "").strip()
     raw_provider = merged.get(ENV_PROVIDER, "").strip()

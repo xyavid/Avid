@@ -85,6 +85,8 @@ class RunRecord:
     cancel_requested: bool = False
     cancel_reason: str | None = None
     finished_at: int | None = None
+    # 本次运行的模型覆盖（界面选的那个）；None = 按设置解析。
+    model: str | None = None
 
     # Event buffer holding durable and transient events; deltas never take part in replay.
     events: list[RunEvent] = field(default_factory=list)
@@ -217,6 +219,7 @@ class RunRegistry:
         branch: str = DEFAULT_BRANCH,
         permission: str | None = None,
         full_ack: bool = False,
+        model: str | None = None,
     ) -> RunRecord:
         """Register a run and start its thread; raises RunBusy or SessionNotFound."""
         # The branch decides which chain the run appends to, and the permission argument
@@ -236,7 +239,10 @@ class RunRegistry:
                     raise RunBusy(f"会话已有活动 run：{self._active[session_id]}")
                 run_id = f"run_{uuid.uuid4().hex[:12]}"
                 record = RunRecord(
-                    run_id=run_id, session_id=session_id, started_at=events.now_ms()
+                    run_id=run_id,
+                    session_id=session_id,
+                    started_at=events.now_ms(),
+                    model=(model or "").strip() or None,
                 )
 
                 def emit_approval(type: str, **data: Any) -> None:
@@ -688,7 +694,7 @@ class RunRegistry:
         # The recorder is built inside the try: if load_config fails it never exists, and
         # _finish then has no usage to persist because record.recorder stays None.
         try:
-            config = load_config()
+            config = load_config(model=record.model)
             recorder = SessionRecorder(session, branch)
             # Hand it to the record so _finish can persist usage before announcing the end.
             record.recorder = recorder

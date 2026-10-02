@@ -76,6 +76,8 @@ export interface Capabilities {
   tools: string[]
   skills: Skill[]
   model: string | null
+  /** 可切换的模型候选（内核窗口表；不是提供商目录）。 */
+  known_models: string[]
   workspace: string
   /** 这台机器上会用到哪个文件夹选择器后端（null = 没有可用的）。诊断用。 */
   workspace_picker: string | null

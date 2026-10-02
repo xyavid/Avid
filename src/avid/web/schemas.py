@@ -48,6 +48,8 @@ class Capabilities(BaseModel):
     tools: list[str]
     skills: list[SkillOut]
     model: str | None = None
+    # 可切换的模型候选（本次运行的覆盖用）；取自内核的窗口表，不是提供商目录。
+    known_models: list[str] = Field(default_factory=list)
     workspace: str
     # Declared because the response model silently drops undeclared keys, which would read as absent.
     workspace_picker: str | None = None
@@ -267,6 +269,8 @@ class StartRunIn(BaseModel):
     prompt: str = Field(max_length=MAX_PROMPT_CHARS)
     auto_approve: bool = False
     branch: str = Field(default="main", max_length=MAX_NAME_CHARS)
+    # 本次运行的模型覆盖；缺省 = 按设置（.env + 界面覆盖层）解析。空串按缺省处理。
+    model: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
     permission: Literal["manual", "auto", "full"] | None = None
     full_access_ack: bool = False
 

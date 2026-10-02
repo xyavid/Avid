@@ -76,6 +76,9 @@ export function ConversationPage() {
   const [error, setError] = useState<string | null>(null)
   // 权限「态势」：随选中会话回落到其工作区的默认权限，用户可在输入区改（下次发送生效）。
   const [permission, setPermission] = useState<PermissionMode>('manual')
+  // 本次运行用的模型（输入区可选）：null = 跟随设置。粘住直到用户改回来——
+  // 试模型时通常要连着问几个问题，每条都重选一次很烦。
+  const [runModel, setRunModel] = useState<string | null>(null)
   // 工作区候选与「新会话将使用的工作区」选择；新增走宿主机 picker（不可用时手动路径）。
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[] | null>(null)
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null)
@@ -427,9 +430,13 @@ export function ConversationPage() {
             onChangePermission={setPermission}
             disabled={!selectedId}
             busy={liveHere}
+            model={runModel}
+            onChangeModel={setRunModel}
+            effectiveModel={meta?.capabilities.model ?? null}
+            knownModels={meta?.capabilities.known_models ?? []}
             onSend={(text) => {
               setLiveSession(selectedId)
-              void live.send(text, permission)
+              void live.send(text, permission, runModel)
             }}
             onStop={() => void live.stop()}
           />

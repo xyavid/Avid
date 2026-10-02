@@ -83,3 +83,33 @@ def test_parallel_tool_calls_refuses_to_silently_clamp():
         )
 
     assert "32" in str(exc.value)
+
+
+def test_per_run_model_override_changes_model_and_window():
+    """按运行覆盖模型：只改模型名，地址/密钥照旧；上下文窗口跟着重算。"""
+    env = {"AVID_API_KEY": "k", "AVID_MODEL": "deepseek-chat", "AVID_BASE_URL": "https://api.test/v1"}
+
+    base = load_config(env)
+    assert base.model == "deepseek-chat"
+    assert base.context_window == 65_536
+
+    switched = load_config(env, model="gpt-4.1")
+    assert switched.model == "gpt-4.1"
+    assert switched.base_url == base.base_url
+    assert switched.api_key == base.api_key
+    assert switched.context_window == 1_047_576  # 窗口按模型名重查，不沿用旧值
+
+
+def test_per_run_model_override_blank_falls_back_to_settings():
+    env = {"AVID_API_KEY": "k", "AVID_MODEL": "deepseek-chat"}
+
+    assert load_config(env, model="   ").model == "deepseek-chat"
+    assert load_config(env, model=None).model == "deepseek-chat"
+
+
+def test_known_models_excludes_family_fallbacks():
+    """界面候选表不能把 `claude-` 这种族回退当模型 id 列出来。"""
+    from avid.ai.config import KNOWN_MODELS
+
+    assert "deepseek-chat" in KNOWN_MODELS and "deepseek-reasoner" in KNOWN_MODELS
+    assert all(not name.endswith("-") for name in KNOWN_MODELS)
