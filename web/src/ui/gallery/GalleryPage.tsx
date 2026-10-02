@@ -197,8 +197,10 @@ export function GalleryPage() {
 | 入口 | avid.cli | \`python -m avid\` 亦可 |
 
 \`\`\`python
-def main() -> int:
-    return 0
+def add(a, b):
+    """两数之和"""
+    total = a + b  # 求和
+    return total * 2
 \`\`\`
 
 ---
@@ -213,7 +215,13 @@ def main() -> int:
       {show('bubble') && (
         <Section id="bubble" title="消息 · 用户气泡与助手回复">
           <div className="max-w-chat">
-            <UserBubble>帮我把这套界面整理成一份可以交给别的 agent 的参考。</UserBubble>
+            <UserBubble>帮我看下这段：
+
+```py
+print("hi")
+```
+
+顺便说下 `--extra web` 是干嘛的。</UserBubble>
             <div className="mt-a16">
               <AssistantMessage>好。我把它拆成三层：全局 token、主题调色板、组件规范。地基是那套 4px 网格和六档字号。</AssistantMessage>
             </div>

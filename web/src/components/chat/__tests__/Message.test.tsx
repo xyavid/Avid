@@ -9,11 +9,20 @@ describe('UserBubble（组件墙 §消息与工具卡）', () => {
   afterEach(cleanup)
 
   it('右对齐、accent 浅垫底、主文字色', () => {
-    render(<UserBubble>帮我读 pyproject.toml</UserBubble>)
+    const { container } = render(<UserBubble>帮我读 pyproject.toml</UserBubble>)
 
-    const bubble = screen.getByText('帮我读 pyproject.toml')
-    expect(bubble.className).toContain('bg-accent-light')
-    expect(bubble.parentElement?.className).toContain('justify-end')
+    // 文本现在落在 markdown 段落里，气泡样式在外层——按结构找气泡本体
+    const bubble = container.querySelector('.bg-accent-light')
+    expect(bubble?.textContent).toContain('帮我读 pyproject.toml')
+    expect(bubble?.parentElement?.className).toContain('justify-end')
+  })
+
+  it('也用 markdown 渲染（用户贴的代码块/列表不该原样显示标记符）', () => {
+    const { container } = render(<UserBubble>{'看这个：\n\n```ts\nconst a = 1\n```\n\n- 甲\n- 乙'}</UserBubble>)
+
+    expect(container.querySelector('pre code')?.textContent).toBe('const a = 1')
+    expect([...container.querySelectorAll('li')].map((li) => li.textContent)).toEqual(['甲', '乙'])
+    expect(container.textContent).not.toContain('```')
   })
 })
 
