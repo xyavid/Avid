@@ -182,12 +182,13 @@ def test_legacy_names_are_rejected_by_validate_mode():
 # ---------------------------------------------------------------- 词汇一致性
 
 
-def test_mode_vocabulary_is_the_same_in_three_places():
-    """模式名是**契约**：内核、CLI、REST DTO 必须逐字一致。
+def test_mode_vocabulary_is_the_same_in_four_places():
+    """模式名是**契约**：内核、CLI、REST DTO、前端联合类型必须逐字一致。
 
-    前端整体删除前，这条还比对 web/src/api/types.ts 里的 TS 联合类型；
-    新前端定稿后应把第四处对账加回来，否则"界面选了 full、服务端按 422 拒"。
+    前端漏改会变成"界面选了 full、服务端按 422 拒"，所以 TS 联合类型也拉进来对账；
+    web/src/api/types.ts 是前端侧模式名的单点。
     """
+    import re
     from typing import get_args
 
     from avid import cli
@@ -211,6 +212,11 @@ def test_mode_vocabulary_is_the_same_in_three_places():
     assert cli_choices == set(MODES) == run_choices
     # 默认值那一档不接受 full（见 full 三重锁）
     assert ws_choices == {MODE_MANUAL, MODE_AUTO} == ws_field
+
+    types = (ROOT / "web" / "src" / "api" / "types.ts").read_text(encoding="utf-8")
+    match = re.search(r"export type PermissionMode =([^\n]+)", types)
+    assert match, "types.ts 里找不到 PermissionMode"
+    assert set(re.findall(r"'([a-z]+)'", match.group(1))) == set(MODES)
 
 
 def test_labels_and_help_text_exist_for_every_mode():
