@@ -3,7 +3,7 @@ import { cleanup, render } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import assetSource from '../../../src/assets/avid-mark.svg?raw'
-import faviconSource from '../../../public/favicon.svg?raw'
+import faviconSource from '../../assets/favicon.svg?raw'
 import { AvidMark } from '../Mark'
 
 /**
@@ -51,9 +51,12 @@ describe('Avid 标识（阶段 33 · 阶段 7）', () => {
     expect(assetSource).not.toMatch(/fill="#010101"/)
   })
 
-  it('favicon 自带纸底（标签栏里没有页面底色可继承）', () => {
-    expect(faviconSource).toContain('fill="#F8F4ED"')
-    expect(assetSource).not.toContain('fill="#F8F4ED"')
+  it('favicon 自带底板，asset 没有（标签栏里没有页面底色可继承）', () => {
+    // 底板是青夜色：淡粉花瓣压在纸色上只有 1.15 对比，16px 下看不见（实拍对比过）
+    expect(faviconSource).toContain('fill="#3B4A54"')
+    expect(faviconSource).not.toContain('fill="#F8F4ED"')
+    // 图标本体（asset）保持原样：透明底，一个像素都不改
+    expect(assetSource).not.toContain('<rect')
   })
 
   it('两边的画布视框一致，落位不会因为视框不同而忽大忽小', () => {

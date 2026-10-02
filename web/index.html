@@ -3,8 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <!-- 站点图标：纸底墨焰。产物由 public/ 原样复制到根，与 avid web 同源发出。 -->
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- 站点图标：荷花 + 纸底。**放在 src/assets 而不是 public/**：Vite 会给产物加内容
+         指纹，图标地址随内容变——否则浏览器会一直用缓存里的旧图标（换过一轮才发现的坑：
+         地址不变时它不重新取），而 favicon 又没法靠硬刷新可靠地清掉。 -->
+    <link rel="icon" type="image/svg+xml" href="./src/assets/favicon.svg" />
     <title>Avid</title>
   </head>
   <body>
