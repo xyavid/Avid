@@ -147,9 +147,20 @@ function renderItem(item: ListItem, key: number) {
   )
 }
 
-/** 标题字号：一档文档标题、二档节标题、其余同正文标题档。 */
+/** 标题字号：按正文拉档差（token 在 tokens.css；h5/h6 与正文同号，靠字重与衬线区分）。 */
 function headingSize(level: HeadingLevel): string {
-  return level === 1 ? 'text-title' : level === 2 ? 'text-body' : 'text-ui'
+  switch (level) {
+    case 1:
+      return 'text-chat-h1'
+    case 2:
+      return 'text-chat-h2'
+    case 3:
+      return 'text-chat-h3'
+    case 4:
+      return 'text-chat-h4'
+    default:
+      return 'text-chat font-medium'
+  }
 }
 
 function alignOf(align: Align[], i: number): Align {

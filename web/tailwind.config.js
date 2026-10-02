@@ -82,6 +82,11 @@ export default {
         hint: v('fs-hint'),
         micro: v('fs-micro'),
         chat: v('chat-message-font-size'),
+        /* 对话内标题：与 chat 同一族，按档差往上拉（见 tokens.css） */
+        'chat-h1': v('chat-h1'),
+        'chat-h2': v('chat-h2'),
+        'chat-h3': v('chat-h3'),
+        'chat-h4': v('chat-h4'),
       },
       spacing: space,
       borderWidth: {

@@ -83,6 +83,18 @@ describe('markdown 渲染', () => {
     expect(container.querySelectorAll('a')).toHaveLength(1)
   })
 
+  it('标题字号按正文拉档差（原来 h2/h3 比正文还小，等于没区分）', () => {
+    const { container } = render(<Markdown>{'# 一\n\n## 二\n\n### 三\n\n#### 四\n\n##### 五'}</Markdown>)
+
+    expect(container.querySelector('h1')?.className).toContain('text-chat-h1')
+    expect(container.querySelector('h2')?.className).toContain('text-chat-h2')
+    expect(container.querySelector('h3')?.className).toContain('text-chat-h3')
+    expect(container.querySelector('h4')?.className).toContain('text-chat-h4')
+    // 五级及以下不再更大，靠字重与衬线区分
+    expect(container.querySelector('h5')?.className).toContain('text-chat')
+    expect(container.querySelector('h5')?.className).not.toContain('text-chat-h')
+  })
+
   it('带分割线的小节标题：线在上、标题居中', () => {
     const { container } = render(<Markdown>{'前文\n\n---\n\n## 选型决策线'}</Markdown>)
 
