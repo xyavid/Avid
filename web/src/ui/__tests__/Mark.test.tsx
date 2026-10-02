@@ -38,8 +38,17 @@ describe('Avid 标识（阶段 33 · 阶段 7）', () => {
     const paths = (text: string) => (text.match(/ d="[^"]+"/g) ?? []).sort()
 
     const assetPaths = paths(assetSource)
-    expect(assetPaths.length).toBeGreaterThan(100)
+    // 9 条有厚度的色块。上限是防「重新描摹一遍」把 400 多条发丝墨线带回来。
+    expect(assetPaths.length).toBeGreaterThanOrEqual(6)
+    expect(assetPaths.length).toBeLessThan(40)
     expect(paths(faviconSource)).toEqual(assetPaths)
+  })
+
+  it('没有发丝级墨线（它们在 22px 下会变成一圈黑噪点）', () => {
+    // 描摹件的边缘残迹都是 #010101 / #020202 这类近黑且极薄的 path；
+    // 清洗后一条不该剩——颜色照搬原样，但这一层不是画面的一部分。
+    expect(assetSource).not.toMatch(/fill="#0[12]0[12]0[12]"/)
+    expect(assetSource).not.toMatch(/fill="#010101"/)
   })
 
   it('favicon 自带纸底（标签栏里没有页面底色可继承）', () => {
