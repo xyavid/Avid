@@ -24,7 +24,10 @@ export function SidebarFooter({ onOpenSettings }: SidebarFooterProps) {
         onClick={onOpenSettings}
         className="flex w-full items-center gap-a8 rounded-sm px-[9px] py-[7px] font-ui text-ui text-ink transition-colors duration-fast ease-out hover:bg-accent-light"
       >
-        <Icon name="settings" size={14} />
+        {/* 图标 16px 而不是默认 14px：齿轮的笔迹只占 24 视框的约 19/24，
+            14px 时画出来的直径明显小于「设置」两个字的墨高（实测字墨约 12px、
+            图标笔迹约 11px），看上去又小又轻。16px 时笔迹与字墨等高（约 12.5px）。 */}
+        <Icon name="settings" size={16} />
         <span>设置</span>
       </button>
     </div>
