@@ -182,7 +182,7 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
   )
 
   const send = useCallback(
-    async (prompt: string, permission: PermissionMode, model?: string | null) => {
+    async (prompt: string, permission: PermissionMode, model?: string | null, branch?: string) => {
       if (!sessionId) return
       setPhase('starting')
       setError(null)
@@ -197,6 +197,8 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
           permission,
           // 只在选了覆盖时才带 model：不带 = 服务端按设置解析（与旧行为逐字一致）
           ...(model ? { model } : {}),
+          // 只在非主线时才带 branch：不带 = 服务端默认 main，载荷与旧行为逐字一致
+          ...(branch && branch !== 'main' ? { branch } : {}),
           ...(permission === 'full' ? { full_access_ack: true } : {}),
         })
         runIdRef.current = created.run_id

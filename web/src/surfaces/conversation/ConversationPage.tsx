@@ -13,6 +13,7 @@ import type { ReactNode } from 'react'
 
 import {
   ApiError,
+  createBranch,
   createSession,
   createWorkspace,
   deleteSession,
@@ -72,6 +73,9 @@ export function ConversationPage() {
   const [sessions, setSessions] = useState<SessionSummary[] | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [entries, setEntries] = useState<Entry[] | null>(null)
+  // 当前查看的分支：分叉后切到新分支，之后的发送也落在它上面（「回到主线」退回去）。
+  const [branch, setBranch] = useState('main')
+  const [branchHint, setBranchHint] = useState<string | null>(null)
   const [usage, setUsage] = useState<UsageReport | null>(null)
   const [error, setError] = useState<string | null>(null)
   // 权限「态势」：随选中会话回落到其工作区的默认权限，用户可在输入区改（下次发送生效）。
@@ -97,6 +101,8 @@ export function ConversationPage() {
   const conversationScrollRef = useAutoHideScroll<HTMLDivElement>()
   const selectedIdRef = useRef<string | null>(null)
   selectedIdRef.current = selectedId
+  const branchRef = useRef('main')
+  branchRef.current = branch
   const attachedRunRef = useRef<string | null>(null)
   const settledRef = useRef<() => Promise<void>>(async () => {})
   const live = useRunStream(selectedId, () => {
@@ -106,10 +112,14 @@ export function ConversationPage() {
     const id = selectedIdRef.current
     if (id) {
       try {
-        const [page, bl] = await Promise.all([listEntries(id, { limit: 50 }), listBranches(id)])
+        const viewed = branchRef.current
+        const [page, bl] = await Promise.all([
+          listEntries(id, { branch: viewed, limit: 50 }),
+          listBranches(id),
+        ])
         setEntries([...page.entries].reverse())
-        const main = bl.branches.find((b) => b.name === 'main') ?? bl.branches.find((b) => b.is_default)
-        setUsage(main?.usage ?? null)
+        const hit = bl.branches.find((b) => b.name === viewed) ?? bl.branches.find((b) => b.is_default)
+        setUsage(hit?.usage ?? null)
       } catch {
         // 回拉失败保留旧视图，刷新兜底
       }
@@ -152,7 +162,7 @@ export function ConversationPage() {
     let alive = true
     setEntries(null)
     // 用量快照与条目分属两个端点；快照失败不该连累对话流，静默回退到「—」。
-    listEntries(selectedId, { limit: 50 })
+    listEntries(selectedId, { branch, limit: 50 })
       .then((page) => {
         if (alive) setEntries([...page.entries].reverse())
       })
@@ -165,8 +175,8 @@ export function ConversationPage() {
     listBranches(selectedId)
       .then((bl) => {
         if (!alive) return
-        const main = bl.branches.find((b) => b.name === 'main') ?? bl.branches.find((b) => b.is_default)
-        setUsage(main?.usage ?? null)
+        const hit = bl.branches.find((b) => b.name === branch) ?? bl.branches.find((b) => b.is_default)
+        setUsage(hit?.usage ?? null)
       })
       .catch(() => {
         if (alive) setUsage(null)
@@ -174,9 +184,31 @@ export function ConversationPage() {
     return () => {
       alive = false
     }
-  }, [selectedId])
+  }, [selectedId, branch])
 
   const selected = sessions?.find((s) => s.id === selectedId) ?? null
+
+  // 切会话回到主线：分支是「这个会话内部的一条线」，跟到别的会话上是错的。
+  useEffect(() => {
+    setBranch('main')
+    setBranchHint(null)
+  }, [selectedId])
+
+  /**
+   * 从某条消息分叉：建分支 → 切到它。不切的话这个按钮就是个死按钮
+   * （前端没有分支选择器），所以顺带给一条「回到主线」的退路。
+   */
+  const branchFrom = async (entryId: string) => {
+    if (!selectedId) return
+    setBranchHint(null)
+    try {
+      const created = await createBranch(selectedId, { at: entryId })
+      setBranch(created.name)
+      setBranchHint(`已从这条消息分叉到「${created.name}」；之后的发送都落在这个分支上`)
+    } catch (e) {
+      setBranchHint(e instanceof ApiError ? e.message : String(e))
+    }
+  }
 
   useEffect(() => {
     setPermission(selected?.workspace?.default_permission ?? 'manual')
@@ -356,7 +388,7 @@ export function ConversationPage() {
         {selected?.truncated_tail && (
           <p className="mb-a16 text-center font-ui text-hint text-ink-muted">上次运行在此中断</p>
         )}
-        {hasEntries && <Timeline entries={entries} />}
+        {hasEntries && <Timeline entries={entries} onBranch={(id) => void branchFrom(id)} />}
         {liveHere && (
           <div className="mt-a16 flex flex-col gap-a16">
             {live.userText && <UserBubble>{live.userText}</UserBubble>}
@@ -416,6 +448,25 @@ export function ConversationPage() {
           <div ref={conversationScrollRef} className="scroll-auto flex min-h-0 flex-1 flex-col overflow-y-auto px-a16 pt-a16">
             {body}
           </div>
+          {(branch !== 'main' || branchHint) && (
+            <div className="mx-auto flex w-full max-w-chat-input items-center justify-between gap-a8 border-t border-hair px-a16 py-a6">
+              <span className="min-w-0 truncate font-ui text-hint text-ink-muted">
+                {branchHint ?? `分支：${branch}`}
+              </span>
+              {branch !== 'main' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBranch('main')
+                    setBranchHint(null)
+                  }}
+                  className="shrink-0 rounded-sm px-a8 py-[2px] font-ui text-hint text-accent transition-colors duration-fast ease-out hover:bg-overlay-light"
+                >
+                  回到主线
+                </button>
+              )}
+            </div>
+          )}
           {live.approvals.length > 0 && liveSession === selectedId && (
             <div className="px-a16 pb-a8">
               <ApprovalBar
@@ -436,7 +487,7 @@ export function ConversationPage() {
             knownModels={meta?.capabilities.known_models ?? []}
             onSend={(text) => {
               setLiveSession(selectedId)
-              void live.send(text, permission, runModel)
+              void live.send(text, permission, runModel, branch)
             }}
             onStop={() => void live.stop()}
           />

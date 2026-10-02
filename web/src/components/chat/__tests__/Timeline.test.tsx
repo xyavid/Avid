@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { Entry } from '../../../api/types'
 import { Timeline } from '../Timeline'
@@ -108,5 +108,31 @@ describe('Timeline（durable 条目 → 冻结组件）', () => {
 
     expect(screen.getByText('在吗')).toBeTruthy()
     expect(screen.queryByText(/提醒/)).toBeNull()
+  })
+})
+
+describe('Timeline · 消息动作行（阶段 14）', () => {
+  const entries = [
+    entry(1, { role: 'user', content: '帮我读一下 pyproject.toml' }),
+    entry(2, { role: 'assistant', content: '项目名是 avid。' }),
+  ]
+
+  it('助手消息底部有复制与分支；用户消息只有复制', () => {
+    const onBranch = vi.fn()
+    render(<Timeline entries={entries} onBranch={onBranch} />)
+
+    // 两条消息各一个动作行；分支按钮只有一个（助手那条）
+    expect(screen.getAllByRole('button', { name: '复制' })).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: '分支' })).toHaveLength(1)
+
+    fireEvent.click(screen.getByRole('button', { name: '分支' }))
+    expect(onBranch).toHaveBeenCalledWith('e2')
+  })
+
+  it('没给 onBranch 时一条分支按钮都没有（只读呈现）', () => {
+    render(<Timeline entries={entries} />)
+
+    expect(screen.queryByRole('button', { name: '分支' })).toBeNull()
+    expect(screen.getAllByRole('button', { name: '复制' })).toHaveLength(2)
   })
 })

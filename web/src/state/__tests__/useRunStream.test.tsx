@@ -69,6 +69,17 @@ describe('useRunStream（发送 → 订阅 → 活事件 → 终态回拉）', (
       await result.current.send('还是跟随设置', 'manual', null)
     })
     expect(startRun).toHaveBeenLastCalledWith('s1', { prompt: '还是跟随设置', permission: 'manual' })
+
+    // 分叉之后：只有非 main 才带 branch（main 与旧行为逐字一致）
+    await act(async () => {
+      await result.current.send('在分支上问', 'manual', null, 'b2')
+    })
+    expect(startRun).toHaveBeenLastCalledWith('s1', { prompt: '在分支上问', permission: 'manual', branch: 'b2' })
+
+    await act(async () => {
+      await result.current.send('在主线上问', 'manual', null, 'main')
+    })
+    expect(startRun).toHaveBeenLastCalledWith('s1', { prompt: '在主线上问', permission: 'manual' })
   })
 
   it('reasoning_delta 单独累积：思考不进正文，正文也不进思考', async () => {

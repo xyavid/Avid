@@ -9,6 +9,7 @@
  */
 
 import type {
+  Branch,
   BranchList,
   CancelResult,
   EntryPage,
@@ -126,6 +127,21 @@ export function listEntries(sessionId: string, opts: ListEntriesOptions = {}): P
 /** 分支清单（含每分支落盘的用量快照——上下文卡的读数来源）。 */
 export function listBranches(sessionId: string): Promise<BranchList> {
   return request(`/api/sessions/${encodeURIComponent(sessionId)}/branches`)
+}
+
+/**
+ * 从某条目分叉出一条分支（缺 name 由服务端起名，缺 at 起一条空分支）。
+ * 会话有活动 run 时后端 409——分叉点不能在别人还在往链尾追加时被切走。
+ */
+export function createBranch(
+  sessionId: string,
+  input: { name?: string; at?: string } = {},
+): Promise<Branch> {
+  return request(`/api/sessions/${encodeURIComponent(sessionId)}/branches`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
 }
 
 export function listWorkspaces(): Promise<{ workspaces: WorkspaceSummary[] }> {
