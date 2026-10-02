@@ -53,11 +53,14 @@ jobs:
       - name: 安装依赖
         working-directory: web
         run: pnpm install --frozen-lockfile
-      # 阶段 33 重建的前端：门禁从这三件最小集起步（打包链 / 类型自洽 / 用例非空转），
-      # 分层 / token / 对比度 / 体积等门禁待对应阶段落成后随结构恢复。
+      # 阶段 33 收口：体积门禁（gate:size，对 web/budget.json）随预算文件恢复；
+      # 分层 / token 白名单 / 对比度门禁仍待纸本 token 层自己的规则集。
       - name: 构建
         working-directory: web
         run: pnpm run build
+      - name: 体积门禁
+        working-directory: web
+        run: pnpm run gate:size
       - name: 类型检查
         working-directory: web
         run: pnpm run typecheck

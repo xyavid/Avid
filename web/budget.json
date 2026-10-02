@@ -1,0 +1,11 @@
+{
+  "entry_gzip_bytes": 90112,
+  "chunk_gzip_bytes": 90112,
+  "exempt_gzip_bytes": 204800,
+  "css_gzip_bytes": 16384,
+  "font_bytes": 1048576,
+  "texture_bytes": 32768,
+  "frozen_at": "2026-10-02 · 分支 refactor/web-hana-ui（阶段 33 收口）· WSL2 / node v24 · pnpm -C web build && pnpm -C web run gate:size → 首屏 JS gzip 70,192 B（raw 224,453，单块）· 样式表 gzip 6,806 B · 字体 24 文件 raw 814,756 B · 位图纹理 0 B",
+  "note": "阶段 33 收口重建预算，判据沿用旧门禁（上限是护栏，记录值只标测量出处）。三处与旧预算不同：① font_bytes 0 → 1 MiB：纸本视觉刻意带回四套自托管字体（@fontsource，衬线栈是设计的一部分），0 这条规则不适用了；同时把 fontsource 的子集从默认全量裁到 latin + latin-ext（默认会把西里尔/希腊/越南文各几十 KB 也带进 dist，中文 UI 永远命不中）——76 文件 1.34 MB → 24 文件 815 kB，浏览器实际按 unicode-range 只取 latin 档（约 150 KB）。② 门禁把 .woff 回退与 .woff2 一起计入字体档（旧脚本只数 .woff2，回退文件对它是瞎的）。③ entry/chunk 从 460,800 收紧到 90,112：旧上限按旧前端的 187 kB 冻结，新前端单块 70 kB，收紧才有约束力。css 16,384 与 texture 32,768 沿用。",
+  "EXEMPT": []
+}
