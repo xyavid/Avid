@@ -9,7 +9,7 @@ from avid.workspaces import AVID_HOME_ENV
 
 
 @pytest.fixture(autouse=True)
-def model_env(request, monkeypatch):
+def model_env(request, tmp_path, monkeypatch):
     """每个测试都有"看起来可用"的模型配置：svc 会在运行线程里 load_config()。
 
     **例外**：`eval` / `eval_smoke` 标记的真模型评测要用真实环境（`--env-file .env`）。
@@ -21,6 +21,10 @@ def model_env(request, monkeypatch):
     monkeypatch.setenv("AVID_API_KEY", "test-key")
     monkeypatch.setenv("AVID_MODEL", "test-model")
     monkeypatch.delenv("AVID_BASE_URL", raising=False)
+    # BYOK 配置与密钥文件也指到临时目录：不隔离的话，开发者机器上真实的
+    # ~/.avid/models.json 会在单测里赢过这里的 env 基线（resolve_chat 优先 BYOK）。
+    monkeypatch.setenv("AVID_BYOK_CONFIG", str(tmp_path / "byok" / "models.json"))
+    monkeypatch.setenv("AVID_BYOK_SECRETS", str(tmp_path / "byok" / "secrets.json"))
     # 关掉"问 provider 要窗口"的探测：单测不打真实端点（要验它自己注入 MockTransport
     # 并把这一项打开，见 tests/test_usage.py）。
     monkeypatch.setenv("AVID_MODEL_INFO", "off")

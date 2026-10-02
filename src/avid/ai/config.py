@@ -192,6 +192,11 @@ class Config:
     provider: str | None = None
     # Per-step cap on parallel tool calls; 1 is fully serial and unsafe tools never overlap.
     max_parallel_tool_calls: int = DEFAULT_MAX_PARALLEL_TOOL_CALLS
+    # BYOK passthrough (ai/byok.py): extra request headers (custom auth), fixed body fields
+    # and the per-model output cap; None = untouched legacy behavior.
+    extra_headers: dict[str, str] | None = None
+    extra_body: dict[str, Any] | None = None
+    max_output: int | None = None
 
     @property
     def resolved_provider(self) -> str:
