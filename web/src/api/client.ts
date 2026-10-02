@@ -116,10 +116,18 @@ export function createWorkspace(input: CreateWorkspaceInput): Promise<WorkspaceS
   })
 }
 
+/**
+ * 从项目列表移除工作区（注册表条目，204 无正文）。
+ * 它不会删磁盘上的会话文件——那些会话仍留在原目录的 `.avid/sessions/` 下，
+ * 重新登记同一个目录就会再出现。UI 上也照实这么说。
+ */
+export function deleteWorkspace(id: string): Promise<void> {
+  return request(`/api/workspaces/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
 export type StartRunInput = {
   prompt: string
-  /** 这次运行接在哪条链尾上；缺省 = main。 */
-  branch?: string
+  /** 这次运行接在哪条链尾上；缺省 = main。 */  branch?: string
   /** 权限模式；缺省由服务端按会话所属工作区的默认权限回落。 */
   permission?: 'manual' | 'auto' | 'full'
   /** permission: 'full' 的显式授权凭据——少了它服务端 422（full 三重锁）。 */

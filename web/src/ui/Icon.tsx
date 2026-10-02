@@ -29,6 +29,7 @@
  * | settings | 设置入口（阶段 4+） |
  * | sun / moon | 主题切换（阶段 6） |
  * | user | 消息组的用户侧标识（阶段 4） |
+ * | more-horizontal | 项目行的「更多」（悬停现形，按下出删除，阶段 12） |
  */
 
 import type { ReactNode } from 'react'
@@ -169,6 +170,13 @@ const PATHS = {
     <>
       <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
       <circle cx="12" cy="7" r="4" />
+    </>
+  ),
+  'more-horizontal': (
+    <>
+      <circle cx="12" cy="12" r="1" />
+      <circle cx="19" cy="12" r="1" />
+      <circle cx="5" cy="12" r="1" />
     </>
   ),
   'user-check': (

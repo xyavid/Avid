@@ -288,8 +288,9 @@ print("hi")
       )}
 
       {show('projects') && (
-        <Section id="projects" title="项目卡（侧栏 · 可收回，一个项目 = 一个选定的工作区）">
-          <div className="w-sidebar rounded-md border-hairline border-hair bg-sidebar p-a12">
+        <Section id="projects" title="项目卡（侧栏 · 可收回；行尾「更多」悬停现形，按下出删除）">
+          {/* 摆拍：项目行的「更多」平时是 opacity-0，这里把它强制点亮，速查板上才看得见 */}
+          <div className="w-sidebar rounded-md border-hairline border-hair bg-sidebar p-a12 [&_[data-testid=project-more]]:opacity-100">
             <ProjectCard
               workspaces={demoSessions
                 .filter((s) => s.workspace)
@@ -306,6 +307,7 @@ print("hi")
               sessionWorkspaceId="pw0"
               pickerAvailable
               onSelectWorkspace={() => {}}
+              onDeleteWorkspace={() => {}}
             />
           </div>
         </Section>

@@ -73,6 +73,53 @@ describe('ProjectCard（侧栏 · 项目卡，可收回）', () => {
     expect(screen.queryByText('手动输入路径')).toBeNull()
   })
 
+  it('每行都有「更多」按钮，默认不占视线：透明，悬停/聚焦才现形', () => {
+    render(<ProjectCard workspaces={WORKSPACES} activeWorkspaceId="w1" onDeleteWorkspace={() => {}} />)
+
+    const more = screen.getByRole('button', { name: '更多：Other' })
+    expect(more.className).toContain('opacity-0')
+    expect(more.className).toContain('group-hover:opacity-100')
+    expect(more.querySelector('svg')).toBeTruthy()
+    // 两行各一个，不共用
+    expect(screen.getAllByRole('button', { name: /^更多：/ })).toHaveLength(2)
+  })
+
+  it('按下「更多」才出删除按钮；再按收起', () => {
+    render(<ProjectCard workspaces={WORKSPACES} activeWorkspaceId="w1" onDeleteWorkspace={() => {}} />)
+
+    expect(screen.queryByRole('button', { name: '删除 Other' })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: '更多：Other' }))
+    expect(screen.getByRole('button', { name: '删除 Other' })).toBeTruthy()
+    // 展开的那一行按钮常亮（不再靠悬停）
+    expect(screen.getByRole('button', { name: '更多：Other' }).getAttribute('aria-expanded')).toBe('true')
+
+    fireEvent.click(screen.getByRole('button', { name: '更多：Other' }))
+    expect(screen.queryByRole('button', { name: '删除 Other' })).toBeNull()
+  })
+
+  it('删除只作用于该行，并带上该行 id；说明这是从列表移除', () => {
+    const onDelete = vi.fn()
+    render(<ProjectCard workspaces={WORKSPACES} activeWorkspaceId="w1" onDeleteWorkspace={onDelete} />)
+
+    fireEvent.click(screen.getByRole('button', { name: '更多：Other' }))
+    // 展开时就写清这一下删的是什么（注册表条目，不是磁盘上的会话）
+    expect(screen.getByText(/会话文件留在磁盘/)).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: '删除 Other' }))
+
+    expect(onDelete).toHaveBeenCalledWith('w2')
+    expect(onDelete).toHaveBeenCalledTimes(1)
+    // 删完菜单自己收起
+    expect(screen.queryByRole('button', { name: '删除 Other' })).toBeNull()
+  })
+
+  it('没给 onDeleteWorkspace 时不出现「更多」（只读形态）', () => {
+    render(<ProjectCard workspaces={WORKSPACES} activeWorkspaceId="w1" />)
+
+    expect(screen.queryByRole('button', { name: /^更多：/ })).toBeNull()
+  })
+
   it('hint 展示；正在加载时行区给占位', () => {
     render(<ProjectCard workspaces={null} activeWorkspaceId={null} hint="该目录已在列表中" />)
 

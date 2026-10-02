@@ -29,6 +29,8 @@ export type ProjectCardProps = {
   hint?: string | null
   onSelectWorkspace?: (id: string) => void
   onAddByPicker?: () => void
+  /** 给了解构出「更多 → 删除」；不给则项目行只读（组件墙的静态演示就属于这种）。 */
+  onDeleteWorkspace?: (id: string) => void
 }
 
 export function ProjectCard({
@@ -40,8 +42,11 @@ export function ProjectCard({
   hint = null,
   onSelectWorkspace,
   onAddByPicker,
+  onDeleteWorkspace,
 }: ProjectCardProps) {
   const [open, setOpen] = useState(true)
+  /** 展开的是哪一行的「更多」——同时只开一个，免得一排删除按钮同时挂在那儿。 */
+  const [menuFor, setMenuFor] = useState<string | null>(null)
   const listScrollRef = useAutoHideScroll<HTMLDivElement>()
 
   return (
@@ -79,32 +84,78 @@ export function ProjectCard({
           {workspaces?.length === 0 && <p className="px-a8 font-ui text-hint text-ink-muted">还没有项目</p>}
           {workspaces?.map((ws) => {
             const active = ws.id === activeWorkspaceId
+            const label = ws.name ?? basename(ws.root)
+            const expanded = menuFor === ws.id
             return (
-              <button
-                key={ws.id}
-                type="button"
-                title={ws.root}
-                onClick={() => onSelectWorkspace?.(ws.id)}
-                className={cx(
-                  'flex w-full items-center gap-a8 rounded-sm px-a8 py-a4 text-left transition-colors duration-fast ease-out',
-                  active ? 'bg-accent-light' : 'hover:bg-overlay-light',
+              <div key={ws.id} className="group flex flex-col">
+                <div
+                  className={cx(
+                    'flex items-center rounded-sm transition-colors duration-fast ease-out',
+                    active ? 'bg-accent-light' : 'hover:bg-overlay-light',
+                  )}
+                >
+                  <button
+                    type="button"
+                    title={ws.root}
+                    onClick={() => {
+                      setMenuFor(null)
+                      onSelectWorkspace?.(ws.id)
+                    }}
+                    className="flex min-w-0 flex-1 items-center gap-a8 rounded-sm px-a8 py-a4 text-left"
+                  >
+                    <span className={cx('shrink-0', active ? 'text-accent' : 'text-ink-light')}>
+                      <Icon name="folder" size={14} />
+                    </span>
+                    <span className={cx('min-w-0 flex-1 truncate font-ui text-ui', active ? 'font-medium text-accent' : 'text-ink')}>
+                      {label}
+                    </span>
+                    {ws.id === sessionWorkspaceId && (
+                      <span className="shrink-0 font-ui text-micro text-ink-muted">当前会话</span>
+                    )}
+                    {active && (
+                      <span className="shrink-0 text-accent">
+                        <Icon name="check" size={12} />
+                      </span>
+                    )}
+                  </button>
+                  {/* 「更多」：默认透明（不占视线），悬停或键盘聚焦才现形；
+                      按下后常亮（expanded 一档），并展开下面那条删除栏。 */}
+                  {onDeleteWorkspace && (
+                    <button
+                      type="button"
+                      aria-label={`更多：${label}`}
+                      aria-expanded={expanded}
+                      data-testid="project-more"
+                      title="更多"
+                      onClick={() => setMenuFor(expanded ? null : ws.id)}
+                      className={cx(
+                        'mr-a4 inline-flex h-[20px] w-[20px] shrink-0 items-center justify-center rounded-sm text-ink-muted transition-opacity duration-fast ease-out hover:bg-overlay-medium hover:text-ink',
+                        expanded ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100',
+                      )}
+                    >
+                      <Icon name="more-horizontal" size={12} />
+                    </button>
+                  )}
+                </div>
+
+                {expanded && onDeleteWorkspace && (
+                  <div className="mb-a2 ml-a8 flex items-center justify-between gap-a8 rounded-sm border-hairline border-hair bg-card px-a8 py-a4">
+                    <span className="font-ui text-micro text-ink-muted">只从项目列表移除，会话文件留在磁盘</span>
+                    <button
+                      type="button"
+                      aria-label={`删除 ${label}`}
+                      data-testid="project-delete"
+                      onClick={() => {
+                        onDeleteWorkspace(ws.id)
+                        setMenuFor(null)
+                      }}
+                      className="shrink-0 rounded-xs px-a8 py-[1px] font-ui text-micro text-danger transition-colors duration-fast ease-out hover:bg-overlay-light"
+                    >
+                      删除
+                    </button>
+                  </div>
                 )}
-              >
-                <span className={cx('shrink-0', active ? 'text-accent' : 'text-ink-light')}>
-                  <Icon name="folder" size={14} />
-                </span>
-                <span className={cx('min-w-0 flex-1 truncate font-ui text-ui', active ? 'font-medium text-accent' : 'text-ink')}>
-                  {ws.name ?? basename(ws.root)}
-                </span>
-                {ws.id === sessionWorkspaceId && (
-                  <span className="shrink-0 font-ui text-micro text-ink-muted">当前会话</span>
-                )}
-                {active && (
-                  <span className="shrink-0 text-accent">
-                    <Icon name="check" size={12} />
-                  </span>
-                )}
-              </button>
+              </div>
             )
           })}
         </div>

@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from 'react'
 import {
   ApiError,
   createWorkspace,
+  deleteWorkspace,
   getMeta,
   listBranches,
   listEntries,
@@ -218,6 +219,22 @@ export function ConversationPage() {
     }
   }
 
+  /** 从项目列表移除：注册表条目，不删磁盘上的会话文件（hint 里照实说）。 */
+  const removeWorkspace = async (id: string) => {
+    setWsBusy(true)
+    setWsHint(null)
+    try {
+      await deleteWorkspace(id)
+      const list = await refreshWorkspaces()
+      if (activeWorkspaceId === id) setActiveWorkspaceId(list[0]?.id ?? null)
+      setWsHint('已从项目列表移除；会话文件仍在磁盘上，重新登记该目录即可找回')
+    } catch (e) {
+      setWsHint(e instanceof ApiError ? e.message : String(e))
+    } finally {
+      setWsBusy(false)
+    }
+  }
+
   const addByPicker = async () => {
     setWsBusy(true)
     setWsHint(null)
@@ -287,6 +304,7 @@ export function ConversationPage() {
             hint={wsHint}
             onSelectWorkspace={setActiveWorkspaceId}
             onAddByPicker={addByPicker}
+            onDeleteWorkspace={(id) => void removeWorkspace(id)}
           />
           <SessionNav
             sessions={sessions ?? []}
