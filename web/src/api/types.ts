@@ -72,12 +72,20 @@ export interface WorkspaceSummary {
   is_default: boolean
 }
 
+/** 按运行换模型的 BYOK 候选：`ref` 是 providerId/modelId，`label` 是展示名。 */
+export interface ModelCandidate {
+  ref: string
+  label: string
+}
+
 export interface Capabilities {
   tools: string[]
   skills: Skill[]
   model: string | null
   /** 可切换的模型候选（内核窗口表；不是提供商目录）。 */
   known_models: string[]
+  /** BYOK 候选（providerId/modelId ref）；没有 BYOK 配置时为空，回落 known_models。 */
+  models: ModelCandidate[]
   workspace: string
   /** 这台机器上会用到哪个文件夹选择器后端（null = 没有可用的）。诊断用。 */
   workspace_picker: string | null
@@ -269,23 +277,95 @@ export interface StartRunInput {
 }
 
 /**
- * 界面模型配置（GET/PUT/DELETE `/api/settings/model`）。
- * 密钥只入不出：响应里只有 `api_key_set`，任何字段都不回传 api_key 本身。
- * `overlay_active` = 界面覆盖层（`~/.avid/model.toml`）存在且优先于环境变量。
+ * BYOK 模型配置（阶段 34；GET/PUT/POST test/DELETE `/api/settings/byok`）。
+ *
+ * 三层模型：Provider（接入端点）1—N Model（具体模型 + 能力声明），Binding 把
+ * Model 挂到角色槽位（当前只有 chat 一槽）。**密钥只入不出**：PUT 载荷里的
+ * `api_key` 有去无回，GET 只给每家的 `key_set` 布尔；配置文件里只有 secretRef 引用。
  */
-export interface ModelSettings {
-  model: string | null
-  base_url: string | null
-  /** null = 按 base_url 自动识别协议族。 */
-  provider: string | null
-  api_key_set: boolean
-  overlay_active: boolean
+export type ByokProtocol = 'openai-compatible' | 'anthropic' | 'google' | 'ollama'
+export type ByokAuthType = 'bearer' | 'header' | 'none'
+
+/** 能力声明；null = 未声明。只有显式 false 才会被运行期拦截。 */
+export interface CapabilityFlags {
+  tool_calling?: boolean | null
+  vision?: boolean | null
+  json_mode?: boolean | null
+  streaming?: boolean | null
+  reasoning?: boolean | null
 }
 
-/** PUT 载荷：字段全部可选；空串 = 清除该字段回落环境变量。 */
-export interface ModelSettingsInput {
-  model?: string | null
-  base_url?: string | null
-  provider?: 'openai' | 'anthropic' | 'gemini' | '' | null
+/** Provider 下的一个具体模型：id + 可选展示名 / 上下文窗口 / 输出上限 / 能力。 */
+export interface ModelEntry {
+  id: string
+  label?: string | null
+  context_window?: number | null
+  max_output?: number | null
+  capabilities: CapabilityFlags
+}
+
+/** GET 回显的一个接入端点：与 ProviderInput 同形但没有 api_key，多 key_set。 */
+export interface ProviderEntry {
+  id: string
+  label: string
+  protocol: ByokProtocol
+  base_url: string
+  auth_type: ByokAuthType
+  secret_ref?: string | null
+  header_name?: string | null
+  headers: Record<string, string>
+  extra_body: Record<string, unknown>
+  enabled: boolean
+  models: ModelEntry[]
+  key_set: boolean
+}
+
+/** PUT 载荷的一个接入端点：api_key 只入不出（空串 = 清除已存密钥）。 */
+export interface ProviderInput {
+  id: string
+  label: string
+  protocol: ByokProtocol
+  base_url: string
+  auth_type: ByokAuthType
+  secret_ref?: string | null
+  header_name?: string | null
+  headers: Record<string, string>
+  extra_body: Record<string, unknown>
+  enabled: boolean
+  models: ModelEntry[]
   api_key?: string | null
+}
+
+/** Legacy 生效值（旧 model.toml 覆盖层 → env）；仅在 BYOK 文件不存在时返回。 */
+export interface LegacyConnection {
+  model: string | null
+  base_url: string | null
+  provider: string | null
+  api_key_set: boolean
+}
+
+/** GET /api/settings/byok 的响应。 */
+export interface ByokSettings {
+  providers: ProviderEntry[]
+  bindings: Record<string, string | null>
+  legacy: LegacyConnection | null
+}
+
+/** PUT 载荷：providers 全量 + chat 绑定；服务端 validate 不过就不落盘。 */
+export interface ByokSettingsInput {
+  providers: ProviderInput[]
+  bindings: Record<string, string | null>
+}
+
+/** 连通校验的一步：step = 'chat'（最小对话）| 'tool'（工具冒烟）。 */
+export interface VerifyStep {
+  step: string
+  ok: boolean
+  detail: string
+}
+
+/** POST /api/settings/byok/test 的响应。 */
+export interface ByokTestResult {
+  ok: boolean
+  steps: VerifyStep[]
 }

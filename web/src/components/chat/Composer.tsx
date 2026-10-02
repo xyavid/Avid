@@ -10,7 +10,7 @@
 
 import { useState } from 'react'
 
-import type { PermissionMode } from '../../api/types'
+import type { ModelCandidate, PermissionMode } from '../../api/types'
 import { Icon, type IconName } from '../../ui/Icon'
 import { IconButton } from '../../ui/IconButton'
 import { Input } from '../../ui/Input'
@@ -32,6 +32,8 @@ export type ComposerProps = {
   /** 设置里解析出来的模型（展示用）。 */
   effectiveModel?: string | null
   knownModels?: string[]
+  /** BYOK 候选（providerId/modelId ref）；非空时模型胶囊优先展示。 */
+  byokModels?: ModelCandidate[]
 }
 
 export function Composer({
@@ -45,6 +47,7 @@ export function Composer({
   onChangeModel,
   effectiveModel = null,
   knownModels = [],
+  byokModels = [],
 }: ComposerProps) {
   const [text, setText] = useState('')
   const locked = disabled || busy
@@ -84,6 +87,7 @@ export function Composer({
                 onChange={onChangeModel}
                 effective={effectiveModel}
                 known={knownModels}
+                candidates={byokModels}
               />
             )}
           </div>

@@ -485,6 +485,7 @@ export function ConversationPage() {
             onChangeModel={setRunModel}
             effectiveModel={meta?.capabilities.model ?? null}
             knownModels={meta?.capabilities.known_models ?? []}
+            byokModels={meta?.capabilities.models ?? []}
             onSend={(text) => {
               setLiveSession(selectedId)
               void live.send(text, permission, runModel, branch)

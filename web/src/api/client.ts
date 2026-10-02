@@ -11,11 +11,12 @@
 import type {
   Branch,
   BranchList,
+  ByokSettings,
+  ByokSettingsInput,
+  ByokTestResult,
   CancelResult,
   EntryPage,
   Meta,
-  ModelSettings,
-  ModelSettingsInput,
   Run,
   RunCreated,
   SessionDetail,
@@ -211,21 +212,41 @@ export function decideApproval(runId: string, approvalId: string, decision: 'all
   })
 }
 
-/** 界面模型配置：读取生效值（永不回传密钥，只给 api_key_set）。 */
-export function getModelSettings(): Promise<ModelSettings> {
-  return request('/api/settings/model')
+/**
+ * BYOK 模型配置（阶段 34）。密钥只入不出：PUT 载荷的 api_key 有去无回，
+ * GET 只给每家的 key_set。保存后对下一条消息立即生效，无需重启。
+ */
+
+/** 读整份 BYOK 配置（providers + chat 绑定 + legacy 生效值）。 */
+export function getByokSettings(): Promise<ByokSettings> {
+  return request('/api/settings/byok')
 }
 
-/** 写入界面覆盖层（`~/.avid/model.toml`，优先于 .env）；空串 = 清除该字段回落 .env。 */
-export function saveModelSettings(input: ModelSettingsInput): Promise<ModelSettings> {
-  return request('/api/settings/model', {
+/** 整体保存（providers 全量 + chat 绑定）；validate 不过服务端 400 不落盘。 */
+export function saveByokSettings(input: ByokSettingsInput): Promise<ByokSettings> {
+  return request('/api/settings/byok', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
   })
 }
 
-/** 清除界面覆盖层，全部回落环境变量。 */
-export function resetModelSettings(): Promise<void> {
-  return request('/api/settings/model', { method: 'DELETE' })
+/**
+ * 两步连通校验（最小对话 + 工具冒烟），针对**载荷**而不是已保存配置——
+ * 保存前就能测；密钥走载荷，不读也不写密钥文件。
+ */
+export function testByokModel(
+  provider: ByokSettingsInput['providers'][number],
+  modelId: string,
+): Promise<ByokTestResult> {
+  return request('/api/settings/byok/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider, model_id: modelId }),
+  })
+}
+
+/** 重置：删配置与密钥两份文件，回落旧 model.toml 覆盖层 / .env。 */
+export function resetByokSettings(): Promise<void> {
+  return request('/api/settings/byok', { method: 'DELETE' })
 }

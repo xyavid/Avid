@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ModelButton } from '../ModelButton'
+import type { ModelCandidate } from '../../../api/types'
 
 /**
  * 模型选择（输入区）：默认跟随设置，可以只对「本次运行」换一个模型。
@@ -12,7 +13,13 @@ import { ModelButton } from '../ModelButton'
 describe('模型选择', () => {
   afterEach(cleanup)
 
-  const base = { model: null, effective: 'deepseek-chat', known: ['deepseek-chat', 'deepseek-reasoner'], onChange: () => {} }
+  const base = {
+    model: null,
+    effective: 'deepseek-chat',
+    known: ['deepseek-chat', 'deepseek-reasoner'],
+    candidates: [] as ModelCandidate[],
+    onChange: () => {},
+  }
 
   it('默认显示「跟随设置」，并带出设置里解析到的模型名', () => {
     render(<ModelButton {...base} />)

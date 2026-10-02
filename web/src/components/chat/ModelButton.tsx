@@ -14,6 +14,7 @@
 
 import { useState } from 'react'
 
+import type { ModelCandidate } from '../../api/types'
 import { cx } from '../../ui/cx'
 import { Icon } from '../../ui/Icon'
 
@@ -23,11 +24,13 @@ export type ModelButtonProps = {
   onChange: (model: string | null) => void
   /** 设置里解析出来的模型（「跟随设置」那一行的说明）。 */
   effective: string | null
-  /** 内核认得的模型候选。 */
+  /** 内核认得的模型候选（窗口表；没有 BYOK 配置时的回落）。 */
   known: string[]
+  /** BYOK 候选（providerId/modelId ref + 展示名）；非空时优先展示。 */
+  candidates: ModelCandidate[]
 }
 
-export function ModelButton({ model, onChange, effective, known }: ModelButtonProps) {
+export function ModelButton({ model, onChange, effective, known, candidates }: ModelButtonProps) {
   const [open, setOpen] = useState(false)
   const pick = (next: string | null) => {
     onChange(next)
@@ -78,7 +81,31 @@ export function ModelButton({ model, onChange, effective, known }: ModelButtonPr
             )}
           </button>
 
-          <p className="mt-a4 px-a8 font-ui text-micro text-ink-muted">内核认得的模型</p>
+          {candidates.length > 0 ? (
+            <>
+              <p className="mt-a4 px-a8 font-ui text-micro text-ink-muted">BYOK 提供商</p>
+              {candidates.map((c) => (
+                <button
+                  key={c.ref}
+                  type="button"
+                  onClick={() => pick(c.ref)}
+                  className="flex w-full items-center justify-between gap-a8 rounded-sm px-a8 py-a4 text-left font-ui text-caption text-ink transition-colors duration-fast ease-out hover:bg-overlay-light"
+                >
+                  <span className="flex min-w-0 flex-col">
+                    <span className="min-w-0 truncate">{c.label}</span>
+                    <span className="min-w-0 truncate font-ui text-micro text-ink-muted">{c.ref}</span>
+                  </span>
+                  {model === c.ref && (
+                    <span className="shrink-0 text-accent">
+                      <Icon name="check" size={12} />
+                    </span>
+                  )}
+                </button>
+              ))}
+            </>
+          ) : (
+            <p className="mt-a4 px-a8 font-ui text-micro text-ink-muted">内核认得的模型</p>
+          )}
           {known.map((name) => (
             <button
               key={name}
