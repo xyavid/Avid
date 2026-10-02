@@ -17,32 +17,33 @@ uv sync
 
 ## 配置
 
-```bash
-cp .env.example .env
-# 编辑 .env，至少填入 AVID_API_KEY 与 AVID_MODEL
-```
+模型连接**只认 BYOK 配置**（阶段 34b 起，不再读 `.env` 里的模型变量）：在界面
+「设置 → 模型」里维护，或手编文件。每份提供商配置 = 协议（OpenAI 兼容 / Anthropic /
+Gemini / Ollama）+ 接口地址 + 密钥引用 + 模型与能力声明；chat 槽位绑定一个
+`providerId/modelId` 作为主对话模型。规则：
 
-| 变量 | 必填 | 说明 |
-|---|---|---|
-| `AVID_API_KEY` | 是 | 服务商签发的密钥 |
-| `AVID_BASE_URL` | 否 | OpenAI 兼容接口根地址，默认 `https://api.openai.com/v1` |
-| `AVID_MODEL` | 是 | 模型名，例如 `deepseek-chat`、`gpt-4o-mini` |
-
-### BYOK：自带 key 接入任意提供商（阶段 34）
-
-除了单个 env 配置，还可以在界面「设置 → 模型」里维护多份提供商配置（BYOK）：
-每份 = 协议（OpenAI 兼容 / Anthropic / Gemini / Ollama）+ 接口地址 + 密钥引用 +
-模型与能力声明；chat 槽位绑定一个 `providerId/modelId` 作为主对话模型。规则：
-
-- **密钥只入不出**：明文只落 `~/.avid/secrets.json`（0600），配置文件
-  `~/.avid/models.json` 里只有 `secretRef` 引用，可以随意备份分享；
-- **没有 BYOK 配置时**回落 env / 旧 `model.toml`；保存后对下一条消息立即生效；
+- **两份文件**：`~/.avid/models.json`（providers + bindings，只存 `secretRef` 引用，
+  可以随意备份分享）与 `~/.avid/secrets.json`（明文密钥，0600，原子写）；
+- **没有配置就跑不了**：未绑定 chat 槽位时发送消息会报「还没有模型配置」，文案给出
+  可执行的修复步骤；保存后对下一条消息立即生效，无需重启；
 - **连通校验**：每个模型可跑「最小对话 + 工具冒烟」两步探测，能在配置阶段筛掉
   「能聊天、不能调工具」的模型；
 - 「按运行换模型」的候选自动带上 BYOK 模型（`providerId/modelId`）。
 
 也可以直接手编 `~/.avid/models.json`（providers + bindings，结构见
-`src/avid/ai/byok.py` 模块注释）；写坏了服务启动时会报可执行的修复文案。
+`src/avid/ai/byok.py` 模块注释）；写坏了会报可执行的修复文案，绝不静默回落。
+
+### 环境变量（只剩旁路凭据与运行期开关）
+
+```bash
+cp .env.example .env   # 按需填入；模型连接不在这里配
+```
+
+| 变量 | 必填 | 说明 |
+|---|---|---|
+| `TAVILY_API_KEY` | 否 | `web_search` 工具的检索凭据；缺省只有该工具失败关闭 |
+| `AVID_MAX_PARALLEL_TOOL_CALLS` | 否 | 一步内并行工具调用上限，默认 10，硬上限 32 |
+| `AVID_MODEL_INFO` | 否 | 设 `off` 关闭「向 provider 问模型窗口」的探测 |
 
 ## 运行
 

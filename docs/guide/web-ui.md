@@ -52,8 +52,8 @@ HTTP 503 `static_missing`（「前端尚未构建」）。API 与 SSE 不受影�
 | `POST /api/workspaces` | 登记一个工作区（写 `~/.avid/workspaces.json`） | `{path, name?, permission?}`；`permission` 只有 `manual` / `auto`——工作区默认权限不接受 `full`，非法值 422 | 409 `workspace_exists`（含进程绑定的那个）/ 400 `workspace_invalid`（路径不存在） |
 | `POST /api/workspaces/pick` | 由**服务端**在宿主机弹一次文件夹选择器 | `{path}`；`path: null` = 用户取消（不是错误）。浏览器拿不到目录的绝对路径（`webkitdirectory` 只给相对路径、File System Access API 只给 handle），所以这一步只能由跑在本机的后端做；它按 `AVID_PICKER_CMD` → tkinter → zenity/kdialog → Windows（WSL 互操作）→ osascript 依次探测，`capabilities.workspace_picker` 报告实际用的是哪一个（`null` = 这台机器没有可用的） | 409 已有对话框开着 / 503 没有可用后端（消息里给出 `avid workspace add <路径>`） |
 | `DELETE /api/workspaces/{id}` | 从候选列表里摘掉一项，**不删会话数据**（目录、`.avid/sessions` 与会话文件一行不改） | 204 | 409 `workspace_bound`（想摘的是进程绑定的那个，它永远在候选里） |
-| `GET /api/settings/byok` | BYOK 配置全量（providers + chat 绑定 + 每家 `key_set`） | **密钥只入不出**：任何响应不回传明文；`legacy` 块仅在没有 BYOK 文件时返回（界面拿它预填「导入旧配置」草稿） | — |
-| `PUT /api/settings/byok` | 整体保存（providers 全量 + `{chat: "providerId/modelId"\|null}`） | 载荷里的 `api_key`（只入）剥出写进 `~/.avid/secrets.json`（0600，引用缺省 = provider id），配置文件只留引用；validate 不过 → 400 `invalid_request`，**不落盘也不留半份密钥**；保存后 `resolve_chat` 每次运行重读，下一条消息立即生效 | 400 / 422 |
+| `GET /api/settings/byok` | BYOK 配置全量（providers + chat 绑定 + 每家 `key_set`） | **密钥只入不出**：任何响应不回传明文；BYOK 是模型连接的唯一来源，没有文件时 providers 为空 | — |
+| `PUT /api/settings/byok` | 整体保存（providers 全量 + `{chat: "providerId/modelId"\|null}`） | 载荷里的 `api_key`（只入）剥出写进 `~/.avid/secrets.json`（0600，引用缺省 = provider id），配置文件只留引用；validate 不过 → 400 `invalid_request`，**不落盘也不留半份密钥**；保存后 `resolve_chat` 每次运行重读，下一条消息立即生效；chat 未绑定时运行报 config_error | 400 / 422 |
 | `POST /api/settings/byok/test` | 两步连通校验（① `max_tokens=1` 最小对话；② 必答 `get_time` 工具冒烟） | 针对**载荷**而非已保存配置：保存前就能测，密钥走载荷不落盘；失败按 401/403 → 密钥、404 → `base_url` 少 `/v1`、429 → 限流、超时 → 不可达、空 `tool_calls` → 不支持工具 分类 | — |
 | `DELETE /api/settings/byok` | 删配置与密钥两份文件，回落 env / 旧 `model.toml` | 204 | — |
 | `GET /api/skills` | 技能目录（name + 一行描述，与 system prompt 同源） | | — |

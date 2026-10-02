@@ -41,6 +41,10 @@ pnpm -C web run verify            # 前端门禁：typecheck + vitest + build + 
 pnpm -C web run copy:dist         # 构建产物交付到 src/avid/web/static/（avid web 服务它）
 ```
 
+**模型连接只认 BYOK 配置**（阶段 34b）：`~/.avid/models.json` + 0600 的
+`~/.avid/secrets.json`，由界面「设置 → 模型」或手编文件维护；未配置时运行报
+「还没有模型配置」。`.env`（`--env-file`）只承载 TAVILY 等旁路凭据与运行期开关。
+
 评测仪器（真模型，不是门禁）：`uv run --env-file .env python -m benchmarks.run --smoke`，参数见 `benchmarks/README.md`。安装、配置项、CLI 全量参数与 Web 交付形态见 `README.md`。前端的对账门禁（wire/event 契约、模式词表、体积预算）已随阶段 33 收口恢复；e2e 尚未重建，界面验收走实机 CDP 脚本（`dev/evidence/`）。
 
 ### 1.2 数据流
