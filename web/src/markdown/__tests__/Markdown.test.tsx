@@ -23,10 +23,12 @@ describe('markdown 渲染', () => {
   })
 
   it('围栏代码块：语言标在、内容在、有复制按钮', () => {
-    render(<Markdown>{'```py\nprint(1)\n```'}</Markdown>)
+    const { container } = render(<Markdown>{'```py\nprint(1)\n```'}</Markdown>)
 
     expect(screen.getByText('py')).toBeTruthy()
-    expect(screen.getByText(/print\(1\)/)).toBeTruthy()
+    // 高亮把代码拆成多个 token span，所以按整块文本断言（拼回去等于原文由
+    // highlight 的单测保证）
+    expect(container.querySelector('pre code')?.textContent).toBe('print(1)')
     expect(screen.getByRole('button', { name: /复制/ })).toBeTruthy()
   })
 

@@ -34,6 +34,13 @@
   --coral: #E8A79F;
   --danger: #D98A7E;
 
+  /* 代码高亮四色：同色相往亮里调，按代码块底色（overlay-subtle 压青夜 #404F59）
+     实测 ≥ 4.5——注释 4.53 · 关键字 4.86 · 字符串 4.55 · 数字 4.62。 */
+  --syntax-comment: #B0C0CB;
+  --syntax-keyword: #A8C9DD;
+  --syntax-string: #9CC9A0;
+  --syntax-number: #E4B87F;
+
   /* 叠层：亮色低透明度（压暗在暗主题失效，改用提亮） */
   --overlay-subtle: rgba(225, 234, 240, 0.03);
   --overlay-light: rgba(225, 234, 240, 0.06);

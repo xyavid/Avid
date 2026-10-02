@@ -60,6 +60,13 @@ export default {
         ok: rgb('green'),
         coral: rgb('coral'),
         danger: rgb('danger'),
+        /* 代码高亮四色（固定值，不做 /alpha 修饰） */
+        syntax: {
+          comment: v('syntax-comment'),
+          keyword: v('syntax-keyword'),
+          string: v('syntax-string'),
+          number: v('syntax-number'),
+        },
       },
       fontFamily: {
         ui: v('font-ui'),

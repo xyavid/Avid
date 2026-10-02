@@ -11,7 +11,18 @@
 import { useState } from 'react'
 
 import { copyText } from './clipboard'
+import { highlight, type TokenKind } from './highlight'
 import { cx } from '../ui/cx'
+
+/** token 类别 → token 色。函数/类型名不占颜色，用墨色中粗——见 highlight.ts 的色板说明。 */
+const KIND_CLASS: Record<TokenKind, string> = {
+  comment: 'text-syntax-comment italic',
+  keyword: 'text-syntax-keyword',
+  string: 'text-syntax-string',
+  number: 'text-syntax-number',
+  function: 'font-medium text-ink',
+  plain: '',
+}
 
 export type CodeBlockProps = {
   lang: string | null
@@ -20,6 +31,7 @@ export type CodeBlockProps = {
 
 export function CodeBlock({ lang, text }: CodeBlockProps) {
   const [copied, setCopied] = useState(false)
+  const tokens = highlight(text, lang)
 
   const onCopy = () => {
     void copyText(text).then((ok) => {
@@ -42,7 +54,15 @@ export function CodeBlock({ lang, text }: CodeBlockProps) {
         </button>
       </div>
       <pre className="scroll-auto overflow-x-auto px-a12 py-a8">
-        <code className={cx('font-mono text-caption leading-[1.6] text-ink')}>{text}</code>
+        <code className={cx('font-mono text-caption leading-[1.6] text-ink')}>
+          {/* 逐 token 出文本节点：拼回去逐字等于原文（highlight.ts 的硬不变量），
+              复制按钮复制的也是原文，不经过任何转换。 */}
+          {tokens.map((token, i) => (
+            <span key={i} className={KIND_CLASS[token.kind]}>
+              {token.text}
+            </span>
+          ))}
+        </code>
       </pre>
     </div>
   )
