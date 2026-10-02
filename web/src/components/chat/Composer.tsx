@@ -1,6 +1,8 @@
 /**
  * 输入区（参考图主界面）：16px 圆角抬升面壳（--radius-chat-surface）+
  * 裸输入框（bare Input）+ 左侧 [附加·附件·权限] + 右侧发送/停止钮。
+ * 发送与停止是**带文字**的按钮（图标 + 「发送」/「停止」）：这两个动作每次都要认，
+ * 只给图标时得先认图；文字也让它们的可访问名直接等于用户看到的字。
  * Enter 发送（trim 后非空）；运行中（busy）输入禁用、发送钮变停止钮
  * （square 图标，仍是 accent 实底——停止是协作式的，终态以事件为准）。
  * 权限胶囊反映实际三态，发送时随 StartRunInput 提交（full 由 hook 附 ack）。
@@ -9,6 +11,7 @@
 import { useState } from 'react'
 
 import type { PermissionMode } from '../../api/types'
+import { Icon, type IconName } from '../../ui/Icon'
 import { IconButton } from '../../ui/IconButton'
 import { Input } from '../../ui/Input'
 import { PermissionButton } from './PermissionButton'
@@ -48,7 +51,7 @@ export function Composer({ permission, onChangePermission, disabled = false, bus
               submit()
             }
           }}
-          placeholder={busy ? '运行中…可点右侧停止' : '给 Avid 发消息…'}
+          placeholder={busy ? '运行中…可点右侧停止' : '说点什么…'}
           aria-label="消息输入"
           disabled={locked}
         />
@@ -59,18 +62,37 @@ export function Composer({ permission, onChangePermission, disabled = false, bus
             <PermissionButton mode={permission} onChange={onChangePermission} />
           </div>
           {busy ? (
-            <IconButton icon="square" label="停止" variant="primary" onClick={onStop} />
+            <ActionButton icon="square" label="停止" onClick={onStop} />
           ) : (
-            <IconButton
-              icon="send"
-              label="发送"
-              variant="primary"
-              disabled={!canSend}
-              onClick={submit}
-            />
+            <ActionButton icon="send" label="发送" disabled={!canSend} onClick={submit} />
           )}
         </div>
       </div>
     </div>
+  )
+}
+
+/** 主行动按钮：accent 实底 + 图标 + 文字（发送 / 停止 两个动作用它）。 */
+function ActionButton({
+  icon,
+  label,
+  disabled = false,
+  onClick,
+}: {
+  icon: IconName
+  label: string
+  disabled?: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className="inline-flex h-[26px] items-center gap-a6 rounded-sm bg-accent px-a10 font-ui text-caption text-card transition-colors duration-fast ease-out hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
+    >
+      <Icon name={icon} size={13} />
+      {label}
+    </button>
   )
 }
