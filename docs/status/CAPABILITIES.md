@@ -31,7 +31,7 @@
 | CLI | 已落地 | `avid`、`avid web`、`avid workspace` | `src/avid/cli.py` |
 | 可观测（trace / 事件流 / 运行时状态） | 已落地 | stderr trace、`GET /api/runs/{id}/events`、`GET /api/runs/{id}` | `src/avid/runtime/events.py` |
 | 评测与基准（AvidBench v0.1） | 已落地（第一层） | `python -m benchmarks.run`、`pytest -m eval` / `-m eval_smoke` | `benchmarks/README.md`、`benchmarks/avidbench/`、`BENCHMARK.md` §9 |
-| 长期记忆、多 provider、多用户鉴权 | **不存在** | — | 见 `CURRENT_STATE.md` §4 |
+| 长期记忆、多用户鉴权 | **不存在** | — | 见 `CURRENT_STATE.md` §4 |
 
 ---
 
@@ -239,9 +239,16 @@ key 查而不当作文件路径，未命中返回可用清单（`skills.py:108-1
 
 ## 9. 模型接入
 
-- **协议**：OpenAI 兼容 `POST {base_url}/chat/completions`，httpx 直连、不套 SDK（请求体与响应
-  字段保持可见）；base_url 默认 `https://api.openai.com/v1`，模型名与 key 走环境变量
-  （`src/avid/ai/config.py`、`src/avid/ai/client.py`）。
+- **协议**：三个协议族注册在 `ai/providers/`（registry 单点）——OpenAI 兼容
+  `POST {base_url}/chat/completions`、Anthropic Messages、Gemini generateContent；httpx 直连、
+  不套 SDK（请求体与响应字段保持可见）。模型名与 key 的来源见下一条 BYOK 与
+  `src/avid/ai/config.py`、`src/avid/ai/byok.py`。
+- **BYOK 多提供商（阶段 34）**：三层配置（Provider / Model / Binding）由 `ai/byok.py` 单点管理——
+  `~/.avid/models.json` 只存 `secretRef` 引用（明文在 0600 的 `~/.avid/secrets.json`），
+  `resolve_chat()` 是唯一解析入口（本次覆盖 `providerId/modelId` > chat 绑定 > legacy env），
+  产出同形 `Config`（含 extra_headers / extra_body 透传与 max_output），loop 与 execution 零感知；
+  `ai/verify.py` 提供两步连通校验（最小对话 + 工具冒烟），界面入口在「设置 → 模型」。
+  没有 BYOK 文件时整条回落旧路径，行为不变。
 - **两条路径同形**：非流式 `chat_completion` 与流式 `stream_completion` 都返回同一个 `Turn`
   （文本 / 工具调用 / usage / finish_reason）；流式按 SSE 解析并把分片累加（`ai/client.py`）。
   生产 Web 路径用流式跑主轮次、用非流式跑摘要，两者分开注入，delta 流里因此不会混进摘要文本
@@ -271,7 +278,7 @@ key 查而不当作文件路径，未命中返回可用清单（`skills.py:108-1
 ## 10. Web API
 
 `API_VERSION = 1`；全部挂在 `/api` 前缀下，未知 `/api/*` 回 JSON 404、绝不回落 SPA
-（`src/avid/web/app.py:122-125, 210-221`）。共 **22 个端点**：
+（`src/avid/web/app.py:122-125, 210-221`）。共 **21 个端点**：
 
 | 方法 + 路径 | 职责 |
 |---|---|
@@ -412,7 +419,7 @@ deltas）、`state/useRunStream.ts`（事件收敛）。
 
 ## 15. 明确没有的能力
 
-长期记忆、沙箱执行、多 provider、多用户与鉴权、中断后恢复运行、SQLite 后端、
+长期记忆、沙箱执行、多用户与鉴权、中断后恢复运行、SQLite 后端、
 **成本估算**（token 用量台账本身已落地，阶段 22——占用、缓存读写与命中率、压缩次数，
 按分支落盘）、跨进程的「一个会话一个活动 run」互斥、subagent 子事件转发、前端虚拟列表
 （新前端暂无虚拟列表，条目量大时立项）

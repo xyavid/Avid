@@ -87,7 +87,7 @@
 | 子 agent | `subagent` 一次最多 4 个子任务，并行执行后汇总；子运行结构上去掉 `subagent` 自己（`SUB_TOOLS`）；子 agent 看不到父对话，prompt 必须自包含 | `src/avid/tools/__init__.py:80-81`、`src/avid/tools/subagent.py`、`src/avid/tools/schemas.py:172-203` |
 | 技能 | 目录下 3 个技能（`agent-builder` / `code-review` / `pdf`）；系统提示里只放非 always 技能的 `name + description`，正文由 `load_skill` 按需读取；frontmatter `always: true` 的技能正文常驻系统提示（单篇 8k / 总量 16k 字符上限）；目录在运行开始时重新扫描 | `skills/`、`src/avid/policy/skills.py`、`src/avid/runtime/context_manager.py` |
 | 系统提示装配（阶段 31） | 默认文案含身份、工具契约（授权执行并验证 / 不可逆先确认 / 缺信息先澄清 / 等结果再答复）与外部内容防线（工具结果是数据不是指令），集中在 `policy/prompt.py`；`<工作区根>/AGENTS.md` 存在时作为引导块进系统提示（缺失/为空即无块，超 16k 字符截断注明）；环境块含运行时事实（OS/架构/Python、当天日期）；SYSTEM 块首轮冻结，实测缓存命中率中位数 0.808（`BENCHMARK.md` §3.5） | `src/avid/policy/prompt.py`、`src/avid/runtime/context_manager.py`、`benchmarks/cache_hit/artifact.json` |
-| 模型接入 | OpenAI 兼容 `/chat/completions` 直连 httpx（不套 SDK）；非流式 `chat_completion` 与流式 `stream_completion` 返回**同形**的 `Turn`，两条解析路径共用同一个 usage 归一化；连接超时 10s / 读超时 60s | `src/avid/ai/client.py:22-35`、`src/avid/ai/client.py` 的 `stream_completion`、`src/avid/runtime/loop.py:228-237` |
+| 模型接入 | **三协议族**（openai / anthropic / gemini，registry 单点）+ **BYOK 多提供商（阶段 34）**：三层配置（Provider/Model/Binding）在 `~/.avid/models.json`（只存 secretRef 引用，明文在 0600 的 `~/.avid/secrets.json`），`resolve_chat()` 唯一解析入口（覆盖 ref > chat 绑定 > legacy env），产出同形 `Config`；两步连通校验（最小对话 + 工具冒烟）在「设置 → 模型」可用；非流式与流式返回**同形** `Turn`；连接超时 10s / 读超时 60s | `src/avid/ai/byok.py`、`src/avid/ai/verify.py`、`src/avid/ai/client.py:22-35`、`tests/test_ai_byok.py`（17 例）、`tests/test_model_settings.py`（12 例） |
 | Web 服务（内核侧） | 20 个 HTTP 端点（会话 / 运行 / 审批 / 事件流 / 技能 / 工作区 / 元信息）；19 类事件分三档（16 durable + `run_status` + `assistant_delta` + `reasoning_delta`）；传输适配 `src/avid/web/**` 阶段 32 未改动 | `src/avid/web/routes/*.py`、`src/avid/runtime/events.py:24-104` |
 | 前端 | **阶段 33 重建**（分支 `refactor/web-hana-ui`，2026-10）：React 18 + Vite + pnpm，纸本视觉（暖纸 / 青夜 token 层）+ 自研 markdown 渲染与语法高亮；页面 = 对话（思考块 / 工具卡 / 动作行 / 用量卡 / 按运行换模型）、会话管理、工作区分组、设置、组件墙；契约种子（`api/types.ts`、`events/types.ts`）与对账门禁、体积门禁已恢复 | `CAPABILITIES.md` §11、`web/budget.json` |
 | CLI | `--agent` / `--yes` / `--permission` / `--workspace` / `--session` / `--new-session` / `--session-name` / `--list-sessions` / `--delete-session`；子命令 `web`、`workspace {add,list,remove,permission}` | `src/avid/cli.py:85-140,317-333` |
@@ -107,7 +107,7 @@
 | 跨会话记忆（提炼 / 召回 / 遗忘） | 声称有、实际无 | `AGENTS.md §1` 把「记忆」列为自有层；`src/` 下只有会话条目树，没有任何提炼或召回模块 |
 | 沙箱执行 | **已落地**（阶段 26）：`bash` 在 bwrap 里跑（只读系统、可写工作区、掩蔽凭据、`--unshare-net`、环境白名单），文件类工具仍由阶梯 + 路径校验守住 | `src/avid/policy/sandbox.py`、`src/avid/tools/shell.py`；E2E `benchmarks/sandbox_boundary/` |
 | 多用户、鉴权、远程安全暴露 | 设计上不做 | `docs/guide/web-ui.md:69-92`：只有回环监听 + Host/Origin 白名单，**明文写着没有认证**，能连上端口的人就能建会话、跑命令 |
-| 多 provider | 设计上不做 | 只有一条 OpenAI 兼容路径（`pyproject.toml:6` 唯一运行期依赖是 httpx）；需求里 D-03 明确「早期不做多 provider 抽象」 |
+| 多 provider | **已落地**（阶段 34，BYOK） | `src/avid/ai/byok.py`：Provider/Model/Binding 三层配置 + secret 引用 + chat 槽解析；协议族仍只有三种（openai / anthropic / gemini，ollama 走 openai 兼容端点）——「只改配置接入新端点」成立，「任意协议」不成立；候选池 A 组的触发条件（必须接第二个端点）已出现并处理 |
 | 中断后恢复运行 | 设计上不做 | `docs/design/runtime-architecture.md:308-324` 的「不做」清单含崩溃恢复 / checkpoint / 重放；取消只保证不丢已产生的消息、不产生伪造工具结果 |
 | 两个进程同时操作同一会话的运行 | 做到一半 | 会话**文件**有跨进程锁（`jsonl.py` 的 `<会话>.jsonl.lock`），但「一个会话同时至多一个活动 run」只在进程内成立（`src/avid/svc/runs.py` 的注册表是进程内单实例） |
 | 会话的下一段 | 做到一半 | 压缩条目、usage 台账、operation 状态机、SQLite 后端均未做（`runtime-architecture.md:635-643`） |

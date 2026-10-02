@@ -28,6 +28,22 @@ cp .env.example .env
 | `AVID_BASE_URL` | 否 | OpenAI 兼容接口根地址，默认 `https://api.openai.com/v1` |
 | `AVID_MODEL` | 是 | 模型名，例如 `deepseek-chat`、`gpt-4o-mini` |
 
+### BYOK：自带 key 接入任意提供商（阶段 34）
+
+除了单个 env 配置，还可以在界面「设置 → 模型」里维护多份提供商配置（BYOK）：
+每份 = 协议（OpenAI 兼容 / Anthropic / Gemini / Ollama）+ 接口地址 + 密钥引用 +
+模型与能力声明；chat 槽位绑定一个 `providerId/modelId` 作为主对话模型。规则：
+
+- **密钥只入不出**：明文只落 `~/.avid/secrets.json`（0600），配置文件
+  `~/.avid/models.json` 里只有 `secretRef` 引用，可以随意备份分享；
+- **没有 BYOK 配置时**回落 env / 旧 `model.toml`；保存后对下一条消息立即生效；
+- **连通校验**：每个模型可跑「最小对话 + 工具冒烟」两步探测，能在配置阶段筛掉
+  「能聊天、不能调工具」的模型；
+- 「按运行换模型」的候选自动带上 BYOK 模型（`providerId/modelId`）。
+
+也可以直接手编 `~/.avid/models.json`（providers + bindings，结构见
+`src/avid/ai/byok.py` 模块注释）；写坏了服务启动时会报可执行的修复文案。
+
 ## 运行
 
 单轮问答：
