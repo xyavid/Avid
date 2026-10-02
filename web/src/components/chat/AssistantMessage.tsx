@@ -8,6 +8,7 @@
 
 import type { ReactNode } from 'react'
 
+import { Markdown } from '../../markdown'
 import { cx } from '../../ui/cx'
 import { AvidMark } from '../../ui/Mark'
 
@@ -20,7 +21,25 @@ export type AssistantMessageProps = {
   className?: string
 }
 
+/** 字符串走 markdown 渲染；已经是元素（或空）就原样放。 */
+function Body({ children, trailing }: { children?: ReactNode; trailing?: ReactNode }) {
+  if (typeof children === 'string') return <Markdown trailing={trailing}>{children}</Markdown>
+  return (
+    <>
+      {children}
+      {trailing}
+    </>
+  )
+}
+
 export function AssistantMessage({ children, streaming = false, name = 'Avid', className }: AssistantMessageProps) {
+  const cursor = (
+    <span
+      aria-hidden
+      className="ml-a4 inline-block h-[10px] w-[3px] translate-y-[1px] rounded-[1px] bg-accent"
+      style={{ animation: 'hana-pulse 1.2s ease-in-out infinite' }}
+    />
+  )
   return (
     <div className={cx('flex gap-a8', className)}>
       <div className="min-w-0 flex-1">
@@ -33,12 +52,7 @@ export function AssistantMessage({ children, streaming = false, name = 'Avid', c
         {streaming ? (
           children ? (
             <div className="serif-text mt-a4 text-chat text-ink">
-              {children}
-              <span
-                aria-hidden
-                className="ml-a4 inline-block h-[10px] w-[3px] translate-y-[1px] rounded-[1px] bg-accent"
-                style={{ animation: 'hana-pulse 1.2s ease-in-out infinite' }}
-              />
+              <Body trailing={cursor}>{children}</Body>
             </div>
           ) : (
             <span role="status" aria-label="生成中" className="mt-a4 inline-flex items-center gap-[3px]">
@@ -55,7 +69,9 @@ export function AssistantMessage({ children, streaming = false, name = 'Avid', c
             </span>
           )
         ) : (
-          <div className="serif-text mt-a4 text-chat text-ink">{children}</div>
+          <div className="serif-text mt-a4 text-chat text-ink">
+            <Body>{children}</Body>
+          </div>
         )}
       </div>
     </div>

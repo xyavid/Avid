@@ -20,12 +20,24 @@ describe('UserBubble（组件墙 §消息与工具卡）', () => {
 describe('AssistantMessage（报告 §7.3：头像行 + 正文分列）', () => {
   afterEach(cleanup)
 
-  it('头像 + 名称行 + 衬线正文', () => {
-    render(<AssistantMessage>好，我去读文件。</AssistantMessage>)
+  it('头像 + 名称行 + 衬线正文（正文走 markdown 渲染）', () => {
+    const { container } = render(<AssistantMessage>好，我去读文件。</AssistantMessage>)
 
     expect(screen.getByText('Avid')).toBeTruthy()
-    const body = screen.getByText('好，我去读文件。')
-    expect(body.className).toContain('serif-text')
+    // 正文外层仍是衬线栈；文本落在 markdown 的段落里，样式靠继承
+    const body = container.querySelector('.serif-text')
+    expect(body?.textContent).toContain('好，我去读文件。')
+    expect(body?.querySelector('p')?.textContent).toBe('好，我去读文件。')
+  })
+
+  it('markdown 生效：标题、列表、行内代码落成元素，原文不显示标记符', () => {
+    const { container } = render(<AssistantMessage>{'## 结果\n\n- 甲\n- 乙\n\n用 `npm test` 跑。'}</AssistantMessage>)
+
+    expect(container.querySelector('h2')?.textContent).toBe('结果')
+    expect([...container.querySelectorAll('li')].map((li) => li.textContent)).toEqual(['甲', '乙'])
+    expect(container.querySelector('p code')?.textContent).toBe('npm test')
+    expect(container.textContent).not.toContain('##')
+    expect(container.textContent).not.toContain('`')
   })
 
   it('流式态无文本：显示生成中的呼吸点，不渲染正文', () => {
