@@ -12,8 +12,7 @@ from __future__ import annotations
 import pytest
 from support import ScriptedChat, make_turn
 
-from avid.agent.compaction import CompactReport
-from avid.agent.context import announce
+from avid.agent.compaction import CompactReport, announce
 from avid.agent.state import RunState
 from avid.providers.config import Config
 from avid.providers.usage import Usage

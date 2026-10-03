@@ -16,8 +16,8 @@ from __future__ import annotations
 import pytest
 
 from avid.agent import compaction as compact
-from avid.agent.compaction import derived_context_chars
-from avid.agent.context import ContextBudget, ContextManager, effective_budget
+from avid.agent.compaction import derived_context_chars, effective_budget
+from avid.agent.context import ContextBudget, ContextManager
 from avid.agent.state import RunState
 from avid.providers.client import Usage
 from avid.providers.config import Config

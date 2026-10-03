@@ -6,7 +6,15 @@
 
 import pytest
 
-from avid.agent.context import SYSTEM, TAIL, Block, ContextBudget, ContextManager
+from avid.agent.context import (
+    FROZEN,
+    PER_ROUND,
+    SYSTEM,
+    TAIL,
+    BlockSpec,
+    ContextBudget,
+    ContextManager,
+)
 from avid.agent.skills import SkillLoader
 from avid.agent.state import RunState
 from avid.providers.config import Config
@@ -93,7 +101,16 @@ def test_system_is_frozen_within_a_run():
 
 def test_custom_system_section_source_joins_the_template():
     manager = make_manager()
-    manager.register_source("tenant", lambda: Block("tenant", "租户：acme", SYSTEM))
+    manager.register_block(
+        BlockSpec(
+            kind="tenant",
+            title=None,
+            section=SYSTEM,
+            stability=FROZEN,
+            cap=None,
+            source=lambda mgr: "租户：acme",
+        )
+    )
 
     request = manager.compose()
 
@@ -153,14 +170,14 @@ def test_bootstrap_ignores_a_directory_shaped_file(tmp_path):
     assert "bootstrap" not in make_manager(state=state).compose().parts
 
 
-def test_bootstrap_truncates_past_the_cap(tmp_path, monkeypatch):
-    from avid.agent import prompt
-
-    monkeypatch.setattr(prompt, "AGENTS_MD_MAX_CHARS", 50)
+def test_bootstrap_truncates_past_the_cap(tmp_path):
     (tmp_path / "AGENTS.md").write_text("长" * 80, encoding="utf-8")
     state = RunState(workspace_root=str(tmp_path))
 
-    request = make_manager(state=state).compose()
+    # 上限归口 ContextBudget：按运行注入，而不是改散常量
+    request = make_manager(state=state, budget=ContextBudget(bootstrap_chars=50)).compose()
+
+    from avid.agent import prompt
 
     assert prompt.TRUNCATION_NOTE in request.system
     assert "长" * 50 in request.system
@@ -275,8 +292,15 @@ def test_plan_updates_every_round_while_system_stays_frozen():
 
 def test_custom_tail_source_lands_in_the_tail_message():
     manager = make_manager()
-    manager.register_source(
-        "artifact", lambda: Block("artifact", "## 当前 Artifact\n报告 v2", TAIL)
+    manager.register_block(
+        BlockSpec(
+            kind="artifact",
+            title="当前 Artifact",
+            section=TAIL,
+            stability=PER_ROUND,
+            cap=None,
+            source=lambda mgr: "报告 v2",
+        )
     )
 
     request = manager.compose()

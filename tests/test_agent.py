@@ -1178,7 +1178,7 @@ def test_compaction_is_logged(hook_registry, monkeypatch, caplog):
         ),
     )
 
-    with caplog.at_level("INFO", logger="avid.agent.context"):
+    with caplog.at_level("INFO", logger="avid.agent.compaction"):
         run_loop(
             [{"role": "user", "content": "x"}],
             config=CONFIG,

@@ -135,7 +135,7 @@ def test_each_step_is_announced_and_counted(monkeypatch, caplog):
     monkeypatch.setattr(compact, "snip_compact", lambda t, **k: None)
 
     state = RunState()
-    with caplog.at_level("INFO", logger="avid.agent.context"):
+    with caplog.at_level("INFO", logger="avid.agent.compaction"):
         prepare(Transcript([user()]), state)
 
     assert any(

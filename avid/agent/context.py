@@ -1,4 +1,28 @@
-"""Context assembly and compaction: the single place deciding what the model sees each round."""
+"""Context 组装：一张声明表（CONTEXT_MAP）+ 一个装配引擎，决定模型每轮看到什么。
+
+## 请求的三部分
+
+- **system**：frozen 块首轮拼接后逐字节冻结（结构上保住 provider 前缀缓存），
+  外加 UserPromptSubmit hook 的 injected 文本；
+- **messages**：transcript 历史（可被压缩阶梯改写，见 compaction.py）+ 一条每轮
+  重建的 tail 便签（TAIL_HEADER 头 + per_round 块）；tail 永不写入 transcript；
+- **tools**：本次运行的 schema 数组，每轮不变。
+
+## 块清单（CONTEXT_MAP，声明顺序即渲染顺序）
+
+| kind          | 去哪   | 生命周期 | 上限        | 数据来源 |
+|---------------|--------|----------|-------------|----------|
+| instructions  | system | frozen   | —           | 调用方传入，或 prompt.DEFAULT_INSTRUCTIONS |
+| environment   | system | frozen   | —           | 工作目录 / 运行时 / 日期 / 本次工具名 |
+| bootstrap     | system | frozen   | 16,000 字符 | 工作区 AGENTS.md（缺失即整块缺席） |
+| skill_always  | system | frozen   | 16,000 字符 | always 技能全文（单篇 8k，超限按名字序跳过） |
+| skill_catalog | system | frozen   | —           | 技能目录（name: description 行） |
+| plan          | tail   | per_round| —           | TODO（无计划即整块缺席） |
+| run_state     | tail   | per_round| —           | 轮次 / 工具调用 / 被拒 / 压缩计数 |
+
+扩展点：`register_block`（追加整条声明）或 `register_source`（替换已有 kind 的
+文本源）。压缩阶梯在 compaction.py：compose() 每轮先跑一遍，再装配。
+"""
 
 from __future__ import annotations
 
@@ -13,104 +37,56 @@ from typing import Any
 from ..providers.config import Config
 from ..providers.transcript import Transcript, message_chars
 from . import compaction as compact
-from . import events, prompt
-from .compaction import CompactReport
+from . import prompt
+from .compaction import CompactReport, ContextBudget
 from .state import RunState
 
 logger = logging.getLogger("avid.agent.context")
 
-#: Placement inside the system prompt, frozen on the first round so the provider prefix cache holds.
+#: 块的去向：system 进冻结前缀，tail 进每轮重建的便签（位置与生命周期一一对应）。
 SYSTEM = "system"
 TAIL = "tail"
 
-#: Built-in block kinds; a new kind needs no change here, since register_source takes any string.
-INSTRUCTIONS = "instructions"  # fixed instructions from the caller, or the default text
-ENVIRONMENT = "environment"  # working directory plus the available tool names
-BOOTSTRAP = "bootstrap"  # the workspace AGENTS.md conventions; a missing file means no block
-SKILL_ALWAYS = "skill_always"  # full text of always-marked skills, capped per skill and in total
-SKILL_CATALOG = "skill_catalog"  # skill catalog; only load_skill brings the full text in
-INJECTED = "injected"  # extra system text injected by a UserPromptSubmit hook
-PLAN = "plan"  # the current TODO plan
-RUN_STATE = "run_state"  # round, tool-call, denial and compaction counters
+#: 块的生命周期：frozen 首轮定型，per_round 每轮重新收集。
+FROZEN = "frozen"
+PER_ROUND = "per_round"
 
-# Fixed tail header so the model and log readers can tell this apart from user input.
+#: 内置块 kind；register_block/register_source 可扩展新块，无需改这里。
+INSTRUCTIONS = "instructions"
+ENVIRONMENT = "environment"
+BOOTSTRAP = "bootstrap"
+SKILL_ALWAYS = "skill_always"
+SKILL_CATALOG = "skill_catalog"
+INJECTED = "injected"  # 非声明块：UserPromptSubmit 注入的 system 文本
+PLAN = "plan"
+RUN_STATE = "run_state"
+
+# 固定 tail 头，让模型与日志都能分辨这不是用户输入。
 TAIL_HEADER = "[上下文] 以下是本次请求附带的运行时上下文，不是用户输入。"
 
 
 @dataclass(frozen=True)
-class Block:
-    """One piece of context, tagged by kind and placed by section."""
+class BlockSpec:
+    """一个上下文块的完整声明：去哪、何时定型、上限多少、文本从哪来。
+
+    source 拿到 ContextManager（读 state / instructions / tool_names），返回正文
+    文本；返回 None 表示本块缺席。标题渲染为 `## {title}\\n正文`，title 为 None
+    时不加标题（instructions 用）。
+    """
 
     kind: str
-    content: str
+    title: str | None
     section: str
+    stability: str
+    # None = 不设上限；int = 正文字符数；str = ContextBudget 的字段名（按运行预算解析）。
+    # 上限约束正文，标题不计入。
+    cap: "int | str | None"
+    source: Callable[["ContextManager"], str | None]
 
-
-@dataclass(frozen=True)
-class ContextBudget:
-    """Compaction thresholds; the defaults reference the constants in policy.compaction."""
-
-    tool_result_chars: int = compact.TOOL_RESULT_CHAR_BUDGET
-    tool_result_keep_recent: int = compact.TOOL_RESULT_KEEP_RECENT
-    keep_head: int = compact.SNIP_KEEP_HEAD
-    keep_tail: int = compact.SNIP_KEEP_TAIL
-    context_chars: int = compact.CONTEXT_CHAR_LIMIT
-    micro_keep_recent: int = compact.MICRO_COMPACT_KEEP_RECENT
-    micro_target_ratio: float = compact.MICRO_COMPACT_TARGET_RATIO
-    reactive_keep_recent: int = compact.REACTIVE_KEEP_RECENT
-    # Whether the character thresholds follow the real window; turn it off when comparing
-    # injected values.
-    from_window: bool = True
-    # Fraction of the window used as the derived trigger line.
-    window_ratio: float = compact.WINDOW_TRIGGER_RATIO
-
-
-def effective_budget(
-    limits: ContextBudget, state: RunState
-) -> tuple[ContextBudget, str | None]:
-    """Return the thresholds this run uses and their origin, or None when plain defaults apply."""
-    if not limits.from_window:
-        return limits, None
-
-    # The reading and the part counts come from the same request, so they always arrive as a pair.
-    parts = state.prompt_parts
-    usage = state.last_usage
-    # Chars per token is measured from the last real request, because a fixed ratio is wrong
-    # for mixed scripts.
-    derived = compact.derived_context_chars(
-        window=state.context_window,
-        prompt_tokens=None if usage is None else usage.prompt_tokens,
-        chars=parts,
-        ratio=limits.window_ratio,
-    )
-    # A missing reading or part count falls back verbatim to the constant, so the default
-    # path stays unchanged.
-    if derived is None or parts is None:
-        return limits, None
-
-    limit, per_token = derived
-    note = (
-        f"阈值随窗口派生：{limit} 字符"
-        f"（窗口 {state.context_window} × {limits.window_ratio:g} × "
-        f"实测 {per_token:.2f} 字符/token − 系统与工具 {parts[0] + parts[1]} 字符）"
-    )
-    return replace(limits, context_chars=limit), note
-
-
-def announce(report: CompactReport | None, state: RunState) -> None:
-    """Record a compaction in one place: one log line, one ledger entry and one event."""
-    if report is None:
-        return
-    logger.info("compact: %s", report.describe())
-    # How much a compaction saved is answered by the next model call, not estimated here.
-    state.mark_compacted(report.step)
-    state.emit(
-        events.CONTEXT_COMPACTED,
-        step=report.step,
-        detail=report.detail,
-        before=report.before,
-        after=report.after,
-    )
+    def render(self, body: str) -> str:
+        if self.title is None:
+            return body
+        return f"## {self.title}\n{body}"
 
 
 @dataclass(frozen=True)
@@ -138,7 +114,7 @@ class ComposedRequest:
 
 
 class ContextManager:
-    """Per-run context assembly and budget, constructed once and called every round."""
+    """每轮调用的装配引擎：块清单见 CONTEXT_MAP，压缩编排委托 compaction.py。"""
 
     def __init__(
         self,
@@ -155,44 +131,50 @@ class ContextManager:
         self.transcript = transcript
         self.state = state
         self.config = config
-        # The caller's instruction override, as benchmarks and subagents each carry one;
-        # None falls back to the default text from policy.prompt.
+        # 调用方的指令覆盖（评测 / 子代理各自携带）；None 回落到默认词表。
         self.instructions = (
             instructions if instructions is not None else prompt.DEFAULT_INSTRUCTIONS
         )
         self.tool_names = list(tool_names)
         self.budget = budget or ContextBudget()
         self.summarize = summarize
-        # ④/⑤ 替换历史后回调（summary 消息, keep 条数）：调用方借此把游标落盘，
-        # 让下一次运行的投影直接从摘要形态开始（诊断 C2）。
+        # ④/⑤ 替换历史后的落盘钩子（summary 消息, keep 条数）；不接则压缩只在内存生效。
         self.on_compaction = on_compaction
-        self._sources: dict[str, Callable[[], Block | None]] = {}
+        self._specs: dict[str, BlockSpec] = {spec.kind: spec for spec in CONTEXT_MAP}
+        self._extra: list[BlockSpec] = []
         # The system prompt is frozen on the first compose so the provider prefix cache stays valid.
         self._system: str | None = None
         self._system_parts: dict[str, int] = {}
-        self._register_defaults()
 
-    def register_source(self, kind: str, source: Callable[[], Block | None]) -> None:
-        """Register or replace a block source; a SYSTEM block only binds on the first compose."""
-        self._sources[kind] = source
+    # ---- 扩展点 ----
 
-    def _register_defaults(self) -> None:
-        self.register_source(
-            INSTRUCTIONS, lambda: Block(INSTRUCTIONS, self.instructions, SYSTEM)
-        )
-        self.register_source(
-            ENVIRONMENT, lambda: Block(ENVIRONMENT, self._render_environment(), SYSTEM)
-        )
-        self.register_source(BOOTSTRAP, self._bootstrap_block)
-        self.register_source(SKILL_ALWAYS, self._always_skills_block)
-        self.register_source(
-            SKILL_CATALOG, lambda: Block(SKILL_CATALOG, self._render_skills(), SYSTEM)
-        )
-        self.register_source(PLAN, self._plan_block)
-        self.register_source(RUN_STATE, self._run_state_block)
+    def register_block(self, spec: BlockSpec) -> None:
+        """追加一条自定义块声明。"""
+        self._extra.append(spec)
 
-    def _render_environment(self) -> str:
-        # Deferred import: the tools package pulls in policy.skills, so a top-level
+    def register_source(self, kind: str, source: Callable[[], str | None]) -> None:
+        """替换已有 kind 的文本源；kind 不在声明表里则追加为 frozen system 块。
+
+        便捷源的签名是零参函数；声明表里的 source 都拿 ContextManager。
+        """
+        if kind in self._specs:
+            self._specs[kind] = replace(self._specs[kind], source=lambda mgr: source())
+            return
+        self._extra.append(
+            BlockSpec(
+                kind=kind,
+                title=None,
+                section=SYSTEM,
+                stability=FROZEN,
+                cap=None,
+                source=lambda mgr: source(),
+            )
+        )
+
+    # ---- 各内置块的正文 ----
+
+    def _environment_body(self) -> str:
+        # Deferred import: the tools package pulls in agent.skills, so a top-level
         # import would be circular.
         from .tools import workspace
 
@@ -203,7 +185,6 @@ class ContextManager:
             f"{platform.system()} {platform.machine()} / Python {platform.python_version()}"
         )
         return (
-            "## 环境\n"
             f"工作目录：{root}\n"
             f"运行时：{runtime}；今天：{date.today().isoformat()}\n"
             f"可用工具：{names}\n"
@@ -211,16 +192,8 @@ class ContextManager:
             "Act, don't explain."
         )
 
-    def _render_skills(self) -> str:
-        catalog = self.state.skills.catalog()
-        return (
-            "## 可用技能\n"
-            f"{catalog or '（当前没有可用技能）'}\n\n"
-            "Use load_skill to read the full instructions when a skill applies."
-        )
-
-    def _bootstrap_block(self) -> Block | None:
-        # Read once per run: SYSTEM sources are collected only on the first compose,
+    def _bootstrap_body(self) -> str | None:
+        # Read once per run: frozen sources are collected only on the first compose,
         # which is also what keeps the frozen prefix byte-stable afterwards.
         root = self.state.workspace_root
         if not root:
@@ -229,13 +202,9 @@ class ContextManager:
             text = (Path(root) / "AGENTS.md").read_text(encoding="utf-8", errors="replace")
         except OSError:
             return None
-        if not text.strip():
-            return None
-        if len(text) > prompt.AGENTS_MD_MAX_CHARS:
-            text = text[: prompt.AGENTS_MD_MAX_CHARS] + prompt.TRUNCATION_NOTE
-        return Block(BOOTSTRAP, f"## 工作区约定\n{text}", SYSTEM)
+        return text if text.strip() else None
 
-    def _always_skills_block(self) -> Block | None:
+    def _skill_always_body(self) -> str | None:
         # Capping lives here, not in SkillLoader: how much may stay resident is a
         # prompt-budget decision. The total cap skips by name order instead of
         # aborting, so one oversized skill does not evict the smaller ones.
@@ -251,38 +220,53 @@ class ContextManager:
             sections.append(f"### {name}\n{body}")
         if not sections:
             return None
-        return Block(
-            SKILL_ALWAYS,
-            "## 常驻技能\n以下技能已全文载入，无需再调用 load_skill：\n\n"
-            + "\n\n".join(sections),
-            SYSTEM,
+        return "以下技能已全文载入，无需再调用 load_skill：\n\n" + "\n\n".join(sections)
+
+    def _skill_catalog_body(self) -> str:
+        catalog = self.state.skills.catalog()
+        return (
+            f"{catalog or '（当前没有可用技能）'}\n\n"
+            "Use load_skill to read the full instructions when a skill applies."
         )
 
-    def _plan_block(self) -> Block | None:
+    def _plan_body(self) -> str | None:
         # An empty plan renders a placeholder, so no plan at all means no block.
         if not self.state.todo.items:
             return None
-        return Block(PLAN, f"## 当前计划\n{self.state.todo.render()}", TAIL)
+        return self.state.todo.render()
 
-    def _run_state_block(self) -> Block:
+    def _run_state_body(self) -> str:
         state = self.state
-        return Block(
-            RUN_STATE,
-            "## 运行状态\n"
+        return (
             f"第 {state.round} 轮；已执行 {state.tool_calls} 次工具调用；"
             f"被拒 {state.denials} 次（当前连击 {state.denial_streak}）；"
-            f"压缩 {state.compactions} 次。",
-            TAIL,
+            f"压缩 {state.compactions} 次。"
         )
 
-    def _collect(self, section: str) -> list[Block]:
-        # Sources are keyed by kind, so re-registering a kind replaces its previous source.
-        blocks: list[Block] = []
-        for source in self._sources.values():
-            block = source()
-            if block is not None and block.section == section and block.content:
-                blocks.append(block)
-        return blocks
+    # ---- 装配 ----
+
+    def _ordered_specs(self) -> list[BlockSpec]:
+        return [*self._specs.values(), *self._extra]
+
+    def _render_block(self, spec: BlockSpec) -> str | None:
+        body = spec.source(self)
+        if body is None or not body.strip():
+            return None
+        # 上限约束正文（标题不计入），与旧语义一致：截断发生在内容上，块头保留。
+        cap = getattr(self.budget, spec.cap) if isinstance(spec.cap, str) else spec.cap
+        if cap is not None and len(body) > cap:
+            body = body[:cap] + prompt.TRUNCATION_NOTE
+        return spec.render(body)
+
+    def _collect(self, stability: str) -> list[tuple[BlockSpec, str]]:
+        collected: list[tuple[BlockSpec, str]] = []
+        for spec in self._ordered_specs():
+            if spec.stability != stability:
+                continue
+            text = self._render_block(spec)
+            if text is not None:
+                collected.append((spec, text))
+        return collected
 
     def compose(self, *, injected: list[str] | None = None) -> ComposedRequest:
         """Compact and render; injected text joins the system prompt on the first round only."""
@@ -300,15 +284,14 @@ class ContextManager:
         return self._system
 
     def _freeze_system(self, injected: list[str]) -> None:
-        # Per-kind character counts are frozen with the text so accounting matches the prompt.
-        blocks = self._collect(SYSTEM)
-        texts = [block.content for block in blocks]
+        blocks = self._collect(FROZEN)
+        texts = [text for _spec, text in blocks]
         texts += [str(text) for text in injected if str(text).strip()]
         self._system = "\n\n".join(texts)
         self._system_parts = {}
-        for block in blocks:
-            self._system_parts[block.kind] = (
-                self._system_parts.get(block.kind, 0) + len(block.content)
+        for spec, text in blocks:
+            self._system_parts[spec.kind] = (
+                self._system_parts.get(spec.kind, 0) + len(text)
             )
         for text in injected:
             self._system_parts[INJECTED] = (
@@ -323,20 +306,20 @@ class ContextManager:
 
     def _assemble(self, reports: list[CompactReport]) -> ComposedRequest:
         # The tail becomes one extra user message and is never written to the transcript.
-        tail_blocks = self._collect(TAIL)
+        tail_blocks = self._collect(PER_ROUND)
         messages = self.transcript.as_messages()
         tail_chars = 0
         if tail_blocks:
             content = TAIL_HEADER + "\n\n" + "\n\n".join(
-                block.content for block in tail_blocks
+                text for _spec, text in tail_blocks
             )
             message = {"role": "user", "content": content}
             messages.append(message)
             tail_chars = message_chars(message)
 
         parts = dict(self._system_parts)
-        for block in tail_blocks:
-            parts[block.kind] = parts.get(block.kind, 0) + len(block.content)
+        for spec, text in tail_blocks:
+            parts[spec.kind] = parts.get(spec.kind, 0) + len(text)
         parts["history"] = self.transcript.estimate_chars()
         parts["messages"] = parts["history"] + tail_chars
         return ComposedRequest(
@@ -346,95 +329,84 @@ class ContextManager:
             reports=reports,
         )
 
+    # ---- 压缩编排：委托给 compaction.py（43 在那里重构阶梯本身） ----
+
     def _compact(self) -> list[CompactReport]:
-        """Run the pipeline cheapest first; the fourth step happens at most once per run."""
-        limits, note = effective_budget(self.budget, self.state)
-        if note is not None:
-            logger.debug("compact: %s", note)
-        reports: list[CompactReport] = []
-        # Spill files follow the workspace root, because one process can serve several workspaces.
-        workdir = Path(self.state.workspace_root) if self.state.workspace_root else None
-
-        def run(report: CompactReport | None) -> None:
-            if report is None:
-                return
-            if note is not None:
-                # A derived threshold records its origin, which the UI reads to explain it.
-                report = replace(report, detail=f"{report.detail}（{note}）")
-            reports.append(report)
-            announce(report, self.state)
-
-        # Steps one and two need no API call, so they run every round.
-        run(
-            compact.tool_result_budget(
-                self.transcript,
-                budget=limits.tool_result_chars,
-                keep_recent=limits.tool_result_keep_recent,
-                workdir=workdir,
-                tag=self.state.run_tag,
-            )
+        return compact.compose_ladder(
+            transcript=self.transcript,
+            state=self.state,
+            config=self.config,
+            limits=self.budget,
+            summarize=self.summarize,
+            on_compaction=self.on_compaction,
         )
-        run(
-            compact.snip_compact(
-                self.transcript,
-                # ② 与 ③④ 共用派生预算：条数不再单独触发（诊断 C1）
-                max_chars=limits.context_chars,
-                keep_head=limits.keep_head,
-                keep_tail=limits.keep_tail,
-            )
-        )
-
-        # Step three is free, so it comes before the paid one.
-        if self.transcript.estimate_chars() > limits.context_chars:
-            run(
-                compact.micro_compact(
-                    self.transcript,
-                    limit=limits.context_chars,
-                    keep_recent=limits.micro_keep_recent,
-                    target_ratio=limits.micro_target_ratio,
-                    workdir=workdir,
-                    tag=self.state.run_tag,
-                )
-            )
-
-        # Step four pays for a summarization call, so state allows it at most once per run.
-        if self.transcript.estimate_chars() > limits.context_chars:
-            if self.state.compacted:
-                logger.info("compact: 自动压缩本运行已用过一次，跳过")
-            else:
-                report = compact.compact_history(
-                    self.transcript,
-                    config=self.config,
-                    chat=self.summarize,
-                    limit=limits.context_chars,
-                    workdir=workdir,
-                    tag=self.state.run_tag,
-                )
-                if report is not None and self.on_compaction is not None:
-                    self.on_compaction(self.transcript.as_messages()[0], 0)
-                if report is not None:
-                    # Only this branch sets the flag, which is what bounds step four to one run.
-                    self.state.compacted = True
-                run(report)
-
-        return reports
 
     def reactive(self) -> CompactReport | None:
-        """Fallback after a provider overflow: summarize older history and keep a recent tail."""
-        report = compact.reactive_compact(
-            self.transcript,
+        return compact.reactive_pass(
+            transcript=self.transcript,
+            state=self.state,
             config=self.config,
-            chat=self.summarize,
-            workdir=Path(self.state.workspace_root)
-            if self.state.workspace_root
-            else None,
-            keep_recent=self.budget.reactive_keep_recent,
-            tag=self.state.run_tag,
+            summarize=self.summarize,
+            on_compaction=self.on_compaction,
         )
-        # The caller bounds this to one attempt per run through state.retried.
-        announce(report, self.state)
-        if report is not None and self.on_compaction is not None:
-            self.on_compaction(
-                self.transcript.as_messages()[0], compact.REACTIVE_KEEP_RECENT
-            )
-        return report
+
+
+#: 声明顺序即渲染顺序。来源方法长在 ContextManager 上，这里只做声明。
+CONTEXT_MAP: list[BlockSpec] = [
+    BlockSpec(
+        kind=INSTRUCTIONS,
+        title=None,
+        section=SYSTEM,
+        stability=FROZEN,
+        cap=None,
+        source=lambda mgr: mgr.instructions,
+    ),
+    BlockSpec(
+        kind=ENVIRONMENT,
+        title="环境",
+        section=SYSTEM,
+        stability=FROZEN,
+        cap=None,
+        source=lambda mgr: mgr._environment_body(),
+    ),
+    BlockSpec(
+        kind=BOOTSTRAP,
+        title="工作区约定",
+        section=SYSTEM,
+        stability=FROZEN,
+        cap="bootstrap_chars",
+        source=lambda mgr: mgr._bootstrap_body(),
+    ),
+    BlockSpec(
+        kind=SKILL_ALWAYS,
+        title="常驻技能",
+        section=SYSTEM,
+        stability=FROZEN,
+        cap="skill_always_chars",
+        source=lambda mgr: mgr._skill_always_body(),
+    ),
+    BlockSpec(
+        kind=SKILL_CATALOG,
+        title="可用技能",
+        section=SYSTEM,
+        stability=FROZEN,
+        cap=None,
+        source=lambda mgr: mgr._skill_catalog_body(),
+    ),
+    BlockSpec(
+        kind=PLAN,
+        title="当前计划",
+        section=TAIL,
+        stability=PER_ROUND,
+        cap=None,
+        source=lambda mgr: mgr._plan_body(),
+    ),
+    BlockSpec(
+        kind=RUN_STATE,
+        title="运行状态",
+        section=TAIL,
+        stability=PER_ROUND,
+        cap=None,
+        source=lambda mgr: mgr._run_state_body(),
+    ),
+]

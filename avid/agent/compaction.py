@@ -1,4 +1,10 @@
-"""Five-step context compaction ladder, ordered from the cheapest mechanism to the most expensive."""
+"""压缩子系统：五步阶梯（最便宜优先）+ 触发预算派生 + 编排入口。
+
+阶梯次序：① tool_result_budget（落盘最大项）→ ② snip（字符超预算裁中间，
+只在安全切口）→ ③ micro（超限落盘旧工具结果）→ ④ compact_history（摘要替换
+历史，每运行至多一次）→ ⑤ reactive（模型报溢出后的兜底）。①② 每轮跑，③④
+看预算，⑤ 由调用方在 PromptTooLong 后触发一次。
+"""
 
 from __future__ import annotations
 
@@ -7,13 +13,14 @@ import logging
 import os
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 from ..providers.client import LLMError, chat_completion
 from ..providers.config import Config
 from ..providers.transcript import Transcript
+from . import events, prompt
 
 logger = logging.getLogger("avid.agent.compaction")
 
@@ -380,3 +387,186 @@ def reactive_compact(
         before,
         transcript.estimate_chars(),
     )
+
+
+# ---------- 触发预算与编排 ----------
+
+
+@dataclass(frozen=True)
+class ContextBudget:
+    """压缩阈值与组装上限；默认值引用常量，按运行可注入覆盖（单变量对照用）。
+
+    组装上限（bootstrap_chars / skill_always_chars）由 CONTEXT_MAP 的 cap 字段
+    以字段名引用，渲染时从这份预算取值——上限可调但不散落。
+    """
+
+    bootstrap_chars: int = prompt.AGENTS_MD_MAX_CHARS
+    skill_always_chars: int = prompt.SKILL_ALWAYS_TOTAL_MAX_CHARS
+    tool_result_chars: int = TOOL_RESULT_CHAR_BUDGET
+    tool_result_keep_recent: int = TOOL_RESULT_KEEP_RECENT
+    keep_head: int = SNIP_KEEP_HEAD
+    keep_tail: int = SNIP_KEEP_TAIL
+    context_chars: int = CONTEXT_CHAR_LIMIT
+    micro_keep_recent: int = MICRO_COMPACT_KEEP_RECENT
+    micro_target_ratio: float = MICRO_COMPACT_TARGET_RATIO
+    reactive_keep_recent: int = REACTIVE_KEEP_RECENT
+    # Whether the character thresholds follow the real window; turn it off when comparing
+    # injected values.
+    from_window: bool = True
+    # Fraction of the window used as the derived trigger line.
+    window_ratio: float = WINDOW_TRIGGER_RATIO
+
+
+def effective_budget(
+    limits: ContextBudget, state: Any
+) -> tuple[ContextBudget, str | None]:
+    """Return the thresholds this run uses and their origin, or None when plain defaults apply."""
+    if not limits.from_window:
+        return limits, None
+
+    # The reading and the part counts come from the same request, so they always arrive as a pair.
+    parts = state.prompt_parts
+    usage = state.last_usage
+    # Chars per token is measured from the last real request, because a fixed ratio is wrong
+    # for mixed scripts.
+    derived = derived_context_chars(
+        window=state.context_window,
+        prompt_tokens=None if usage is None else usage.prompt_tokens,
+        chars=parts,
+        ratio=limits.window_ratio,
+    )
+    # A missing reading or part count falls back verbatim to the constant, so the default
+    # path stays unchanged.
+    if derived is None or parts is None:
+        return limits, None
+
+    limit, per_token = derived
+    note = (
+        f"阈值随窗口派生：{limit} 字符"
+        f"（窗口 {state.context_window} × {limits.window_ratio:g} × "
+        f"实测 {per_token:.2f} 字符/token − 系统与工具 {parts[0] + parts[1]} 字符）"
+    )
+    return replace(limits, context_chars=limit), note
+
+
+def announce(report: "CompactReport | None", state: Any) -> None:
+    """Record a compaction in one place: one log line, one ledger entry and one event."""
+    if report is None:
+        return
+    logger.info("compact: %s", report.describe())
+    # How much a compaction saved is answered by the next model call, not estimated here.
+    state.mark_compacted(report.step)
+    state.emit(
+        events.CONTEXT_COMPACTED,
+        step=report.step,
+        detail=report.detail,
+        before=report.before,
+        after=report.after,
+    )
+
+
+def compose_ladder(
+    *,
+    transcript: Transcript,
+    state: Any,
+    config: Config,
+    limits: ContextBudget,
+    summarize: Any,
+    on_compaction: Any = None,
+) -> list[CompactReport]:
+    """Run the pipeline cheapest first; the fourth step happens at most once per run."""
+    limits, note = effective_budget(limits, state)
+    if note is not None:
+        logger.debug("compact: %s", note)
+    reports: list[CompactReport] = []
+    # Spill files follow the workspace root, because one process can serve several workspaces.
+    workdir = Path(state.workspace_root) if state.workspace_root else None
+
+    def run(report: CompactReport | None) -> None:
+        if report is None:
+            return
+        if note is not None:
+            # A derived threshold records its origin, which the UI reads to explain it.
+            report = replace(report, detail=f"{report.detail}（{note}）")
+        reports.append(report)
+        announce(report, state)
+
+    # Steps one and two need no API call, so they run every round.
+    run(
+        tool_result_budget(
+            transcript,
+            budget=limits.tool_result_chars,
+            keep_recent=limits.tool_result_keep_recent,
+            workdir=workdir,
+            tag=state.run_tag,
+        )
+    )
+    run(
+        snip_compact(
+            transcript,
+            # ② 与 ③④ 共用派生预算：条数不再单独触发（诊断 C1）
+            max_chars=limits.context_chars,
+            keep_head=limits.keep_head,
+            keep_tail=limits.keep_tail,
+        )
+    )
+
+    # Step three is free, so it comes before the paid one.
+    if transcript.estimate_chars() > limits.context_chars:
+        run(
+            micro_compact(
+                transcript,
+                limit=limits.context_chars,
+                keep_recent=limits.micro_keep_recent,
+                target_ratio=limits.micro_target_ratio,
+                workdir=workdir,
+                tag=state.run_tag,
+            )
+        )
+
+    # Step four pays for a summarization call, so state allows it at most once per run.
+    if transcript.estimate_chars() > limits.context_chars:
+        if state.compacted:
+            logger.info("compact: 自动压缩本运行已用过一次，跳过")
+        else:
+            report = compact_history(
+                transcript,
+                config=config,
+                chat=summarize,
+                limit=limits.context_chars,
+                workdir=workdir,
+                tag=state.run_tag,
+            )
+            if report is not None:
+                # Only this branch sets the flag, which is what bounds step four to one run.
+                state.compacted = True
+                run(report)
+                if on_compaction is not None:
+                    on_compaction(transcript.as_messages()[0], 0)
+
+    return reports
+
+
+def reactive_pass(
+    *,
+    transcript: Transcript,
+    state: Any,
+    config: Config,
+    summarize: Any,
+    on_compaction: Any = None,
+) -> CompactReport | None:
+    """Fallback after a provider overflow: summarize older history and keep a recent tail."""
+    report = reactive_compact(
+        transcript,
+        config=config,
+        chat=summarize,
+        workdir=Path(state.workspace_root) if state.workspace_root else None,
+        keep_recent=REACTIVE_KEEP_RECENT,
+        tag=state.run_tag,
+    )
+    # The caller bounds this to one attempt per run through state.retried.
+    announce(report, state)
+    if report is not None and on_compaction is not None:
+        on_compaction(transcript.as_messages()[0], REACTIVE_KEEP_RECENT)
+    return report
+
