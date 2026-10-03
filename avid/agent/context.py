@@ -22,6 +22,16 @@
 
 扩展点：`register_block`（追加整条声明）或 `register_source`（替换已有 kind 的
 文本源）。压缩阶梯在 compaction.py：compose() 每轮先跑一遍，再装配。
+
+## 缓存纪律（KV-cache 排序，CONTEXT_MAP 的排序依据）
+
+固定的、重复出现的块放前面，易变的放最后——frozen 块拼接出的 system 前缀
+逐字节稳定，是缓存命中的部分。唯一允许的例外是 tail 便签：运行状态这类
+per_round 内容按功能原理必须贴近对话末尾（锚定注意力），它们也确实只出现
+在 messages 的最后一条里。新增块时按同一条纪律选 section/stability：内容
+一次定型选 frozen、每轮变化选 per_round 且要能回答"为什么它必须在末尾"。
+压缩阶梯改写 transcript 中段会击穿该点之后的缓存——那是 compaction.py 的
+频率/幅度权衡（clear_at_least 语义），不是组装层的排序问题。
 """
 
 from __future__ import annotations
@@ -351,7 +361,8 @@ class ContextManager:
         )
 
 
-#: 声明顺序即渲染顺序。来源方法长在 ContextManager 上，这里只做声明。
+#: 声明顺序即渲染顺序，也是缓存纪律的落点：稳定的在前（instructions 最静态），
+#: 易变的（tail 两块）在 messages 末尾。来源方法长在 ContextManager 上，这里只做声明。
 CONTEXT_MAP: list[BlockSpec] = [
     BlockSpec(
         kind=INSTRUCTIONS,

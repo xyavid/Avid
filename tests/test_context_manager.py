@@ -390,3 +390,44 @@ def test_render_before_compose_is_rejected():
 
     with pytest.raises(RuntimeError):
         manager.render()
+
+
+# ---------- 缓存纪律（阶段 42 排序约定） ----------
+
+
+def test_context_map_puts_stable_blocks_before_volatile_ones():
+    """KV-cache 纪律钉进声明表：frozen 五块在前、per_round 两块在后，顺序不得漂移。"""
+    from avid.agent.context import CONTEXT_MAP
+
+    kinds = [spec.kind for spec in CONTEXT_MAP]
+    assert kinds == [
+        "instructions",
+        "environment",
+        "bootstrap",
+        "skill_always",
+        "skill_catalog",
+        "plan",
+        "run_state",
+    ]
+    stabilities = [spec.stability for spec in CONTEXT_MAP]
+    assert stabilities == ["frozen"] * 5 + ["per_round"] * 2
+
+
+def test_volatile_content_only_reaches_the_last_message():
+    """per_round 块只出现在 messages 的最后一条（tail 便签）；system 跨轮逐字节稳定。"""
+    state = RunState()
+    state.todo.replace([{"content": "第一步", "status": "in_progress"}])
+    manager = make_manager(state=state)
+
+    first = manager.compose()
+    system_after_first = first.system
+    state.round = 2
+    second = manager.compose()
+
+    assert second.system == system_after_first  # 冻结前缀逐字节稳定
+    for message in second.messages[:-1]:
+        assert "## 运行状态" not in str(message.get("content"))
+        assert "## 当前计划" not in str(message.get("content"))
+    assert "## 运行状态" in second.messages[-1]["content"]
+    assert "## 当前计划" in second.messages[-1]["content"]
+
