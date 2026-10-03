@@ -210,13 +210,24 @@ def test_delete_session_removes_the_file(sandbox, model, capsys):
     [
         ["--session", "a", "--new-session", "问"],
         ["--session-name", "名字", "--agent", "问"],
-        ["--agent", "--new-session"],
     ],
 )
 def test_argument_errors_exit_2(sandbox, argv):
     with pytest.raises(SystemExit) as info:
         cli.main(argv)
     assert info.value.code == 2
+
+
+def test_no_prompt_enters_the_interactive_session(sandbox, monkeypatch):
+    """无参数 = 交互会话（默认续接最近会话）；EOF 立即退出且返回 0。"""
+
+    def eof(prompt=""):
+        raise EOFError()
+
+    monkeypatch.setattr("builtins.input", eof)
+
+    assert cli.main(["--new-session"]) == 0
+    assert cli.main([]) == 0
 
 
 # ---------------- 工作区（阶段 18） ----------------
@@ -357,3 +368,48 @@ def test_workspace_add_reports_a_duplicate_without_adding_twice(sandbox, capsys,
 
     assert cli.main(["workspace", "list"]) == 0
     assert capsys.readouterr().out.count(str(other.resolve())) == 1
+
+
+def test_interactive_turn_skill_and_unknown_command(sandbox, model, monkeypatch, capsys, tmp_path):
+    """交互会话：普通输入走一次运行；/技能 全文写入会话；未知命令给提示不发模型。"""
+    model.answer("答")
+    (tmp_path / "skills" / "demo").mkdir(parents=True)
+    (tmp_path / "skills" / "demo" / "SKILL.md").write_text(
+        "---\ndescription: 演示技能\n---\n这是演示技能的正文", encoding="utf-8"
+    )
+
+    answers = iter(["你好", "/demo", "/nope", "/compact"])
+
+    def fake_input(prompt=""):
+        try:
+            return next(answers)
+        except StopIteration:
+            raise EOFError() from None
+
+    monkeypatch.setattr("builtins.input", fake_input)
+
+    assert cli.main(["--new-session"]) == 0
+
+    out, err = capsys.readouterr()
+    assert "答" in out
+    assert "已载入技能 demo" in err
+    assert "/compact" in err and "/demo" in err   # 未知命令提示列出可用命令与技能
+    assert "没有可压缩的更早历史" in err
+
+    # 技能全文确实写入了会话（落库、可续接）
+    from avid.services.workspace_registry import sessions_root
+    from avid.session import JsonlSessionRepo, messages_for_branch
+
+    target = cli._resolve_workspace(None)
+    repo = JsonlSessionRepo(sessions_root(target), workspace=target.id)
+    try:
+        newest = repo.list()[0]
+        session = repo.open(newest)
+        try:
+            contents = [m["content"] for m in messages_for_branch(session)]
+            assert any("这是演示技能的正文" in str(c) for c in contents)
+        finally:
+            session.close()
+    finally:
+        repo.close()
+

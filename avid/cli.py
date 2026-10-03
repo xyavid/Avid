@@ -9,13 +9,14 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from .agent import commands as commands_module
 from .agent.run import Run
 from .agent.spec import RunSpec
 from .agent.state import RunState
 from .agent.tools import TOOLS, build_toolset, workspace
 from .agent.tools.mcp import McpManager
 from .providers.byok import resolve_chat
-from .providers.client import LLMError, ask
+from .providers.client import LLMError, ask, chat_completion
 from .providers.config import Config, ConfigError
 from .providers.usage import Usage, hit_ratio
 from .security.permission import (
@@ -111,9 +112,10 @@ def _announce_security(security: RunSecurity | None) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="avid",
-        description="向模型发一次提问，打印回复与 token 用量",
+        description="不带参数直接进入交互会话（/compact 压缩、/<技能名> 载入技能）；"
+        "带问题则单轮提问后退出",
     )
-    parser.add_argument("prompt", nargs="?", help="要发送给模型的问题")
+    parser.add_argument("prompt", nargs="?", help="要发送给模型的问题（缺省进入交互会话）")
     parser.add_argument(
         "--agent",
         action="store_true",
@@ -191,8 +193,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--session 与 --new-session 只能选一个")
     if args.session_name and not (args.session or args.new_session):
         parser.error("--session-name 需要与 --session 或 --new-session 一起用")
-    if not args.prompt:
-        parser.error("缺少要发送的内容")
+
     problem = full_grant_error(
         args.permission, acknowledged=args.allow_full_access, source="cli"
     )
@@ -204,6 +205,10 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as exc:
         print(f"配置错误：{exc}", file=sys.stderr)
         return 2
+
+    if not args.prompt:
+        # 无问题 = 交互会话：--session/--new-session/--workspace 继续生效。
+        return _interactive(args, config)
 
     if args.session or args.new_session:
         args.agent = True
@@ -354,6 +359,145 @@ def _run_session(args: argparse.Namespace, config, state: RunState | None = None
         file=sys.stderr,
     )
     return 0
+
+
+def _interactive(args: argparse.Namespace, config) -> int:
+    """交互会话：默认续接最近会话；/compact 压缩、/<技能名> 载入技能、其余发给模型。"""
+    logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    try:
+        target = _resolve_workspace(args.workspace)
+    except WorkspaceNotFound as exc:
+        print(f"工作区错误：{exc}", file=sys.stderr)
+        return 2
+    except (FullAccessError, PolicyConfigError) as exc:
+        print(f"安全配置错误：{exc}", file=sys.stderr)
+        return 2
+
+    repo = JsonlSessionRepo(sessions_root(target), workspace=target.id)
+    session = None
+    created = False
+    try:
+        if args.new_session:
+            session = repo.create(workspace=target.id)
+            created = True
+        elif args.session:
+            existing = _find(repo, args.session)
+            if existing is None:
+                session = repo.create(id=args.session, workspace=target.id)
+                created = True
+            else:
+                session = repo.open(existing)
+        else:
+            # 默认续接最近会话（repo.list() 按创建时间倒序）。
+            items = repo.list()
+            if items:
+                session = repo.open(items[0])
+            else:
+                session = repo.create(workspace=target.id)
+                created = True
+        if args.session_name:
+            session.set_name(args.session_name)
+        recorder = SessionRecorder(session)
+        recorder.ensure_branch()
+    except SessionError as exc:
+        print(f"会话错误：{exc}", file=sys.stderr)
+        if session is not None and not session.closed:
+            session.close()
+        repo.close()
+        return 1
+
+    print(
+        f"工作区 {target.id}（{target.root}，默认权限 {target.default_permission}）\n"
+        f"会话 {session.metadata.id}{'（新建）' if created else '（续接）'}；"
+        "输入问题回车发送，/compact 压缩，/<技能名> 载入技能，Ctrl-D 退出",
+        file=sys.stderr,
+    )
+    try:
+        while True:
+            try:
+                line = input("avid> ")
+            except (EOFError, KeyboardInterrupt):
+                print(file=sys.stderr)
+                break
+            text = line.strip()
+            if not text:
+                continue
+
+            match = None
+            if text.startswith("/"):
+                match = commands_module.match_command(
+                    text,
+                    skill_names=commands_module.skill_names(workspace_root=target.root),
+                )
+            if match is not None and match.kind == commands_module.KIND_COMMAND:
+                _compact_now(session, recorder, config, target)
+                continue
+            if match is not None and match.kind == commands_module.KIND_SKILL:
+                body = commands_module.skill_text(match.name, workspace_root=target.root)
+                if body is None:
+                    print(
+                        commands_module.help_text(workspace_root=target.root),
+                        file=sys.stderr,
+                    )
+                    continue
+                # 技能全文作为一条 user 消息写入会话：落库、可续接，下一轮模型即见。
+                recorder.on_message({"role": "user", "content": body})
+                print(f"已载入技能 {match.name}（{len(body)} 字符），已写入会话", file=sys.stderr)
+                continue
+            if match is not None and match.kind == commands_module.KIND_UNKNOWN:
+                print(commands_module.help_text(workspace_root=target.root), file=sys.stderr)
+                continue
+
+            # 普通输入：每轮一份新的 RunState（安全默认沿用旗标与工作区），MCP 随运行起停。
+            state = RunState.for_run(
+                auto_approve=args.yes,
+                permission_mode=args.permission or target.default_permission,
+                workspace_root=target.root,
+                full_ack=args.allow_full_access,
+                grant_source="cli",
+            )
+            _start_mcp(state)
+            try:
+                schemas, impls = build_toolset(state)
+                messages = [
+                    *messages_for_branch(session, recorder.branch),
+                    {"role": "user", "content": text},
+                ]
+                outcome = Run(
+                    messages,
+                    RunSpec.resolve(config=config, tools=schemas, registry=impls),
+                    state=state,
+                    on_message=recorder.on_message,
+                    on_compaction=recorder.record_compaction,
+                ).run()
+            except LLMError as exc:
+                print(f"循环中止：{exc}", file=sys.stderr)
+                continue
+            finally:
+                state.close_mcp()
+            print(outcome.text)
+            print(f"--- {outcome.reason} ---", file=sys.stderr)
+    finally:
+        if session is not None and not session.closed:
+            session.close()
+        repo.close()
+    return 0
+
+
+def _compact_now(session, recorder: SessionRecorder, config, target) -> None:
+    """/compact 的执行体：强制压缩当前会话历史并落游标（摘要调用走非流式 chat）。"""
+    report = commands_module.compact_session(
+        history=messages_for_branch(session, recorder.branch),
+        config=config,
+        summarize=chat_completion,
+        workspace_root=target.root,
+        on_compaction=recorder.record_compaction,
+    )
+    if report is None:
+        print("没有可压缩的更早历史（或摘要失败），会话保持不变", file=sys.stderr)
+    else:
+        print(f"已压缩：{report.describe()}", file=sys.stderr)
 
 
 def _session_admin(args: argparse.Namespace) -> int:
