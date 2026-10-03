@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -16,7 +17,7 @@ import pytest
 from avid import cli
 from avid.ai.client import Turn, Usage
 from avid.runtime import TAIL_HEADER
-from avid.runtime import agent_loop as real_agent_loop
+from avid.runtime import Run as RealRun
 from avid.tools import workspace
 
 
@@ -42,7 +43,7 @@ def make_turn(text="回答"):
 
 
 class Model:
-    """按需安装一个返回固定回答的假模型。"""
+    """按需安装一个返回固定回答的假模型（换掉 spec.chat，其余走真 Run）。"""
 
     def __init__(self, monkeypatch):
         self.monkeypatch = monkeypatch
@@ -50,10 +51,15 @@ class Model:
     def answer(self, *texts):
         chat = FakeChat(*[make_turn(text) for text in texts])
 
-        def run(messages, **kwargs):
-            return real_agent_loop(messages, chat=chat, **kwargs)
+        class FakeRun:
+            def __init__(self, messages, spec, **kwargs):
+                self._args = (messages, replace(spec, chat=chat), kwargs)
 
-        self.monkeypatch.setattr(cli, "agent_loop", run)
+            def run(self):
+                messages, spec, kwargs = self._args
+                return RealRun(messages, spec, **kwargs).run()
+
+        self.monkeypatch.setattr(cli, "Run", FakeRun)
         return chat
 
 
@@ -246,19 +252,22 @@ def test_permission_default_comes_from_the_workspace(sandbox, model, monkeypatch
     ws = registry.add(sandbox, permission="manual")
     seen = {}
 
-    def fake_loop(messages, **kwargs):
-        seen.update(kwargs)
-        return "答"
+    class FakeRun:
+        def __init__(self, messages, spec, **kwargs):
+            seen.update(kwargs)
 
-    monkeypatch.setattr(cli, "agent_loop", fake_loop)
+        def run(self):
+            return "答"
+
+    monkeypatch.setattr(cli, "Run", FakeRun)
 
     assert cli.main(["--agent", "--new-session", "问"]) == 0
 
     # 模式与工作区根现在都装在那份运行级规格里（state.security）：少一处转发就是
     # "界面说 manual、实际按别的模式跑"，所以断言读的是**真正传给循环的那份 state**。
-    assert seen["state"].permission_mode == "manual"
-    assert seen["state"].workspace_root == ws.root
-    assert seen["state"].security.sandbox.enforced is True
+    assert seen.get("state").permission_mode == "manual"
+    assert seen.get("state").workspace_root == ws.root
+    assert seen.get("state").security.sandbox.enforced is True
     capsys.readouterr()
 
 
@@ -266,16 +275,19 @@ def test_run_flag_overrides_the_workspace_default(sandbox, model, monkeypatch, c
     cli.WorkspaceRegistry().add(sandbox, permission="manual")
     seen = {}
 
-    def fake_loop(messages, **kwargs):
-        seen.update(kwargs)
-        return "答"
+    class FakeRun:
+        def __init__(self, messages, spec, **kwargs):
+            seen.update(kwargs)
 
-    monkeypatch.setattr(cli, "agent_loop", fake_loop)
+        def run(self):
+            return "答"
+
+    monkeypatch.setattr(cli, "Run", FakeRun)
 
     assert cli.main(["--agent", "--new-session", "--permission", "auto", "问"]) == 0
 
-    assert seen["state"].permission_mode == "auto"
-    assert seen["state"].security.approval == "classifier"
+    assert seen.get("state").permission_mode == "auto"
+    assert seen.get("state").security.approval == "classifier"
     capsys.readouterr()
 
 

@@ -23,7 +23,7 @@ from .policy.permission import (
     RunSecurity,
     full_grant_error,
 )
-from .runtime import RunState, agent_loop
+from .runtime import Run, RunSpec, RunState
 from .session import (
     JsonlSessionMetadata,
     JsonlSessionRepo,
@@ -232,13 +232,11 @@ def main(argv: list[str] | None = None) -> int:
             return _run_session(args, config, state)
         try:
             print(
-                agent_loop(
+                Run(
                     [{"role": "user", "content": args.prompt}],
-                    config=config,
+                    RunSpec.resolve(config=config, tools=schemas, registry=impls),
                     state=state,
-                    tools=schemas,
-                    registry=impls,
-                )
+                ).run()
             )
         except LLMError as exc:
             print(f"循环中止：{exc}", file=sys.stderr)
@@ -317,9 +315,9 @@ def _run_session(args: argparse.Namespace, config, state: RunState | None = None
         recorder.ensure_branch()
         messages = [*history, {"role": "user", "content": args.prompt}]
         try:
-            reply = agent_loop(
+            reply = Run(
                 messages,
-                config=config,
+                RunSpec.resolve(config=config),
                 state=state
                 or RunState.for_run(
                     auto_approve=args.yes,
@@ -329,7 +327,7 @@ def _run_session(args: argparse.Namespace, config, state: RunState | None = None
                     grant_source="cli",
                 ),
                 on_message=recorder.on_message,
-            )
+            ).run()
         except LLMError as exc:
             print(f"循环中止：{exc}", file=sys.stderr)
             return 1

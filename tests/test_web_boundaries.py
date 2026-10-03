@@ -82,23 +82,23 @@ def test_a1_svc_is_also_checked_for_web_framework_imports():
 
 
 def test_a3_loop_is_still_only_a_scheduler():
-    # runtime 合并为单文件后，调度约束作用于 loop 分区（文件内最后一个分节）。
+    # runtime 合并为单文件后，调度约束作用于 loop 分区（spec/run 分节之前）。
     runtime = (SRC / "runtime.py").read_text(encoding="utf-8")
     loop = runtime.split("# ──────────────────────────── loop", 1)[1]
+    loop = loop.split("# ──────────────────────────── spec", 1)[0]
     assert loop.count("state.hooks.trigger(") == 2, (
         "调度段只该有 UserPromptSubmit 与 Stop 两个 hook 调用点"
     )
     assert "while " not in loop, "调度段里不该出现手写 while"
 
-    # 没有第二份 agent 循环：agent_loop 的调用点固定为「三个接线点 + 自身定义」。
-    # （cli.py 与 svc/runs.py 是内核的两个平级调用方，subagent 复用同一循环。）
+    # 没有第二份 agent 循环：旧 agent_loop 的调用点固定为「svc + subagent + 自身」
+    # （cli 已切新 Run；subagent 递归复用同一循环，svc 随阶段 39 切换）。
     callers = {
         item.split(":")[0]
         for item in code_hits(files_under(suffix=".py"), r"agent_loop\(")
     }
     assert callers == {
         "avid/runtime.py",
-        "avid/cli.py",
         "avid/svc/runs.py",
         "avid/tools/subagent.py",
     }, callers
