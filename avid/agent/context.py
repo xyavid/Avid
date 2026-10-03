@@ -45,11 +45,11 @@ from pathlib import Path
 from typing import Any
 
 from ..providers.config import Config
-from ..providers.transcript import Transcript, message_chars
 from . import compaction as compact
 from . import prompt
 from .compaction import CompactReport, ContextBudget
 from .state import RunState
+from .transcript import Transcript, message_chars
 
 logger = logging.getLogger("avid.agent.context")
 

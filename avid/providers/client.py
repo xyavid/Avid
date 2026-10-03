@@ -8,7 +8,21 @@ from typing import Any
 
 import httpx
 
+from . import openai_compat as openai_compat
 from .config import Config, model_info_enabled
+
+# OpenAI-compatible public names kept here for existing tests and direct callers.
+from .openai_compat import (  # noqa: F401
+    StreamState,
+    build_payload,
+    build_request,
+    delta_reasoning,
+    delta_text,
+    merge_stream_chunk,
+    parse_reply,
+    parse_turn,
+    post,
+)
 
 # Re-exported: providers and this facade share one vocabulary of types and errors.
 from .protocol import (
@@ -20,20 +34,6 @@ from .protocol import (
 from .protocol import LLMError as LLMError
 from .protocol import PromptTooLongError as PromptTooLongError
 from .protocol import iter_sse_events as iter_sse_events
-from .providers import openai_compat as openai_compat
-
-# OpenAI-compatible public names kept here for existing tests and direct callers.
-from .providers.openai_compat import (  # noqa: F401
-    StreamState,
-    build_payload,
-    build_request,
-    delta_reasoning,
-    delta_text,
-    merge_stream_chunk,
-    parse_reply,
-    parse_turn,
-    post,
-)
 
 # Re-exported for tests and callers that take the transport names from this facade.
 from .transport import CONNECT_TIMEOUT_SECONDS as CONNECT_TIMEOUT_SECONDS
@@ -93,7 +93,7 @@ def stream_completion(
 
 
 def _impl(provider: str):
-    from .providers import impl
+    from . import impl
 
     return impl(provider)
 

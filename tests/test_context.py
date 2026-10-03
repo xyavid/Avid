@@ -9,9 +9,9 @@ from avid.agent import compaction as compact
 from avid.agent.compaction import ContextBudget
 from avid.agent.context import ContextManager
 from avid.agent.state import RunState
+from avid.agent.transcript import Transcript
 from avid.providers.client import LLMError, Turn, Usage
 from avid.providers.config import Config
-from avid.providers.transcript import Transcript
 
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
 

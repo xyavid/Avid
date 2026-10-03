@@ -25,9 +25,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 from ..providers.client import Turn
-from ..providers.transcript import Transcript
 from .events import STOP_NUDGE
 from .hooks import BLOCK
+from .transcript import Transcript
 
 if TYPE_CHECKING:
     from .state import RunState

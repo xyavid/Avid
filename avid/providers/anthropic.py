@@ -8,8 +8,8 @@ from typing import Any
 
 import httpx
 
-from ..config import Config
-from ..protocol import (
+from .config import Config
+from .protocol import (
     DeltaCallback,
     LLMError,
     PromptTooLongError,
@@ -19,7 +19,7 @@ from ..protocol import (
     prompt_too_long,
     usage_of,
 )
-from ..transport import send, send_stream, shared_client
+from .transport import send, send_stream, shared_client
 
 #: Anthropic requires max_tokens; this value is used when the caller passes none.
 DEFAULT_MAX_TOKENS = 16384

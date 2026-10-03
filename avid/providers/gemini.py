@@ -8,8 +8,8 @@ from typing import Any
 
 import httpx
 
-from ..config import Config
-from ..protocol import (
+from .config import Config
+from .protocol import (
     DEFAULT_MAX_TOKENS,
     DeltaCallback,
     LLMError,
@@ -20,7 +20,7 @@ from ..protocol import (
     prompt_too_long,
     usage_of,
 )
-from ..transport import send, send_stream, shared_client
+from .transport import send, send_stream, shared_client
 
 # finishReason to the OpenAI-compatible vocabulary; unknown values pass through lowercased.
 _FINISH_REASONS = {

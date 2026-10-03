@@ -246,6 +246,7 @@ AGENT_SECURITY_EDGES: dict[str, set[str]] = {
     "avid/agent/tools/subagent.py": {"security.permission"},
 }
 SECURITY_FREE_AGENT = (
+    "avid/agent/transcript.py",
     "avid/agent/execution.py",
     "avid/agent/spec.py",
     "avid/agent/run.py",

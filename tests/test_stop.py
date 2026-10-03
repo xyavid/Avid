@@ -22,7 +22,7 @@ from avid.agent.stop import (
     decide,
     is_blank,
 )
-from avid.providers.transcript import Transcript
+from avid.agent.transcript import Transcript
 
 USER = {"role": "user", "content": "问"}
 

@@ -15,9 +15,9 @@ from support import run_loop
 from avid.agent.context import TAIL_HEADER
 from avid.agent.hooks import BLOCK
 from avid.agent.state import RunState
+from avid.agent.transcript import Transcript
 from avid.providers.client import Turn, Usage
 from avid.providers.config import Config
-from avid.providers.transcript import Transcript
 from avid.session import (
     MemorySessionRepo,
     SessionClosedError,

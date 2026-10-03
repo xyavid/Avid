@@ -14,8 +14,8 @@ from avid.agent.context import ContextManager
 from avid.agent.state import RunState
 from avid.agent.tools import shell
 from avid.agent.tools.files import read_file, write_file
+from avid.agent.transcript import Transcript
 from avid.providers.config import Config
-from avid.providers.transcript import Transcript
 
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
 

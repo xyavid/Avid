@@ -22,9 +22,9 @@ from avid.agent.compaction import (
     trigger_chars,
 )
 from avid.agent.state import RunState
+from avid.agent.transcript import Transcript, estimate_chars, validate
 from avid.providers.client import LLMError, Turn, Usage
 from avid.providers.config import Config
-from avid.providers.transcript import Transcript, estimate_chars, validate
 
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
 

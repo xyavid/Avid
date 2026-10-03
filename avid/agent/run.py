@@ -15,7 +15,6 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from ..providers.client import PromptTooLongError, Turn
-from ..providers.transcript import Transcript
 from .context import ComposedRequest, ContextManager
 from .events import RUN_STATUS, RunObserver
 from .execution import execute_batch
@@ -23,6 +22,7 @@ from .hooks import BLOCK
 from .spec import RunSpec
 from .state import RunState
 from .stop import STOP_DENIAL_HALTED, STOP_PROMPT_BLOCKED, RunOutcome, decide
+from .transcript import Transcript
 
 if TYPE_CHECKING:
     from ..security.permission import AskUser

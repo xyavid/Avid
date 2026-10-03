@@ -26,8 +26,8 @@ from typing import Any
 
 from ..providers.client import LLMError
 from ..providers.config import Config
-from ..providers.transcript import Transcript
 from . import events, prompt
+from .transcript import Transcript
 
 logger = logging.getLogger("avid.agent.compaction")
 

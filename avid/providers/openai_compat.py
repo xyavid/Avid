@@ -9,8 +9,8 @@ from typing import Any
 
 import httpx
 
-from ..config import Config
-from ..protocol import (
+from .config import Config
+from .protocol import (
     DEFAULT_MAX_TOKENS,
     DeltaCallback,
     LLMError,
@@ -23,8 +23,8 @@ from ..protocol import (
     prompt_too_long,
     usage_of,
 )
-from ..transport import RetryPolicy, send, send_stream, shared_client
-from ..usage import Usage
+from .transport import RetryPolicy, send, send_stream, shared_client
+from .usage import Usage
 
 
 def build_payload(config: Config, prompt: str) -> dict[str, Any]:
