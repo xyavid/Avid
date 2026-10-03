@@ -265,34 +265,43 @@ def test_budget_ignores_non_tool_messages():
 # ---------- ② snip_compact ----------
 
 
-def test_snip_is_a_no_op_below_the_limit():
-    messages = [user(f"m{i}") for i in range(10)]
+def test_snip_is_a_no_op_below_the_budget():
+    messages = [user(f"m{i}" + "x" * 100) for i in range(10)]
 
-    assert snip_compact(Transcript(messages)) is None
+    assert snip_compact(Transcript(messages), max_chars=100_000) is None
     assert len(messages) == 10
 
 
-def test_snip_keeps_head_and_tail():
+def test_snip_ignores_message_count_when_chars_are_cheap():
+    """诊断 C1 回归：denial 风暴式的几十条短消息只占窗口千分之几——
+    触发看字符预算，条数堆得再多也不该把信息最密的中间裁掉。"""
     messages = [user(f"m{i}") for i in range(60)]
 
-    report = snip_compact(Transcript(messages))
+    assert snip_compact(Transcript(messages), max_chars=100_000) is None
+    assert len(messages) == 60
+
+
+def test_snip_keeps_head_and_tail():
+    messages = [user(f"m{i}-" + "x" * 500) for i in range(60)]
+
+    report = snip_compact(Transcript(messages), max_chars=1000)
 
     assert report is not None
     assert report.step == "snip_compact"
-    assert messages[0]["content"] == "m0"
-    assert messages[-1]["content"] == "m59"
+    assert messages[0]["content"].startswith("m0-")
+    assert messages[-1]["content"].startswith("m59-")
     assert len(messages) < 60
     assert any("已裁剪" in str(m.get("content")) for m in messages)
 
 
 def test_snip_never_splits_a_tool_pair():
-    messages = [user("开始")]
+    messages = [user("开始" + "x" * 200)]
     for index in range(30):
         messages.append(assistant("", [call(f"c{index}")]))
-        messages.append(tool(f"c{index}", "x" * 5))
+        messages.append(tool(f"c{index}", "x" * 200))
 
     assert len(messages) == 61
-    report = snip_compact(Transcript(messages))
+    report = snip_compact(Transcript(messages), max_chars=1000)
 
     assert report is not None
     assert validate(messages) == []
@@ -306,10 +315,10 @@ def test_snip_never_splits_a_tool_pair():
 
 def test_snip_gives_up_when_head_and_tail_cover_everything():
     """头尾保留量之和超过消息数时无中间可裁——放弃而不是硬裁。"""
-    messages = [user(f"m{i}") for i in range(11)]
+    messages = [user(f"m{i}" + "x" * 100) for i in range(11)]
 
     assert (
-        snip_compact(Transcript(messages), max_messages=10, keep_head=8, keep_tail=24)
+        snip_compact(Transcript(messages), max_chars=10, keep_head=8, keep_tail=24)
         is None
     )
     assert len(messages) == 11

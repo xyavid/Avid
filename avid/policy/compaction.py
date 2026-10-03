@@ -20,7 +20,6 @@ logger = logging.getLogger("avid.policy.compaction")
 # Thresholds are centralized here so that tuning after measurement touches only these numbers.
 TOOL_RESULT_CHAR_BUDGET = 200_000  # characters of tool results allowed before spilling the largest
 TOOL_RESULT_KEEP_RECENT = 3
-MAX_MESSAGES = 50
 SNIP_KEEP_HEAD = 8
 SNIP_KEEP_TAIL = 24
 CONTEXT_CHAR_LIMIT = 400_000  # fallback conversation budget when no window reading is available
@@ -230,15 +229,19 @@ def tool_result_budget(
 def snip_compact(
     transcript: Transcript,
     *,
-    max_messages: int = MAX_MESSAGES,
+    max_chars: int = CONTEXT_CHAR_LIMIT,
     keep_head: int = SNIP_KEEP_HEAD,
     keep_tail: int = SNIP_KEEP_TAIL,
 ) -> CompactReport | None:
-    """Drop the middle of a transcript over the message cap, cutting only at safe boundaries."""
-    before = len(transcript)
-    if before <= max_messages:
+    """Drop the middle of a transcript once its characters pass the budget, cutting only at safe boundaries.
+
+    触发看字符预算而非消息条数（9-27 诊断 C1）：denial 风暴式的短消息堆到几十条
+    也只占窗口的千分之几，条数触发会在信息最密的中间下手。切口机制不变。
+    """
+    if transcript.estimate_chars() <= max_chars:
         return None
 
+    before = len(transcript)
     head_end = min(keep_head, before)
     tail_start = max(head_end, before - keep_tail)
 

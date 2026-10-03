@@ -53,7 +53,6 @@ class ContextBudget:
 
     tool_result_chars: int = compact.TOOL_RESULT_CHAR_BUDGET
     tool_result_keep_recent: int = compact.TOOL_RESULT_KEEP_RECENT
-    max_messages: int = compact.MAX_MESSAGES
     keep_head: int = compact.SNIP_KEEP_HEAD
     keep_tail: int = compact.SNIP_KEEP_TAIL
     context_chars: int = compact.CONTEXT_CHAR_LIMIT
@@ -375,7 +374,8 @@ class ContextManager:
         run(
             compact.snip_compact(
                 self.transcript,
-                max_messages=limits.max_messages,
+                # ② 与 ③④ 共用派生预算：条数不再单独触发（诊断 C1）
+                max_chars=limits.context_chars,
                 keep_head=limits.keep_head,
                 keep_tail=limits.keep_tail,
             )

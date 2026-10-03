@@ -156,9 +156,8 @@ def test_effective_budget_derives_from_this_runs_own_reading():
 
     assert limits.context_chars == 2_214
     assert note is not None and "窗口" in note and "字符/token" in note
-    # 这份改动只碰 ③④ 的判据：① 的工具结果预算与 ② 的条数上限一个字都不动。
+    # 派生值由 ②③④ 共用（② 的 snip 触发看字符预算，诊断 C1）；① 的工具结果预算不动。
     assert limits.tool_result_chars == compact.TOOL_RESULT_CHAR_BUDGET
-    assert limits.max_messages == compact.MAX_MESSAGES
 
 
 @pytest.mark.parametrize(
