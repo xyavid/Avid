@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from avid.runtime import RUN_STARTED
+from avid.runtime.events import RUN_STARTED
 from avid.session import (
     STORAGE_VERSION,
     JsonlSessionMetadata,

@@ -6,7 +6,7 @@ from avid.policy.todo import (
     TodoList,
     todo_write,
 )
-from avid.runtime import RunState
+from avid.runtime.state import RunState
 
 
 @pytest.fixture

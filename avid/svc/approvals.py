@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..runtime import APPROVAL_REQUESTED, APPROVAL_RESOLVED, now_ms
+from ..runtime.events import APPROVAL_REQUESTED, APPROVAL_RESOLVED, now_ms
 from .errors import ApprovalConflict, ApprovalExpired, ApprovalNotFound
 
 logger = logging.getLogger("avid.svc.approvals")

@@ -1,0 +1,239 @@
+"""Run：一次运行的生命周期（prepare → 轮次循环 → 终止），单出口。
+
+与 agent_loop 的分工：这里只换表达方式（显式阶段方法 + 单一出口），
+行为逐字节一致由 tests/test_run.py 的序列一致性用例钉住；阶段 37 起
+行为演进先改这里，旧 loop.py 在阶段 40 删除（届时 BLANK_* 与
+MAX_STOP_BLOCKS 常量随终止路径迁往 stop 模块）。
+"""
+
+from __future__ import annotations
+
+import itertools
+import json
+import logging
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
+
+from ..ai.client import PromptTooLongError, Turn
+from ..ai.transcript import Transcript
+from .context_manager import ComposedRequest, ContextManager
+from .events import RUN_STATUS, STOP_NUDGE, RunObserver
+from .execution import execute_batch
+from .hooks import BLOCK
+from .loop import (
+    BLANK_ANSWER_NOTICE,
+    BLANK_ANSWER_NUDGE,
+    _blank_answer,
+    _blank_reason,
+    _submit_input,
+)
+from .spec import RunSpec
+from .state import RunState
+
+if TYPE_CHECKING:
+    from ..policy.permission import AskUser
+
+logger = logging.getLogger("avid.runtime.run")
+
+
+class Run:
+    def __init__(
+        self,
+        messages: list[dict[str, Any]],
+        spec: RunSpec,
+        *,
+        state: RunState | None = None,
+        on_message: Callable[[dict[str, Any]], Any] | None = None,
+        ask: "AskUser | None" = None,
+        on_event: RunObserver | None = None,
+    ) -> None:
+        self.messages = messages
+        self.spec = spec
+        self.state = state
+        self.on_message = on_message
+        self.ask = ask
+        self.on_event = on_event
+
+    def run(self) -> str:
+        spec = self.spec
+        state = self.state
+        if state is None:
+            state = RunState.for_run(
+                auto_approve=spec.auto_approve,
+                ask=self.ask,
+                observer=self.on_event,
+                permission_mode=spec.permission_mode,
+                ledger=spec.ledger,
+                security=spec.security,
+                workspace_root=spec.workspace_root,
+                hooks=spec.hooks,
+                context_window=spec.config.context_window,
+            )
+        # 调用方自建 state 时窗口还没探测（探测只发生在 resolve），这里回填。
+        if state.context_window is None:
+            state.context_window = spec.config.context_window
+
+        ctx = ContextManager(
+            transcript=Transcript(self.messages),
+            state=state,
+            config=spec.config,
+            instructions=spec.instructions,
+            tool_names=spec.tool_names,
+            budget=spec.budget,
+            summarize=spec.summarize or spec.chat,
+        )
+        transcript = ctx.transcript
+
+        trigger = _submit_input(transcript, state, spec.tool_names)
+        if trigger is None:
+            return ""
+        index, injected = trigger
+        self._emit(transcript.as_messages()[index])
+
+        for round_index in itertools.count(1):
+            state.round = round_index
+            state.check_cancelled()  # 取消检查点 1：轮次开始前
+            state.emit(RUN_STATUS, round=round_index, tokens=state.tokens, activity="model")
+
+            request = ctx.compose(injected=injected)
+            self._note_prompt_parts(state, request)
+            turn = self._call_model(state, ctx, request)
+
+            state.record_usage(turn.usage)
+            transcript.append(turn.message)
+            self._emit(turn.message)
+            state.emit(
+                RUN_STATUS,
+                round=round_index,
+                tokens=state.tokens,
+                activity="model",
+                finish_reason=turn.finish_reason,
+                usage=state.usage_report(),
+            )
+            logger.info(
+                "round=%d finish=%s tool_calls=%d tokens=%d",
+                round_index,
+                turn.finish_reason or "-",
+                len(turn.tool_calls),
+                turn.usage.total_tokens,
+            )
+
+            if not turn.tool_calls:
+                final = self._finish(state, transcript, turn)
+                if final is not None:
+                    return final
+                continue
+
+            state.check_cancelled()  # 取消检查点 2：工具批前
+            outcomes = execute_batch(
+                turn.tool_calls,
+                state=state,
+                registry=spec.registry,
+                round_index=round_index,
+                schemas=spec.schemas,
+                max_parallel=spec.parallel_limit,
+            )
+            for outcome in outcomes:
+                message = {
+                    "role": "tool",
+                    "tool_call_id": outcome.tool_call_id,
+                    "content": outcome.content,
+                }
+                transcript.append(message)
+                self._emit(message)
+
+            if state.denial_streak >= spec.max_consecutive_denials:
+                halt = (
+                    f"（运行已停止：连续 {state.denial_streak} 次工具调用被权限策略拒绝，"
+                    "期间没有一次通过。请向用户说明需要哪个目标或哪条命令的授权，"
+                    "再开新一轮。）"
+                )
+                logger.warning("连续 %d 次工具调用被拒，运行提前结束", state.denial_streak)
+                message = {"role": "assistant", "content": halt}
+                transcript.append(message)
+                self._emit(message)
+                return halt
+        raise AssertionError("轮次循环没有正常出口")  # pragma: no cover
+
+    def _call_model(
+        self, state: RunState, ctx: ContextManager, request: ComposedRequest
+    ) -> Turn:
+        spec = self.spec
+        try:
+            return spec.chat(
+                spec.config,
+                request.messages,
+                system=request.system,
+                tools=spec.tools,
+                max_tokens=spec.max_tokens,
+            )
+        except PromptTooLongError:
+            if state.retried:
+                raise
+            state.retried = True
+            logger.warning("compact: 模型报上下文超限，兜底压缩后重试一次")
+            ctx.reactive()
+            request = ctx.render()
+            self._note_prompt_parts(state, request)
+            return spec.chat(
+                spec.config,
+                request.messages,
+                system=request.system,
+                tools=spec.tools,
+                max_tokens=spec.max_tokens,
+            )
+
+    def _finish(self, state: RunState, transcript: Transcript, turn: Turn) -> str | None:
+        """终止路径（阶段 37 独立成模块）：返回最终文本；None = nudge 已注入，续轮。"""
+        spec = self.spec
+        stop: dict[str, Any] = {
+            "final_text": turn.text,
+            "messages": transcript.as_messages(),
+            "summary": None,
+            "nudge": None,
+            **state.snapshot(),
+        }
+        blocked = state.hooks.trigger("Stop", stop) == BLOCK
+        blank = _blank_answer(turn)
+        reason = _blank_reason(turn) if blank else ""
+        if blank and not blocked:
+            # 没有可见正文的一轮不算答复：按一次 Stop 拦截处理并补问
+            blocked = True
+            stop["nudge"] = BLANK_ANSWER_NUDGE.format(reason=reason)
+        if blocked and state.stop_blocks < spec.max_stop_blocks:
+            state.stop_blocks += 1
+            nudge = stop.get("nudge")
+            if nudge:
+                message = {"role": "user", "content": str(nudge)}
+                transcript.append(message)
+                state.emit(STOP_NUDGE, content=str(nudge), message=message)
+                self._emit(message)
+            logger.info("Stop 被拦截（第 %d 次），继续循环", state.stop_blocks)
+            return None
+        if blank:
+            notice = BLANK_ANSWER_NOTICE.format(reason=reason)
+            message = {"role": "assistant", "content": notice}
+            transcript.append(message)
+            self._emit(message)
+            logger.warning(
+                "仍然没有可见正文（%s；finish_reason=%s），以 notice 收尾",
+                reason,
+                turn.finish_reason or "-",
+            )
+            return notice
+        if blocked:
+            logger.warning("Stop 拦截次数已达上限 %d，照常退出", spec.max_stop_blocks)
+        return turn.text
+
+    def _emit(self, message: dict[str, Any]) -> None:
+        if self.on_message is not None:
+            self.on_message(message)
+
+    def _note_prompt_parts(self, state: RunState, request: ComposedRequest) -> None:
+        state.record_prompt_parts(
+            system=request.system_chars,
+            tools=len(json.dumps(self.spec.tools, ensure_ascii=False))
+            if self.spec.tools
+            else 0,
+            messages=request.messages_chars,
+        )

@@ -26,7 +26,7 @@ from support import (
     wait_for,
 )
 
-from avid.runtime import (
+from avid.runtime.events import (
     APPROVAL_REQUESTED,
     APPROVAL_RESOLVED,
     RUN_CANCELLED,

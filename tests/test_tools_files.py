@@ -45,7 +45,7 @@ def test_read_file_without_a_run_spec_refuses_escape(sandbox):
 
 def test_read_file_reads_outside_the_workspace_with_a_run_spec(sandbox):
     """边界是沙箱能力而不是工作区：读区外是沙箱已有能力（同 Codex workspace-write）。"""
-    from avid.runtime import RunState
+    from avid.runtime.state import RunState
 
     outside = sandbox.parent / "outside-read.txt"
     outside.write_text("外面\n", encoding="utf-8")
@@ -108,7 +108,7 @@ def test_write_file_refuses_escape(sandbox):
 
 def test_full_run_can_write_outside_workspace(sandbox):
     """full 关闭沙箱后，区外写不应再被旧的工作区检查拦截。"""
-    from avid.runtime import RunState
+    from avid.runtime.state import RunState
 
     target = sandbox.parent / "outside-full-write.txt"
     state = RunState.for_run(

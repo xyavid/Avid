@@ -24,7 +24,7 @@ from support import (
 )
 
 from avid.ai.client import LLMError
-from avid.runtime import (
+from avid.runtime.events import (
     APPROVAL_REQUESTED,
     ASSISTANT_DELTA,
     ASSISTANT_MESSAGE,

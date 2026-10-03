@@ -22,7 +22,7 @@ from . import workspace
 from .registry import tool
 
 if TYPE_CHECKING:  # annotation only: tools must not depend on runtime at run time
-    from ..runtime import RunState
+    from ..runtime.state import RunState
 
 DEFAULT_TIMEOUT = 30
 MAX_TIMEOUT = 300

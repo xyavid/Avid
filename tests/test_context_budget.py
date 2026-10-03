@@ -20,7 +20,8 @@ from avid.ai.config import Config
 from avid.ai.transcript import Transcript
 from avid.policy import compaction as compact
 from avid.policy.compaction import derived_context_chars
-from avid.runtime import ContextBudget, ContextManager, RunState, effective_budget
+from avid.runtime.context_manager import ContextBudget, ContextManager, effective_budget
+from avid.runtime.state import RunState
 
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
 

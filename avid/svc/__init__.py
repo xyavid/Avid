@@ -11,7 +11,7 @@ from ..ai.byok import byok_model_candidates, resolve_chat
 from ..ai.config import KNOWN_MODELS, ConfigError
 from ..policy.sandbox import default_backend_summary
 from ..policy.skills import SkillLoader, default_skills_dir
-from ..runtime import (
+from ..runtime.events import (
     EVENT_TYPES,
     STREAM_HEARTBEAT_SECONDS,
     TERMINAL_FALLBACK_SECONDS,

@@ -16,8 +16,8 @@ import pytest
 
 from avid import cli
 from avid.ai.client import Turn, Usage
-from avid.runtime import TAIL_HEADER
-from avid.runtime import Run as RealRun
+from avid.runtime.context_manager import TAIL_HEADER
+from avid.runtime.run import Run as RealRun
 from avid.tools import workspace
 
 

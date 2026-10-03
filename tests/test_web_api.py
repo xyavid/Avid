@@ -21,7 +21,7 @@ from support import (
     wait_for,
 )
 
-from avid.runtime import ASSISTANT_MESSAGE, EVENT_TYPES, TOOL_RESULT_MESSAGE, USER_MESSAGE
+from avid.runtime.events import ASSISTANT_MESSAGE, EVENT_TYPES, TOOL_RESULT_MESSAGE, USER_MESSAGE
 from avid.session import SessionRecorder
 from avid.svc import API_VERSION, FEATURES, Services
 from avid.web import create_app

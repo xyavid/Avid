@@ -7,7 +7,7 @@ import logging
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
-from ..runtime import STREAM_HEARTBEAT_SECONDS
+from ..runtime.events import STREAM_HEARTBEAT_SECONDS
 from .schemas import event_payload
 
 logger = logging.getLogger("avid.web.sse")

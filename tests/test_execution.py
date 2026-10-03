@@ -21,14 +21,14 @@ import time
 
 import pytest
 
-from avid.runtime import (
+from avid.runtime.execution import (
     CANCELLED_CONTENT,
-    RunState,
     ToolOutcome,
     execute_batch,
     execute_one,
     plan_segments,
 )
+from avid.runtime.state import RunState
 
 
 def call(name: str, arguments: str = "{}", call_id: str = "c1") -> dict:
@@ -45,7 +45,7 @@ def make_state() -> RunState:
     默认注册表里有权限 hook（`write_file`/`bash` 会发起审批并读 stdin）与截断 hook，
     那是别的用例的题目；这里要观察的是"谁和谁同时在跑"，不该被审批阻塞。
     """
-    from avid.runtime import HookRegistry
+    from avid.runtime.hooks import HookRegistry
 
     return RunState(hooks=HookRegistry())
 

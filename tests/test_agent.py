@@ -7,13 +7,9 @@ import pytest
 from avid.ai.client import Turn, Usage
 from avid.ai.config import Config
 from avid.policy.compaction import CompactReport
-from avid.runtime import (
-    BLOCK,
-    MAX_CONSECUTIVE_DENIALS,
-    agent_loop,
-    large_output_hook,
-    permission_hook,
-)
+from avid.runtime.hooks import BLOCK, large_output_hook, permission_hook
+from avid.runtime.loop import agent_loop
+from avid.runtime.state import MAX_CONSECUTIVE_DENIALS
 from avid.tools import TOOLS
 
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
@@ -653,7 +649,7 @@ def test_post_tool_use_sees_the_raw_content(hook_registry):
 
 
 def test_large_output_hook_truncates_real_tool_output(hook_registry, monkeypatch):
-    monkeypatch.setattr("avid.runtime.MAX_TOOL_OUTPUT_CHARS", 100)
+    monkeypatch.setattr("avid.runtime.hooks.MAX_TOOL_OUTPUT_CHARS", 100)
     hook_registry.register("PostToolUse", large_output_hook)
     chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
     messages = [{"role": "user", "content": "读"}]
@@ -1079,7 +1075,7 @@ def test_unknown_skill_returns_error_text_without_raising(hook_registry, tmp_pat
 def test_context_pipeline_runs_before_every_model_call(hook_registry, monkeypatch):
     rounds = []
     monkeypatch.setattr(
-        "avid.runtime.ContextManager._compact",
+        "avid.runtime.context_manager.ContextManager._compact",
         lambda self: rounds.append(self.state.round) or [],
     )
 
@@ -1111,7 +1107,7 @@ def test_prompt_too_long_triggers_one_reactive_retry(hook_registry, monkeypatch)
         return CompactReport("reactive_compact", "摘要更早的 3 条", 999, 10)
 
     monkeypatch.setattr(
-        "avid.runtime.ContextManager.reactive", fake_reactive
+        "avid.runtime.context_manager.ContextManager.reactive", fake_reactive
     )
     messages = [{"role": "user", "content": "x"}]
 
@@ -1136,7 +1132,7 @@ def test_reactive_is_not_retried_twice(hook_registry, monkeypatch):
         return CompactReport("reactive_compact", "摘要", 999, 10)
 
     monkeypatch.setattr(
-        "avid.runtime.ContextManager.reactive", fake_reactive
+        "avid.runtime.context_manager.ContextManager.reactive", fake_reactive
     )
 
     with pytest.raises(PromptTooLongError):
@@ -1164,7 +1160,7 @@ def test_reactive_retry_sends_the_compressed_history(hook_registry, monkeypatch)
         return CompactReport("reactive_compact", "摘要", 999, 10)
 
     monkeypatch.setattr(
-        "avid.runtime.ContextManager.reactive", fake_reactive
+        "avid.runtime.context_manager.ContextManager.reactive", fake_reactive
     )
 
     agent_loop([{"role": "user", "content": "x"}], config=CONFIG, chat=fake_chat)
@@ -1182,7 +1178,7 @@ def test_compaction_is_logged(hook_registry, monkeypatch, caplog):
         ),
     )
 
-    with caplog.at_level("INFO", logger="avid.runtime"):
+    with caplog.at_level("INFO", logger="avid.runtime.context_manager"):
         agent_loop(
             [{"role": "user", "content": "x"}],
             config=CONFIG,
@@ -1222,7 +1218,7 @@ def test_run_state_is_created_per_run(hook_registry, monkeypatch):
         return []
 
     monkeypatch.setattr(
-        "avid.runtime.ContextManager._compact", fake_compact
+        "avid.runtime.context_manager.ContextManager._compact", fake_compact
     )
 
     agent_loop(
@@ -1250,7 +1246,7 @@ def test_injected_budget_lowers_the_compaction_threshold(tmp_path, hook_registry
     用空 hook 注册表是为了让字符数可算——生产路径上 `large_output_hook` 会先把每个
     工具结果截到 8000 字符，实机要达到同一个阈值需要更多轮。
     """
-    from avid.runtime import ContextBudget
+    from avid.runtime.context_manager import ContextBudget
 
     for index in range(5):
         (tmp_path / f"big{index}.txt").write_text("x" * 20_000, encoding="utf-8")

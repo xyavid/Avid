@@ -23,7 +23,9 @@ from ..policy.permission import DEFAULT_MODE
 from .registry import tool
 
 if TYPE_CHECKING:  # a runtime import would be circular (state.py imports this package)
-    from ..runtime import HookRegistry, RunEvent, RunObserver, RunState
+    from ..runtime.events import RunEvent, RunObserver
+    from ..runtime.hooks import HookRegistry
+    from ..runtime.state import RunState
 
 logger = logging.getLogger("avid.subagent")
 
@@ -71,7 +73,8 @@ def run_subagent(
     another thread inherits no run state.
     """
     # A deferred import, since runtime/state.py imports this package for the tool tables.
-    from ..runtime import RunState, agent_loop
+    from ..runtime.loop import agent_loop
+    from ..runtime.state import RunState
     from . import SUB_HANDLERS, SUB_TOOLS
 
     child_state = RunState.for_run(

@@ -7,7 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..policy.permission import full_grant_error
-from ..runtime import TOOL_CALL_DENIED, TOOL_CALL_FINISHED, RunEvent
+from ..runtime.events import TOOL_CALL_DENIED, TOOL_CALL_FINISHED, RunEvent
 
 # Tool failures come back as text, so three prefixes separate business, argument and environment errors.
 _FAILED_PREFIXES = ("错误：", "参数错误：")

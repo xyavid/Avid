@@ -15,7 +15,7 @@ from ..ai.byok import resolve_chat
 from ..ai.client import LLMError, chat_completion, stream_completion
 from ..ai.config import ConfigError
 from ..policy.permission import build_run_security, full_grant_error
-from ..runtime import (
+from ..runtime.events import (
     ASSISTANT_DELTA,
     ASSISTANT_MESSAGE,
     DELTA_EVENT_TYPES,
@@ -32,12 +32,11 @@ from ..runtime import (
     TERMINAL_EVENT_TYPES,
     TOOL_RESULT_MESSAGE,
     USER_MESSAGE,
-    RunCancelled,
     RunEvent,
-    RunState,
-    agent_loop,
     now_ms,
 )
+from ..runtime.loop import RunCancelled, agent_loop
+from ..runtime.state import RunState
 from ..session import (
     DEFAULT_BRANCH,
     SessionError,

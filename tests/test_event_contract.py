@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from avid.runtime import (
+from avid.runtime.events import (
     DELTA_EVENT_TYPES,
     DURABLE_EVENT_TYPES,
     EVENT_TYPES,
@@ -58,7 +58,7 @@ def test_event_types_are_derived_from_the_literal():
     """
     from typing import get_args
 
-    from avid.runtime import EventType
+    from avid.runtime.events import EventType
 
     assert get_args(EventType) == EVENT_TYPES
     assert set(EventType.__args__) == set(EVENT_TYPES)
@@ -74,7 +74,7 @@ def test_stream_timing_constants_have_exactly_one_definition():
     import inspect
 
     from avid import svc
-    from avid.runtime import STREAM_HEARTBEAT_SECONDS, TERMINAL_FALLBACK_SECONDS
+    from avid.runtime.events import STREAM_HEARTBEAT_SECONDS, TERMINAL_FALLBACK_SECONDS
     from avid.svc.runs import RunRegistry
     from avid.web import sse
 

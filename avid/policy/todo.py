@@ -8,7 +8,7 @@ from ..tools.registry import tool
 
 # Type-only import: importing RunState at runtime would cycle back into this module.
 if TYPE_CHECKING:
-    from ..runtime import RunState
+    from ..runtime.state import RunState
 
 VALID_STATUSES = ("pending", "in_progress", "completed")
 

@@ -36,7 +36,7 @@ def test_stateful_tools_are_exactly_the_handlers_that_take_state():
     任务工具的子集断言。漏进这张表（或反过来多写一个名字）会让执行时抛 TypeError，
     再被兜底成「工具执行失败」——错误信息指向工具，根因却在注册表。
     """
-    from avid.runtime import STATEFUL_TOOLS
+    from avid.runtime.execution import STATEFUL_TOOLS
 
     takes_state = {
         name

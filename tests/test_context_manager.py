@@ -9,7 +9,8 @@ import pytest
 from avid.ai.config import Config
 from avid.ai.transcript import Transcript
 from avid.policy.skills import SkillLoader
-from avid.runtime import SYSTEM, TAIL, Block, ContextBudget, ContextManager, RunState
+from avid.runtime.context_manager import SYSTEM, TAIL, Block, ContextBudget, ContextManager
+from avid.runtime.state import RunState
 
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
 
