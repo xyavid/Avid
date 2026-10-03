@@ -89,15 +89,14 @@ def test_a3_loop_is_still_only_a_scheduler():
     )
     assert "while " not in loop, "循环里不该出现手写 while"
 
-    # 没有第二份 agent 循环：旧 agent_loop 的调用点固定为「svc + subagent + 自身」
-    # （cli 已切新 Run；subagent 递归复用同一循环，svc 随阶段 39 切换）。
+    # 没有第二份 agent 循环：旧 agent_loop 的调用点只剩「subagent + 自身」
+    # （cli 与 svc 都已切新 Run；subagent 在阶段 41 切换后 loop.py 整体删除）。
     callers = {
         item.split(":")[0]
         for item in code_hits(files_under(suffix=".py"), r"agent_loop\(")
     }
     assert callers == {
         "avid/runtime/loop.py",
-        "avid/svc/runs.py",
         "avid/tools/subagent.py",
     }, callers
 

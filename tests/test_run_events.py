@@ -704,6 +704,8 @@ def test_terminal_event_and_rest_view_share_the_final_snapshot(sandbox):
 
     finished = next(e for e in events_list if e.type == RUN_FINISHED)
     assert finished.data["usage"] == record.usage
+    # 出口原因（阶段 40）：每个出口都叫得出名字（StopReason）
+    assert finished.data["reason"] == "final_text"
     assert record.usage["context"]["tokens"] == 1
     # 累计量仍是运行账单（两轮 × total 3），与"占用"不是一回事。
     assert record.tokens == 6

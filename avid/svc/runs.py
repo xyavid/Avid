@@ -35,7 +35,9 @@ from ..runtime.events import (
     RunEvent,
     now_ms,
 )
-from ..runtime.loop import RunCancelled, agent_loop
+from ..runtime.loop import RunCancelled
+from ..runtime.run import Run
+from ..runtime.spec import RunSpec
 from ..runtime.state import RunState
 from ..session import (
     DEFAULT_BRANCH,
@@ -749,20 +751,23 @@ class RunRegistry:
             # No injected chat means the production path: main rounds stream, summaries do not.
             streaming = chat is None
             mcp_schemas, mcp_impls = build_toolset(state)
-            text = agent_loop(
-                messages,
+            spec = RunSpec.resolve(
                 config=config,
                 chat=chat if chat is not None else self.streaming_chat(record),
                 summarize=chat_completion if streaming else None,
-                auto_approve=auto_approve,
-                on_message=self._message_sink(record, recorder),
-                state=state,
                 # An injected registry (tests, benchmarks) keeps its old meaning: no MCP tools.
                 tools=TOOLS if self.tool_registry is not None else mcp_schemas,
                 registry=self.tool_registry if self.tool_registry is not None else mcp_impls,
             )
-            record.text = text
-            self._finish(record, RUN_FINISHED, text=text)
+            outcome = Run(
+                messages,
+                spec,
+                state=state,
+                on_message=self._message_sink(record, recorder),
+                on_compaction=recorder.record_compaction,
+            ).run()
+            record.text = outcome.text
+            self._finish(record, RUN_FINISHED, text=outcome.text, reason=outcome.reason)
         except RunCancelled as exc:
             record.cancel_reason = str(exc) or "cancelled"
             self._finish(record, RUN_CANCELLED, reason=record.cancel_reason)
