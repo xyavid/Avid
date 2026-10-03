@@ -40,6 +40,9 @@ class Run:
         on_message: Callable[[dict[str, Any]], Any] | None = None,
         ask: "AskUser | None" = None,
         on_event: RunObserver | None = None,
+        # ④/⑤ 替换历史后的落盘钩子（summary 消息, keep 条数）；CLI 接会话游标，
+        # 不接则压缩只在内存生效、下个运行重新压缩（诊断 C2 的旧行为）。
+        on_compaction: Callable[[dict[str, Any], int], None] | None = None,
     ) -> None:
         self.messages = messages
         self.spec = spec
@@ -47,6 +50,7 @@ class Run:
         self.on_message = on_message
         self.ask = ask
         self.on_event = on_event
+        self.on_compaction = on_compaction
 
     def run(self) -> RunOutcome:
         spec = self.spec
@@ -75,6 +79,7 @@ class Run:
             tool_names=spec.tool_names,
             budget=spec.budget,
             summarize=spec.summarize or spec.chat,
+            on_compaction=self.on_compaction,
         )
         transcript = ctx.transcript
 

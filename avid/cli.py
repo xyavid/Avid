@@ -329,6 +329,7 @@ def _run_session(args: argparse.Namespace, config, state: RunState | None = None
                     grant_source="cli",
                 ),
                 on_message=recorder.on_message,
+                on_compaction=recorder.record_compaction,
             ).run().text
         except LLMError as exc:
             print(f"循环中止：{exc}", file=sys.stderr)

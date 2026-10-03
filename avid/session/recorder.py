@@ -7,7 +7,7 @@ from typing import Any
 
 from .session import SessionBranch, StorageBackedSession
 from .types import MESSAGE_ENTRY, NOTICE_ENTRY
-from .values import DEFAULT_BRANCH, branch_usage
+from .values import DEFAULT_BRANCH, branch_compaction, branch_usage
 
 logger = logging.getLogger("avid.session.recorder")
 
@@ -52,3 +52,24 @@ class SessionRecorder:
         # Kept out of the entry projection, so usage never becomes history and needs no type exception there.
         self.session.set_value(branch_usage(self.branch), payload)
         logger.debug("会话落库 usage：分支 %s", self.branch)
+
+    def record_compaction(self, summary: dict[str, Any], keep: int = 0) -> None:
+        """Per-branch compaction cursor: projection replaces history up to the tip with the summary (+ kept tail).
+
+        锚点是写入时的分支 tip seq——条目只追加不可变，所以 snip/micro 这类只改内存的
+        步骤不影响它；摘要消息自带落盘路径，投影端不需要再找原文。
+        """
+        branch = self.ensure_branch()
+        tip = branch.get_tip_id()
+        if tip is None:
+            return
+        entry = self.session.get_entry(tip)
+        if entry is None:
+            return
+        self.session.set_value(
+            branch_compaction(self.branch),
+            {"through_seq": entry.seq, "summary": summary, "keep": keep},
+        )
+        logger.info(
+            "会话落盘压缩游标：分支 %s through_seq=%d keep=%d", self.branch, entry.seq, keep
+        )

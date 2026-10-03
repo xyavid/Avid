@@ -502,3 +502,79 @@ def test_summary_call_is_not_capped(spill_root):
 
     assert len(chat.requests) == 1
     assert chat.requests[0].get("max_tokens") is None
+
+
+# ---------- ④/⑤ 的落盘钩子（阶段 39） ----------
+
+
+def _big_text_transcript():
+    return Transcript(
+        [user("x" * 400), assistant("y" * 400), user("z" * 400), assistant("w" * 400)]
+    )
+
+
+def test_history_compaction_calls_the_persistence_hook():
+    """④ 的摘要替换历史时，钩子拿到（摘要消息, keep=0）——投影拿它做游标。"""
+    covered: list = []
+    from avid.runtime.context_manager import ContextBudget, ContextManager
+    from avid.runtime.state import RunState
+
+    manager = ContextManager(
+        transcript=_big_text_transcript(),
+        state=RunState(),
+        config=CONFIG,
+        summarize=FakeChat(),
+        budget=ContextBudget(context_chars=100, from_window=False),
+        on_compaction=lambda summary, keep: covered.append((summary, keep)),
+    )
+    result = manager.compose()
+
+    assert result.changed
+    assert len(covered) == 1
+    summary, keep = covered[0]
+    assert summary["role"] == "user" and "[历史摘要]" in summary["content"]
+    assert keep == 0
+
+
+def test_reactive_compaction_calls_the_persistence_hook_with_its_keep():
+    covered: list = []
+    from avid.runtime.context_manager import ContextBudget, ContextManager
+    from avid.runtime.state import RunState
+
+    manager = ContextManager(
+        transcript=_big_text_transcript(),
+        state=RunState(),
+        config=CONFIG,
+        summarize=FakeChat(),
+        budget=ContextBudget(context_chars=100, from_window=False),
+        on_compaction=lambda summary, keep: covered.append((summary, keep)),
+    )
+    manager.compose()
+    covered.clear()
+    # ④ 已把历史换成摘要；补足超过 keep_recent(5) 的消息，reactive 才有「更早历史」
+    for i in range(7):
+        manager.transcript.append(user(f"n{i}" + "x" * 300))
+        manager.transcript.append(assistant("m" * 300))
+
+    manager.reactive()
+
+    assert len(covered) == 1
+    summary, keep = covered[0]
+    assert "[历史摘要]" in summary["content"]
+    assert keep == 5  # REACTIVE_KEEP_RECENT
+
+
+def test_persistence_hook_is_silent_when_nothing_compacts():
+    covered: list = []
+    from avid.runtime.context_manager import ContextBudget, ContextManager
+    from avid.runtime.state import RunState
+
+    ContextManager(
+        transcript=Transcript([user("hi")]),
+        state=RunState(),
+        config=CONFIG,
+        budget=ContextBudget(context_chars=100_000, from_window=False),
+        on_compaction=lambda summary, keep: covered.append((summary, keep)),
+    ).compose()
+
+    assert covered == []

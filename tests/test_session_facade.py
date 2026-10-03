@@ -43,8 +43,10 @@ EXPECTED = {
     # 值
     "DEFAULT_BRANCH",
     "USAGE_NS",
+    "COMPACTION_NS",
     "branch_tip",
     "branch_usage",
+    "branch_compaction",
     "entry_label",
     "session_name",
     "set_value",

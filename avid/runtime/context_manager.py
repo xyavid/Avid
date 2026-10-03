@@ -151,6 +151,7 @@ class ContextManager:
         tool_names: Iterable[str] = (),
         budget: ContextBudget | None = None,
         summarize: Any = None,
+        on_compaction: Callable[[dict[str, Any], int], None] | None = None,
     ) -> None:
         self.transcript = transcript
         self.state = state
@@ -163,6 +164,9 @@ class ContextManager:
         self.tool_names = list(tool_names)
         self.budget = budget or ContextBudget()
         self.summarize = summarize
+        # ④/⑤ 替换历史后回调（summary 消息, keep 条数）：调用方借此把游标落盘，
+        # 让下一次运行的投影直接从摘要形态开始（诊断 C2）。
+        self.on_compaction = on_compaction
         self._sources: dict[str, Callable[[], Block | None]] = {}
         # The system prompt is frozen on the first compose so the provider prefix cache stays valid.
         self._system: str | None = None
@@ -407,6 +411,8 @@ class ContextManager:
                     workdir=workdir,
                     tag=self.state.run_tag,
                 )
+                if report is not None and self.on_compaction is not None:
+                    self.on_compaction(self.transcript.as_messages()[0], 0)
                 if report is not None:
                     # Only this branch sets the flag, which is what bounds step four to one run.
                     self.state.compacted = True
@@ -428,4 +434,8 @@ class ContextManager:
         )
         # The caller bounds this to one attempt per run through state.retried.
         announce(report, self.state)
+        if report is not None and self.on_compaction is not None:
+            self.on_compaction(
+                self.transcript.as_messages()[0], compact.REACTIVE_KEEP_RECENT
+            )
         return report

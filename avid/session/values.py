@@ -12,6 +12,8 @@ ENTRY_LABEL_NS = "avid.entry.label"
 BRANCH_TIP_NS = "avid.branch.tip"
 # Run-usage ledger, one address per branch: usage lives only inside a run, so it is persisted to survive a reload.
 USAGE_NS = "avid.usage"
+# Compaction cursor, one address per branch: records that history up to a tip seq was replaced by a summary.
+COMPACTION_NS = "avid.compaction"
 
 # The implicit default branch; a session with no branch value yet is read as if it were on main.
 DEFAULT_BRANCH = "main"
@@ -51,6 +53,11 @@ def branch_tip(branch: str) -> ValueAddress:
 def branch_usage(branch: str) -> ValueAddress:
     """Usage is booked per branch, not per session, because each chain carries a different context."""
     return ValueAddress(USAGE_NS, branch)
+
+
+def branch_compaction(branch: str) -> ValueAddress:
+    """The compaction cursor is per branch for the same reason: each chain compacts independently."""
+    return ValueAddress(COMPACTION_NS, branch)
 
 
 def set_value(address: ValueAddress, next_value: Any) -> ValueSetWrite:

@@ -54,6 +54,68 @@ def tool(call_id="c1", content="结果"):
     return {"role": "tool", "tool_call_id": call_id, "content": content}
 
 
+# ---------------- 压缩游标（诊断 C2：splice 只改内存，投影时应用） ----------------
+
+
+def test_compaction_record_replaces_covered_prefix_with_summary():
+    repo, session = make_session()
+    recorder = SessionRecorder(session)
+    for i in range(10):
+        recorder.on_message(user(f"m{i}"))
+    summary = {"role": "user", "content": "[历史摘要] 之前的对话要点"}
+
+    recorder.record_compaction(summary, keep=0)
+
+    assert messages_for_branch(session) == [summary]
+
+
+def test_compaction_record_keeps_the_requested_tail():
+    repo, session = make_session()
+    recorder = SessionRecorder(session)
+    for i in range(10):
+        recorder.on_message(user(f"m{i}"))
+
+    recorder.record_compaction({"role": "user", "content": "[历史摘要]"}, keep=3)
+
+    messages = messages_for_branch(session)
+    assert messages[0]["content"] == "[历史摘要]"
+    assert [m["content"] for m in messages[1:]] == ["m7", "m8", "m9"]
+
+
+def test_messages_after_the_cursor_project_normally():
+    repo, session = make_session()
+    recorder = SessionRecorder(session)
+    for i in range(10):
+        recorder.on_message(user(f"m{i}"))
+    recorder.record_compaction({"role": "user", "content": "[历史摘要]"}, keep=0)
+    recorder.on_message(user("压缩之后的新消息"))
+
+    messages = messages_for_branch(session)
+    assert [m["content"] for m in messages] == ["[历史摘要]", "压缩之后的新消息"]
+
+
+def test_projection_without_a_record_is_unchanged():
+    repo, session = make_session()
+    recorder = SessionRecorder(session)
+    for i in range(3):
+        recorder.on_message(user(f"m{i}"))
+
+    assert [m["content"] for m in messages_for_branch(session)] == ["m0", "m1", "m2"]
+
+
+def test_a_second_compaction_record_overwrites_the_first():
+    repo, session = make_session()
+    recorder = SessionRecorder(session)
+    for i in range(10):
+        recorder.on_message(user(f"m{i}"))
+    recorder.record_compaction({"role": "user", "content": "[历史摘要] 一"}, keep=0)
+    recorder.on_message(user("又干了点活"))
+    recorder.record_compaction({"role": "user", "content": "[历史摘要] 二"}, keep=1)
+
+    messages = messages_for_branch(session)
+    assert [m["content"] for m in messages] == ["[历史摘要] 二", "又干了点活"]
+
+
 # ---------------- 投影 ----------------
 
 

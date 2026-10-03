@@ -17,6 +17,7 @@ from avid.ai.transcript import Transcript
 from avid.runtime.context_manager import TAIL_HEADER
 from avid.runtime.hooks import BLOCK
 from avid.runtime.loop import agent_loop
+from avid.runtime.state import RunState
 from avid.session import (
     MemorySessionRepo,
     SessionClosedError,
@@ -217,3 +218,63 @@ def test_history_is_not_re_recorded(hook_registry, session):
         "新的",
         "新答",
     ]
+
+
+def test_a_summarized_history_is_not_summarized_again_next_run(hook_registry, session, tmp_path):
+    """诊断 C2 端到端：④ 的摘要经投影成为下次运行的历史——摘要调用只花一次。
+
+    修复前：splice 只改内存，第二个运行从全量历史重新投影，字符再度超限，
+    ④ 再花一次摘要调用（每次运行一遍）。
+    """
+
+    from avid.runtime.context_manager import ContextBudget
+    from avid.runtime.run import Run
+    from avid.runtime.spec import RunSpec
+
+    summarize_sizes: list[int] = []
+
+    class Summarizer:
+        def __call__(self, config, messages, **kwargs):
+            summarize_sizes.append(len(messages))
+            return make_turn("[历史摘要] 之前的要点")
+
+    summarizer = Summarizer()
+    recorder = SessionRecorder(session)
+    # 摘要消息自带 ~160 字符样板（完整记录路径），预算须与触发消息量级分开
+    budget = ContextBudget(context_chars=3000, from_window=False)
+
+    def spec_for(chat):
+        return RunSpec.resolve(
+            config=CONFIG,
+            chat=chat,
+            summarize=summarizer,
+            budget=budget,
+        )
+
+    # 运行一：触发消息就超预算 → ④ 摘要替换历史，游标落会话值
+    run1 = Run(
+        [{"role": "user", "content": "x" * 5000}],
+        spec_for(FakeChat(make_turn("干完了一"))),
+        state=RunState.for_run(workspace_root=str(tmp_path)),
+        on_message=recorder.on_message,
+        on_compaction=recorder.record_compaction,
+    )
+    assert run1.run().text == "干完了一"
+    assert len(summarize_sizes) == 1
+
+    # 投影即摘要形态
+    projected = messages_for_branch(session, recorder.branch)
+    assert projected[0]["content"].startswith("[历史摘要]")
+
+    # 运行二：从摘要形态续接，字符不再超预算 → 摘要调用不重复
+    history = messages_for_branch(session, recorder.branch)
+    run2 = Run(
+        [*history, {"role": "user", "content": "继续"}],
+        spec_for(FakeChat(make_turn("接着干完二"))),
+        state=RunState.for_run(workspace_root=str(tmp_path)),
+        on_message=recorder.on_message,
+        on_compaction=recorder.record_compaction,
+    )
+    assert run2.run().text == "接着干完二"
+    assert len(summarize_sizes) == 1  # 修复前这里会变成 2
+

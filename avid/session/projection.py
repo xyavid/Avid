@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from .types import MESSAGE_ENTRY, NOTICE_ENTRY, BranchScan, Entry
+from .values import COMPACTION_NS, ValueAddress
 
 __all__ = ["messages_for_branch", "entries_to_messages", "repair_incomplete_batches"]
 
@@ -14,12 +15,48 @@ _TRANSCRIPT_TYPES = (MESSAGE_ENTRY, NOTICE_ENTRY)
 
 
 def messages_for_branch(session: Any, branch: str = "main") -> list[dict[str, Any]]:
-    """Every message on a branch, oldest first; an unknown branch yields an empty list."""
+    """Every message on a branch, oldest first; an unknown branch yields an empty list.
+
+    存在压缩游标时（诊断 C2），被游标覆盖的前缀由摘要（＋保留尾）替代——
+    上一次运行花的摘要调用通过投影延续到之后的每个运行，不再重花。
+    """
     found = session.branch(branch)
     if found is None:
         return []
     entries = found.find_entries(BranchScan(order="oldestFirst"))
+    record = session.get_value(ValueAddress(COMPACTION_NS, branch))
+    if record is not None and isinstance(record.value, dict):
+        return _project_with_compaction(record.value, entries)
     return entries_to_messages(entries)
+
+
+def _project_with_compaction(
+    record: dict[str, Any], entries: Sequence[Entry]
+) -> list[dict[str, Any]]:
+    """游标锚定 entry seq（只追加、不可变），覆盖段由摘要＋保留尾替代。"""
+    try:
+        through = int(record.get("through_seq") or 0)
+        keep = int(record.get("keep") or 0)
+    except (TypeError, ValueError):
+        return entries_to_messages(entries)
+    summary = record.get("summary")
+    if through <= 0 or not isinstance(summary, dict):
+        return entries_to_messages(entries)
+
+    covered = [entry for entry in entries if entry.seq <= through]
+    if not covered:
+        return entries_to_messages(entries)
+    rest = [entry for entry in entries if entry.seq > through]
+
+    def transcript(items: list[Entry]) -> list[dict[str, Any]]:
+        return [
+            dict(entry.message)
+            for entry in items
+            if entry.type in _TRANSCRIPT_TYPES and entry.message is not None
+        ]
+
+    kept = transcript(covered)[-keep:] if keep > 0 else []
+    return repair_incomplete_batches([dict(summary)] + kept + transcript(rest))
 
 
 def entries_to_messages(entries: Sequence[Entry]) -> list[dict[str, Any]]:

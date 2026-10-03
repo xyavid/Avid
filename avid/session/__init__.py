@@ -43,8 +43,10 @@ from .types import (
     SessionStats,
 )
 from .values import (
+    COMPACTION_NS,
     DEFAULT_BRANCH,
     USAGE_NS,
+    branch_compaction,
     branch_tip,
     branch_usage,
     entry_label,
@@ -84,6 +86,8 @@ __all__ = [
     # Value addresses.
     "DEFAULT_BRANCH",
     "USAGE_NS",
+    "COMPACTION_NS",
+    "branch_compaction",
     "branch_tip",
     "branch_usage",
     "entry_label",
