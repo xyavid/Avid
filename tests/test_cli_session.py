@@ -18,6 +18,7 @@ from avid import cli
 from avid.ai.client import Turn, Usage
 from avid.runtime.context_manager import TAIL_HEADER
 from avid.runtime.run import Run as RealRun
+from avid.runtime.stop import STOP_FINAL_TEXT, RunOutcome
 from avid.tools import workspace
 
 
@@ -257,7 +258,7 @@ def test_permission_default_comes_from_the_workspace(sandbox, model, monkeypatch
             seen.update(kwargs)
 
         def run(self):
-            return "答"
+            return RunOutcome(text="答", reason=STOP_FINAL_TEXT)
 
     monkeypatch.setattr(cli, "Run", FakeRun)
 
@@ -280,7 +281,7 @@ def test_run_flag_overrides_the_workspace_default(sandbox, model, monkeypatch, c
             seen.update(kwargs)
 
         def run(self):
-            return "答"
+            return RunOutcome(text="答", reason=STOP_FINAL_TEXT)
 
     monkeypatch.setattr(cli, "Run", FakeRun)
 

@@ -238,7 +238,7 @@ def main(argv: list[str] | None = None) -> int:
                     [{"role": "user", "content": args.prompt}],
                     RunSpec.resolve(config=config, tools=schemas, registry=impls),
                     state=state,
-                ).run()
+                ).run().text
             )
         except LLMError as exc:
             print(f"循环中止：{exc}", file=sys.stderr)
@@ -329,7 +329,7 @@ def _run_session(args: argparse.Namespace, config, state: RunState | None = None
                     grant_source="cli",
                 ),
                 on_message=recorder.on_message,
-            ).run()
+            ).run().text
         except LLMError as exc:
             print(f"循环中止：{exc}", file=sys.stderr)
             return 1

@@ -22,7 +22,7 @@ from .execution import execute_batch
 from .loop import _submit_input
 from .spec import RunSpec
 from .state import RunState
-from .stop import decide
+from .stop import STOP_DENIAL_HALTED, STOP_PROMPT_BLOCKED, RunOutcome, decide
 
 if TYPE_CHECKING:
     from ..policy.permission import AskUser
@@ -48,7 +48,7 @@ class Run:
         self.ask = ask
         self.on_event = on_event
 
-    def run(self) -> str:
+    def run(self) -> RunOutcome:
         spec = self.spec
         state = self.state
         if state is None:
@@ -80,7 +80,8 @@ class Run:
 
         trigger = _submit_input(transcript, state, spec.tool_names)
         if trigger is None:
-            return ""
+            # UserPromptSubmit 拦截：运行没开始就结束，但没有模型轮次可补问
+            return RunOutcome(text="", reason=STOP_PROMPT_BLOCKED)
         index, injected = trigger
         self._emit(transcript.as_messages()[index])
 
@@ -146,7 +147,7 @@ class Run:
                 message = {"role": "assistant", "content": halt}
                 transcript.append(message)
                 self._emit(message)
-                return halt
+                return RunOutcome(text=halt, reason=STOP_DENIAL_HALTED)
         raise AssertionError("轮次循环没有正常出口")  # pragma: no cover
 
     def _call_model(
@@ -177,16 +178,15 @@ class Run:
                 max_tokens=spec.max_tokens,
             )
 
-    def _finish(self, state: RunState, transcript: Transcript, turn: Turn) -> str | None:
+    def _finish(self, state: RunState, transcript: Transcript, turn: Turn) -> RunOutcome | None:
         """终止路径委托给 stop 模块；None = 已补问，续轮。"""
-        outcome = decide(
+        return decide(
             state,
             transcript,
             turn,
             max_blocks=self.spec.max_stop_blocks,
             emitted=self._emit,
         )
-        return outcome.final
 
     def _emit(self, message: dict[str, Any]) -> None:
         if self.on_message is not None:

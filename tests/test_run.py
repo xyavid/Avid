@@ -20,6 +20,7 @@ from avid.runtime.loop import RunCancelled, agent_loop
 from avid.runtime.run import Run
 from avid.runtime.spec import RunSpec
 from avid.runtime.state import RunState
+from avid.runtime.stop import STOP_BLANK_NOTICE, STOP_FINAL_TEXT
 from avid.tools import TOOL_IMPLS, TOOLS
 
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
@@ -44,20 +45,22 @@ def drive(*turns, registry=None, messages=None):
         on_message=emitted_old.append,
     )
     spec = RunSpec.resolve(config=CONFIG, chat=chat_new, registry=registry or {})
-    text_new = Run(messages_new, spec, on_message=emitted_new.append).run()
+    outcome_new = Run(messages_new, spec, on_message=emitted_new.append).run()
 
-    assert text_old == text_new
+    assert text_old == outcome_new.text
     assert messages_old == messages_new
     assert emitted_old == emitted_new
     assert chat_old.requests == chat_new.requests
-    return text_new
+    return outcome_new
 
 
 # ---------------- 一致性用例 ----------------
 
 
 def test_single_round_answer_is_identical():
-    assert drive(make_turn("答复文本")) == "答复文本"
+    outcome = drive(make_turn("答复文本"))
+    assert outcome.text == "答复文本"
+    assert outcome.reason == STOP_FINAL_TEXT
 
 
 def test_two_round_tool_use_is_identical():
@@ -67,40 +70,41 @@ def test_two_round_tool_use_is_identical():
         seen.append(arguments)
         return "内容"
 
-    text = drive(
+    outcome = drive(
         make_turn("", [tool_call("read_file")]),
         make_turn("读到了"),
         registry={"read_file": read_file},
     )
-    assert text == "读到了"
+    assert outcome.text == "读到了"
     # registry 在旧/新两条流程间共享，handler 各执行一次
     assert seen == [{"path": "a.txt"}] * 2
 
 
 def test_unknown_tool_becomes_tool_result_identically():
-    text = drive(
+    outcome = drive(
         make_turn("", [tool_call("run_bash", call_id="c1")]),
         make_turn("好"),
         registry={},
     )
-    assert text == "好"
+    assert outcome.text == "好"
 
 
 def test_tool_failure_becomes_text_not_exception_identically():
     def boom(arguments, **kwargs):
         raise RuntimeError("炸了")
 
-    text = drive(
+    outcome = drive(
         make_turn("", [tool_call("read_file")]),
         make_turn("继续"),
         registry={"read_file": boom},
     )
-    assert text == "继续"
+    assert outcome.text == "继续"
 
 
 def test_blank_answer_nudge_and_notice_are_identical():
-    text = drive(make_turn(""), make_turn(""))
-    assert text.startswith("（本次运行没有产生可见答复")
+    outcome = drive(make_turn(""), make_turn(""))
+    assert outcome.text.startswith("（本次运行没有产生可见答复")
+    assert outcome.reason == STOP_BLANK_NOTICE
 
 
 # ---------------- RunSpec.resolve 行为钉 ----------------
@@ -141,7 +145,7 @@ def test_prebuilt_hooks_instance_flow_through():
 def test_run_accepts_prebuilt_state_and_records_round():
     state = RunState.for_run()
     spec = RunSpec.resolve(config=CONFIG, chat=ScriptedChat(make_turn("好的")))
-    assert Run([dict(USER)], spec, state=state).run() == "好的"
+    assert Run([dict(USER)], spec, state=state).run().text == "好的"
     assert state.round == 1
 
 

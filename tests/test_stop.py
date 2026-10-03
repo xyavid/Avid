@@ -13,7 +13,16 @@ from avid.ai.transcript import Transcript
 from avid.runtime.events import STOP_NUDGE
 from avid.runtime.hooks import BLOCK, HookRegistry
 from avid.runtime.state import RunState
-from avid.runtime.stop import MAX_STOP_BLOCKS, StopOutcome, blank_reason, decide, is_blank
+from avid.runtime.stop import (
+    MAX_STOP_BLOCKS,
+    STOP_BLANK_NOTICE,
+    STOP_FINAL_TEXT,
+    STOP_HOOK_BUDGET_EXIT,
+    RunOutcome,
+    blank_reason,
+    decide,
+    is_blank,
+)
 
 USER = {"role": "user", "content": "问"}
 
@@ -40,7 +49,7 @@ def test_visible_answer_returns_final_without_nudge():
     transcript = Transcript([dict(USER)])
     emitted: list[dict] = []
     outcome = append_and_decide(state, transcript, make_turn("答复"), emitted=emitted)
-    assert outcome == StopOutcome(final="答复")
+    assert outcome == RunOutcome(text="答复", reason=STOP_FINAL_TEXT)
     assert state.stop_blocks == 0
     assert emitted == []
 
@@ -52,7 +61,7 @@ def test_blank_answer_triggers_one_nudge_then_closes_with_notice():
     emitted: list[dict] = []
 
     first = append_and_decide(state, transcript, make_turn(""), emitted=emitted)
-    assert first.final is None
+    assert first is None
     assert state.stop_blocks == 1
     assert any(e.type == STOP_NUDGE for e in events)
     nudges = [
@@ -65,8 +74,8 @@ def test_blank_answer_triggers_one_nudge_then_closes_with_notice():
 
     # 预算用尽：再次空答复以可见 notice 收尾（不静默）
     second = append_and_decide(state, transcript, make_turn(""), emitted=emitted)
-    assert second.final is not None
-    assert second.final.startswith("（本次运行没有产生可见答复")
+    assert second.reason == STOP_BLANK_NOTICE
+    assert second.text.startswith("（本次运行没有产生可见答复")
     assert transcript.as_messages()[-1]["role"] == "assistant"
     assert len(emitted) == 2
 
@@ -82,7 +91,7 @@ def test_stop_hook_can_hold_the_exit_open_with_its_own_nudge():
     state = make_state(hooks=registry)
     transcript = Transcript([dict(USER)])
     outcome = append_and_decide(state, transcript, make_turn("有正文但被拦"))
-    assert outcome.final is None
+    assert outcome is None
     assert transcript.as_messages()[-1] == {"role": "user", "content": "请总结一下"}
 
 
@@ -97,7 +106,7 @@ def test_hook_nudge_wins_when_it_blocks_a_blank_round():
     state = make_state(hooks=registry)
     transcript = Transcript([dict(USER)])
     outcome = append_and_decide(state, transcript, make_turn(""))
-    assert outcome.final is None
+    assert outcome is None
     assert transcript.as_messages()[-1] == {"role": "user", "content": "hook 补问"}
 
 
@@ -111,9 +120,9 @@ def test_block_budget_exhausted_returns_text_and_stops_counting():
     state = make_state(hooks=registry)
     transcript = Transcript([dict(USER)])
     first = append_and_decide(state, transcript, make_turn("一"))
-    assert first.final is None
+    assert first is None
     second = append_and_decide(state, transcript, make_turn("二"))
-    assert second.final == "二"
+    assert second == RunOutcome(text="二", reason=STOP_HOOK_BUDGET_EXIT)
     assert state.stop_blocks == 1  # 预算用尽后不再累加
 
 
