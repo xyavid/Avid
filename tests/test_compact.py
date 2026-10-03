@@ -203,7 +203,7 @@ def budget(**overrides):
     return ContextBudget(**defaults)
 
 
-def test_below_trigger_nothing_happens():
+def test_below_trigger_nothing_happens(spill_root):
     transcript = Transcript(rounds(12))
     chat = FakeChat()
 
@@ -221,7 +221,7 @@ def test_below_trigger_nothing_happens():
     assert len(transcript) == len(rounds(12))
 
 
-def test_above_trigger_summarizes_older_history_and_keeps_recent_turns():
+def test_above_trigger_summarizes_older_history_and_keeps_recent_turns(spill_root):
     transcript = Transcript(rounds(12))
     before_chars = transcript.estimate_chars()
     chat = FakeChat("之前做了 A，结论 B")
@@ -245,7 +245,7 @@ def test_above_trigger_summarizes_older_history_and_keeps_recent_turns():
     assert transcript.estimate_chars() < before_chars
 
 
-def test_summarized_history_is_still_a_valid_transcript():
+def test_summarized_history_is_still_a_valid_transcript(spill_root):
     transcript = Transcript(rounds(12))
 
     run_compaction(
@@ -259,7 +259,7 @@ def test_summarized_history_is_still_a_valid_transcript():
     assert validate(transcript.as_messages()) == []
 
 
-def test_summarize_failure_keeps_history_and_reports_nothing():
+def test_summarize_failure_keeps_history_and_reports_nothing(spill_root):
     class FailingChat:
         def __call__(self, config, messages, **kwargs):
             raise LLMError("端点挂了")
@@ -294,7 +294,7 @@ def test_full_record_is_saved_for_recovery(spill_root):
     assert (spill_root / recorded).exists()
 
 
-def test_auto_path_compacts_at_most_once_per_run():
+def test_auto_path_compacts_at_most_once_per_run(spill_root):
     transcript = Transcript(rounds(12))
     state = RunState(workspace_root=str(spill_root))
     chat = FakeChat()
@@ -311,7 +311,7 @@ def test_auto_path_compacts_at_most_once_per_run():
     assert state.compacted is True
 
 
-def test_force_bypasses_threshold_and_the_once_guard():
+def test_force_bypasses_threshold_and_the_once_guard(spill_root):
     transcript = Transcript(rounds(12))
     state = RunState(workspace_root=str(spill_root))
     chat = FakeChat()
@@ -326,7 +326,7 @@ def test_force_bypasses_threshold_and_the_once_guard():
     assert first is not None and second is not None  # force 不受守护限制
 
 
-def test_cursor_hook_receives_summary_and_kept_count():
+def test_cursor_hook_receives_summary_and_kept_count(spill_root):
     covered: list = []
     transcript = Transcript(rounds(12))
 

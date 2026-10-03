@@ -787,3 +787,45 @@ def test_loop_records_the_three_prompt_parts(sandbox):
     assert parts["system"] > 0, parts   # 系统提示词
     assert parts["tools"] > 0, parts    # 工具定义（15 个工具的 JSON）
     assert parts["messages"] > 0, parts  # 对话消息（余数在这里）
+
+
+# ---------------- 会话内命令（阶段 45） ----------------
+
+
+def test_compact_command_finishes_without_calling_the_model(sandbox):
+    """'/compact' 走命令分支：不调模型，run_finished 带 command 出口与结果文本。"""
+    # ScriptedChat 置空：真被调用会断言“模型被多要了一轮”。
+    services = build(sandbox, ScriptedChat())
+    record = run_to_end(services, prompt="/compact")
+
+    assert record.status == "finished"
+    assert "没有可压缩的更早历史" in record.text
+    finished = next(
+        e for e in collect(services, record.run_id) if e.type == RUN_FINISHED
+    )
+    assert finished.data["reason"] == "command"
+
+
+def test_unknown_command_answers_with_help_text(sandbox):
+    services = build(sandbox, ScriptedChat())
+    record = run_to_end(services, prompt="/nope")
+
+    assert record.status == "finished"
+    assert "/compact" in record.text
+
+
+def test_skill_command_feeds_the_skill_body_as_the_user_message(sandbox):
+    """'/demo' 把技能全文当作用户输入——模型收到的就是技能正文。"""
+    (sandbox / "skills" / "demo").mkdir(parents=True)
+    (sandbox / "skills" / "demo" / "SKILL.md").write_text(
+        "---\ndescription: 演示技能\n---\n这是演示技能的正文", encoding="utf-8"
+    )
+    chat = ScriptedChat(make_turn("照做"))
+    services = build(sandbox, chat)
+    record = run_to_end(services, prompt="/demo")
+
+    assert record.status == "finished"
+    assert record.text == "照做"
+    first_request = chat.requests[0]["messages"]
+    assert any("这是演示技能的正文" in str(m.get("content")) for m in first_request)
+

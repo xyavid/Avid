@@ -11,6 +11,7 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..agent import commands as commands_module
 from ..agent.events import (
     ASSISTANT_DELTA,
     ASSISTANT_MESSAGE,
@@ -107,6 +108,8 @@ class RunRecord:
     finished_at: int | None = None
     # 本次运行的模型覆盖（界面选的那个）；None = 按设置解析。
     model: str | None = None
+    # 会话内命令（"compact" / "unknown"）；None = 普通运行。
+    command: str | None = None
 
     # Event buffer holding durable and transient events; deltas never take part in replay.
     events: list[RunEvent] = field(default_factory=list)
@@ -253,6 +256,22 @@ class RunRegistry:
         if problem is not None:
             raise InvalidRequest(problem)
 
+        # 会话内命令（内核单点解析）：/<技能名> 把全文当作用户输入（正常运行），
+        # /compact 与未知命令走 _run 的命令分支（不调模型，直接以文本收尾）。
+        command: str | None = None
+        if prompt.startswith("/"):
+            match = commands_module.match_command(
+                prompt, skill_names=commands_module.skill_names(workspace_root=workspace.root)
+            )
+            if match is not None and match.kind == commands_module.KIND_SKILL:
+                body = commands_module.skill_text(match.name, workspace_root=workspace.root)
+                if body is not None:
+                    prompt = body
+            elif match is not None and match.kind == commands_module.KIND_COMMAND:
+                command = match.name
+            elif match is not None:
+                command = "unknown"
+
         with self.session_lock(session_id):
             with self._lock:
                 if session_id in self._active:
@@ -263,6 +282,7 @@ class RunRegistry:
                     session_id=session_id,
                     started_at=now_ms(),
                     model=(model or "").strip() or None,
+                    command=command,
                 )
 
                 def emit_approval(type: str, **data: Any) -> None:
@@ -721,6 +741,31 @@ class RunRegistry:
             recorder.ensure_branch()
             history = messages_for_branch(session, recorder.branch)
             messages = [*history, {"role": "user", "content": prompt}]
+
+            # 命令分支：不调模型，结果以一条 assistant 条目收尾（SSE 生命周期不变）。
+            if record.command == "compact":
+                report = commands_module.compact_session(
+                    history=list(history),
+                    config=config,
+                    summarize=chat_completion,
+                    workspace_root=workspace.root,
+                    on_compaction=recorder.record_compaction,
+                )
+                text = (
+                    f"已压缩：{report.describe()}"
+                    if report is not None
+                    else "没有可压缩的更早历史（或摘要失败），会话保持不变"
+                )
+                self._message_sink(record, recorder)({"role": "assistant", "content": text})
+                record.text = text
+                self._finish(record, RUN_FINISHED, text=text, reason="command")
+                return
+            if record.command == "unknown":
+                text = commands_module.help_text(workspace_root=workspace.root)
+                self._message_sink(record, recorder)({"role": "assistant", "content": text})
+                record.text = text
+                self._finish(record, RUN_FINISHED, text=text, reason="command")
+                return
 
             state = RunState.for_run(
                 auto_approve=auto_approve,

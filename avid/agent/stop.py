@@ -73,6 +73,7 @@ StopReason = Literal[
     "hook_budget_exit",
     "denial_halted",
     "prompt_blocked",
+    "command",
 ]
 
 STOP_FINAL_TEXT: StopReason = "final_text"
@@ -81,6 +82,8 @@ STOP_HOOK_BUDGET_EXIT: StopReason = "hook_budget_exit"
 STOP_DENIAL_HALTED: StopReason = "denial_halted"
 # UserPromptSubmit hook 在第一轮之前拦截：运行根本没开始，文本为空。
 STOP_PROMPT_BLOCKED: StopReason = "prompt_blocked"
+# 会话内命令（/compact、未知命令提示）：不调模型，立即以文本收尾。
+STOP_COMMAND: StopReason = "command"
 
 
 @dataclass(frozen=True)
