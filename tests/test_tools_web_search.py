@@ -1,8 +1,8 @@
 """web_search 的分支覆盖：成功、空结果、四类失败、参数收口与截断。
 
 全部走 ``httpx.MockTransport`` 注入——**不发真实网络请求**，因此用例不依赖网络、
-不消耗 Tavily 额度，CI 里也是确定的。真实端点只由一条手工冒烟命令覆盖（见
-``docs/status/CAPABILITIES.md`` 与阶段 21 的验收证据）。
+不消耗 Tavily 额度，CI 里也是确定的。真实端点只由一条手工冒烟命令覆盖
+（`uv run --env-file .env python -m tests.probe_web_search` 这类一次性脚本，不入库）。
 
 约定类断言（前缀 ``错误：``、失败不抛异常）在这里按"模型看到什么"来断言，
 而不是按内部实现：这些文本就是回传给模型的东西。

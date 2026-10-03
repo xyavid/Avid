@@ -4,24 +4,16 @@
 
 ## 1. 项目简介
 
-Avid 是一个自建的 agent 运行时（harness）：模型调用、工具执行、多步循环、上下文与记忆、权限、评测各层都由自己掌控，做到可替换、可调试、可度量。
+Avid 是一个自建的 agent 运行时（harness）：模型调用、工具执行、多步循环、上下文与记忆、权限各层都由自己掌控，做到可替换、可调试。
 
 - **核心用途**：先做通用内核，场景后接；用同一个内核承载编码、检索、业务流等不同任务。
-- **目标**：改动任一模块（模型 / 工具 / 记忆 / 上下文策略）不需要动其它部分，且改动前后有可对比的评测数字。
-- **验收基准**：参考场景 **R**（读取本地文件 + 计算）——首个工具与后续评测集都从它长出来。
-- **技术栈**：内核 Python 3.12，环境与依赖管理用 `uv`，运行期依赖只有 `httpx`。前端在 `web/`（React 18 + Vite + pnpm + TypeScript），纸本视觉与渲染层自研。
-- **现状**：模型调用 → 循环 → 9 个内置工具 + stdio MCP → 权限三轴预设（四级 deny 阶梯 + bwrap 沙箱 + 审计）→ hook 四事件 → 技能 → 上下文压缩 → 会话持久化 → 本地 Web 服务，端到端可用。**浏览器界面已随阶段 33 重建**（纸本视觉对话界面 + 会话/工作区管理 + 设置，分支 `refactor/web-hana-ui`），见 `docs/status/CAPABILITIES.md` §11。
+- **目标**：改动任一模块（模型 / 工具 / 上下文策略）不需要动其它部分。
+- **验收基准**：参考场景 **R**（读取本地文件 + 计算）——首个工具从它长出来。
+- **技术栈**：内核 Python 3.12，`uv` 管理依赖，运行期依赖只有 `httpx`；前端在 `web/`（React 18 + Vite + pnpm + TypeScript）。
+- **现状**：模型调用 → 循环 → 9 个内置工具 + stdio MCP → 权限三轴预设（四级 deny 阶梯 + bwrap 沙箱 + 审计）→ hook 四事件 → 技能 → 上下文压缩 → 会话持久化 → 本地 Web 服务，端到端可用；浏览器界面随阶段 33 重建（纸本视觉对话界面 + 会话/工作区管理 + 设置）。
+- **阶段 35 重置**：包平铺到仓库根（`avid/`，无 src 层）；评测仪器（benchmarks）整体删除，评测另立阶段；docs 体系撤除，**代码与模块注释是唯一现状**。
 
-本文件只写**跨阶段的稳定约定**；会随阶段变化的现状、数字与阶段账本各有归属：
-
-| 想问什么 | 去哪 |
-|---|---|
-| 现在能做什么、不能做什么、瓶颈与未知 | `docs/status/CURRENT_STATE.md` |
-| 每项能力的入口与证据 | `docs/status/CAPABILITIES.md` |
-| 有什么数字、缺什么数字 | `docs/status/BENCHMARK.md` |
-| 分层、依赖方向与门禁 | `docs/status/ARCHITECTURE.md` |
-| 下一步往哪走 | `docs/status/ROADMAP.md` |
-| 已完成阶段的目标 / 实现 / 产出 | `dev/plan/roadmap.md`（本地，不入库） |
+**仓库现状问谁**：不问文档，问代码——每个模块的职责、边界与不变量写在模块 docstring 与注释里；跨包边界由 `tests/test_web_boundaries.py` 的门禁（A1–A13）钉住，前端契约由 `test_wire_contract.py` / `test_event_contract.py` 双侧钉住。
 
 ### 1.1 常用命令
 
@@ -30,22 +22,20 @@ uv sync && uv sync --extra web   # 内核依赖 / 追加 Web 依赖（fastapi·u
 uv run --env-file .env avid --agent "读 pyproject.toml，告诉我项目名"
 uv run --env-file .env avid web --port 8765
 
-uv run pytest                    # 默认不跑 stress 与 eval（见 pyproject 的 addopts）
+uv run pytest                    # stress 门禁默认不跑（见 pyproject 的 addopts）
 uv run pytest -m stress          # 复杂度与长会话门禁
-uv run --env-file .env pytest -q -m eval_smoke -s   # 评测冒烟（真模型，有成本）
-uv run ruff check src/avid && uv run mypy           # 与 CI 同一套静态检查
-seiso check                       # 文档规范（kind 映射与豁免见 seiso.toml；--preview 另有实验规则）
+uv run ruff check avid tests && uv run mypy   # 与 CI 同一套静态检查
 
-pnpm -C web install               # 前端依赖（pnpm 9）
+pnpm -C web install               # 前端依赖
 pnpm -C web run verify            # 前端门禁：typecheck + vitest + build + gate:size（体积预算）
-pnpm -C web run copy:dist         # 构建产物交付到 src/avid/web/static/（avid web 服务它）
+pnpm -C web run copy:dist         # 构建产物交付到 avid/web/static/（avid web 服务它）
 ```
 
-**模型连接只认 BYOK 配置**（阶段 34b）：`~/.avid/models.json` + 0600 的
-`~/.avid/secrets.json`，由界面「设置 → 模型」或手编文件维护；未配置时运行报
-「还没有模型配置」。`.env`（`--env-file`）只承载 TAVILY 等旁路凭据与运行期开关。
-
-评测仪器（真模型，不是门禁）：`uv run --env-file .env python -m benchmarks.run --smoke`，参数见 `benchmarks/README.md`。安装、配置项、CLI 全量参数与 Web 交付形态见 `README.md`。前端的对账门禁（wire/event 契约、模式词表、体积预算）已随阶段 33 收口恢复；e2e 尚未重建，界面验收走实机 CDP 脚本（`dev/evidence/`）。
+**模型连接只认 BYOK 配置**：`~/.avid/models.json` + 0600 的
+`~/.avid/secrets.json`，由界面「设置 → 模型」或手编文件维护（结构见
+`avid/ai/byok.py` 模块注释）；未配置时运行报「还没有模型配置」。`.env`
+（`--env-file`）只承载 TAVILY 等旁路凭据与运行期开关。安装、配置项与
+CLI 全量参数见 `README.md`。
 
 ### 1.2 数据流
 
@@ -69,13 +59,13 @@ Web  POST /api/sessions/{id}/runs ─┴─► svc/runs.RunRegistry（线程 + �
 - **`on_message` 是消息的唯一出口**：循环不 import 会话层，落库与否由回调决定。
 - **`on_event` 是步骤级事实的通道**，不是第二个消息通道；事件不写进会话 JSONL。
 - 五步压缩阶梯在 `policy/compaction.py`，编排归 `ContextManager`。
-- 完整数据流、状态所有权与依赖门禁见 `docs/status/ARCHITECTURE.md` §2–§4。
+- 跨包依赖方向由 `tests/test_web_boundaries.py` 门禁钉住：循环与工具协议对策略层零运行时依赖（A13）。
 
 ### 1.3 关键子系统
 
 | 子系统 | 位置 | 职责 |
 |---|---|---|
-| 模型适配 | `ai/`：`transport` 退避重试、`protocol` 共享词表、`providers/{openai_compat,anthropic,gemini}`、`usage` 四家 usage 归一、`transcript` 独占消息写入 | 换模型只动这一层 |
+| 模型适配 | `ai/`：`transport` 退避重试、`protocol` 共享词表、`providers/{openai_compat,anthropic,gemini}`、`usage` 四家 usage 归一、`transcript` 独占消息写入、`byok` 模型配置 | 换模型只动这一层 |
 | 循环与运行期 | `runtime/`：`loop` 只调度、`state.RunState` 一次运行的全部可变状态、`execution` 工具协议、`context_manager` 上下文装配与压缩编排、`events` 事件名单点、`hooks` 默认回调 | 一次运行的生命周期 |
 | 策略层 | `policy/`：`action` 归一化与风险分类、`engine`（deny > ask > allow）、`rules` 四级阶梯、`sandbox` bwrap、`audit`、`permission` 唯一装配点、`compaction`、`modes` 三轴预设、`skills`、`todo` | 阈值、规则与文案的高频变化集中地 |
 | 会话 | `session/`：条目树 + 值 + 分支 + 变更线，`memory` 与 `jsonl` 两后端共用一套一致性用例，`recorder` 是唯一写入者 | 磁盘上的会话真相 |
@@ -83,17 +73,16 @@ Web  POST /api/sessions/{id}/runs ─┴─► svc/runs.RunRegistry（线程 + �
 | 传输适配 | `web/`：FastAPI 路由 + pydantic DTO + SSE 编帧 + 静态资源 | 线格式的唯一所有者 |
 | 工具 | `tools/`：`registry` 单点声明、`files`/`shell`/`subagent`/`skill`/`web_search`/`mcp`、`validate` 参数校验 | 9 个内置工具 + 该工作区声明的 MCP 工具 |
 | 工作区 | `workspaces.py` + `~/.avid/workspaces.json` | 用户级注册表（索引，非权威） |
-| 前端 | `web/`（React 18 + Vite + pnpm）：`api/types.ts` 与 `events/types.ts` 契约种子、`styles/tokens.css` 纸本 token 层、`markdown/` 自研渲染、`surfaces/` 页面 | 浏览器侧全部代码；线格式契约由对账门禁钉住（`test_wire_contract.py` / `test_event_contract.py`），交付走 `copy:dist` 进 `src/avid/web/static/` |
-| 评测仪器 | `benchmarks/`：21 条 case × 3 变体、五种判定器、轨迹落盘 | **不进 wheel**，产品代码反过来不许依赖它 |
+| 前端 | `web/`（React 18 + Vite + pnpm）：`api/types.ts` 与 `events/types.ts` 契约种子、`styles/tokens.css` 纸本 token 层、`markdown/` 自研渲染、`surfaces/` 页面 | 浏览器侧全部代码；交付走 `copy:dist` 进 `avid/web/static/` |
 
 ### 1.4 入口点
 
 | 入口 | 位置 |
 |---|---|
-| CLI | `src/avid/cli.py`：单轮 / `--agent` 循环 / `--session` 会话 / `avid workspace` / `avid web` |
-| Web 服务 | `src/avid/web/app.py`（FastAPI）；接口面（端点 / 事件 / 信任边界）见 `docs/guide/web-ui.md` |
-| 测试 | `tests/`，镜像 `src/avid/` 结构；`tests/test_web_boundaries.py` 是分层门禁 |
-| 模块入口 | `src/avid/__main__.py`（`python -m avid`） |
+| CLI | `avid/cli.py`：单轮 / `--agent` 循环 / `--session` 会话 / `avid workspace` / `avid web` |
+| Web 服务 | `avid/web/app.py`（FastAPI）；接口面看 `avid/web/routes/` 与 `schemas.py` |
+| 测试 | `tests/`，镜像 `avid/` 结构；`tests/test_web_boundaries.py` 是分层门禁 |
+| 模块入口 | `avid/__main__.py`（`python -m avid`） |
 
 ### 1.5 常见改动落点
 
@@ -119,35 +108,18 @@ Web  POST /api/sessions/{id}/runs ─┴─► svc/runs.RunRegistry（线程 + �
 ```
 
 - **type** 取 `feat` / `fix` / `refactor` / `test` / `docs` / `chore` / `perf`。
-- **scope** 写受影响的模块名，如 `loop`、`tools`、`context`、`eval`、`perm`。
+- **scope** 写受影响的模块名，如 `loop`、`tools`、`context`、`perm`。
 - **简述**用中文祈使句，说明"做了什么"，不超过 50 字，结尾不加句号。
 - **正文**只在"为什么"无法从 diff 看出时写。diff 已说明"是什么"，正文补原因、取舍与被否掉的方案。
 - **粒度**一个提交一件事；提交后项目保持可运行。
-
-**示例**
-
-```
-feat(loop): 支持多步工具调用与终止条件
-
-单次往返覆盖不了参考场景 R 的多文件问题。循环上限设为可配置，
-超限时归类为"未完成"而非抛错，便于评测区分能力不足与预算不足。
-```
-
-```
-docs(plan): 冻结需求、非目标与阶段路线
-```
-
-```
-fix(tools): 读取不存在文件时回传错误文本而非中断循环
-```
 
 ## 3. 阶段执行流程
 
 "阶段"指一轮事先与你商定的开发目标；划分、优先级与顺序都在对话中确定，不预先排期。**完整阶段**动工前先出图；阶段内部的细碎修改不走此流程。
 
-### 第零步：澄清需求（grill-me）
+### 第零步：澄清需求（先讨论后动工）
 
-你提出新的功能或新的开发阶段时，我先调用 `grill-me` skill 向你提问，澄清需求范围、验收标准与技术细节，**得到回答后才出图、动工**；一轮问不完时，等回答后依据已定的答案再问下一轮。
+你提出新的功能或新的开发阶段时，先向你提问，澄清需求范围、验收标准与技术细节，**得到回答后才出图、动工**；一轮问不完时，等回答后依据已定的答案再问下一轮。**文件的具体编排属于必讨论项**：目录结构、包内文件落点、命名，先摆方案再动手。
 
 - **问题数量与复杂度相称**：改动涉及的模块越多、边界越不确定，问题越多；能自己从仓库里查到的事实（现有实现、命名、依赖关系）自己查，只把真正由你决定的取舍拿来提问，不凑数、也不漏问。
 - **每条问题编号并给出推荐答案**，方便你只回「同意」或直接改写。
@@ -161,7 +133,7 @@ fix(tools): 读取不存在文件时回传错误文本而非中断循环
 2. **目录树**：本阶段完成后的完整目录结构，用文本树展示。
 3. **架构图**：本阶段完成后的模块划分与数据流向，手写 SVG 落盘到 `dev/architecture/phase-<阶段号>-<短名>.svg`（无外部依赖，浏览器可直接打开），图中标注每条数据流携带的内容。该图属过程文档，只存本地、不入库。
 
-模块边界、数据所有权、失败模型按 `docs/design/architecture-criteria.md` 推导；出图时用一句话说明每个边界的依据。
+每个取舍按 §5 的判据推导，出图时用一句话说明每个边界的依据。
 
 ### 第二步：动工
 
@@ -176,27 +148,35 @@ fix(tools): 读取不存在文件时回传错误文本而非中断循环
 
 该阶段每条验收标准都有证据、且你确认后，才进入下一阶段。
 
-## 4. 文档归属
+## 4. 注释与文档纪律（阶段 35 起）
 
-**正式文档**（项目说明、使用手册、API 文档、部署与配置、冻结后的设计）进 `docs/`，目录与命名见 `docs/README.md`。
-**过程文档**（开发计划、需求草稿、进度跟踪、笔记、会议记录、阶段出图）留 `dev/`，只存本地、不入库。
-
-`docs/` 走白名单：落在 `docs/` 根目录或未知子目录的新文件默认被忽略，正式文档必须放进已放行的四类目录。
-
-**检索范围**：`dev/` 只存本地、不入库，其中 `dev/tmp/` 还放着参考项目的完整副本
-（实测 5.8 GB / 4.3 万个文件）。全仓 `grep` / `rg` / `find` 会把它们一起扫进来，
-既慢又噪声大——按需把范围限定到 `src/`、`tests/`、`docs/`、`skills/`。
+- **没有 docs/ 目录**：仓库内的 md 只有 `README.md`（安装 / 配置 / 运行）、`AGENTS.md`（本约定）与技能的 `SKILL.md`（运行期契约）。
+- **代码与注释是唯一现状**：能力、边界、契约、阈值都写在代码与注释里；注释漂移按 bug 修。
+- **注释纪律**：
+  - 精简——普通代码不注释，代码能表达的不写；
+  - 注释只写代码本身表达不了的**约束**：为什么这样做、不变量、外部契约、失败语义、边界条件；
+  - 风格参照 `avid/runtime/loop.py`、`avid/ai/transcript.py` 的既有注释：短、具体、说约束不说过程；
+  - 改代码必须同步改注释；发现注释说谎，当场修。
+- **过程文档**（计划 / 诊断 / 阶段出图 / 会议记录）留 `dev/`，只存本地不入库；其中 `dev/tmp/` 存参考项目副本（约 5.8 GB / 4.3 万文件）——全仓 grep / find 把范围限定到 `avid/`、`tests/`、`web/src`，既快又不带噪声。
 
 ## 5. 架构推导判据
 
-设计判据单独成文：`docs/design/architecture-criteria.md`（12 组检查点）。
+设计结论动工前走一遍这十二组检查点；只分析与当前问题真正相关的，不为凑齐条目制造复杂度。
 
-### 使用约束
+1. **变化优先**——先列什么会变、多频繁，再谈结构；「总因同一原因一起改」的模块背后可能缺一个边界。
+2. **具体先行**——从最简单可运行的实现开始；抽象准入要真实重复 / 真实变化 / 真实耦合三证其一；删掉抽象后更简单且边界不丢，就撤回。
+3. **耦合**——每条依赖回答「用了什么、谁变谁跟着变」，指名耦合机制（结构 / 数据 / 控制 / 时间 / 生命周期…）；不用「松紧耦合」这类结论词。
+4. **边界与决定权**——每个边界说清隔离了什么、谁说了算；总是一起改的模块该合，一个模块装互不相关的多种变化该拆。
+5. **数据所有权**——每份数据指名谁创建 / 谁可改 / 谁可读 / 谁是权威 / 谁负责同步；每个 state 说清生命周期与持久化时机。
+6. **不变量**——先列「永远不能破」的性质，再指派唯一守护层，并检查没有绕过路径。
+7. **失败与恢复**——失败路径与正常路径同级设计；临时 / 永久 / 业务拒绝 / 权限拒绝 / 环境错误各有机制；异步化先回答为什么不能同步。
+8. **并发**——设计期显式建模：谁与谁同时动什么、谁提供互斥、一致性在哪个窗口对谁成立。
+9. **不可靠边界**——外部依赖逐个回答不可用时怎么办；远程调用按丢失 / 重复 / 延迟 / 中断建模，给超时、幂等与对账方案。
+10. **边界代价**——先算代价再决定；方案比较至少两个；结论写「解决了什么 / 牺牲了什么 / 何时成立 / 什么信号出现时重审」。
+11. **可逆性**——按撤销难度分配论证成本；难撤销者（数据模型、公开 API）要迁移方案与回滚点。
+12. **运行与演进**——性能从工作负载推导；安全按信任边界处理；每个架构写明适用条件与失效信号，以及下一次变化最可能落在哪。
 
-- 给出架构结论前，逐条走完 `docs/design/architecture-criteria.md` 的 12 组检查点。
-- 每个取舍写清具体机制与原因，用「解决了什么 / 牺牲了什么 / 在什么条件下成立 / 什么信号出现时重新考虑」替换「最佳实践」「行业标准」「更优雅」「更可扩展」这类结论词。
-- 涉及不可逆决策时，先列出证据与实验再下结论：假设 → 原因 → 证据 → 实验 → 决策。
-- 只分析与当前问题真正相关的检查点，不为凑齐条目而制造复杂度。
+禁止用「最佳实践」「行业标准」「更优雅」代替具体机制与取舍。
 
 ## 6. 测试约定
 

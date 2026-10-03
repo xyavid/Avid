@@ -1,13 +1,14 @@
 # Avid
 
-自建的 agent 运行时（harness）：模型调用、工具执行、多步循环、上下文与记忆、权限、评测各层都掌握在自己手里，做到可替换、可调试、可度量。
+自建的 agent 运行时（harness）：模型调用、工具执行、多步循环、上下文与记忆、权限各层都掌握在自己手里，做到可替换、可调试。
 
 **当前进度**：内核（模型调用、循环、工具、会话持久化、事件层）与**本地 Web 服务**
 （FastAPI 路由、pydantic DTO、SSE 事件流、静态资源服务）都已跑通。
 浏览器界面已随阶段 33 重建（`web/`，React 18 + Vite：纸本视觉对话界面、会话与工作区
-管理、设置；分支 `refactor/web-hana-ui`，见 `docs/status/CAPABILITIES.md` §11）。
+管理、设置）。
 
-正式文档在 `docs/`，收录标准见 `docs/README.md`；开发过程文档在 `dev/`，只留本地、不入库。协作约定见 `AGENTS.md`。
+仓库内没有 docs/ 目录：现状以代码与模块注释为准，协作约定见 `AGENTS.md`；
+开发过程文档在 `dev/`，只留本地、不入库。
 
 ## 安装
 
@@ -17,7 +18,7 @@ uv sync
 
 ## 配置
 
-模型连接**只认 BYOK 配置**（阶段 34b 起，不再读 `.env` 里的模型变量）：在界面
+模型连接**只认 BYOK 配置**（不读 `.env` 里的模型变量）：在界面
 「设置 → 模型」里维护，或手编文件。每份提供商配置 = 协议（OpenAI 兼容 / Anthropic /
 Gemini / Ollama）+ 接口地址 + 密钥引用 + 模型与能力声明；chat 槽位绑定一个
 `providerId/modelId` 作为主对话模型。规则：
@@ -31,7 +32,7 @@ Gemini / Ollama）+ 接口地址 + 密钥引用 + 模型与能力声明；chat �
 - 「按运行换模型」的候选自动带上 BYOK 模型（`providerId/modelId`）。
 
 也可以直接手编 `~/.avid/models.json`（providers + bindings，结构见
-`src/avid/ai/byok.py` 模块注释）；写坏了会报可执行的修复文案，绝不静默回落。
+`avid/ai/byok.py` 模块注释）；写坏了会报可执行的修复文案，绝不静默回落。
 
 ### 环境变量（只剩旁路凭据与运行期开关）
 
@@ -60,7 +61,7 @@ uv run --env-file .env avid --agent "读 pyproject.toml，告诉我项目名"
 ```
 
 工具执行前过一道四层裁决（硬拒绝 → 危险命令 → 越界 → 常规规则），配合三档权限模式
-（`--permission manual|auto|full`，三轴预设见 `docs/design/workspace-permission.md` 的决策表）：
+（`--permission manual|auto|full`，决策表见 `avid/policy/modes.py` 模块注释）：
 
 - **硬拒绝**（`rm -rf /` 这类）三种模式一律不执行；
 - **危险命令**（提权、递归删除、系统级包管理、`~/.ssh` 这类敏感路径等 15 类）三种模式
@@ -77,7 +78,7 @@ stdout 打印模型回复，stderr 打印逐轮 trace 与 token 用量。
 
 ```bash
 uv sync --extra web                              # 装 Web 依赖（FastAPI/uvicorn）
-pnpm -C web install && pnpm -C web run copy:dist # 前端产物交付到 src/avid/web/static/
+pnpm -C web install && pnpm -C web run copy:dist # 前端产物交付到 avid/web/static/
 uv run --env-file .env avid web --port 8765      # API + SSE + 静态资源
 # → http://127.0.0.1:8765
 ```
@@ -87,15 +88,17 @@ uv run --env-file .env avid web --port 8765      # API + SSE + 静态资源
 模型选择、设置面板；组件墙在 `?gallery=1`。没有产物时访问非 `/api` 路径会得到
 HTTP 503 `static_missing`。
 
-Web 服务的接口、SSE 消费规则与信任边界见 `docs/guide/web-ui.md`。
+接口面（端点 / 事件 / 信任边界）看 `avid/web/routes/` 与 `avid/web/schemas.py` 的
+模块注释。
 
 ## 开发
 
 ```bash
 uv run pytest                                 # 内核与 API 全部测试，不联网
-uv run ruff check src tests && uv run mypy    # 与 CI 同一套静态检查
+uv run ruff check avid tests && uv run mypy   # 与 CI 同一套静态检查
 pnpm -C web run verify                        # 前端：typecheck + vitest + build + gate:size
 ```
 
 前端的对账门禁（wire / event 契约、模式词表、A12）在 pytest 里随内核一起跑；体积门禁
-`gate:size` 对 `web/budget.json` 的冻结预算。浏览器 e2e、a11y 与视觉回归尚未重建。
+`gate:size` 对 `web/budget.json` 的冻结预算。架构门禁（A1–A13）在
+`tests/test_web_boundaries.py`。浏览器 e2e、a11y 与视觉回归尚未重建。
