@@ -16,8 +16,8 @@ from ..ai.config import Config
 from ..tools import TOOL_IMPLS, TOOLS, ToolImpl
 from .context_manager import ContextBudget
 from .hooks import HookRegistry
-from .loop import MAX_STOP_BLOCKS
 from .state import MAX_CONSECUTIVE_DENIALS
+from .stop import MAX_STOP_BLOCKS
 
 if TYPE_CHECKING:
     from ..policy.permission import ApprovalLedger, RunSecurity

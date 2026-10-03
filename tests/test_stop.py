@@ -1,0 +1,130 @@
+"""stop.py：终止路径的契约。
+
+输入「无 tool_calls 的那一轮」（已 append 进 transcript）＋ Stop hook 裁决，
+输出最终答复文本或补问信号（final=None，nudge 已入 transcript，调用方续轮）。
+补问预算 max_blocks 防止写坏的回调或连续空答复把循环拖成死循环。
+"""
+
+from __future__ import annotations
+
+from support import make_turn
+
+from avid.ai.transcript import Transcript
+from avid.runtime.events import STOP_NUDGE
+from avid.runtime.hooks import BLOCK, HookRegistry
+from avid.runtime.state import RunState
+from avid.runtime.stop import MAX_STOP_BLOCKS, StopOutcome, blank_reason, decide, is_blank
+
+USER = {"role": "user", "content": "问"}
+
+
+def make_state(**kwargs):
+    return RunState.for_run(**kwargs)
+
+
+def append_and_decide(state, transcript, turn, *, max_blocks=MAX_STOP_BLOCKS, emitted=None):
+    """按真实时序先把轮次消息入 transcript，再走终止裁决。"""
+    transcript.append(turn.message)
+    sink = emitted if emitted is not None else []
+    return decide(
+        state,
+        transcript,
+        turn,
+        max_blocks=max_blocks,
+        emitted=sink.append,
+    )
+
+
+def test_visible_answer_returns_final_without_nudge():
+    state = make_state(hooks=HookRegistry())
+    transcript = Transcript([dict(USER)])
+    emitted: list[dict] = []
+    outcome = append_and_decide(state, transcript, make_turn("答复"), emitted=emitted)
+    assert outcome == StopOutcome(final="答复")
+    assert state.stop_blocks == 0
+    assert emitted == []
+
+
+def test_blank_answer_triggers_one_nudge_then_closes_with_notice():
+    events: list = []
+    state = make_state(hooks=HookRegistry(), observer=events.append)
+    transcript = Transcript([dict(USER)])
+    emitted: list[dict] = []
+
+    first = append_and_decide(state, transcript, make_turn(""), emitted=emitted)
+    assert first.final is None
+    assert state.stop_blocks == 1
+    assert any(e.type == STOP_NUDGE for e in events)
+    nudges = [
+        m["content"]
+        for m in transcript.as_messages()
+        if m["role"] == "user" and m["content"].startswith("上一轮没有可见正文")
+    ]
+    assert len(nudges) == 1
+    assert len(emitted) == 1  # nudge 消息走 on_message 通道
+
+    # 预算用尽：再次空答复以可见 notice 收尾（不静默）
+    second = append_and_decide(state, transcript, make_turn(""), emitted=emitted)
+    assert second.final is not None
+    assert second.final.startswith("（本次运行没有产生可见答复")
+    assert transcript.as_messages()[-1]["role"] == "assistant"
+    assert len(emitted) == 2
+
+
+def test_stop_hook_can_hold_the_exit_open_with_its_own_nudge():
+    registry = HookRegistry()
+
+    @registry.register("Stop")
+    def hold(stop):
+        stop["nudge"] = "请总结一下"
+        return BLOCK
+
+    state = make_state(hooks=registry)
+    transcript = Transcript([dict(USER)])
+    outcome = append_and_decide(state, transcript, make_turn("有正文但被拦"))
+    assert outcome.final is None
+    assert transcript.as_messages()[-1] == {"role": "user", "content": "请总结一下"}
+
+
+def test_hook_nudge_wins_when_it_blocks_a_blank_round():
+    registry = HookRegistry()
+
+    @registry.register("Stop")
+    def hold(stop):
+        stop["nudge"] = "hook 补问"
+        return BLOCK
+
+    state = make_state(hooks=registry)
+    transcript = Transcript([dict(USER)])
+    outcome = append_and_decide(state, transcript, make_turn(""))
+    assert outcome.final is None
+    assert transcript.as_messages()[-1] == {"role": "user", "content": "hook 补问"}
+
+
+def test_block_budget_exhausted_returns_text_and_stops_counting():
+    registry = HookRegistry()
+
+    @registry.register("Stop")
+    def always_block(stop):
+        return BLOCK
+
+    state = make_state(hooks=registry)
+    transcript = Transcript([dict(USER)])
+    first = append_and_decide(state, transcript, make_turn("一"))
+    assert first.final is None
+    second = append_and_decide(state, transcript, make_turn("二"))
+    assert second.final == "二"
+    assert state.stop_blocks == 1  # 预算用尽后不再累加
+
+
+def test_blank_reason_names_thinking_truncation_or_empty():
+    reason_thinking = blank_reason(make_turn("", reasoning="思" * 20))
+    assert "思考" in reason_thinking and "20 字符" in reason_thinking
+    reason_truncated = blank_reason(make_turn("", finish_reason="length"))
+    assert "截断" in reason_truncated
+    assert "输出为空" in blank_reason(make_turn(""))
+
+
+def test_is_blank_distinguishes_whitespace_from_text():
+    assert is_blank(make_turn("  \n")) is True
+    assert is_blank(make_turn("答案")) is False

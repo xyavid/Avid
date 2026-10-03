@@ -15,7 +15,12 @@ import pytest
 from avid.ai.client import Turn, Usage
 
 
-def make_turn(text: str = "", tool_calls: Iterable[dict] = (), finish_reason: str = "stop") -> Turn:
+def make_turn(
+    text: str = "",
+    tool_calls: Iterable[dict] = (),
+    finish_reason: str = "stop",
+    reasoning: str = "",
+) -> Turn:
     calls = list(tool_calls)
     message: dict[str, Any] = {"role": "assistant", "content": text}
     if calls:
@@ -27,6 +32,7 @@ def make_turn(text: str = "", tool_calls: Iterable[dict] = (), finish_reason: st
         usage=Usage(prompt_tokens=1, completion_tokens=2, total_tokens=3),
         model="m",
         finish_reason=finish_reason,
+        reasoning=reasoning,
     )
 
 

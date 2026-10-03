@@ -254,6 +254,7 @@ POLICY_FREE_RUNTIME = (
     "avid/runtime/execution.py",
     "avid/runtime/spec.py",
     "avid/runtime/run.py",
+    "avid/runtime/stop.py",
 )
 
 

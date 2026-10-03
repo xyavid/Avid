@@ -17,18 +17,12 @@ from typing import TYPE_CHECKING, Any
 from ..ai.client import PromptTooLongError, Turn
 from ..ai.transcript import Transcript
 from .context_manager import ComposedRequest, ContextManager
-from .events import RUN_STATUS, STOP_NUDGE, RunObserver
+from .events import RUN_STATUS, RunObserver
 from .execution import execute_batch
-from .hooks import BLOCK
-from .loop import (
-    BLANK_ANSWER_NOTICE,
-    BLANK_ANSWER_NUDGE,
-    _blank_answer,
-    _blank_reason,
-    _submit_input,
-)
+from .loop import _submit_input
 from .spec import RunSpec
 from .state import RunState
+from .stop import decide
 
 if TYPE_CHECKING:
     from ..policy.permission import AskUser
@@ -184,46 +178,15 @@ class Run:
             )
 
     def _finish(self, state: RunState, transcript: Transcript, turn: Turn) -> str | None:
-        """终止路径（阶段 37 独立成模块）：返回最终文本；None = nudge 已注入，续轮。"""
-        spec = self.spec
-        stop: dict[str, Any] = {
-            "final_text": turn.text,
-            "messages": transcript.as_messages(),
-            "summary": None,
-            "nudge": None,
-            **state.snapshot(),
-        }
-        blocked = state.hooks.trigger("Stop", stop) == BLOCK
-        blank = _blank_answer(turn)
-        reason = _blank_reason(turn) if blank else ""
-        if blank and not blocked:
-            # 没有可见正文的一轮不算答复：按一次 Stop 拦截处理并补问
-            blocked = True
-            stop["nudge"] = BLANK_ANSWER_NUDGE.format(reason=reason)
-        if blocked and state.stop_blocks < spec.max_stop_blocks:
-            state.stop_blocks += 1
-            nudge = stop.get("nudge")
-            if nudge:
-                message = {"role": "user", "content": str(nudge)}
-                transcript.append(message)
-                state.emit(STOP_NUDGE, content=str(nudge), message=message)
-                self._emit(message)
-            logger.info("Stop 被拦截（第 %d 次），继续循环", state.stop_blocks)
-            return None
-        if blank:
-            notice = BLANK_ANSWER_NOTICE.format(reason=reason)
-            message = {"role": "assistant", "content": notice}
-            transcript.append(message)
-            self._emit(message)
-            logger.warning(
-                "仍然没有可见正文（%s；finish_reason=%s），以 notice 收尾",
-                reason,
-                turn.finish_reason or "-",
-            )
-            return notice
-        if blocked:
-            logger.warning("Stop 拦截次数已达上限 %d，照常退出", spec.max_stop_blocks)
-        return turn.text
+        """终止路径委托给 stop 模块；None = 已补问，续轮。"""
+        outcome = decide(
+            state,
+            transcript,
+            turn,
+            max_blocks=self.spec.max_stop_blocks,
+            emitted=self._emit,
+        )
+        return outcome.final
 
     def _emit(self, message: dict[str, Any]) -> None:
         if self.on_message is not None:

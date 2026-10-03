@@ -26,26 +26,23 @@ from .events import RunObserver
 from .execution import execute_batch
 from .hooks import BLOCK, HookRegistry
 from .state import MAX_CONSECUTIVE_DENIALS, RunState
+from .stop import (
+    BLANK_ANSWER_NOTICE,
+    BLANK_ANSWER_NUDGE,
+    MAX_STOP_BLOCKS,
+)
+from .stop import (
+    blank_reason as _blank_reason,
+)
+from .stop import (
+    is_blank as _blank_answer,
+)
 
 # Only annotations use it: annotations are lazy, so the policy layer stays out of run time.
 if TYPE_CHECKING:
     from ..policy.permission import ApprovalLedger, AskUser, RunSecurity
 
 logger = logging.getLogger("avid.runtime.loop")
-
-# Extra rounds granted after a blocked Stop; stops a faulty callback from looping forever.
-MAX_STOP_BLOCKS = 1
-
-# Follow-up prompt for a round with no visible text; it shares the Stop-block budget above.
-BLANK_ANSWER_NUDGE = (
-    "上一轮没有可见正文（{reason}）。请直接给出可见答复：总结已完成的事与当前结论；"
-    "要继续动手就发起工具调用。"
-)
-# Closing text when even the follow-up produced no text; it must stay visible to the user.
-BLANK_ANSWER_NOTICE = (
-    "（本次运行没有产生可见答复：{reason}。请看上一条工具结果，或重试这一轮。）"
-)
-
 
 class RunCancelled(RuntimeError):
     """Cancellation, raised only at step boundaries so no compensating write is needed."""
@@ -73,24 +70,6 @@ def _submit_input(
         return None
 
     return index, [str(item) for item in (submit.get("injected") or [])]
-
-
-def _blank_answer(turn: Turn) -> bool:
-    """True when the round has no visible text; truncation and an empty stop look alike here."""
-    return not turn.text.strip()
-
-
-def _blank_reason(turn: Turn) -> str:
-    """Explain the missing text with concrete numbers rather than an 'unknown' placeholder."""
-    thinking = turn.reasoning.strip()
-    if thinking:
-        base = f"最近一轮只产出了思考（{len(thinking)} 字符思维链）"
-    elif turn.finish_reason == "length":
-        base = "最近一轮在输出上限处被截断"
-    else:
-        base = "最近一轮输出为空"
-    tokens = turn.usage.reasoning_tokens
-    return f"{base}，推理 token {tokens}" if tokens else base
 
 
 def agent_loop(
