@@ -19,7 +19,7 @@ from ..providers.transcript import Transcript
 from .context import ComposedRequest, ContextManager
 from .events import RUN_STATUS, RunObserver
 from .execution import execute_batch
-from .loop import _submit_input
+from .hooks import BLOCK
 from .spec import RunSpec
 from .state import RunState
 from .stop import STOP_DENIAL_HALTED, STOP_PROMPT_BLOCKED, RunOutcome, decide
@@ -28,6 +28,34 @@ if TYPE_CHECKING:
     from ..security.permission import AskUser
 
 logger = logging.getLogger("avid.agent.run")
+
+
+class RunCancelled(RuntimeError):
+    """Cancellation, raised only at step boundaries so no compensating write is needed."""
+
+
+def _submit_input(
+    transcript: Transcript, state: RunState, tool_names: list[str]
+) -> tuple[int, list[str]] | None:
+    """Run the submit hook; returns the trigger message index and injected context, or None."""
+    index = transcript.last_user_index()
+    if index is None:
+        return None
+
+    submit: dict[str, Any] = {
+        "prompt": transcript.text_at(index),
+        "messages": transcript.as_messages(),
+        "injected": [],
+        # The injected environment information must match the workspace actually resolved.
+        "workspace_root": state.workspace_root,
+        "permission_mode": state.permission_mode,
+        "tool_names": list(tool_names),
+    }
+    if state.hooks.trigger("UserPromptSubmit", submit) == BLOCK:
+        logger.warning("UserPromptSubmit 被拦截，未调用模型")
+        return None
+
+    return index, [str(item) for item in (submit.get("injected") or [])]
 
 
 class Run:

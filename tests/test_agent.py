@@ -3,10 +3,10 @@ import time
 from dataclasses import replace
 
 import pytest
+from support import run_loop
 
 from avid.agent.compaction import CompactReport
 from avid.agent.hooks import BLOCK, large_output_hook, permission_hook
-from avid.agent.loop import agent_loop
 from avid.agent.state import MAX_CONSECUTIVE_DENIALS
 from avid.agent.tools import TOOLS
 from avid.providers.client import Turn, Usage
@@ -61,7 +61,7 @@ def test_returns_text_and_appends_assistant_when_no_tool_calls(hook_registry):
     chat = FakeChat(make_turn("你好"))
     messages = [{"role": "user", "content": "hi"}]
 
-    assert agent_loop(messages, config=CONFIG, chat=chat) == "你好"
+    assert run_loop(messages, config=CONFIG, chat=chat) == "你好"
     assert messages == [
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "你好"},
@@ -90,7 +90,7 @@ def test_executes_tool_call_then_finishes():
     )
     messages = [{"role": "user", "content": "读 a.txt"}]
 
-    result = agent_loop(
+    result = run_loop(
         messages, config=CONFIG, chat=chat, registry={"read_file": read_file}
     )
 
@@ -120,7 +120,7 @@ def test_multiple_tool_calls_become_multiple_tool_messages():
     )
     messages = [{"role": "user", "content": "读两个"}]
 
-    agent_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a: "内容"})
+    run_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a: "内容"})
 
     assert [m["tool_call_id"] for m in messages if m["role"] == "tool"] == [
         "call_1",
@@ -135,7 +135,7 @@ def test_unknown_tool_is_reported_back_to_the_model():
     )
     messages = [{"role": "user", "content": "ls"}]
 
-    agent_loop(messages, config=CONFIG, chat=chat, registry={})
+    run_loop(messages, config=CONFIG, chat=chat, registry={})
 
     assert messages[2]["content"] == "未知工具：run_bash"
 
@@ -147,7 +147,7 @@ def test_tool_exception_becomes_a_result_not_a_crash():
     chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
     messages = [{"role": "user", "content": "读"}]
 
-    agent_loop(messages, config=CONFIG, chat=chat, registry={"read_file": boom})
+    run_loop(messages, config=CONFIG, chat=chat, registry={"read_file": boom})
 
     assert "权限不足" in messages[2]["content"]
 
@@ -166,14 +166,14 @@ def test_tool_failure_kinds_have_distinguishable_prefixes():
     # 程序 / 环境错误
     chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
     messages = [{"role": "user", "content": "读"}]
-    agent_loop(messages, config=CONFIG, chat=chat, registry={"read_file": boom})
+    run_loop(messages, config=CONFIG, chat=chat, registry={"read_file": boom})
     assert messages[2]["content"].startswith("工具执行失败：read_file（磁盘满了）")
     assert "不要用同样的参数重复调用" in messages[2]["content"]
 
     # 业务拒绝：工具自己回的「错误：…」原样透传，不被套上新前缀
     chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
     messages = [{"role": "user", "content": "读"}]
-    agent_loop(
+    run_loop(
         messages,
         config=CONFIG,
         chat=chat,
@@ -186,7 +186,7 @@ def test_invalid_json_arguments_are_reported():
     chat = FakeChat(make_turn("", [tool_call("read_file", "{不是 json")]), make_turn("好的"))
     messages = [{"role": "user", "content": "读"}]
 
-    agent_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a: "x"})
+    run_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a: "x"})
 
     assert messages[2]["content"].startswith("参数错误：")
     assert "不是合法 JSON" in messages[2]["content"]
@@ -196,7 +196,7 @@ def test_non_string_tool_result_is_serialised():
     chat = FakeChat(make_turn("", [tool_call("stat")]), make_turn("好的"))
     messages = [{"role": "user", "content": "看"}]
 
-    agent_loop(messages, config=CONFIG, chat=chat, registry={"stat": lambda a: {"lines": 3}})
+    run_loop(messages, config=CONFIG, chat=chat, registry={"stat": lambda a: {"lines": 3}})
 
     assert messages[2]["content"] == '{"lines": 3}'
 
@@ -215,7 +215,7 @@ def test_a_plain_task_finishes_no_matter_how_many_rounds_it_takes():
     messages = [{"role": "user", "content": "读 12 个文件"}]
 
     assert (
-        agent_loop(
+        run_loop(
             messages,
             config=CONFIG,
             chat=chat,
@@ -255,7 +255,7 @@ def test_one_turn_with_several_safe_calls_runs_them_concurrently():
     messages = [{"role": "user", "content": "读三个文件"}]
 
     assert (
-        agent_loop(
+        run_loop(
             messages,
             config=CONFIG,
             chat=chat,
@@ -293,7 +293,7 @@ def test_max_parallel_tools_one_restores_strictly_serial_dispatch():
         make_turn("好"),
     )
 
-    agent_loop(
+    run_loop(
         [{"role": "user", "content": "读"}],
         config=CONFIG,
         chat=chat,
@@ -340,7 +340,7 @@ def test_exclusive_writes_in_one_turn_never_overlap_reads(hook_registry):
         make_turn("好"),
     )
 
-    agent_loop(
+    run_loop(
         [{"role": "user", "content": "改 a.txt"}],
         config=CONFIG,
         chat=chat,
@@ -374,7 +374,7 @@ def test_pre_tool_use_block_skips_the_handler(hook_registry):
     )
     messages = [{"role": "user", "content": "读"}]
 
-    agent_loop(
+    run_loop(
         messages, config=CONFIG, chat=chat, registry={"read_file": read_file}
     )
 
@@ -391,7 +391,7 @@ def test_pre_tool_use_block_does_not_stop_the_loop(hook_registry):
     chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("那我换个说法"))
     messages = [{"role": "user", "content": "读"}]
 
-    result = agent_loop(
+    result = run_loop(
         messages, config=CONFIG, chat=chat, registry={"read_file": lambda a: "内容"}
     )
 
@@ -408,7 +408,7 @@ def test_pre_tool_use_receives_name_and_parsed_arguments(hook_registry):
     )
     messages = [{"role": "user", "content": "读"}]
 
-    agent_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a: "x"})
+    run_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a: "x"})
 
     assert seen == [("read_file", {"path": "a.txt"})]
 
@@ -424,7 +424,7 @@ def test_pre_tool_use_sees_the_round_number(hook_registry):
     )
     messages = [{"role": "user", "content": "读"}]
 
-    agent_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a: "x"})
+    run_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a: "x"})
 
     assert rounds == [1, 2]
 
@@ -437,7 +437,7 @@ def test_unknown_tool_never_reaches_pre_tool_use(hook_registry):
     chat = FakeChat(make_turn("", [tool_call("nope")]), make_turn("好的"))
     messages = [{"role": "user", "content": "x"}]
 
-    agent_loop(messages, config=CONFIG, chat=chat, registry={})
+    run_loop(messages, config=CONFIG, chat=chat, registry={})
 
     assert messages[2]["content"] == "未知工具：nope"
 
@@ -450,7 +450,7 @@ def test_unparsable_arguments_never_reach_pre_tool_use(hook_registry):
     chat = FakeChat(make_turn("", [tool_call("read_file", "{坏 json")]), make_turn("好的"))
     messages = [{"role": "user", "content": "x"}]
 
-    agent_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a: "x"})
+    run_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a: "x"})
 
     assert "不是合法 JSON" in messages[2]["content"]
 
@@ -463,7 +463,7 @@ def test_non_object_arguments_never_reach_pre_tool_use(hook_registry):
     chat = FakeChat(make_turn("", [tool_call("read_file", "[1, 2]")]), make_turn("好的"))
     messages = [{"role": "user", "content": "x"}]
 
-    agent_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a: "x"})
+    run_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a: "x"})
 
     assert "JSON 对象" in messages[2]["content"]
 
@@ -479,7 +479,7 @@ def test_denied_tool_calls_do_not_terminate_the_loop(hook_registry):
     messages = [{"role": "user", "content": "读"}]
 
     assert (
-        agent_loop(
+        run_loop(
             messages,
             config=CONFIG,
             chat=chat,
@@ -508,7 +508,7 @@ def test_consecutive_denials_stop_the_run(hook_registry):
     )
     messages = [{"role": "user", "content": "读"}]
 
-    text = agent_loop(
+    text = run_loop(
         messages,
         config=CONFIG,
         chat=chat,
@@ -540,7 +540,7 @@ def test_one_successful_call_clears_the_denial_streak(hook_registry):
     )
     messages = [{"role": "user", "content": "读"}]
 
-    text = agent_loop(
+    text = run_loop(
         messages,
         config=CONFIG,
         chat=chat,
@@ -564,7 +564,7 @@ def test_blank_answer_notice_names_the_reason(hook_registry):
     chat = FakeChat(skipped, skipped)
     messages = [{"role": "user", "content": "做"}]
 
-    text = agent_loop(messages, config=CONFIG, chat=chat)
+    text = run_loop(messages, config=CONFIG, chat=chat)
 
     assert "思维链" in text
     assert f"{len(skipped.reasoning)} 字符" in text
@@ -580,7 +580,7 @@ def test_blank_answer_notice_reports_reasoning_tokens(hook_registry):
     spend = replace(spend, usage=Usage(1, 900, 901, reasoning_tokens=880))
 
     chat = FakeChat(spend, spend)
-    text = agent_loop([{"role": "user", "content": "做"}], config=CONFIG, chat=chat)
+    text = run_loop([{"role": "user", "content": "做"}], config=CONFIG, chat=chat)
 
     assert "880" in text
 
@@ -598,7 +598,7 @@ def test_empty_answer_is_not_accepted_as_final(hook_registry):
     )
     messages = [{"role": "user", "content": "做"}]
 
-    assert agent_loop(messages, config=CONFIG, chat=chat) == "环境探测完成：无显示、无外网。"
+    assert run_loop(messages, config=CONFIG, chat=chat) == "环境探测完成：无显示、无外网。"
     assert len(chat.requests) == 2
     # 补问走 Stop nudge 那条通道（同一份预算、同一个事件、同一条消息出口）。
     nudges = [m for m in messages if m.get("role") == "user" and "可见" in m["content"]]
@@ -612,7 +612,7 @@ def test_still_blank_after_the_nudge_ends_with_a_visible_notice(hook_registry):
     chat = FakeChat(make_turn("", finish_reason="length"), make_turn(""))
     messages = [{"role": "user", "content": "做"}]
 
-    text = agent_loop(messages, config=CONFIG, chat=chat)
+    text = run_loop(messages, config=CONFIG, chat=chat)
 
     assert text.strip(), "空答复不能算运行成功"
     assert messages[-1]["role"] == "assistant"
@@ -631,7 +631,7 @@ def test_post_tool_use_can_rewrite_the_result(hook_registry):
     chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
     messages = [{"role": "user", "content": "读"}]
 
-    agent_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a, **kwargs: "原始"})
+    run_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a, **kwargs: "原始"})
 
     assert messages[2]["content"] == "改写过的结果"
 
@@ -643,7 +643,7 @@ def test_post_tool_use_sees_the_raw_content(hook_registry):
     chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
     messages = [{"role": "user", "content": "读"}]
 
-    agent_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a, **kwargs: "原始"})
+    run_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a, **kwargs: "原始"})
 
     assert seen == ["原始"]
 
@@ -654,7 +654,7 @@ def test_large_output_hook_truncates_real_tool_output(hook_registry, monkeypatch
     chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
     messages = [{"role": "user", "content": "读"}]
 
-    agent_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a: "x" * 300})
+    run_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a: "x" * 300})
 
     assert "hook 按上下文预算截断" in messages[2]["content"]
     assert len(messages[2]["content"]) <= 100
@@ -675,7 +675,7 @@ def test_user_prompt_submit_injects_context(hook_registry):
     chat = FakeChat(make_turn("好的"))
     messages = [{"role": "user", "content": "原始问题"}]
 
-    agent_loop(messages, config=CONFIG, chat=chat)
+    run_loop(messages, config=CONFIG, chat=chat)
 
     assert messages[0]["content"] == "原始问题"
     assert chat.requests[0]["messages"][0]["content"] == "原始问题"
@@ -692,7 +692,7 @@ def test_environment_block_lists_the_runs_tools(hook_registry):
     messages = [{"role": "user", "content": "读"}]
     only_read = [item for item in TOOLS if item["function"]["name"] == "read_file"]
 
-    agent_loop(
+    run_loop(
         messages,
         config=CONFIG,
         chat=chat,
@@ -709,7 +709,7 @@ def test_user_prompt_submit_receives_the_prompt(hook_registry):
     seen = []
     hook_registry.register("UserPromptSubmit", lambda ctx: seen.append(ctx["prompt"]))
 
-    agent_loop([{"role": "user", "content": "问题"}], config=CONFIG, chat=FakeChat(make_turn("好")))
+    run_loop([{"role": "user", "content": "问题"}], config=CONFIG, chat=FakeChat(make_turn("好")))
 
     assert seen == ["问题"]
 
@@ -719,7 +719,7 @@ def test_user_prompt_submit_can_block_the_model_call(hook_registry):
     chat = FakeChat(make_turn("不该被调用"))
     messages = [{"role": "user", "content": "问题"}]
 
-    assert agent_loop(messages, config=CONFIG, chat=chat) == ""
+    assert run_loop(messages, config=CONFIG, chat=chat) == ""
     assert chat.requests == []
 
 
@@ -728,7 +728,7 @@ def test_user_prompt_submit_skipped_without_a_user_message(hook_registry):
     hook_registry.register("UserPromptSubmit", lambda ctx: fired.append(1))
     messages = [{"role": "assistant", "content": "之前的话"}]
 
-    agent_loop(messages, config=CONFIG, chat=FakeChat(make_turn("嗯")))
+    run_loop(messages, config=CONFIG, chat=FakeChat(make_turn("嗯")))
 
     assert fired == []
 
@@ -740,7 +740,7 @@ def test_stop_is_triggered_before_returning(hook_registry):
     seen = []
     hook_registry.register("Stop", lambda ctx: seen.append((ctx["rounds"], ctx["final_text"])))
 
-    agent_loop([{"role": "user", "content": "x"}], config=CONFIG, chat=FakeChat(make_turn("答案")))
+    run_loop([{"role": "user", "content": "x"}], config=CONFIG, chat=FakeChat(make_turn("答案")))
 
     assert seen == [(1, "答案")]
 
@@ -750,7 +750,7 @@ def test_stop_hook_can_block_exit_once(hook_registry):
     chat = FakeChat(make_turn("第一次"), make_turn("第二次"))
     messages = [{"role": "user", "content": "x"}]
 
-    result = agent_loop(messages, config=CONFIG, chat=chat, max_stop_blocks=1)
+    result = run_loop(messages, config=CONFIG, chat=chat, max_stop_blocks=1)
 
     assert result == "第二次"
     assert len(chat.requests) == 2
@@ -761,7 +761,7 @@ def test_stop_block_is_capped(hook_registry):
     chat = FakeChat(*[make_turn(f"第{i}次") for i in range(5)])
     messages = [{"role": "user", "content": "x"}]
 
-    result = agent_loop(messages, config=CONFIG, chat=chat, max_stop_blocks=1)
+    result = run_loop(messages, config=CONFIG, chat=chat, max_stop_blocks=1)
 
     assert result == "第1次"
     assert len(chat.requests) == 2
@@ -776,7 +776,7 @@ def test_stop_nudge_is_appended_and_redirects_the_model(hook_registry):
     chat = FakeChat(make_turn("草稿"), make_turn("结论"))
     messages = [{"role": "user", "content": "x"}]
 
-    result = agent_loop(messages, config=CONFIG, chat=chat, max_stop_blocks=1)
+    result = run_loop(messages, config=CONFIG, chat=chat, max_stop_blocks=1)
 
     assert result == "结论"
     assert messages[2] == {"role": "user", "content": "别忘了给出结论"}
@@ -786,7 +786,7 @@ def test_stop_block_disabled_when_budget_is_zero(hook_registry):
     hook_registry.register("Stop", lambda ctx: BLOCK)
     chat = FakeChat(make_turn("唯一一轮"))
 
-    result = agent_loop(
+    result = run_loop(
         [{"role": "user", "content": "x"}],
         config=CONFIG,
         chat=chat,
@@ -807,7 +807,7 @@ def test_stop_receives_run_statistics(hook_registry):
     )
     messages = [{"role": "user", "content": "读"}]
 
-    agent_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a: "x"})
+    run_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a: "x"})
 
     assert seen == [(1, 0)]
 
@@ -824,7 +824,7 @@ def test_hard_deny_message_reaches_the_model(hook_registry):
     )
     messages = [{"role": "user", "content": "清理一下"}]
 
-    agent_loop(
+    run_loop(
         messages,
         config=CONFIG,
         chat=chat,
@@ -845,7 +845,7 @@ def test_hook_supplied_denied_content_is_used(hook_registry):
     chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
     messages = [{"role": "user", "content": "读"}]
 
-    agent_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a: "x"})
+    run_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a: "x"})
 
     assert messages[2]["content"] == "自定义拒绝文案"
 
@@ -855,7 +855,7 @@ def test_block_without_denied_content_falls_back_to_the_default(hook_registry):
     chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
     messages = [{"role": "user", "content": "读"}]
 
-    agent_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a: "x"})
+    run_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a: "x"})
 
     assert messages[2]["content"] == "Permission denied."
 
@@ -866,7 +866,7 @@ def test_block_without_denied_content_falls_back_to_the_default(hook_registry):
 def test_system_prompt_asks_for_a_plan_first(hook_registry):
     chat = FakeChat(make_turn("好的"))
 
-    agent_loop([{"role": "user", "content": "x"}], config=CONFIG, chat=chat)
+    run_loop([{"role": "user", "content": "x"}], config=CONFIG, chat=chat)
 
     assert "todo_write" in chat.requests[0]["system"]
 
@@ -886,7 +886,7 @@ def test_todo_write_result_is_returned_to_the_model(hook_registry):
     )
     messages = [{"role": "user", "content": "x"}]
 
-    agent_loop(messages, config=CONFIG, chat=chat)
+    run_loop(messages, config=CONFIG, chat=chat)
 
     assert "已更新 TODO" in messages[2]["content"]
     assert "第一步" in messages[2]["content"]
@@ -905,11 +905,11 @@ def test_todo_state_does_not_leak_between_runs(hook_registry):
         ),
         make_turn("好了"),
     )
-    agent_loop([{"role": "user", "content": "x"}], config=CONFIG, chat=first)
+    run_loop([{"role": "user", "content": "x"}], config=CONFIG, chat=first)
 
     messages = [{"role": "user", "content": "x"}]
     second = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好了"))
-    agent_loop(
+    run_loop(
         messages,
         config=CONFIG,
         chat=second,
@@ -943,7 +943,7 @@ def test_plan_block_follows_the_todo_list(hook_registry):
     )
     messages = [{"role": "user", "content": "x"}]
 
-    agent_loop(messages, config=CONFIG, chat=chat)
+    run_loop(messages, config=CONFIG, chat=chat)
 
     first = chat.requests[0]["messages"][-1]["content"]
     second = chat.requests[1]["messages"][-1]["content"]
@@ -974,7 +974,7 @@ def test_plan_is_visible_to_the_model_on_every_round(hook_registry):
     )
     messages = [{"role": "user", "content": "x"}]
 
-    agent_loop(messages, config=CONFIG, chat=chat)
+    run_loop(messages, config=CONFIG, chat=chat)
 
     # 提交计划之后的每一轮请求，末尾的 tail 都带着当前计划（不再是每 N 轮提醒一次）
     assert "当前计划" not in chat.requests[0]["messages"][-1]["content"]
@@ -1009,7 +1009,7 @@ def test_skill_catalog_reaches_the_model(hook_registry, tmp_path, monkeypatch):
     write_skill(root, "demo", "---\ndescription: 演示技能\n---\n正文")
 
     chat = FakeChat(make_turn("好的"))
-    agent_loop([{"role": "user", "content": "x"}], config=CONFIG, chat=chat)
+    run_loop([{"role": "user", "content": "x"}], config=CONFIG, chat=chat)
 
     assert "- demo: 演示技能" in chat.requests[0]["system"]
 
@@ -1018,13 +1018,13 @@ def test_catalog_changes_are_picked_up_on_the_next_run(hook_registry, tmp_path, 
     root = point_skills_at(tmp_path, monkeypatch)
 
     first = FakeChat(make_turn("好的"))
-    agent_loop([{"role": "user", "content": "x"}], config=CONFIG, chat=first)
+    run_loop([{"role": "user", "content": "x"}], config=CONFIG, chat=first)
     assert "demo" not in first.requests[0]["system"]
 
     write_skill(root, "demo", "---\ndescription: 新加的\n---\n正文")
 
     second = FakeChat(make_turn("好的"))
-    agent_loop([{"role": "user", "content": "x"}], config=CONFIG, chat=second)
+    run_loop([{"role": "user", "content": "x"}], config=CONFIG, chat=second)
     assert "- demo: 新加的" in second.requests[0]["system"]
 
 
@@ -1038,7 +1038,7 @@ def test_load_skill_returns_the_full_text_as_tool_result(hook_registry, tmp_path
     )
     messages = [{"role": "user", "content": "x"}]
 
-    agent_loop(messages, config=CONFIG, chat=chat)
+    run_loop(messages, config=CONFIG, chat=chat)
 
     assert messages[2]["role"] == "tool"
     assert "这是技能的全文。" in messages[2]["content"]
@@ -1060,7 +1060,7 @@ def test_unknown_skill_returns_error_text_without_raising(hook_registry, tmp_pat
     )
     messages = [{"role": "user", "content": "x"}]
 
-    result = agent_loop(messages, config=CONFIG, chat=chat)
+    result = run_loop(messages, config=CONFIG, chat=chat)
 
     assert messages[2]["content"] == "错误：没有这个技能「nope」。可用：（无）"
     assert result == "好的"
@@ -1080,7 +1080,7 @@ def test_context_pipeline_runs_before_every_model_call(hook_registry, monkeypatc
     )
 
     chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
-    agent_loop(
+    run_loop(
         [{"role": "user", "content": "x"}],
         config=CONFIG,
         chat=chat,
@@ -1111,7 +1111,7 @@ def test_prompt_too_long_triggers_one_reactive_retry(hook_registry, monkeypatch)
     )
     messages = [{"role": "user", "content": "x"}]
 
-    result = agent_loop(messages, config=CONFIG, chat=fake_chat)
+    result = run_loop(messages, config=CONFIG, chat=fake_chat)
 
     assert result == "好的"
     assert calls == {"chat": 2, "reactive": 1}
@@ -1136,7 +1136,7 @@ def test_reactive_is_not_retried_twice(hook_registry, monkeypatch):
     )
 
     with pytest.raises(PromptTooLongError):
-        agent_loop(
+        run_loop(
             [{"role": "user", "content": "x"}], config=CONFIG, chat=always_too_long
         )
 
@@ -1163,7 +1163,7 @@ def test_reactive_retry_sends_the_compressed_history(hook_registry, monkeypatch)
         "avid.agent.context.ContextManager.reactive", fake_reactive
     )
 
-    agent_loop([{"role": "user", "content": "x"}], config=CONFIG, chat=fake_chat)
+    run_loop([{"role": "user", "content": "x"}], config=CONFIG, chat=fake_chat)
 
     # tail 块挂在请求末尾（不落库），所以历史本体看第一条就够
     assert seen[0][0] == "x"
@@ -1179,7 +1179,7 @@ def test_compaction_is_logged(hook_registry, monkeypatch, caplog):
     )
 
     with caplog.at_level("INFO", logger="avid.agent.context"):
-        agent_loop(
+        run_loop(
             [{"role": "user", "content": "x"}],
             config=CONFIG,
             chat=FakeChat(make_turn("好的")),
@@ -1200,7 +1200,7 @@ def test_compaction_count_reaches_the_stop_hook(hook_registry, monkeypatch):
     seen = []
     hook_registry.register("Stop", lambda ctx: seen.append(ctx["compactions"]))
 
-    agent_loop(
+    run_loop(
         [{"role": "user", "content": "x"}],
         config=CONFIG,
         chat=FakeChat(make_turn("好的")),
@@ -1221,12 +1221,12 @@ def test_run_state_is_created_per_run(hook_registry, monkeypatch):
         "avid.agent.context.ContextManager._compact", fake_compact
     )
 
-    agent_loop(
+    run_loop(
         [{"role": "user", "content": "a"}],
         config=CONFIG,
         chat=FakeChat(make_turn("好")),
     )
-    agent_loop(
+    run_loop(
         [{"role": "user", "content": "b"}],
         config=CONFIG,
         chat=FakeChat(make_turn("好")),
@@ -1260,7 +1260,7 @@ def test_injected_budget_lowers_the_compaction_threshold(tmp_path, hook_registry
     def run(budget):
         events = []
         summaries = FakeChat(make_turn("[摘要] 早前的读取"))
-        text = agent_loop(
+        text = run_loop(
             [{"role": "user", "content": "把 5 份文件都读一遍"}],
             config=CONFIG,
             chat=FakeChat(*turns, make_turn("读完了")),
@@ -1289,6 +1289,6 @@ def test_loop_does_not_cap_the_output_budget(hook_registry):
     """
     chat = FakeChat(make_turn("你好"))
 
-    agent_loop([{"role": "user", "content": "hi"}], config=CONFIG, chat=chat)
+    run_loop([{"role": "user", "content": "hi"}], config=CONFIG, chat=chat)
 
     assert chat.requests[0].get("max_tokens") is None

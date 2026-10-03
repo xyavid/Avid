@@ -81,22 +81,25 @@ def test_a1_services_is_also_checked_for_web_framework_imports():
 # ---------------- A3 ----------------
 
 
-def test_a3_loop_is_still_only_a_scheduler():
-    # 旧 loop.py 保留（subagent 递归用）：调度约束继续按文件钉。
-    loop = (SRC / "agent" / "loop.py").read_text(encoding="utf-8")
-    assert loop.count("state.hooks.trigger(") == 2, (
-        "循环只该有 UserPromptSubmit 与 Stop 两个 hook 调用点"
+def test_a3_run_is_the_only_loop_and_stays_a_scheduler():
+    # 唯一的循环是 agent/run.py 的 Run：调度段只该有 UserPromptSubmit 一个
+    # hook 触发点（Stop 的触发点在终止路径 stop.py），也不该有手写 while。
+    run = (SRC / "agent" / "run.py").read_text(encoding="utf-8")
+    stop = (SRC / "agent" / "stop.py").read_text(encoding="utf-8")
+    assert run.count("state.hooks.trigger(") == 1, (
+        "调度层只该有 UserPromptSubmit 一个 hook 调用点（Stop 在 stop.decide）"
     )
-    assert "while " not in loop, "循环里不该出现手写 while"
+    assert stop.count("state.hooks.trigger(") == 1, "终止路径只该有 Stop 一个 hook 调用点"
+    assert "while " not in run, "循环里不该出现手写 while"
 
-    # 没有第二份 agent 循环：旧 agent_loop 的调用点只剩「subagent + 自身」
-    # （cli 与 svc 都已切新 Run；subagent 在阶段 41 切换后 loop.py 整体删除）。
+    # 没有第二份循环：Run 的调用点固定为「三个接线点」（run.py 只定义不调用）。
     callers = {
         item.split(":")[0]
-        for item in code_hits(files_under(suffix=".py"), r"agent_loop\(")
+        for item in code_hits(files_under(suffix=".py"), r"\bRun\(")
     }
     assert callers == {
-        "avid/agent/loop.py",
+        "avid/cli.py",
+        "avid/services/runs.py",
         "avid/agent/tools/subagent.py",
     }, callers
 
@@ -105,9 +108,7 @@ def test_a3_loop_is_still_only_a_scheduler():
 
 
 def test_a3_observation_points_are_declared_once():
-    loop = (SRC / "agent" / "loop.py").read_text(encoding="utf-8")
     run = (SRC / "agent" / "run.py").read_text(encoding="utf-8")
-    assert "on_message" in loop and "on_event" in loop
     assert "on_message" in run and "on_event" in run
 
 
@@ -146,9 +147,7 @@ def test_a10_on_message_wiring_stays_in_four_places():
         item.split(":")[0]
         for item in hits(files_under(suffix=".py"), r"on_message")
     }
-    # run.py 是新流程的出口实现，与旧 loop.py 并存（subagent 仍走旧循环）
     assert found == {
-        "avid/agent/loop.py",
         "avid/agent/run.py",
         "avid/session/recorder.py",
         "avid/cli.py",
@@ -247,7 +246,6 @@ AGENT_SECURITY_EDGES: dict[str, set[str]] = {
     "avid/agent/tools/subagent.py": {"security.permission"},
 }
 SECURITY_FREE_AGENT = (
-    "avid/agent/loop.py",
     "avid/agent/execution.py",
     "avid/agent/spec.py",
     "avid/agent/run.py",
@@ -288,7 +286,6 @@ def test_a13_type_checking_imports_stay_inert():
     TYPE_CHECKING 下出现，"零运行时依赖"不是因为名字没出现，而是 import 真没执行。
     """
     for name in (
-        "avid/agent/loop.py",
         "avid/agent/spec.py",
         "avid/agent/run.py",
         "avid/agent/stop.py",

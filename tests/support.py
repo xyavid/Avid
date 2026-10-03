@@ -196,3 +196,24 @@ def bound_workspace(services: Any) -> str:
 
 def new_session(services: Any, name: str | None = None) -> str:
     return services.sessions.create(workspace=bound_workspace(services), name=name)["id"]
+
+
+def run_loop(messages, *, on_message=None, ask=None, on_event=None, state=None, **spec_kwargs):
+    """旧 ``agent_loop`` 的测试入口：同一 kwarg 面，落到 ``RunSpec.resolve`` + ``Run``。
+
+    loop.py 已删除（阶段 41 统一到 Run）；需要最终文本的用例拿返回值，
+    需要结束原因的用例直接用 ``Run``（返回 ``RunOutcome``）。
+    """
+    from avid.agent.run import Run
+    from avid.agent.spec import RunSpec
+
+    outcome = Run(
+        messages,
+        RunSpec.resolve(**spec_kwargs),
+        state=state,
+        on_message=on_message,
+        ask=ask,
+        on_event=on_event,
+    ).run()
+    return outcome.text
+

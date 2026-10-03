@@ -31,8 +31,7 @@ from ..agent.events import (
     RunEvent,
     now_ms,
 )
-from ..agent.loop import RunCancelled
-from ..agent.run import Run
+from ..agent.run import Run, RunCancelled
 from ..agent.spec import RunSpec
 from ..agent.state import RunState
 from ..agent.tools import TOOLS, build_toolset

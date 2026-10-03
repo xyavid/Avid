@@ -14,8 +14,7 @@ from support import ScriptedChat, make_turn, tool_call
 
 from avid.agent.events import RUN_STATUS, STOP_NUDGE
 from avid.agent.hooks import DEFAULT_HOOKS
-from avid.agent.loop import RunCancelled, agent_loop
-from avid.agent.run import Run
+from avid.agent.run import Run, RunCancelled
 from avid.agent.spec import RunSpec
 from avid.agent.state import RunState
 from avid.agent.stop import STOP_BLANK_NOTICE, STOP_FINAL_TEXT
@@ -28,30 +27,15 @@ USER = {"role": "user", "content": "读 a.txt"}
 
 
 def drive(*turns, registry=None, messages=None):
-    """同一份脚本与工具分别喂给旧 agent_loop 与新 Run，断言四层产物一致。"""
+    """唯一循环跑一份脚本：结束结果返回给用例，脚本本身严格限制轮数。"""
     base = messages if messages is not None else [dict(USER)]
-    messages_old = [dict(m) for m in base]
-    messages_new = [dict(m) for m in base]
-    emitted_old: list[dict] = []
-    emitted_new: list[dict] = []
-    chat_old = ScriptedChat(*turns)
-    chat_new = ScriptedChat(*copy.deepcopy(list(turns)))
+    messages_run = [dict(m) for m in base]
+    emitted: list[dict] = []
+    chat = ScriptedChat(*copy.deepcopy(list(turns)))
 
-    text_old = agent_loop(
-        messages_old,
-        config=CONFIG,
-        chat=chat_old,
-        registry=registry or {},
-        on_message=emitted_old.append,
-    )
-    spec = RunSpec.resolve(config=CONFIG, chat=chat_new, registry=registry or {})
-    outcome_new = Run(messages_new, spec, on_message=emitted_new.append).run()
-
-    assert text_old == outcome_new.text
-    assert messages_old == messages_new
-    assert emitted_old == emitted_new
-    assert chat_old.requests == chat_new.requests
-    return outcome_new
+    spec = RunSpec.resolve(config=CONFIG, chat=chat, registry=registry or {})
+    outcome = Run(messages_run, spec, on_message=emitted.append).run()
+    return outcome
 
 
 # ---------------- 一致性用例 ----------------
@@ -76,8 +60,7 @@ def test_two_round_tool_use_is_identical():
         registry={"read_file": read_file},
     )
     assert outcome.text == "读到了"
-    # registry 在旧/新两条流程间共享，handler 各执行一次
-    assert seen == [{"path": "a.txt"}] * 2
+    assert seen == [{"path": "a.txt"}]
 
 
 def test_unknown_tool_becomes_tool_result_identically():

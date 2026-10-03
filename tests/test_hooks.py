@@ -461,8 +461,9 @@ def test_two_runs_use_different_registries():
     （含子 agent），测试也只能 monkeypatch 全局字典来隔离。现在"这次运行用哪份"
     是一个能看见、能替换的值——这条用例在旧设计下根本写不出来。
     """
+    from support import run_loop
+
     from avid.agent.hooks import HookRegistry
-    from avid.agent.loop import agent_loop
     from avid.agent.state import RunState
     from avid.providers.client import Turn, Usage
     from avid.providers.config import Config
@@ -500,7 +501,7 @@ def test_two_runs_use_different_registries():
 
     def run(registry):
         state = RunState.for_run(hooks=registry, auto_approve=True)
-        agent_loop(
+        run_loop(
             [{"role": "user", "content": "hi"}],
             config=config,
             chat=Chat(),

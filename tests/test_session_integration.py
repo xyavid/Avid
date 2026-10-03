@@ -10,10 +10,10 @@ from __future__ import annotations
 import itertools
 
 import pytest
+from support import run_loop
 
 from avid.agent.context import TAIL_HEADER
 from avid.agent.hooks import BLOCK
-from avid.agent.loop import agent_loop
 from avid.agent.state import RunState
 from avid.providers.client import Turn, Usage
 from avid.providers.config import Config
@@ -81,7 +81,7 @@ def test_every_settled_message_is_persisted_in_order(hook_registry, session):
     messages = [{"role": "user", "content": "你好"}]
     chat = FakeChat(make_turn("答"))
 
-    assert agent_loop(messages, config=CONFIG, chat=chat, on_message=recorder.on_message) == "答"
+    assert run_loop(messages, config=CONFIG, chat=chat, on_message=recorder.on_message) == "答"
 
     assert recorder.count == 2
     assert messages_for_branch(session) == messages
@@ -92,7 +92,7 @@ def test_tool_round_trip_is_persisted(hook_registry, session):
     messages = [{"role": "user", "content": "读文件"}]
     chat = FakeChat(make_turn("", [tool_call()]), make_turn("读完"))
 
-    agent_loop(
+    run_loop(
         messages,
         config=CONFIG,
         chat=chat,
@@ -109,14 +109,14 @@ def test_tool_round_trip_is_persisted(hook_registry, session):
 def test_second_run_continues_from_the_session(hook_registry, session):
     recorder = SessionRecorder(session)
     first = [{"role": "user", "content": "第一问"}]
-    agent_loop(first, config=CONFIG, chat=FakeChat(make_turn("第一答")), on_message=recorder.on_message)
+    run_loop(first, config=CONFIG, chat=FakeChat(make_turn("第一答")), on_message=recorder.on_message)
 
     history = messages_for_branch(session)
     assert [message["content"] for message in history] == ["第一问", "第一答"]
 
     second = [*history, {"role": "user", "content": "第二问"}]
     chat = FakeChat(make_turn("第二答"))
-    agent_loop(second, config=CONFIG, chat=chat, on_message=recorder.on_message)
+    run_loop(second, config=CONFIG, chat=chat, on_message=recorder.on_message)
 
     def visible(request):
         """发给模型的历史（tail 块每轮重渲染且不落库，不参与这条断言）。"""
@@ -154,7 +154,7 @@ def test_trigger_message_is_recorded_verbatim(hook_registry, session):
     messages = [{"role": "user", "content": "原始问题"}]
     chat = FakeChat(make_turn("答"))
 
-    agent_loop(messages, config=CONFIG, chat=chat, on_message=recorder.on_message)
+    run_loop(messages, config=CONFIG, chat=chat, on_message=recorder.on_message)
 
     stored = messages_for_branch(session)
     assert [message["content"] for message in stored] == ["原始问题", "答"]
@@ -176,7 +176,7 @@ def test_stop_nudge_is_persisted(hook_registry, session):
     messages = [{"role": "user", "content": "问题"}]
     chat = FakeChat(make_turn("第一答"), make_turn("第二答"))
 
-    agent_loop(messages, config=CONFIG, chat=chat, on_message=recorder.on_message)
+    run_loop(messages, config=CONFIG, chat=chat, on_message=recorder.on_message)
 
     assert [message["content"] for message in messages_for_branch(session)] == [
         "问题",
@@ -188,7 +188,7 @@ def test_stop_nudge_is_persisted(hook_registry, session):
 
 def test_without_recorder_the_session_stays_empty(hook_registry, session):
     messages = [{"role": "user", "content": "你好"}]
-    agent_loop(messages, config=CONFIG, chat=FakeChat(make_turn("答")))
+    run_loop(messages, config=CONFIG, chat=FakeChat(make_turn("答")))
     assert session.get_stats().message_count == 0
     assert session.find_entries() == []
 
@@ -200,7 +200,7 @@ def test_recording_failure_stops_the_run_before_calling_the_model(hook_registry,
     messages = [{"role": "user", "content": "你好"}]
 
     with pytest.raises(SessionClosedError):
-        agent_loop(messages, config=CONFIG, chat=chat, on_message=recorder.on_message)
+        run_loop(messages, config=CONFIG, chat=chat, on_message=recorder.on_message)
     assert chat.requests == []
 
 
@@ -210,7 +210,7 @@ def test_history_is_not_re_recorded(hook_registry, session):
     recorder.on_message({"role": "assistant", "content": "旧的答"})
 
     messages = [*messages_for_branch(session), {"role": "user", "content": "新的"}]
-    agent_loop(messages, config=CONFIG, chat=FakeChat(make_turn("新答")), on_message=recorder.on_message)
+    run_loop(messages, config=CONFIG, chat=FakeChat(make_turn("新答")), on_message=recorder.on_message)
 
     assert [message["content"] for message in messages_for_branch(session)] == [
         "旧的",

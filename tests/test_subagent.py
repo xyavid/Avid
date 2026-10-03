@@ -212,30 +212,49 @@ def test_auto_approve_defaults_to_false(monkeypatch):
 
 
 def test_run_subagent_initialises_messages_with_the_prompt(monkeypatch):
-    from avid.agent import loop as agent_module
+    import dataclasses
+
+    from avid.agent import run as run_module
 
     seen = {}
 
-    def fake_loop(messages, **kwargs):
-        seen["messages"] = messages
-        seen.update(kwargs)
-        return "摘要"
+    class FakeRun:
+        def __init__(self, messages, spec, **kwargs):
+            seen["messages"] = messages
+            seen["spec"] = spec
+            seen.update(kwargs)
 
-    monkeypatch.setattr(agent_module, "agent_loop", fake_loop)
+        def run(self):
+            class _Outcome:
+                text = "摘要"
+
+            return _Outcome()
+
+    monkeypatch.setattr(run_module, "Run", FakeRun)
 
     assert run_subagent("任务原文", config=CONFIG) == "摘要"
     assert seen["messages"] == [{"role": "user", "content": "任务原文"}]
-    assert seen["system"] == SUB_SYSTEM
-    assert seen["tools"] is SUB_TOOLS
-    assert seen["registry"] is SUB_HANDLERS
+    assert seen["spec"].instructions == SUB_SYSTEM
+    assert seen["spec"].tools is SUB_TOOLS
+    assert seen["spec"].registry is SUB_HANDLERS
     # 子 agent 不传任何轮数预算：内核没有这个概念（旧代码在这里写死过 30 轮）。
-    assert "max_rounds" not in seen
+    assert "max_rounds" not in {f.name for f in dataclasses.fields(seen["spec"])}
 
 
 def test_run_subagent_returns_no_summary_for_empty_text(monkeypatch):
-    from avid.agent import loop as agent_module
+    from avid.agent import run as run_module
 
-    monkeypatch.setattr(agent_module, "agent_loop", lambda *a, **k: "   ")
+    class FakeRun:
+        def __init__(self, messages, spec, **kwargs):
+            pass
+
+        def run(self):
+            class _Outcome:
+                text = "   "
+
+            return _Outcome()
+
+    monkeypatch.setattr(run_module, "Run", FakeRun)
 
     assert run_subagent("随便", config=CONFIG) == "(no summary)"
 
@@ -244,7 +263,7 @@ def test_run_subagent_returns_no_summary_for_empty_text(monkeypatch):
 
 
 def test_check_cancelled_consults_the_external_probe():
-    from avid.agent.loop import RunCancelled
+    from avid.agent.run import RunCancelled
 
     state = RunState(cancel_probe=lambda: "外部要求停止")
 
@@ -286,17 +305,21 @@ def test_usage_report_carries_subagent_totals():
 
 def test_run_subagent_wires_probe_observer_and_state(monkeypatch):
     """run_subagent 自建子 RunState：probe/observer 落在它身上，引用交给 on_state。"""
-    from avid.agent import loop as agent_module
-    from avid.agent.loop import RunCancelled
+    from avid.agent import run as run_module
+    from avid.agent.run import RunCancelled
 
     seen = {}
 
-    def fake_loop(messages, *, state=None, **kwargs):
-        seen["state"] = state
-        state.check_cancelled()  # probe 在这里生效
-        return "不该到这里"
+    class FakeRun:
+        def __init__(self, messages, spec, *, state=None, **kwargs):
+            seen["state"] = state
+            self._state = state
 
-    monkeypatch.setattr(agent_module, "agent_loop", fake_loop)
+        def run(self):
+            self._state.check_cancelled()  # probe 在这里生效
+            return "不该到这里"
+
+    monkeypatch.setattr(run_module, "Run", FakeRun)
 
     kept = []
     with pytest.raises(RunCancelled, match="父已取消"):
@@ -315,15 +338,23 @@ def test_run_subagent_wires_probe_observer_and_state(monkeypatch):
 def test_subagent_tags_child_events_and_adopts_usage(monkeypatch):
     """子事件带 subagent 标记进父事件流；结束后子 token 并进父台账。"""
     import avid.agent.events as runtime_events
-    from avid.agent import loop as agent_module
+    from avid.agent import run as run_module
     from avid.providers.usage import Usage
 
-    def fake_loop(messages, *, state=None, **kwargs):
-        state.record_usage(Usage(5, 2, 7))
-        state.emit(runtime_events.RUN_STATUS, round=1, tokens=7, activity="model")
-        return "ok"
+    class FakeRun:
+        def __init__(self, messages, spec, *, state=None, **kwargs):
+            self._state = state
 
-    monkeypatch.setattr(agent_module, "agent_loop", fake_loop)
+        def run(self):
+            self._state.record_usage(Usage(5, 2, 7))
+            self._state.emit(runtime_events.RUN_STATUS, round=1, tokens=7, activity="model")
+
+            class _Outcome:
+                text = "ok"
+
+            return _Outcome()
+
+    monkeypatch.setattr(run_module, "Run", FakeRun)
 
     parent = RunState()
     collected = []
@@ -341,16 +372,20 @@ def test_subagent_tags_child_events_and_adopts_usage(monkeypatch):
 
 def test_parent_cancel_surfaces_quickly(monkeypatch):
     """父取消后 collect 提前收敛返回，不再等慢子任务自然结束。"""
-    from avid.agent import loop as agent_module
+    from avid.agent import run as run_module
 
     started = threading.Event()
 
-    def fake_loop(messages, *, state=None, **kwargs):
-        started.set()
-        time.sleep(5)  # 比测试耐心长得多
-        return "太慢"
+    class FakeRun:
+        def __init__(self, messages, spec, **kwargs):
+            pass
 
-    monkeypatch.setattr(agent_module, "agent_loop", fake_loop)
+        def run(self):
+            started.set()
+            time.sleep(5)  # 比测试耐心长得多
+            return "太慢"
+
+    monkeypatch.setattr(run_module, "Run", FakeRun)
 
     parent = RunState()
 
@@ -371,21 +406,25 @@ def test_parent_cancel_surfaces_quickly(monkeypatch):
 
 def test_deadline_reaches_child_checkpoints(monkeypatch):
     """墙钟到点：超时文案照回，同时子任务在下个检查点被 probe 停掉（不再是孤儿）。"""
-    from avid.agent import loop as agent_module
-    from avid.agent.loop import RunCancelled
+    from avid.agent import run as run_module
+    from avid.agent.run import RunCancelled
 
     raised = []
 
-    def fake_loop(messages, *, state=None, **kwargs):
-        time.sleep(0.3)  # 超过 timeout
-        try:
-            state.check_cancelled()
-        except RunCancelled as exc:
-            raised.append(str(exc))
-            raise
-        return "不该到这里"
+    class FakeRun:
+        def __init__(self, messages, spec, *, state=None, **kwargs):
+            self._state = state
 
-    monkeypatch.setattr(agent_module, "agent_loop", fake_loop)
+        def run(self):
+            time.sleep(0.3)  # 超过 timeout
+            try:
+                self._state.check_cancelled()
+            except RunCancelled as exc:
+                raised.append(str(exc))
+                raise
+            return "不该到这里"
+
+    monkeypatch.setattr(run_module, "Run", FakeRun)
 
     result = run({"tasks": [task("慢", "p")]}, timeout=0.1)
     assert "timed out" in result

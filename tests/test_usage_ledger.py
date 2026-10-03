@@ -266,9 +266,6 @@ def _window_probe(monkeypatch, *, window=200_000):
 
     http = httpx.Client(transport=httpx.MockTransport(handler))
     monkeypatch.setattr(client_module, "shared_client", lambda: http)
-    monkeypatch.setattr(
-        "avid.agent.loop.shared_client", lambda: http, raising=False
-    )
     return http
 
 
@@ -278,7 +275,7 @@ def test_loop_probes_the_window_and_reports_utilization(monkeypatch):
     两条路径都要覆盖：CLI（`agent_loop` 自己建 state）与 Web（svc 先建 state 再进循环，
     探测结果必须回填进那份 state）。
     """
-    from avid.agent.loop import agent_loop
+    from support import run_loop
 
     http = _window_probe(monkeypatch)
     try:
@@ -286,7 +283,7 @@ def test_loop_probes_the_window_and_reports_utilization(monkeypatch):
         assert config.context_window is None
 
         built = RunState(observer=lambda event: None)
-        agent_loop(
+        run_loop(
             [{"role": "user", "content": "问题"}],
             config=config,
             chat=ScriptedChat(make_turn("答")),
@@ -298,7 +295,7 @@ def test_loop_probes_the_window_and_reports_utilization(monkeypatch):
 
         # 探测结果是进程内缓存：第二次运行不再打端点。
         fresh = RunState(observer=lambda event: None)
-        agent_loop(
+        run_loop(
             [{"role": "user", "content": "又一轮"}],
             config=config,
             chat=ScriptedChat(make_turn("答")),

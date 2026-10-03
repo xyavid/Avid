@@ -73,7 +73,8 @@ def run_subagent(
     another thread inherits no run state.
     """
     # A deferred import, since agent/state.py imports this package for the tool tables.
-    from ..loop import agent_loop
+    from ..run import Run
+    from ..spec import RunSpec
     from ..state import RunState
     from . import SUB_HANDLERS, SUB_TOOLS
 
@@ -93,17 +94,16 @@ def run_subagent(
         on_state(child_state)
 
     messages = [{"role": "user", "content": prompt}]
-    text = agent_loop(
-        messages,
-        system=SUB_SYSTEM,
-        tools=SUB_TOOLS,
-        registry=SUB_HANDLERS,
+    spec = RunSpec.resolve(
         config=config or resolve_chat(),
         chat=chat,
-        state=child_state,
+        instructions=SUB_SYSTEM,
+        tools=SUB_TOOLS,
+        registry=SUB_HANDLERS,
     )
+    outcome = Run(messages, spec, state=child_state).run()
 
-    return _no_summary(text)
+    return _no_summary(outcome.text)
 
 
 def _validate(raw: Any) -> list[dict[str, str]]:

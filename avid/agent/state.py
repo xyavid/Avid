@@ -236,13 +236,13 @@ class RunState:
     def check_cancelled(self) -> None:
         """Called at the loop's checkpoints; it raises RunCancelled when the run should stop."""
         if self.cancelled:
-            from .loop import RunCancelled
+            from .run import RunCancelled
 
             raise RunCancelled(self.cancel_reason or "cancelled")
         if self.cancel_probe is not None:
             reason = self.cancel_probe()
             if reason:
-                from .loop import RunCancelled
+                from .run import RunCancelled
 
                 raise RunCancelled(reason)
 
