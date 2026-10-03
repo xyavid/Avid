@@ -19,7 +19,7 @@ from .policy.permission import (
     migrate_mode,
     validate_mode,
 )
-from .runtime.events import now_ms
+from .runtime import now_ms
 
 logger = logging.getLogger("avid.workspaces")
 

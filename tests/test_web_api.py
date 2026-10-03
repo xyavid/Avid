@@ -21,7 +21,7 @@ from support import (
     wait_for,
 )
 
-from avid.runtime import events
+from avid.runtime import ASSISTANT_MESSAGE, EVENT_TYPES, TOOL_RESULT_MESSAGE, USER_MESSAGE
 from avid.session import SessionRecorder
 from avid.svc import API_VERSION, FEATURES, Services
 from avid.web import create_app
@@ -449,7 +449,7 @@ def test_every_durable_message_event_maps_to_one_entry(bundle):
         event
         for event in collect(services, run_id)
         if event.type
-        in (events.USER_MESSAGE, events.ASSISTANT_MESSAGE, events.TOOL_RESULT_MESSAGE)
+        in (USER_MESSAGE, ASSISTANT_MESSAGE, TOOL_RESULT_MESSAGE)
     ]
     assert len(message_events) == len(entries)
     for event in message_events:
@@ -464,7 +464,7 @@ def test_every_durable_message_event_maps_to_one_entry(bundle):
 def test_meta_matches_kernel_and_features_match_endpoints(bundle):
     client, _ = bundle()
     meta = client.get("/api/meta").json()
-    assert meta["event_types"] == list(events.EVENT_TYPES)
+    assert meta["event_types"] == list(EVENT_TYPES)
     assert meta["features"] == FEATURES
     assert meta["api_version"] == API_VERSION
     assert meta["capabilities"]["model"] == "test-model"

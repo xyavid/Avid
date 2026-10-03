@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 from .registry import tool
 
 if TYPE_CHECKING:  # runtime import would be circular (state.py imports the skill loader)
-    from ..runtime.state import RunState
+    from ..runtime import RunState
 
 
 @tool(

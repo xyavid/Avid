@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from avid.runtime.events import (
+from avid.runtime import (
     DELTA_EVENT_TYPES,
     DURABLE_EVENT_TYPES,
     EVENT_TYPES,
@@ -58,7 +58,7 @@ def test_event_types_are_derived_from_the_literal():
     """
     from typing import get_args
 
-    from avid.runtime.events import EventType
+    from avid.runtime import EventType
 
     assert get_args(EventType) == EVENT_TYPES
     assert set(EventType.__args__) == set(EVENT_TYPES)
@@ -74,12 +74,12 @@ def test_stream_timing_constants_have_exactly_one_definition():
     import inspect
 
     from avid import svc
-    from avid.runtime import events as runtime_events
+    from avid.runtime import STREAM_HEARTBEAT_SECONDS, TERMINAL_FALLBACK_SECONDS
     from avid.svc.runs import RunRegistry
     from avid.web import sse
 
-    assert svc.STREAM_HEARTBEAT_SECONDS is runtime_events.STREAM_HEARTBEAT_SECONDS
-    assert svc.TERMINAL_FALLBACK_SECONDS is runtime_events.TERMINAL_FALLBACK_SECONDS
-    assert sse.HEARTBEAT_SECONDS is runtime_events.STREAM_HEARTBEAT_SECONDS
+    assert svc.STREAM_HEARTBEAT_SECONDS is STREAM_HEARTBEAT_SECONDS
+    assert svc.TERMINAL_FALLBACK_SECONDS is TERMINAL_FALLBACK_SECONDS
+    assert sse.HEARTBEAT_SECONDS is STREAM_HEARTBEAT_SECONDS
     default = inspect.signature(RunRegistry.subscribe).parameters["heartbeat"].default
-    assert default is runtime_events.STREAM_HEARTBEAT_SECONDS
+    assert default is STREAM_HEARTBEAT_SECONDS

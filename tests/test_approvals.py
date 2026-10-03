@@ -26,7 +26,14 @@ from support import (
     wait_for,
 )
 
-from avid.runtime import events
+from avid.runtime import (
+    APPROVAL_REQUESTED,
+    APPROVAL_RESOLVED,
+    RUN_CANCELLED,
+    TOOL_CALL_DENIED,
+    TOOL_CALL_STARTED,
+    TOOL_RESULT_MESSAGE,
+)
 from avid.svc import Services
 from avid.web import create_app
 
@@ -121,8 +128,8 @@ def test_approval_suspends_then_resumes(make_client):
     seqs = [event.seq for event in got if event.seq is not None]
     assert seqs == list(range(1, len(seqs) + 1))
     types = [event.type for event in got]
-    assert events.APPROVAL_REQUESTED in types and events.APPROVAL_RESOLVED in types
-    resolved = [e for e in got if e.type == events.APPROVAL_RESOLVED][0]
+    assert APPROVAL_REQUESTED in types and APPROVAL_RESOLVED in types
+    resolved = [e for e in got if e.type == APPROVAL_RESOLVED][0]
     assert resolved.data["decision"] == "allow"
     # 运行结束后待决表清空
     assert client.get(f"/api/runs/{run_id}/approvals").json()["approvals"] == []
@@ -146,12 +153,12 @@ def test_deny_stops_the_tool_message(make_client):
     assert tools.calls == []
 
     got = collect(services, run_id)
-    assert events.TOOL_CALL_DENIED in [event.type for event in got]
-    denied = [event for event in got if event.type == events.TOOL_CALL_DENIED][0]
+    assert TOOL_CALL_DENIED in [event.type for event in got]
+    denied = [event for event in got if event.type == TOOL_CALL_DENIED][0]
     # 分档是"为什么被拒"，不是"谁拒的"：`sudo` 走的是危险类别，所以这里是 danger
     # （旧版本里所有用户拒绝都记 user，于是界面分不出"危险"和"这次不行"）。
     assert denied.data["kind"] == "danger"
-    assert any(event.type == events.TOOL_RESULT_MESSAGE for event in got)
+    assert any(event.type == TOOL_RESULT_MESSAGE for event in got)
 
 
 # ---------------- B5 ----------------
@@ -183,8 +190,8 @@ def test_repeated_answer_does_not_approve_twice(make_client):
     assert len(tools.calls) == 1, "重复答复绝不二次批准"
 
     got = collect(services, run_id)
-    assert len([e for e in got if e.type == events.TOOL_CALL_STARTED]) == 1
-    assert len([e for e in got if e.type == events.APPROVAL_RESOLVED]) == 1
+    assert len([e for e in got if e.type == TOOL_CALL_STARTED]) == 1
+    assert len([e for e in got if e.type == APPROVAL_RESOLVED]) == 1
 
 
 def test_conflicting_answer_is_409_and_unknown_is_404(make_client):
@@ -230,10 +237,10 @@ def test_timeout_fails_closed(make_client):
     assert tools.calls == [], "超时一律收敛为拒绝"
 
     got = collect(services, run_id)
-    resolved = [e for e in got if e.type == events.APPROVAL_RESOLVED][0]
+    resolved = [e for e in got if e.type == APPROVAL_RESOLVED][0]
     assert resolved.data["decision"] == "deny"
     assert resolved.data["reason"] == "timeout"
-    assert events.TOOL_CALL_DENIED in [event.type for event in got]
+    assert TOOL_CALL_DENIED in [event.type for event in got]
 
     # 过期后再答复 → 410
     approval_id = resolved.data["approval_id"]
@@ -271,8 +278,8 @@ def test_cancel_does_not_lose_messages_nor_fabricate_results(make_client):
 
     got = collect(services, run_id)
     types = [event.type for event in got]
-    assert types[-1] == events.RUN_CANCELLED
-    assert events.TOOL_CALL_STARTED not in types
-    assert events.TOOL_RESULT_MESSAGE not in types
+    assert types[-1] == RUN_CANCELLED
+    assert TOOL_CALL_STARTED not in types
+    assert TOOL_RESULT_MESSAGE not in types
     seqs = [event.seq for event in got if event.seq is not None]
     assert seqs == list(range(1, len(seqs) + 1))

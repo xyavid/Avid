@@ -12,8 +12,7 @@ import pytest
 from avid.ai.config import Config
 from avid.ai.transcript import Transcript
 from avid.policy import compaction
-from avid.runtime.context_manager import ContextManager
-from avid.runtime.state import RunState
+from avid.runtime import ContextManager, RunState
 from avid.tools import shell
 from avid.tools.files import read_file, write_file
 

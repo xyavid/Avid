@@ -23,8 +23,7 @@ from .policy.permission import (
     RunSecurity,
     full_grant_error,
 )
-from .runtime.loop import agent_loop
-from .runtime.state import RunState
+from .runtime import RunState, agent_loop
 from .session import (
     JsonlSessionMetadata,
     JsonlSessionRepo,

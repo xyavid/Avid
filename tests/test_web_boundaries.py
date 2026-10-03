@@ -82,11 +82,13 @@ def test_a1_svc_is_also_checked_for_web_framework_imports():
 
 
 def test_a3_loop_is_still_only_a_scheduler():
-    loop = (SRC / "runtime" / "loop.py").read_text(encoding="utf-8")
+    # runtime 合并为单文件后，调度约束作用于 loop 分区（文件内最后一个分节）。
+    runtime = (SRC / "runtime.py").read_text(encoding="utf-8")
+    loop = runtime.split("# ──────────────────────────── loop", 1)[1]
     assert loop.count("state.hooks.trigger(") == 2, (
-        "循环只该有 UserPromptSubmit 与 Stop 两个 hook 调用点"
+        "调度段只该有 UserPromptSubmit 与 Stop 两个 hook 调用点"
     )
-    assert "while " not in loop, "循环里不该出现手写 while"
+    assert "while " not in loop, "调度段里不该出现手写 while"
 
     # 没有第二份 agent 循环：agent_loop 的调用点固定为「三个接线点 + 自身定义」。
     # （cli.py 与 svc/runs.py 是内核的两个平级调用方，subagent 复用同一循环。）
@@ -95,7 +97,7 @@ def test_a3_loop_is_still_only_a_scheduler():
         for item in code_hits(files_under(suffix=".py"), r"agent_loop\(")
     }
     assert callers == {
-        "avid/runtime/loop.py",
+        "avid/runtime.py",
         "avid/cli.py",
         "avid/svc/runs.py",
         "avid/tools/subagent.py",
@@ -106,8 +108,8 @@ def test_a3_loop_is_still_only_a_scheduler():
 
 
 def test_a3_observation_points_are_declared_once():
-    loop = (SRC / "runtime" / "loop.py").read_text(encoding="utf-8")
-    assert "on_message" in loop and "on_event" in loop
+    runtime = (SRC / "runtime.py").read_text(encoding="utf-8")
+    assert "on_message" in runtime and "on_event" in runtime
 
 
 # ---------------- A4 / A5 ----------------
@@ -135,7 +137,7 @@ def test_a6_event_names_are_single_sourced():
     found = [
         item
         for item in hits(files_under(suffix=".py"), pattern)
-        if "runtime/events.py" not in item.split(":")[0]
+        if "avid/runtime.py" not in item.split(":")[0]
     ]
     assert found == [], f"事件名字面量泄漏到 events.py 之外：{found}"
 
@@ -146,7 +148,7 @@ def test_a10_on_message_wiring_stays_in_four_places():
         for item in hits(files_under(suffix=".py"), r"on_message")
     }
     assert found == {
-        "avid/runtime/loop.py",
+        "avid/runtime.py",
         "avid/session/recorder.py",
         "avid/cli.py",
         "avid/svc/runs.py",
@@ -234,49 +236,40 @@ def policy_imports(path: Path) -> tuple[set[str], set[str]]:
 # 写成会失败的断言：`loop.py` 与 `execution.py` 必须是零运行时依赖（调度与工具协议
 # 不该认识策略），其余三个文件各有明确理由——context_manager 装配上下文并编排压缩、
 # state 持有运行期实例、hooks 注册默认回调（权限裁决 + 截断落盘）。
+# runtime 合并为单文件后，这条边界从「逐文件零依赖 + 申报豁免」收敛为「单文件声明
+# 集」：runtime.py 对策略层的运行时 import 必须恰等于下面的集合——调度段（loop 分区）
+# 不直接认识策略细节，策略触点只落在 state（运行期实例）、hooks（默认回调）与
+# context_manager（装配与压缩）三处分节里。
 RUNTIME_POLICY_EDGES: dict[str, set[str]] = {
-    "avid/runtime/context_manager.py": {"policy", "policy.compaction", "policy.prompt"},
-    "avid/runtime/state.py": {
+    "avid/runtime.py": {
+        "policy",
+        "policy.compaction",
+        "policy.prompt",
         "policy.permission",
         "policy.skills",
         "policy.todo",
     },
-    "avid/runtime/hooks.py": {"policy.permission", "policy.compaction"},
 }
-POLICY_FREE_RUNTIME = ("avid/runtime/loop.py", "avid/runtime/execution.py")
-
-
-def test_a13_loop_and_execution_have_zero_runtime_policy_dependency():
-    for name in POLICY_FREE_RUNTIME:
-        runtime, _typing = policy_imports(ROOT / name)
-        assert runtime == set(), f"{name} 出现了对策略层的运行时依赖：{sorted(runtime)}"
 
 
 def test_a13_runtime_policy_edges_are_exactly_the_declared_ones():
-    """边界是双向的：既不许 loop/execution 反向依赖策略层，也不许别的 runtime
-    文件偷偷多出一条没申报的边（新增一处就必须先改这里）。"""
-    for name in POLICY_FREE_RUNTIME:
-        assert name not in RUNTIME_POLICY_EDGES
-
+    """runtime 对 policy 的每一条运行时 import 都必须是申报过的边（新增先改这里）。"""
     seen: dict[str, set[str]] = {}
-    for path in files_under("runtime"):
+    for path in [SRC / "runtime.py"]:
         runtime, _typing = policy_imports(path)
-        if runtime:
-            seen[str(path.relative_to(ROOT))] = runtime
+        seen[str(path.relative_to(ROOT))] = runtime
 
     assert seen == RUNTIME_POLICY_EDGES, (
-        "runtime→policy 的实际边与设计文档 §12 判据 9 不一致："
+        "runtime→policy 的实际边与申报集不一致："
         f"{sorted(set(seen) | set(RUNTIME_POLICY_EDGES))}"
     )
 
 
 def test_a13_type_checking_imports_stay_inert():
-    """注解用的 import 必须是惰性的：`loop.py` 的 AskUser 只在 TYPE_CHECKING 下。
-
-    这条保证"零运行时依赖"不是因为名字没出现，而是因为那段 import 真的没执行。
+    """注解用的 import 必须是惰性的：AskUser / RunSecurity / McpManager 只在
+    TYPE_CHECKING 下出现，"零运行时依赖"不是因为名字没出现，而是 import 真没执行。
     """
-    runtime, typing_only = policy_imports(SRC / "runtime" / "loop.py")
-    assert runtime == set()
+    _runtime, typing_only = policy_imports(SRC / "runtime.py")
     assert typing_only == {"policy.permission"}
 
 

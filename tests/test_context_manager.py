@@ -9,9 +9,7 @@ import pytest
 from avid.ai.config import Config
 from avid.ai.transcript import Transcript
 from avid.policy.skills import SkillLoader
-from avid.runtime import context_manager as cm
-from avid.runtime.context_manager import Block, ContextBudget, ContextManager
-from avid.runtime.state import RunState
+from avid.runtime import SYSTEM, TAIL, Block, ContextBudget, ContextManager, RunState
 
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
 
@@ -94,7 +92,7 @@ def test_system_is_frozen_within_a_run():
 
 def test_custom_system_section_source_joins_the_template():
     manager = make_manager()
-    manager.register_source("tenant", lambda: Block("tenant", "租户：acme", cm.SYSTEM))
+    manager.register_source("tenant", lambda: Block("tenant", "租户：acme", SYSTEM))
 
     request = manager.compose()
 
@@ -277,7 +275,7 @@ def test_plan_updates_every_round_while_system_stays_frozen():
 def test_custom_tail_source_lands_in_the_tail_message():
     manager = make_manager()
     manager.register_source(
-        "artifact", lambda: Block("artifact", "## 当前 Artifact\n报告 v2", cm.TAIL)
+        "artifact", lambda: Block("artifact", "## 当前 Artifact\n报告 v2", TAIL)
     )
 
     request = manager.compose()

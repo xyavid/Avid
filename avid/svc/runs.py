@@ -15,10 +15,29 @@ from ..ai.byok import resolve_chat
 from ..ai.client import LLMError, chat_completion, stream_completion
 from ..ai.config import ConfigError
 from ..policy.permission import build_run_security, full_grant_error
-from ..runtime import events
-from ..runtime.events import STREAM_HEARTBEAT_SECONDS, RunEvent
-from ..runtime.loop import RunCancelled, agent_loop
-from ..runtime.state import RunState
+from ..runtime import (
+    ASSISTANT_DELTA,
+    ASSISTANT_MESSAGE,
+    DELTA_EVENT_TYPES,
+    DURABLE_SET,
+    REASONING_DELTA,
+    RESYNC,
+    RUN_CANCELLED,
+    RUN_FAILED,
+    RUN_FINISHED,
+    RUN_STARTED,
+    RUN_STATUS,
+    STOP_NUDGE,
+    STREAM_HEARTBEAT_SECONDS,
+    TERMINAL_EVENT_TYPES,
+    TOOL_RESULT_MESSAGE,
+    USER_MESSAGE,
+    RunCancelled,
+    RunEvent,
+    RunState,
+    agent_loop,
+    now_ms,
+)
 from ..session import (
     DEFAULT_BRANCH,
     SessionError,
@@ -63,9 +82,9 @@ SWEEP_MIN_AGE_SECONDS = 30.0
 
 # Message role -> durable message event.
 _MESSAGE_EVENTS = {
-    "user": events.USER_MESSAGE,
-    "assistant": events.ASSISTANT_MESSAGE,
-    "tool": events.TOOL_RESULT_MESSAGE,
+    "user": USER_MESSAGE,
+    "assistant": ASSISTANT_MESSAGE,
+    "tool": TOOL_RESULT_MESSAGE,
 }
 
 
@@ -242,7 +261,7 @@ class RunRegistry:
                 record = RunRecord(
                     run_id=run_id,
                     session_id=session_id,
-                    started_at=events.now_ms(),
+                    started_at=now_ms(),
                     model=(model or "").strip() or None,
                 )
 
@@ -326,7 +345,7 @@ class RunRegistry:
     def emit(self, record: RunRecord, type: str, **data: Any) -> RunEvent:
         """Assign a seq and append to the buffer; only durable types get one."""
         with record.condition:
-            seq = record.next_seq if type in events.DURABLE_SET else None
+            seq = record.next_seq if type in DURABLE_SET else None
             if seq is not None:
                 record.next_seq += 1
             event = RunEvent(
@@ -334,7 +353,7 @@ class RunRegistry:
                 data=data,
                 run_id=record.run_id,
                 seq=seq,
-                ts=events.now_ms(),
+                ts=now_ms(),
             )
             record.events.append(event)
             if seq is not None:
@@ -388,7 +407,7 @@ class RunRegistry:
         # A gap yields one durable resync instead of stale leftovers (I5); otherwise the buffer
         # is replayed with deltas excluded (I15) and events at or before the cursor skipped.
         if self._has_gap(record, after):
-            resync = self.emit(record, events.RESYNC, after=after, reason="buffer_evicted")
+            resync = self.emit(record, RESYNC, after=after, reason="buffer_evicted")
             with record.condition:
                 index = record.absolute_index()
             return [resync], max(after, resync.seq or after), index
@@ -396,7 +415,7 @@ class RunRegistry:
             replayed = [
                 event
                 for event in record.events
-                if event.type not in events.DELTA_EVENT_TYPES
+                if event.type not in DELTA_EVENT_TYPES
                 and (event.seq is None or event.seq > after)
             ]
             index = record.absolute_index()
@@ -459,7 +478,7 @@ class RunRegistry:
                 logger.info("订阅 %s 的游标被缓冲淘汰，发 resync", run_id)
                 gap_from = delivered
                 resync = self.emit(
-                    record, events.RESYNC, after=gap_from, reason="buffer_evicted"
+                    record, RESYNC, after=gap_from, reason="buffer_evicted"
                 )
                 delivered = max(delivered, resync.seq or delivered)
                 with record.condition:
@@ -472,14 +491,14 @@ class RunRegistry:
                 yield None  # heartbeat
                 continue
             for event in fresh:
-                if event.type in events.DELTA_EVENT_TYPES and not deltas:
+                if event.type in DELTA_EVENT_TYPES and not deltas:
                     continue
                 if event.seq is not None:
                     if event.seq <= delivered:
                         continue  # duplicate at the replay boundary: skip, do not redeliver
                     delivered = event.seq
                 yield event
-                if event.type in events.TERMINAL_EVENT_TYPES:
+                if event.type in TERMINAL_EVENT_TYPES:
                     return
 
     # ---- Async subscription ----
@@ -561,7 +580,7 @@ class RunRegistry:
                     logger.info("订阅 %s 的游标被缓冲淘汰，发 resync", run_id)
                     resync = self.emit(
                         record,
-                        events.RESYNC,
+                        RESYNC,
                         after=delivered,
                         reason="buffer_evicted",
                     )
@@ -576,14 +595,14 @@ class RunRegistry:
                     yield None  # heartbeat
                     continue
                 for event in fresh:
-                    if event.type in events.DELTA_EVENT_TYPES and not deltas:
+                    if event.type in DELTA_EVENT_TYPES and not deltas:
                         continue
                     if event.seq is not None:
                         if event.seq <= delivered:
                             continue
                         delivered = event.seq
                     yield event
-                    if event.type in events.TERMINAL_EVENT_TYPES:
+                    if event.type in TERMINAL_EVENT_TYPES:
                         return
         finally:
             with record.condition:
@@ -608,7 +627,7 @@ class RunRegistry:
                 messages,
                 on_delta=lambda text: self.emit_delta(record, self, text),
                 on_reasoning=lambda text: self.emit_delta(
-                    record, self, text, event_type=events.REASONING_DELTA
+                    record, self, text, event_type=REASONING_DELTA
                 ),
                 **kwargs,
             )
@@ -621,7 +640,7 @@ class RunRegistry:
         registry: "RunRegistry",
         text: str,
         *,
-        event_type: str = events.ASSISTANT_DELTA,
+        event_type: str = ASSISTANT_DELTA,
     ) -> None:
         """Emit a delta: never replayed and never persisted, so only live subscribers see it."""
         # It travels the record.events queue all the same (subscribers wake on the same
@@ -633,7 +652,7 @@ class RunRegistry:
                     data={"text": text},
                     run_id=record.run_id,
                     seq=None,
-                    ts=events.now_ms(),
+                    ts=now_ms(),
                 )
             )
             RunRegistry._trim(record, registry.buffer_size, registry.max_events)
@@ -673,7 +692,7 @@ class RunRegistry:
         state_spec = safety.summary()
         self.emit(
             record,
-            events.RUN_STARTED,
+            RUN_STARTED,
             session_id=record.session_id,
             prompt=prompt,
             auto_approve=auto_approve,
@@ -744,10 +763,10 @@ class RunRegistry:
                 registry=self.tool_registry if self.tool_registry is not None else mcp_impls,
             )
             record.text = text
-            self._finish(record, events.RUN_FINISHED, text=text)
+            self._finish(record, RUN_FINISHED, text=text)
         except RunCancelled as exc:
             record.cancel_reason = str(exc) or "cancelled"
-            self._finish(record, events.RUN_CANCELLED, reason=record.cancel_reason)
+            self._finish(record, RUN_CANCELLED, reason=record.cancel_reason)
         except LLMError as exc:
             self._fail(record, "llm_error", str(exc))
         except ConfigError as exc:
@@ -786,12 +805,12 @@ class RunRegistry:
         # on_message right after, and _message_sink emits the single durable event because only
         # it has the entry_id. Emitting in both places produced two notifications, one with
         # text and one blank, since each side carried half of the payload.
-        if event.type == events.STOP_NUDGE:
+        if event.type == STOP_NUDGE:
             message = event.data.get("message")
             if isinstance(message, dict):
                 record.injected[id(message)] = "nudge"
             return
-        if event.type == events.RUN_STATUS and "subagent" not in event.data:
+        if event.type == RUN_STATUS and "subagent" not in event.data:
             # Round and token authority is state, while GET /runs/{id} reads RunRecord: without
             # this backfill REST would keep reporting round=0 and tokens=0 and only SSE would be
             # right. A subagent-marked status belongs to a child run and must not overwrite the
@@ -816,7 +835,7 @@ class RunRegistry:
             label = record.injected.pop(id(message), None)
             entry_id = recorder.on_message(message, notice=label is not None)
             if label == "nudge":
-                type = events.STOP_NUDGE
+                type = STOP_NUDGE
             else:
                 type = _MESSAGE_EVENTS.get(str(message.get("role")), "")
             if not type:
@@ -833,12 +852,12 @@ class RunRegistry:
     def _finish(self, record: RunRecord, type: str, **data: Any) -> None:
         status = (
             "finished"
-            if type == events.RUN_FINISHED
+            if type == RUN_FINISHED
             else "cancelled"
-            if type == events.RUN_CANCELLED
+            if type == RUN_CANCELLED
             else "failed"
         )
-        record.finished_at = events.now_ms()
+        record.finished_at = now_ms()
         # Terminal states carry the usage snapshot too: run_finished is durable, so a subscriber
         # gets the final reading without waiting for reconciliation, and cancel and failure use
         # context just the same.
@@ -886,7 +905,7 @@ class RunRegistry:
         # Two rules: drop past the retention window, and once over the count cap drop
         # oldest-first but never a just-finished record, whose buffer a subscriber may still be
         # consuming, since dropping it is the silent gap I5 forbids.
-        now = events.now_ms()
+        now = now_ms()
         with self._lock:
             victims = [
                 run_id
@@ -926,7 +945,7 @@ class RunRegistry:
 
     def _fail(self, record: RunRecord, code: str, message: str) -> None:
         record.error = {"code": code, "message": message}
-        self._finish(record, events.RUN_FAILED, code=code, message=message)
+        self._finish(record, RUN_FAILED, code=code, message=message)
 
     # ---- Session lookup ----
 

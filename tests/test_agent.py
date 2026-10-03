@@ -7,9 +7,13 @@ import pytest
 from avid.ai.client import Turn, Usage
 from avid.ai.config import Config
 from avid.policy.compaction import CompactReport
-from avid.runtime import hooks
-from avid.runtime.loop import agent_loop
-from avid.runtime.state import MAX_CONSECUTIVE_DENIALS
+from avid.runtime import (
+    BLOCK,
+    MAX_CONSECUTIVE_DENIALS,
+    agent_loop,
+    large_output_hook,
+    permission_hook,
+)
 from avid.tools import TOOLS
 
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
@@ -367,7 +371,7 @@ def test_pre_tool_use_block_skips_the_handler(hook_registry):
         executed.append(args)
         return "内容"
 
-    hook_registry.register("PreToolUse", lambda ctx: hooks.BLOCK)
+    hook_registry.register("PreToolUse", lambda ctx: BLOCK)
     chat = FakeChat(
         make_turn("", [tool_call("read_file", '{"path": "a.txt"}')]),
         make_turn("好的"),
@@ -387,7 +391,7 @@ def test_pre_tool_use_block_skips_the_handler(hook_registry):
 
 
 def test_pre_tool_use_block_does_not_stop_the_loop(hook_registry):
-    hook_registry.register("PreToolUse", lambda ctx: hooks.BLOCK)
+    hook_registry.register("PreToolUse", lambda ctx: BLOCK)
     chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("那我换个说法"))
     messages = [{"role": "user", "content": "读"}]
 
@@ -470,7 +474,7 @@ def test_non_object_arguments_never_reach_pre_tool_use(hook_registry):
 
 def test_denied_tool_calls_do_not_terminate_the_loop(hook_registry):
     """被拒的调用既不是失败也不是终点：结果照常回给模型，循环继续到它自己收尾。"""
-    hook_registry.register("PreToolUse", lambda ctx: hooks.BLOCK)
+    hook_registry.register("PreToolUse", lambda ctx: BLOCK)
     chat = FakeChat(
         make_turn("", [tool_call("read_file", call_id="c1")]),
         make_turn("", [tool_call("read_file", call_id="c2")]),
@@ -499,7 +503,7 @@ def test_consecutive_denials_stop_the_run(hook_registry):
     现场（会话 01a0d277）：同一份探针被拒 15 次，每一轮都照样再要一次模型。判据是
 "连击"而不是"拒绝总数"——任何一次成功调用都会把它清零（见下一个用例）。
     """
-    hook_registry.register("PreToolUse", lambda ctx: hooks.BLOCK)
+    hook_registry.register("PreToolUse", lambda ctx: BLOCK)
     chat = FakeChat(
         *[
             make_turn("", [tool_call("read_file", call_id=f"c{i}")])
@@ -528,7 +532,7 @@ def test_one_successful_call_clears_the_denial_streak(hook_registry):
 
     def roughly(context):
         counter["n"] += 1
-        return hooks.BLOCK if counter["n"] % 2 else None
+        return BLOCK if counter["n"] % 2 else None
 
     hook_registry.register("PreToolUse", roughly)
     chat = FakeChat(
@@ -649,8 +653,8 @@ def test_post_tool_use_sees_the_raw_content(hook_registry):
 
 
 def test_large_output_hook_truncates_real_tool_output(hook_registry, monkeypatch):
-    monkeypatch.setattr(hooks, "MAX_TOOL_OUTPUT_CHARS", 100)
-    hook_registry.register("PostToolUse", hooks.large_output_hook)
+    monkeypatch.setattr("avid.runtime.MAX_TOOL_OUTPUT_CHARS", 100)
+    hook_registry.register("PostToolUse", large_output_hook)
     chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
     messages = [{"role": "user", "content": "读"}]
 
@@ -715,7 +719,7 @@ def test_user_prompt_submit_receives_the_prompt(hook_registry):
 
 
 def test_user_prompt_submit_can_block_the_model_call(hook_registry):
-    hook_registry.register("UserPromptSubmit", lambda ctx: hooks.BLOCK)
+    hook_registry.register("UserPromptSubmit", lambda ctx: BLOCK)
     chat = FakeChat(make_turn("不该被调用"))
     messages = [{"role": "user", "content": "问题"}]
 
@@ -746,7 +750,7 @@ def test_stop_is_triggered_before_returning(hook_registry):
 
 
 def test_stop_hook_can_block_exit_once(hook_registry):
-    hook_registry.register("Stop", lambda ctx: hooks.BLOCK)
+    hook_registry.register("Stop", lambda ctx: BLOCK)
     chat = FakeChat(make_turn("第一次"), make_turn("第二次"))
     messages = [{"role": "user", "content": "x"}]
 
@@ -757,7 +761,7 @@ def test_stop_hook_can_block_exit_once(hook_registry):
 
 
 def test_stop_block_is_capped(hook_registry):
-    hook_registry.register("Stop", lambda ctx: hooks.BLOCK)
+    hook_registry.register("Stop", lambda ctx: BLOCK)
     chat = FakeChat(*[make_turn(f"第{i}次") for i in range(5)])
     messages = [{"role": "user", "content": "x"}]
 
@@ -770,7 +774,7 @@ def test_stop_block_is_capped(hook_registry):
 def test_stop_nudge_is_appended_and_redirects_the_model(hook_registry):
     def stop(ctx):
         ctx["nudge"] = "别忘了给出结论"
-        return hooks.BLOCK
+        return BLOCK
 
     hook_registry.register("Stop", stop)
     chat = FakeChat(make_turn("草稿"), make_turn("结论"))
@@ -783,7 +787,7 @@ def test_stop_nudge_is_appended_and_redirects_the_model(hook_registry):
 
 
 def test_stop_block_disabled_when_budget_is_zero(hook_registry):
-    hook_registry.register("Stop", lambda ctx: hooks.BLOCK)
+    hook_registry.register("Stop", lambda ctx: BLOCK)
     chat = FakeChat(make_turn("唯一一轮"))
 
     result = agent_loop(
@@ -816,7 +820,7 @@ def test_stop_receives_run_statistics(hook_registry):
 
 
 def test_hard_deny_message_reaches_the_model(hook_registry):
-    hook_registry.register("PreToolUse", hooks.permission_hook)
+    hook_registry.register("PreToolUse", permission_hook)
     executed = []
     chat = FakeChat(
         make_turn("", [tool_call("bash", '{"command": "rm -rf /"}')]),
@@ -839,7 +843,7 @@ def test_hard_deny_message_reaches_the_model(hook_registry):
 def test_hook_supplied_denied_content_is_used(hook_registry):
     def blocker(ctx):
         ctx["denied_content"] = "自定义拒绝文案"
-        return hooks.BLOCK
+        return BLOCK
 
     hook_registry.register("PreToolUse", blocker)
     chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
@@ -851,7 +855,7 @@ def test_hook_supplied_denied_content_is_used(hook_registry):
 
 
 def test_block_without_denied_content_falls_back_to_the_default(hook_registry):
-    hook_registry.register("PreToolUse", lambda ctx: hooks.BLOCK)
+    hook_registry.register("PreToolUse", lambda ctx: BLOCK)
     chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
     messages = [{"role": "user", "content": "读"}]
 
@@ -1075,7 +1079,7 @@ def test_unknown_skill_returns_error_text_without_raising(hook_registry, tmp_pat
 def test_context_pipeline_runs_before_every_model_call(hook_registry, monkeypatch):
     rounds = []
     monkeypatch.setattr(
-        "avid.runtime.context_manager.ContextManager._compact",
+        "avid.runtime.ContextManager._compact",
         lambda self: rounds.append(self.state.round) or [],
     )
 
@@ -1107,7 +1111,7 @@ def test_prompt_too_long_triggers_one_reactive_retry(hook_registry, monkeypatch)
         return CompactReport("reactive_compact", "摘要更早的 3 条", 999, 10)
 
     monkeypatch.setattr(
-        "avid.runtime.context_manager.ContextManager.reactive", fake_reactive
+        "avid.runtime.ContextManager.reactive", fake_reactive
     )
     messages = [{"role": "user", "content": "x"}]
 
@@ -1132,7 +1136,7 @@ def test_reactive_is_not_retried_twice(hook_registry, monkeypatch):
         return CompactReport("reactive_compact", "摘要", 999, 10)
 
     monkeypatch.setattr(
-        "avid.runtime.context_manager.ContextManager.reactive", fake_reactive
+        "avid.runtime.ContextManager.reactive", fake_reactive
     )
 
     with pytest.raises(PromptTooLongError):
@@ -1160,7 +1164,7 @@ def test_reactive_retry_sends_the_compressed_history(hook_registry, monkeypatch)
         return CompactReport("reactive_compact", "摘要", 999, 10)
 
     monkeypatch.setattr(
-        "avid.runtime.context_manager.ContextManager.reactive", fake_reactive
+        "avid.runtime.ContextManager.reactive", fake_reactive
     )
 
     agent_loop([{"role": "user", "content": "x"}], config=CONFIG, chat=fake_chat)
@@ -1178,7 +1182,7 @@ def test_compaction_is_logged(hook_registry, monkeypatch, caplog):
         ),
     )
 
-    with caplog.at_level("INFO", logger="avid.runtime.context_manager"):
+    with caplog.at_level("INFO", logger="avid.runtime"):
         agent_loop(
             [{"role": "user", "content": "x"}],
             config=CONFIG,
@@ -1218,7 +1222,7 @@ def test_run_state_is_created_per_run(hook_registry, monkeypatch):
         return []
 
     monkeypatch.setattr(
-        "avid.runtime.context_manager.ContextManager._compact", fake_compact
+        "avid.runtime.ContextManager._compact", fake_compact
     )
 
     agent_loop(
@@ -1246,7 +1250,7 @@ def test_injected_budget_lowers_the_compaction_threshold(tmp_path, hook_registry
     用空 hook 注册表是为了让字符数可算——生产路径上 `large_output_hook` 会先把每个
     工具结果截到 8000 字符，实机要达到同一个阈值需要更多轮。
     """
-    from avid.runtime.context_manager import ContextBudget
+    from avid.runtime import ContextBudget
 
     for index in range(5):
         (tmp_path / f"big{index}.txt").write_text("x" * 20_000, encoding="utf-8")

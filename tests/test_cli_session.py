@@ -15,8 +15,8 @@ import pytest
 
 from avid import cli
 from avid.ai.client import Turn, Usage
-from avid.runtime.context_manager import TAIL_HEADER
-from avid.runtime.loop import agent_loop as real_agent_loop
+from avid.runtime import TAIL_HEADER
+from avid.runtime import agent_loop as real_agent_loop
 from avid.tools import workspace
 
 

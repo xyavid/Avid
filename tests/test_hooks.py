@@ -1,7 +1,16 @@
 import pytest
 
-from avid.runtime import hooks
-from avid.runtime.hooks import ALLOW, BLOCK, DEFAULT_HOOKS, HookRegistry
+from avid.runtime import (
+    ALLOW,
+    BLOCK,
+    DEFAULT_HOOKS,
+    HookRegistry,
+    large_output_hook,
+    log_hook,
+    permission_hook,
+    repeat_call_hook,
+    summary_hook,
+)
 
 
 @pytest.fixture
@@ -115,13 +124,13 @@ def test_register_hook_works_as_a_decorator(clean):
 def test_default_hooks_are_registered_on_import():
     # UserPromptSubmit 上没有默认回调：环境注入已是 ContextManager 的 environment 块
     assert DEFAULT_HOOKS.registered("UserPromptSubmit") == []
-    assert DEFAULT_HOOKS.registered("PreToolUse") == [hooks.permission_hook, hooks.log_hook]
+    assert DEFAULT_HOOKS.registered("PreToolUse") == [permission_hook, log_hook]
     assert DEFAULT_HOOKS.registered("PostToolUse") == [
-        hooks.repeat_call_hook,
-        hooks.large_output_hook,
-        hooks.log_hook,
+        repeat_call_hook,
+        large_output_hook,
+        log_hook,
     ]
-    assert DEFAULT_HOOKS.registered("Stop") == [hooks.summary_hook]
+    assert DEFAULT_HOOKS.registered("Stop") == [summary_hook]
 
 
 # ---------- 五个回调各自的行为 ----------
@@ -135,7 +144,7 @@ def test_permission_hook_blocks_and_records_reason(clean):
         "ask": lambda name, arguments, reason: False,
     }
 
-    assert hooks.permission_hook(context) == BLOCK
+    assert permission_hook(context) == BLOCK
     assert context["denied_kind"] == "danger"
     assert context["denied_reason"] == "bash：提权"
     assert "危险命令未获批准" in context["denied_content"]
@@ -143,7 +152,7 @@ def test_permission_hook_blocks_and_records_reason(clean):
 
 def test_permission_hook_lets_the_sandbox_cover_ordinary_commands(sandbox, clean):
     """沙箱能保证的区内常规命令**不进审批**——否则 sandbox 与 approval 就退化成一件事。"""
-    from avid.runtime.state import RunState
+    from avid.runtime import RunState
 
     state = RunState.for_run(
         permission_mode="manual", workspace_root=str(sandbox), audit_enabled=False
@@ -161,7 +170,7 @@ def test_permission_hook_lets_the_sandbox_cover_ordinary_commands(sandbox, clean
         "ask": ask,
     }
 
-    assert hooks.permission_hook(context) is None
+    assert permission_hook(context) is None
     assert "denied_reason" not in context
 
 
@@ -169,7 +178,7 @@ def test_permission_hook_writes_the_audit_record(sandbox, clean, tmp_path, monke
     """放行也要留痕：审计记录里有三轴、目标、裁决与来源。"""
     import json
 
-    from avid.runtime.state import RunState
+    from avid.runtime import RunState
 
     monkeypatch.setenv("AVID_AUDIT_DIR", str(tmp_path / "audit"))
     state = RunState.for_run(permission_mode="auto", workspace_root=str(sandbox))
@@ -181,7 +190,7 @@ def test_permission_hook_writes_the_audit_record(sandbox, clean, tmp_path, monke
         "workspace_root": str(sandbox),
     }
 
-    assert hooks.permission_hook(context) == BLOCK
+    assert permission_hook(context) == BLOCK
 
     records = [
         json.loads(line)
@@ -205,7 +214,7 @@ def test_permission_hook_writes_the_audit_record(sandbox, clean, tmp_path, monke
 def test_permission_hook_allows_and_stays_quiet(clean):
     context = {"tool": "read_file", "arguments": {"path": "a"}}
 
-    assert hooks.permission_hook(context) is None
+    assert permission_hook(context) is None
     assert "denied_reason" not in context
     assert "denied_content" not in context
 
@@ -213,7 +222,7 @@ def test_permission_hook_allows_and_stays_quiet(clean):
 def test_permission_hook_reports_hard_deny_reason(clean):
     context = {"tool": "bash", "arguments": {"command": "rm -rf /"}}
 
-    assert hooks.permission_hook(context) == BLOCK
+    assert permission_hook(context) == BLOCK
     assert context["denied_kind"] == "hard"
     assert "删除根目录或家目录" in context["denied_reason"]
     assert "永久禁止" in context["denied_content"]
@@ -228,8 +237,8 @@ def test_hard_deny_and_user_refusal_give_different_guidance(clean):
         "ask": lambda name, arguments, reason: False,
     }
 
-    hooks.permission_hook(hard)
-    hooks.permission_hook(user)
+    permission_hook(hard)
+    permission_hook(user)
 
     assert hard["denied_kind"] == "hard"
     assert user["denied_kind"] == "danger"
@@ -240,7 +249,7 @@ def test_hard_deny_and_user_refusal_give_different_guidance(clean):
 
 def test_brief_redacts_credentials_and_truncates():
     """工具参数进日志前必须脱敏：INFO 是默认级别，而命令里常带 token。"""
-    from avid.runtime.hooks import brief
+    from avid.runtime import brief
 
     line = brief({"command": 'curl -H "Authorization: Bearer sk-live-abc123" https://x'})
     assert "sk-live-abc123" not in line
@@ -265,12 +274,12 @@ def test_permission_hook_routes_auto_approve_to_the_answerer(clean):
         "ask": lambda *args: asked.append(args) or False,
     }
 
-    assert hooks.permission_hook(auto) is None
+    assert permission_hook(auto) is None
     assert asked == []
 
     hard = {"tool": "bash", "arguments": {"command": "rm -rf /"}, "auto_approve": True}
 
-    assert hooks.permission_hook(hard) == BLOCK
+    assert permission_hook(hard) == BLOCK
     assert hard["denied_kind"] == "hard"
 
 
@@ -281,18 +290,18 @@ def test_permission_hook_uses_the_injected_ask_without_the_run_flag(clean):
 
     context = {"tool": "bash", "arguments": {"command": "sudo ls"}, "ask": ask}
 
-    assert hooks.permission_hook(context) is None
+    assert permission_hook(context) is None
     assert seen == [("bash", "提权")]
 
 
 def test_log_hook_never_blocks(clean):
-    assert hooks.log_hook({"event": "PreToolUse", "tool": "bash", "arguments": {}}) is None
-    assert hooks.log_hook({"event": "PostToolUse", "tool": "bash", "content": "x"}) is None
+    assert log_hook({"event": "PreToolUse", "tool": "bash", "arguments": {}}) is None
+    assert log_hook({"event": "PostToolUse", "tool": "bash", "content": "x"}) is None
 
 
 def test_large_output_hook_spills_the_full_text(clean, monkeypatch, sandbox):
     """超限时全文落盘：模型看到首尾节选，需要细节时能自己读回来。"""
-    monkeypatch.setattr(hooks, "MAX_TOOL_OUTPUT_CHARS", 400)
+    monkeypatch.setattr("avid.runtime.MAX_TOOL_OUTPUT_CHARS", 400)
     payload = "头" * 300 + "尾" * 300
     context = {
         "content": payload,
@@ -301,7 +310,7 @@ def test_large_output_hook_spills_the_full_text(clean, monkeypatch, sandbox):
         "run_tag": "t1",
     }
 
-    assert hooks.large_output_hook(context) is None
+    assert large_output_hook(context) is None
 
     content = context["content"]
     assert context["truncated"] is True
@@ -320,7 +329,7 @@ def test_large_output_hook_spills_the_full_text(clean, monkeypatch, sandbox):
 
 def test_large_output_hook_falls_back_when_spill_fails(clean, monkeypatch, sandbox):
     """落盘失败（路径不可用）不能丢掉结果，也不能让这次调用失败：退回只留头部。"""
-    monkeypatch.setattr(hooks, "MAX_TOOL_OUTPUT_CHARS", 100)
+    monkeypatch.setattr("avid.runtime.MAX_TOOL_OUTPUT_CHARS", 100)
     blocked = sandbox / "not-a-dir"
     blocked.write_text("x", encoding="utf-8")
     context = {
@@ -329,7 +338,7 @@ def test_large_output_hook_falls_back_when_spill_fails(clean, monkeypatch, sandb
         "workspace_root": str(blocked),
     }
 
-    assert hooks.large_output_hook(context) is None
+    assert large_output_hook(context) is None
 
     assert context["truncated"] is True
     assert context["content"].startswith("x")
@@ -342,7 +351,7 @@ def test_large_output_hook_falls_back_when_spill_fails(clean, monkeypatch, sandb
 def test_large_output_hook_leaves_small_output_alone(clean):
     context = {"content": "short", "truncated": False}
 
-    hooks.large_output_hook(context)
+    large_output_hook(context)
 
     assert context["content"] == "short"
     assert context["truncated"] is False
@@ -359,7 +368,7 @@ def test_repeat_call_hook_reminds_on_the_third_and_fifth_time(clean):
             "repeat_calls": counts,
         }
 
-        assert hooks.repeat_call_hook(context) is None
+        assert repeat_call_hook(context) is None
 
         if times in (3, 5):
             assert "[重复调用提醒]" in context["content"]
@@ -379,7 +388,7 @@ def test_repeat_call_hook_treats_different_arguments_as_different_calls(clean):
             "content": "输出",
             "repeat_calls": counts,
         }
-        hooks.repeat_call_hook(context)
+        repeat_call_hook(context)
         return context["content"]
 
     call({"command": "a"})
@@ -401,7 +410,7 @@ def test_repeat_call_hook_ignores_key_order(clean):
             "content": "输出",
             "repeat_calls": counts,
         }
-        hooks.repeat_call_hook(context)
+        repeat_call_hook(context)
 
     assert list(counts.values()) == [3]
 
@@ -410,17 +419,16 @@ def test_repeat_call_hook_is_inert_without_the_run_state(clean):
     """没接上 RunState（直调、别的调用方）时不报错、不误判。"""
     context = {"tool": "bash", "arguments": {"command": "a"}, "content": "输出"}
 
-    assert hooks.repeat_call_hook(context) is None
+    assert repeat_call_hook(context) is None
     assert context["content"] == "输出"
 
 
 def test_repeat_call_hook_counts_through_execute_one():
     """接线：`execution` 必须把 `RunState.repeat_calls` 放进 PostToolUse 的 context。"""
-    from avid.runtime.execution import execute_one
-    from avid.runtime.state import RunState
+    from avid.runtime import RunState, execute_one
 
     registry_obj = HookRegistry()
-    registry_obj.register("PostToolUse", hooks.repeat_call_hook)
+    registry_obj.register("PostToolUse", repeat_call_hook)
     state = RunState.for_run(hooks=registry_obj, auto_approve=True)
     registry = {"bash": lambda arguments, *, state=None: "输出"}
 
@@ -438,7 +446,7 @@ def test_repeat_call_hook_counts_through_execute_one():
 def test_summary_hook_writes_a_summary(clean):
     context = {"rounds": 3, "tool_calls": 5, "denials": 2}
 
-    assert hooks.summary_hook(context) is None
+    assert summary_hook(context) is None
     assert context["summary"] == "轮数=3 工具调用=5 拒绝=2"
 
 
@@ -454,9 +462,7 @@ def test_two_runs_use_different_registries():
     """
     from avid.ai.client import Turn, Usage
     from avid.ai.config import Config
-    from avid.runtime.hooks import HookRegistry
-    from avid.runtime.loop import agent_loop
-    from avid.runtime.state import RunState
+    from avid.runtime import HookRegistry, RunState, agent_loop
 
     seen: list[str] = []
     loud = HookRegistry()
@@ -506,7 +512,7 @@ def test_two_runs_use_different_registries():
 
 def test_copy_is_independent_but_inherits():
     """子运行拿的是父注册表的副本：继承已有回调，自己追加的不回漏。"""
-    from avid.runtime.hooks import HookRegistry
+    from avid.runtime import HookRegistry
 
     parent = HookRegistry()
     parent.register("Stop", lambda context: None)
@@ -527,7 +533,7 @@ def test_post_tool_use_block_stops_the_result_from_entering_context():
     以前这个返回值被直接丢掉：注册了拦截的回调等于静默失效，而且失败方向正好是
     最糟的那个——内容照样进了上下文（比如输出里带凭据）。
     """
-    from avid.runtime.execution import POST_BLOCKED_CONTENT, execute_one
+    from avid.runtime import POST_BLOCKED_CONTENT, execute_one
 
     def runner(arguments, *, state=None):
         return "SECRET=topsecret"
@@ -539,7 +545,7 @@ def test_post_tool_use_block_stops_the_result_from_entering_context():
 
     registry_obj = HookRegistry()
     registry_obj.register("PostToolUse", blocking)
-    from avid.runtime.state import RunState
+    from avid.runtime import RunState
 
     state = RunState.for_run(hooks=registry_obj, auto_approve=True)
     content = execute_one(
@@ -552,8 +558,7 @@ def test_post_tool_use_block_stops_the_result_from_entering_context():
 
 def test_post_tool_use_without_block_passes_the_content_through():
     """没有拦截时结果照常回传（别把"显式处理 BLOCK"做成"总是拦截"）。"""
-    from avid.runtime.execution import execute_one
-    from avid.runtime.state import RunState
+    from avid.runtime import RunState, execute_one
 
     registry = {"bash": lambda arguments, *, state=None: "正常输出"}
     state = RunState.for_run(hooks=HookRegistry(), auto_approve=True)

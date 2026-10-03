@@ -67,11 +67,11 @@ def hook_registry(monkeypatch):
     "注册回调 → 跑循环 → 断言"全发生在这份局部对象上：不再改模块级字典，也不会
     漏到别的用例（以前靠 monkeypatch `HOOKS` 来隔离）。
     """
-    from avid.runtime import hooks as hooks_module
-    from avid.runtime.hooks import HookRegistry
+    from avid import runtime
+    from avid.runtime import HookRegistry
 
     registry = HookRegistry()
-    monkeypatch.setattr(hooks_module, "DEFAULT_HOOKS", registry)
+    monkeypatch.setattr(runtime, "DEFAULT_HOOKS", registry)
     return registry
 
 

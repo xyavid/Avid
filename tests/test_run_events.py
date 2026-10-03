@@ -24,7 +24,23 @@ from support import (
 )
 
 from avid.ai.client import LLMError
-from avid.runtime import events
+from avid.runtime import (
+    APPROVAL_REQUESTED,
+    ASSISTANT_DELTA,
+    ASSISTANT_MESSAGE,
+    DELTA_EVENT_TYPES,
+    REASONING_DELTA,
+    RESYNC,
+    RUN_FAILED,
+    RUN_FINISHED,
+    RUN_STARTED,
+    RUN_STATUS,
+    TODO_REMINDER,
+    TOOL_CALL_FINISHED,
+    TOOL_CALL_STARTED,
+    TOOL_RESULT_MESSAGE,
+    USER_MESSAGE,
+)
 from avid.session import SessionStorageError, messages_for_branch
 from avid.session.types import NOTICE_ENTRY
 from avid.svc import Services, runs
@@ -63,14 +79,14 @@ def test_event_sequence_is_ordered_and_durable_seq_is_monotonic(sandbox):
     got = collect(services, record.run_id)
     types = [event.type for event in got]
 
-    assert types[0] == events.RUN_STARTED
-    assert types[-1] == events.RUN_FINISHED
-    assert events.USER_MESSAGE in types
-    assert events.APPROVAL_REQUESTED not in types  # 只读工具不需要审批
-    assert types.count(events.TOOL_CALL_STARTED) == 2
-    assert types.count(events.TOOL_CALL_FINISHED) == 2
-    assert types.count(events.TOOL_RESULT_MESSAGE) == 2
-    assert types.count(events.ASSISTANT_MESSAGE) == 3
+    assert types[0] == RUN_STARTED
+    assert types[-1] == RUN_FINISHED
+    assert USER_MESSAGE in types
+    assert APPROVAL_REQUESTED not in types  # 只读工具不需要审批
+    assert types.count(TOOL_CALL_STARTED) == 2
+    assert types.count(TOOL_CALL_FINISHED) == 2
+    assert types.count(TOOL_RESULT_MESSAGE) == 2
+    assert types.count(ASSISTANT_MESSAGE) == 3
 
     # durable 的 seq 严格递增、不重复、从 1 开始
     seqs = [event.seq for event in got if event.seq is not None]
@@ -78,7 +94,7 @@ def test_event_sequence_is_ordered_and_durable_seq_is_monotonic(sandbox):
     assert record.next_seq == seqs[-1] + 1
 
     # transient 不带 seq
-    transient = [event for event in got if event.type == events.RUN_STATUS]
+    transient = [event for event in got if event.type == RUN_STATUS]
     assert transient
     assert all(event.seq is None for event in transient)
 
@@ -86,9 +102,9 @@ def test_event_sequence_is_ordered_and_durable_seq_is_monotonic(sandbox):
     assert {event.run_id for event in got} == {record.run_id}
     for event in got:
         if event.type in (
-            events.USER_MESSAGE,
-            events.ASSISTANT_MESSAGE,
-            events.TOOL_RESULT_MESSAGE,
+            USER_MESSAGE,
+            ASSISTANT_MESSAGE,
+            TOOL_RESULT_MESSAGE,
         ):
             assert event.data["entry_id"]
             assert event.data["message"]["role"] in ("user", "assistant", "tool")
@@ -97,7 +113,7 @@ def test_event_sequence_is_ordered_and_durable_seq_is_monotonic(sandbox):
     assert record.status == "finished"
     assert record.text == "完成"
     assert services.sessions.get(record.session_id)["message_count"] == len(
-        [e for e in got if e.type in (events.USER_MESSAGE, events.ASSISTANT_MESSAGE, events.TOOL_RESULT_MESSAGE)]
+        [e for e in got if e.type in (USER_MESSAGE, ASSISTANT_MESSAGE, TOOL_RESULT_MESSAGE)]
     )
 
 
@@ -106,7 +122,7 @@ def test_tool_events_carry_tool_call_id_and_no_full_content_on_the_wire(sandbox)
     services = build(sandbox, ScriptedChat(make_turn("", [tool_call("read_file")]), make_turn("好")), tools)
     record = run_to_end(services)
 
-    finished = [e for e in collect(services, record.run_id) if e.type == events.TOOL_CALL_FINISHED]
+    finished = [e for e in collect(services, record.run_id) if e.type == TOOL_CALL_FINISHED]
     assert len(finished) == 1
     assert finished[0].data["tool_call_id"] == "call_1"
     assert finished[0].data["truncated"] is False
@@ -142,7 +158,7 @@ def test_buffer_eviction_is_explicit_resync(sandbox):
 
     got = collect(services, record.run_id, after=0)
     assert got, "订阅应当至少收到一条 resync"
-    assert got[0].type == events.RESYNC
+    assert got[0].type == RESYNC
     assert got[0].data["reason"] == "buffer_evicted"
     assert got[0].seq is not None  # resync 自己是 durable 的
 
@@ -153,7 +169,7 @@ def test_fresh_cursor_within_buffer_does_not_resync(sandbox):
     record = run_to_end(services)
 
     got = collect(services, record.run_id, after=0)
-    assert events.RESYNC not in [event.type for event in got]
+    assert RESYNC not in [event.type for event in got]
 
 
 # ---------------- B1（F3）：delta 通道 ----------------
@@ -215,19 +231,19 @@ def test_deltas_are_opt_in_and_carry_no_seq(sandbox, monkeypatch):
     watcher.join(timeout=5)
     silent.join(timeout=5)
 
-    deltas = [event for event in with_deltas if event.type == events.ASSISTANT_DELTA]
+    deltas = [event for event in with_deltas if event.type == ASSISTANT_DELTA]
     assert [event.data["text"] for event in deltas] == ["你", "好"]
     assert all(event.seq is None for event in deltas), "delta 不参与游标补齐（I4）"
-    assert events.ASSISTANT_DELTA not in [event.type for event in without_deltas]
+    assert ASSISTANT_DELTA not in [event.type for event in without_deltas]
 
     # durable 消息仍带**完整**内容：delta 全丢也不影响正确性（I5）。
-    finals = [event for event in with_deltas if event.type == events.ASSISTANT_MESSAGE]
+    finals = [event for event in with_deltas if event.type == ASSISTANT_MESSAGE]
     assert finals[-1].data["message"]["content"] == "你好"
 
     # delta 不重放：跑完之后从 0 补齐也拿不到它（I15）。
     assert wait_terminal(record)
     replayed = collect(services, record.run_id, after=0, deltas=True)
-    assert events.ASSISTANT_DELTA not in [event.type for event in replayed]
+    assert ASSISTANT_DELTA not in [event.type for event in replayed]
 
 
 def test_many_deltas_do_not_evict_durable_events(sandbox, monkeypatch):
@@ -248,7 +264,7 @@ def test_many_deltas_do_not_evict_durable_events(sandbox, monkeypatch):
 
     assert record.evicted_upto == 0, "delta 把 durable 挤出了重放缓冲"
     got = collect(services, record.run_id, after=0)
-    assert events.RESYNC not in [event.type for event in got]
+    assert RESYNC not in [event.type for event in got]
 
 
 # ---------------- 会话句柄的并发（阶段 18 修掉的竞态） ----------------
@@ -301,13 +317,13 @@ def test_reasoning_delta_is_a_delta_tier_event(sandbox):
     record = services.runs.get(services.runs.start(new_session(services), "跑").run_id)
 
     services.runs.emit_delta(
-        record, services.runs, "它在想", event_type=events.REASONING_DELTA
+        record, services.runs, "它在想", event_type=REASONING_DELTA
     )
 
     deltas = [event for event in record.events if event.seq is None]
-    assert [event.type for event in deltas] == [events.REASONING_DELTA]
+    assert [event.type for event in deltas] == [REASONING_DELTA]
     assert deltas[0].data == {"text": "它在想"}
-    assert events.REASONING_DELTA in events.DELTA_EVENT_TYPES
+    assert REASONING_DELTA in DELTA_EVENT_TYPES
 
 
 def test_delta_bookkeeping_keeps_the_buffer_consistent(sandbox):
@@ -321,10 +337,10 @@ def test_delta_bookkeeping_keeps_the_buffer_consistent(sandbox):
     record = services.runs.get(services.runs.start(new_session(services), "跑").run_id)
 
     for index in range(50):
-        services.runs.emit(record, events.RUN_STATUS, round=index)  # transient
+        services.runs.emit(record, RUN_STATUS, round=index)  # transient
         services.runs.emit_delta(record, services.runs, f"t{index}")
         if index % 7 == 0:
-            services.runs.emit(record, events.TOOL_RESULT_MESSAGE, entry_id=str(index))
+            services.runs.emit(record, TOOL_RESULT_MESSAGE, entry_id=str(index))
 
     # 与全量重算对齐：耐久事件数不超上限、绝对下标自洽、evicted_upto 是被丢掉的最高 seq。
     durable = [event for event in record.events if event.seq is not None]
@@ -398,10 +414,10 @@ def test_chat_failures_become_a_terminal_event_with_the_right_code(sandbox, exc,
     assert str(exc) in record.error["message"]
 
     frames = collect(services, record.run_id)
-    failed = [event for event in frames if event.type == events.RUN_FAILED]
+    failed = [event for event in frames if event.type == RUN_FAILED]
     assert failed, [event.type for event in frames]
     assert failed[-1].data["code"] == code
-    assert events.RUN_FINISHED not in [event.type for event in frames]
+    assert RUN_FINISHED not in [event.type for event in frames]
 
 
 def test_a_run_longer_than_the_old_cap_still_finishes(sandbox):
@@ -502,14 +518,14 @@ def test_live_follower_is_told_when_its_cursor_is_evicted(sandbox):
     for index in range(6):
         services.runs.emit(
             record,
-            events.TOOL_CALL_STARTED,
+            TOOL_CALL_STARTED,
             tool="bash",
             arguments={},
             round=1,
             tool_call_id=f"c{index}",
         )
 
-    assert wait_for(lambda: events.RESYNC in got, 5), got
+    assert wait_for(lambda: RESYNC in got, 5), got
     chat.release.set()
     assert wait_terminal(record)
     thread.join(timeout=5)
@@ -529,7 +545,7 @@ def test_delta_flood_cannot_grow_the_buffer_without_bound(sandbox):
     for index in range(400):
         services.runs.emit(
             record,
-            events.TOOL_CALL_STARTED,
+            TOOL_CALL_STARTED,
             tool="bash",
             arguments={},
             round=1,
@@ -615,8 +631,8 @@ def test_plan_travels_in_the_tail_not_in_the_history(sandbox):
     assert [entry for entry in entries if entry["type"] == NOTICE_ENTRY] == []
 
     kinds = [event.type for event in collect(services, record.run_id)]
-    assert kinds.count(events.TODO_REMINDER) == 0
-    assert kinds.count(events.USER_MESSAGE) == 1
+    assert kinds.count(TODO_REMINDER) == 0
+    assert kinds.count(USER_MESSAGE) == 1
 
     # 投影不变：落库的历史里没有内核写的提醒文本。
     #
@@ -654,7 +670,7 @@ def test_run_status_carries_the_usage_snapshot_every_round(sandbox):
     snapshots = [
         event.data["usage"]
         for event in collect(services, record.run_id)
-        if event.type == events.RUN_STATUS and "usage" in event.data
+        if event.type == RUN_STATUS and "usage" in event.data
     ]
     assert len(snapshots) == 2  # 两轮，两份
     context = snapshots[-1]["context"]
@@ -686,7 +702,7 @@ def test_terminal_event_and_rest_view_share_the_final_snapshot(sandbox):
     record = run_to_end(services)
     events_list = collect(services, record.run_id)
 
-    finished = next(e for e in events_list if e.type == events.RUN_FINISHED)
+    finished = next(e for e in events_list if e.type == RUN_FINISHED)
     assert finished.data["usage"] == record.usage
     assert record.usage["context"]["tokens"] == 1
     # 累计量仍是运行账单（两轮 × total 3），与"占用"不是一回事。
@@ -735,7 +751,7 @@ def test_terminal_flag_and_terminal_event_land_together(sandbox):
 
     got = collect(services, record.run_id)
     assert got, "订阅一条事件都没收到"
-    assert got[-1].type == events.RUN_FINISHED
+    assert got[-1].type == RUN_FINISHED
 
 
 def test_loop_records_the_three_prompt_parts(sandbox):
@@ -761,7 +777,7 @@ def test_loop_records_the_three_prompt_parts(sandbox):
     snapshots = [
         event.data["usage"]["context"]
         for event in collect(services, record.run_id)
-        if event.type == events.RUN_STATUS and "usage" in event.data
+        if event.type == RUN_STATUS and "usage" in event.data
     ]
     parts = snapshots[-1]["parts"]
     assert parts is not None

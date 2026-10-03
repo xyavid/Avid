@@ -15,8 +15,7 @@ from support import ScriptedChat, make_turn
 from avid.ai.config import Config
 from avid.ai.usage import Usage
 from avid.policy.compaction import CompactReport
-from avid.runtime.context_manager import announce
-from avid.runtime.state import RunState
+from avid.runtime import RunState, announce
 from avid.session import (
     USAGE_NS,
     MemorySessionRepo,
@@ -267,7 +266,7 @@ def _window_probe(monkeypatch, *, window=200_000):
     http = httpx.Client(transport=httpx.MockTransport(handler))
     monkeypatch.setattr(client_module, "shared_client", lambda: http)
     monkeypatch.setattr(
-        "avid.runtime.loop.shared_client", lambda: http, raising=False
+        "avid.runtime.shared_client", lambda: http, raising=False
     )
     return http
 
@@ -278,7 +277,7 @@ def test_loop_probes_the_window_and_reports_utilization(monkeypatch):
     两条路径都要覆盖：CLI（`agent_loop` 自己建 state）与 Web（svc 先建 state 再进循环，
     探测结果必须回填进那份 state）。
     """
-    from avid.runtime.loop import agent_loop
+    from avid.runtime import agent_loop
 
     http = _window_probe(monkeypatch)
     try:

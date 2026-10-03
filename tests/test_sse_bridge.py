@@ -13,7 +13,7 @@ import time
 
 from support import ScriptedChat, make_turn, new_session, wait_terminal
 
-from avid.runtime import events
+from avid.runtime import RUN_FINISHED, RUN_STARTED, TERMINAL_EVENT_TYPES
 from avid.svc import MAX_CONCURRENT_STREAMS, Services
 
 
@@ -30,7 +30,7 @@ def drain_async(services: Services, run_id: str, *, after: int = 0, timeout: flo
         try:
             async for event in agen:
                 got.append(event)
-                if event.type in events.TERMINAL_EVENT_TYPES:
+                if event.type in TERMINAL_EVENT_TYPES:
                     break
         finally:
             await agen.aclose()
@@ -50,8 +50,8 @@ def test_async_subscription_replays_the_same_sequence_as_sync(sandbox):
 
     assert [e.type for e in async_events] == [e.type for e in sync_events]
     assert [e.seq for e in async_events] == [e.seq for e in sync_events]
-    assert [e.type for e in async_events][0] == events.RUN_STARTED
-    assert [e.type for e in async_events][-1] == events.RUN_FINISHED
+    assert [e.type for e in async_events][0] == RUN_STARTED
+    assert [e.type for e in async_events][-1] == RUN_FINISHED
 
 
 def test_async_subscription_follows_live_events_via_the_bridge(sandbox):
@@ -73,7 +73,7 @@ def test_async_subscription_follows_live_events_via_the_bridge(sandbox):
         async def one():
             async for event in services.runs.subscribe_async(record.run_id):
                 got.append(event)
-                if event.type in events.TERMINAL_EVENT_TYPES:
+                if event.type in TERMINAL_EVENT_TYPES:
                     return
 
         asyncio.run(one())
@@ -91,8 +91,8 @@ def test_async_subscription_follows_live_events_via_the_bridge(sandbox):
     assert done.wait(5.0), "订阅者没被唤醒到终态"
 
     types = [event.type for event in got]
-    assert types[0] == events.RUN_STARTED
-    assert types[-1] == events.RUN_FINISHED
+    assert types[0] == RUN_STARTED
+    assert types[-1] == RUN_FINISHED
 
 
 def test_watcher_is_removed_when_the_generator_closes(sandbox):
@@ -125,7 +125,7 @@ def test_many_concurrent_async_subscribers_all_get_full_replay(sandbox):
         try:
             async for event in agen:
                 got.append(event.type)
-                if event.type in events.TERMINAL_EVENT_TYPES:
+                if event.type in TERMINAL_EVENT_TYPES:
                     break
         finally:
             await agen.aclose()
@@ -138,8 +138,8 @@ def test_many_concurrent_async_subscribers_all_get_full_replay(sandbox):
 
     assert len(results) == 40
     for types in results:
-        assert types[0] == events.RUN_STARTED
-        assert types[-1] == events.RUN_FINISHED
+        assert types[0] == RUN_STARTED
+        assert types[-1] == RUN_FINISHED
 
 
 def test_stream_cap_is_now_a_guardrail_not_a_threadpool_shadow():

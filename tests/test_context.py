@@ -11,8 +11,7 @@ from avid.ai.client import Usage
 from avid.ai.config import Config
 from avid.ai.transcript import Transcript
 from avid.policy import compaction as compact
-from avid.runtime.context_manager import ContextBudget, ContextManager
-from avid.runtime.state import RunState
+from avid.runtime import ContextBudget, ContextManager, RunState
 
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
 
@@ -135,7 +134,7 @@ def test_each_step_is_announced_and_counted(monkeypatch, caplog):
     monkeypatch.setattr(compact, "snip_compact", lambda t, **k: None)
 
     state = RunState()
-    with caplog.at_level("INFO", logger="avid.runtime.context_manager"):
+    with caplog.at_level("INFO", logger="avid.runtime"):
         prepare(Transcript([user()]), state)
 
     assert any(

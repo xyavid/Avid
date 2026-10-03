@@ -4,7 +4,7 @@ import time
 import pytest
 
 from avid.ai.config import Config
-from avid.runtime.state import RunState
+from avid.runtime import RunState
 from avid.tools import SUB_HANDLERS, SUB_TOOLS, TOOLS
 from avid.tools.subagent import (
     MAX_PARALLEL,
@@ -212,7 +212,7 @@ def test_auto_approve_defaults_to_false(monkeypatch):
 
 
 def test_run_subagent_initialises_messages_with_the_prompt(monkeypatch):
-    from avid.runtime import loop as agent_module
+    from avid import runtime as agent_module
 
     seen = {}
 
@@ -233,7 +233,7 @@ def test_run_subagent_initialises_messages_with_the_prompt(monkeypatch):
 
 
 def test_run_subagent_returns_no_summary_for_empty_text(monkeypatch):
-    from avid.runtime import loop as agent_module
+    from avid import runtime as agent_module
 
     monkeypatch.setattr(agent_module, "agent_loop", lambda *a, **k: "   ")
 
@@ -244,7 +244,7 @@ def test_run_subagent_returns_no_summary_for_empty_text(monkeypatch):
 
 
 def test_check_cancelled_consults_the_external_probe():
-    from avid.runtime.loop import RunCancelled
+    from avid.runtime import RunCancelled
 
     state = RunState(cancel_probe=lambda: "外部要求停止")
 
@@ -286,8 +286,8 @@ def test_usage_report_carries_subagent_totals():
 
 def test_run_subagent_wires_probe_observer_and_state(monkeypatch):
     """run_subagent 自建子 RunState：probe/observer 落在它身上，引用交给 on_state。"""
-    from avid.runtime import loop as agent_module
-    from avid.runtime.loop import RunCancelled
+    from avid import runtime as agent_module
+    from avid.runtime import RunCancelled
 
     seen = {}
 
@@ -314,9 +314,9 @@ def test_run_subagent_wires_probe_observer_and_state(monkeypatch):
 
 def test_subagent_tags_child_events_and_adopts_usage(monkeypatch):
     """子事件带 subagent 标记进父事件流；结束后子 token 并进父台账。"""
-    import avid.runtime.events as runtime_events
+    import avid.runtime as runtime_events
+    from avid import runtime as agent_module
     from avid.ai.usage import Usage
-    from avid.runtime import loop as agent_module
 
     def fake_loop(messages, *, state=None, **kwargs):
         state.record_usage(Usage(5, 2, 7))
@@ -341,7 +341,7 @@ def test_subagent_tags_child_events_and_adopts_usage(monkeypatch):
 
 def test_parent_cancel_surfaces_quickly(monkeypatch):
     """父取消后 collect 提前收敛返回，不再等慢子任务自然结束。"""
-    from avid.runtime import loop as agent_module
+    from avid import runtime as agent_module
 
     started = threading.Event()
 
@@ -371,8 +371,8 @@ def test_parent_cancel_surfaces_quickly(monkeypatch):
 
 def test_deadline_reaches_child_checkpoints(monkeypatch):
     """墙钟到点：超时文案照回，同时子任务在下个检查点被 probe 停掉（不再是孤儿）。"""
-    from avid.runtime import loop as agent_module
-    from avid.runtime.loop import RunCancelled
+    from avid import runtime as agent_module
+    from avid.runtime import RunCancelled
 
     raised = []
 

@@ -17,7 +17,7 @@ from .registry import tool
 from .workspace import relative, resolve
 
 if TYPE_CHECKING:  # annotation only: tools must not depend on runtime at run time
-    from ..runtime.state import RunState
+    from ..runtime import RunState
 
 MAX_READ_CHARS = 20000
 MAX_READ_LINES = 2000

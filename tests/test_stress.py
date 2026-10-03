@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from avid.runtime import events
+from avid.runtime import RUN_STARTED
 from avid.session import (
     STORAGE_VERSION,
     JsonlSessionMetadata,
@@ -119,7 +119,7 @@ def test_stress_delta_emit_stays_linear(tmp_path):
     """
     registry = RunRegistry(None, buffer_size=512)
     record = RunRecord(run_id="stress", session_id="s", started_at=0)
-    registry.emit(record, events.RUN_STARTED)
+    registry.emit(record, RUN_STARTED)
 
     total = 8000
     started = time.perf_counter()

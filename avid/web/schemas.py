@@ -7,8 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..policy.permission import full_grant_error
-from ..runtime import events
-from ..runtime.events import RunEvent
+from ..runtime import TOOL_CALL_DENIED, TOOL_CALL_FINISHED, RunEvent
 
 # Tool failures come back as text, so three prefixes separate business, argument and environment errors.
 _FAILED_PREFIXES = ("错误：", "参数错误：")
@@ -454,11 +453,11 @@ def classify_tool_status(
 def event_payload(event: RunEvent, session_id: str) -> dict[str, Any]:
     """Maps a kernel event to its wire payload, dropping tool output and adding derived status fields."""
     data = dict(event.data)
-    if event.type == events.TOOL_CALL_FINISHED:
+    if event.type == TOOL_CALL_FINISHED:
         content = data.pop("content", "")
         data["status"] = classify_tool_status(content, truncated=bool(data.get("truncated")))
         data["content_chars"] = len(content) if isinstance(content, str) else 0
-    elif event.type == events.TOOL_CALL_DENIED:
+    elif event.type == TOOL_CALL_DENIED:
         data["status"] = classify_tool_status("", denied_kind=str(data.get("kind") or "user"))
     return {
         "run_id": event.run_id,

@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..runtime import events
+from ..runtime import APPROVAL_REQUESTED, APPROVAL_RESOLVED, now_ms
 from .errors import ApprovalConflict, ApprovalExpired, ApprovalNotFound
 
 logger = logging.getLogger("avid.svc.approvals")
@@ -107,8 +107,8 @@ class ApprovalTable:
             tool=name,
             arguments=arguments,
             reason=reason,
-            created_at=events.now_ms(),
-            expires_at=events.now_ms() + int(self.timeout * 1000),
+            created_at=now_ms(),
+            expires_at=now_ms() + int(self.timeout * 1000),
         )
         with self._condition:
             # The run may have ended while the pending entry was being built.
@@ -117,7 +117,7 @@ class ApprovalTable:
             self._pending[pending.id] = pending
         self.set_status("awaiting_approval")
         self.emit(
-            events.APPROVAL_REQUESTED,
+            APPROVAL_REQUESTED,
             approval_id=pending.id,
             tool=name,
             arguments=arguments,
@@ -129,7 +129,7 @@ class ApprovalTable:
         decision, why = self._await(pending)
 
         self.emit(
-            events.APPROVAL_RESOLVED,
+            APPROVAL_RESOLVED,
             approval_id=pending.id,
             tool=name,
             decision=decision,
@@ -149,7 +149,7 @@ class ApprovalTable:
                 if self.is_cancelled():
                     self._finish(pending, "deny", "cancelled")
                     break
-                remaining = pending.expires_at - events.now_ms()
+                remaining = pending.expires_at - now_ms()
                 if remaining <= 0:
                     # Mark expiry before settling, so a late answer can be rejected as expired.
                     pending.expired = True
@@ -208,7 +208,7 @@ class ApprovalTable:
     def _finish(self, pending: PendingApproval, decision: Decision, reason: str) -> None:
         """Settle one approval while the condition lock is held."""
         pending.decision = decision
-        pending.resolved_at = events.now_ms()
+        pending.resolved_at = now_ms()
         pending.resolved_reason = reason
         self._pending.pop(pending.id, None)
         self._decided[pending.id] = _Decided(
