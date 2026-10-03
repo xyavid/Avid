@@ -58,7 +58,7 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
         <section className="mt-a24">
           <h3 className="font-ui text-hint font-medium text-ink-muted">模型</h3>
           <p className="mt-a8 font-ui text-hint leading-[1.6] text-ink-muted">
-            连接中转站、自部署服务或本地模型（OpenAI 兼容 / Anthropic / Gemini 协议）。
+            连接中转站、自部署服务或本地模型（OpenAI 兼容 / Responses / Anthropic 协议）。
             密钥只写入本机密钥文件，任何界面与日志都不会回传。
           </p>
           <ModelSection />

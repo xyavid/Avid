@@ -66,7 +66,7 @@ Web  POST /api/sessions/{id}/runs ─┴─► svc/runs.RunRegistry（线程 + �
 | 子系统 | 位置 | 职责 |
 |---|---|---|
 | Agent 核心 | `agent/`：`run`（唯一循环）、`spec` 运行输入收口、`state.RunState` 全部可变状态、`context` 上下文装配（CONTEXT_MAP 声明表）、`compaction` 压缩通路（保留最近 N 轮 + 摘要）、`stop` 终止路径（StopReason）、`execution` 工具协议、`transcript` 消息唯一所有者、`events` 事件名单点、`hooks` 默认回调、`todo`/`prompt`/`skills` | 一次运行的生命周期与上下文策略 |
-| 模型适配 | `providers/`：`{openai_compat,anthropic,gemini}` 三家实现 + `__init__` 注册表、`transport` 退避重试、`protocol` 共享词表、`client`、`usage` 四家 usage 归一、`byok` 模型配置、`verify` 连通校验 | 换模型只动这一层 |
+| 模型适配 | `providers/`：`{openai_compat,anthropic,responses}` 实现 + `__init__` 注册表、`transport` 退避重试、`protocol` 共享词表、`client`、`usage` 四家 usage 归一、`byok` 模型配置、`verify` 连通校验 | 换模型只动这一层 |
 | 安全 | `security/`：`action` 归一化与风险分类、`engine`（deny > ask > allow）、`rules` 四级阶梯、`modes` 三轴预设、`sandbox` bwrap、`audit`、`permission` 唯一装配点、`userdirs` | 阈值、规则与文案的高频变化集中地 |
 | 会话 | `session/`：条目树 + 值 + 分支 + 变更线，`memory` 与 `jsonl` 两后端共用一套一致性用例，`recorder` 是唯一写入者 | 磁盘上的会话真相 |
 | 应用服务 | `services/`：`runs` 运行注册表与重放缓冲、`approvals` 待决表、`sessions` 读视图、`workspaces`、`workspace_registry`、`picker` | 内核的第二个调用方 |

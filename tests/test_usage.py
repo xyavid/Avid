@@ -53,16 +53,17 @@ DIALECTS = {
         },
         Usage(58, 3, 61, cache_read_tokens=40, cache_write_tokens=8),
     ),
-    "gemini": (
+    "responses": (
         {
-            "usageMetadata": {
-                "promptTokenCount": 90,
-                "candidatesTokenCount": 4,
-                "totalTokenCount": 94,
-                "cachedContentTokenCount": 30,
+            "usage": {
+                "input_tokens": 90,
+                "output_tokens": 4,
+                "total_tokens": 94,
+                "input_tokens_details": {"cached_tokens": 30},
+                "output_tokens_details": {"reasoning_tokens": 2},
             }
         },
-        Usage(90, 4, 94, cache_read_tokens=30),
+        Usage(90, 4, 94, cache_read_tokens=30, reasoning_tokens=2),
     ),
 }
 
@@ -268,14 +269,14 @@ def test_a_flat_reasoning_token_field_is_accepted_too():
     assert usage.reasoning_tokens == 7
 
 
-def test_gemini_thoughts_count_as_reasoning_tokens():
+def test_responses_reasoning_details_count_as_reasoning_tokens():
     usage = normalize_usage(
         {
-            "usageMetadata": {
-                "promptTokenCount": 3,
-                "candidatesTokenCount": 5,
-                "totalTokenCount": 8,
-                "thoughtsTokenCount": 40,
+            "usage": {
+                "input_tokens": 3,
+                "output_tokens": 45,
+                "total_tokens": 48,
+                "output_tokens_details": {"reasoning_tokens": 40},
             }
         }
     )

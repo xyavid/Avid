@@ -35,14 +35,14 @@ import { Input } from '../../ui/Input'
 const PROTOCOL_OPTIONS: { value: ByokProtocol; label: string }[] = [
   { value: 'openai-compatible', label: 'OpenAI 兼容（中转 / 自部署通用）' },
   { value: 'anthropic', label: 'Anthropic' },
-  { value: 'google', label: 'Gemini' },
+  { value: 'responses', label: 'OpenAI Responses（/responses 端点）' },
   { value: 'ollama', label: 'Ollama（本地）' },
 ]
 
 const PROTOCOL_LABELS: Record<ByokProtocol, string> = {
   'openai-compatible': 'OpenAI 兼容',
   anthropic: 'Anthropic',
-  google: 'Gemini',
+  responses: 'OpenAI Responses',
   ollama: 'Ollama',
 }
 

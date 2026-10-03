@@ -47,11 +47,8 @@ def usage_payload(data: Mapping[str, Any] | None) -> Mapping[str, Any]:
     """Extract the usage object from a response envelope, treating a bare usage object as one."""
     if not isinstance(data, Mapping):
         return {}
-    for key in ("usage", "usageMetadata", "usage_metadata"):
-        found = data.get(key)
-        if isinstance(found, Mapping):
-            return found
-    return data
+    found = data.get("usage")
+    return found if isinstance(found, Mapping) else data
 
 
 def _openai_like(payload: Mapping[str, Any]) -> Usage | None:
@@ -79,6 +76,27 @@ def _openai_like(payload: Mapping[str, Any]) -> Usage | None:
     )
 
 
+def _responses_like(payload: Mapping[str, Any]) -> Usage | None:
+    """Responses API usage: input_tokens / output_tokens with *_details sub-objects."""
+    if "input_tokens_details" not in payload and "output_tokens_details" not in payload:
+        return None
+    inbound = _as_int(payload.get("input_tokens"))
+    if inbound is None:
+        return None
+    completion = _as_int(payload.get("output_tokens")) or 0
+    total = _as_int(payload.get("total_tokens")) or (inbound + completion)
+    cached = _nested_int(payload.get("input_tokens_details"), "cached_tokens")
+    reasoning = _nested_int(payload.get("output_tokens_details"), "reasoning_tokens")
+    return Usage(
+        prompt_tokens=inbound,
+        completion_tokens=completion,
+        total_tokens=total,
+        cache_read_tokens=cached,
+        cache_write_tokens=None,
+        reasoning_tokens=reasoning,
+    )
+
+
 def _anthropic_like(payload: Mapping[str, Any]) -> Usage | None:
     inbound = _as_int(payload.get("input_tokens"))
     if inbound is None:
@@ -98,27 +116,11 @@ def _anthropic_like(payload: Mapping[str, Any]) -> Usage | None:
     )
 
 
-def _gemini_like(payload: Mapping[str, Any]) -> Usage | None:
-    prompt = _as_int(payload.get("promptTokenCount"))
-    if prompt is None:
-        return None
-    completion = _as_int(payload.get("candidatesTokenCount")) or 0
-    total = _as_int(payload.get("totalTokenCount")) or (prompt + completion)
-    return Usage(
-        prompt_tokens=prompt,
-        completion_tokens=completion,
-        total_tokens=total,
-        cache_read_tokens=_as_int(payload.get("cachedContentTokenCount")),
-        cache_write_tokens=None,
-        reasoning_tokens=_as_int(payload.get("thoughtsTokenCount")),
-    )
-
-
 #: Dialects are matched by their discriminating field; the order is the priority.
 _DIALECTS = (
     ("openai", _openai_like),
+    ("responses", _responses_like),
     ("anthropic", _anthropic_like),
-    ("gemini", _gemini_like),
 )
 
 
@@ -131,7 +133,7 @@ def normalize_usage(data: Mapping[str, Any] | None) -> Usage:
         if parsed is not None:
             return parsed
     # Without even a prompt count, keep the total if there is one and zero the rest.
-    total = _as_int(payload.get("total_tokens")) or _as_int(payload.get("totalTokenCount"))
+    total = _as_int(payload.get("total_tokens"))
     if total:
         return Usage(prompt_tokens=0, completion_tokens=0, total_tokens=total)
     return Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)

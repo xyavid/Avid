@@ -19,8 +19,8 @@ uv sync
 ## 配置
 
 模型连接**只认 BYOK 配置**（不读 `.env` 里的模型变量）：在界面
-「设置 → 模型」里维护，或手编文件。每份提供商配置 = 协议（OpenAI 兼容 / Anthropic /
-Gemini / Ollama）+ 接口地址 + 密钥引用 + 模型与能力声明；chat 槽位绑定一个
+「设置 → 模型」里维护，或手编文件。每份提供商配置 = 协议（OpenAI 兼容 / Responses /
+Anthropic / Ollama）+ 接口地址 + 密钥引用 + 模型与能力声明；chat 槽位绑定一个
 `providerId/modelId` 作为主对话模型。规则：
 
 - **两份文件**：`~/.avid/models.json`（providers + bindings，只存 `secretRef` 引用，

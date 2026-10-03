@@ -12,7 +12,7 @@
   换到别的东西）；结构非法（协议未知、引用不存在…）→ ConfigError——文件可读但
   内容错时静默换端点比报错更危险；旧版本写下的 `auth` 块静默忽略，不打断加载；
 - 协议枚举对齐 providers/ 注册表：openai-compatible 与 ollama 归 openai 族，
-  anthropic、google 归各自族；oauth 不做（没有授权流基础设施）。
+  anthropic、responses 归各自族；oauth 不做（没有授权流基础设施）。
 """
 
 from __future__ import annotations

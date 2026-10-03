@@ -5,13 +5,13 @@ Provider 注册表也在本模块：新增一个协议 = 一个实现模块 + PR
 
 from __future__ import annotations
 
-from . import anthropic, gemini, openai_compat
+from . import anthropic, openai_compat, responses
 
 # Single registry: adding a protocol is one module plus one entry here.
 PROVIDERS: dict[str, object] = {
     "openai": openai_compat,
     "anthropic": anthropic,
-    "gemini": gemini,
+    "responses": responses,
 }
 
 

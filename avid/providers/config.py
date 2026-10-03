@@ -27,9 +27,9 @@ _MODEL_INFO_OFF = ("off", "0", "false", "no")
 
 PROVIDER_OPENAI = "openai"
 PROVIDER_ANTHROPIC = "anthropic"
-PROVIDER_GEMINI = "gemini"
+PROVIDER_RESPONSES = "responses"
 #: Allowed values; the registry in providers/ holds the matching protocol implementations.
-PROVIDERS = (PROVIDER_OPENAI, PROVIDER_ANTHROPIC, PROVIDER_GEMINI)
+PROVIDERS = (PROVIDER_OPENAI, PROVIDER_ANTHROPIC, PROVIDER_RESPONSES)
 
 # Built-in context windows by model-name prefix, listing only values that are certainly known.
 MODEL_CONTEXT_WINDOWS: tuple[tuple[str, int], ...] = (
@@ -46,10 +46,6 @@ MODEL_CONTEXT_WINDOWS: tuple[tuple[str, int], ...] = (
     ("claude-", 200_000),
     ("deepseek-chat", 65_536),
     ("deepseek-reasoner", 65_536),
-    ("gemini-1.5", 1_048_576),
-    ("gemini-2.0", 1_048_576),
-    ("gemini-2.5", 1_048_576),
-    ("gemini-", 1_048_576),
 )
 
 
@@ -85,7 +81,7 @@ class Config:
     model: str
     # Context window in tokens; None means unknown, so the usage ratio is not computed.
     context_window: int | None = None
-    # Protocol family (openai / anthropic / gemini); the BYOK resolver fills it from the protocol.
+    # Protocol family (openai / anthropic / responses); the BYOK resolver fills it from the protocol.
     provider: str | None = None
     # Per-step cap on parallel tool calls; 1 is fully serial and unsafe tools never overlap.
     max_parallel_tool_calls: int = DEFAULT_MAX_PARALLEL_TOOL_CALLS

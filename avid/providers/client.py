@@ -130,8 +130,8 @@ def fetch_context_length(
     """Return the context window the provider advertises for this model, or None if unknown."""
     if not model_info_enabled():
         return None
-    # Only OpenAI-compatible gateways expose /models; the native APIs have no equivalent endpoint.
-    if config.resolved_provider != "openai":
+    # Only OpenAI-shaped gateways expose /models; the native APIs have no equivalent endpoint.
+    if config.resolved_provider not in ("openai", "responses"):
         return None
     key = (config.base_url, config.model)
     # A cached entry, including a cached None, is returned without another request.

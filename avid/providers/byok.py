@@ -42,20 +42,25 @@ ENV_BYOK_SECRETS = "AVID_BYOK_SECRETS"
 PROTOCOL_OPENAI_COMPATIBLE = "openai-compatible"
 PROTOCOL_OLLAMA = "ollama"
 PROTOCOL_ANTHROPIC = "anthropic"
-PROTOCOL_GOOGLE = "google"
-#: 协议枚举；映射到 providers/ 注册表的三个协议族（ollama 走它的 /v1 兼容端点）。
-PROTOCOLS = (PROTOCOL_OPENAI_COMPATIBLE, PROTOCOL_ANTHROPIC, PROTOCOL_GOOGLE, PROTOCOL_OLLAMA)
+PROTOCOL_RESPONSES = "responses"
+#: 协议枚举；映射到 providers/ 注册表的协议族（ollama 走它的 /v1 兼容端点）。
+PROTOCOLS = (
+    PROTOCOL_OPENAI_COMPATIBLE,
+    PROTOCOL_ANTHROPIC,
+    PROTOCOL_RESPONSES,
+    PROTOCOL_OLLAMA,
+)
 PROTOCOL_FAMILY = {
     PROTOCOL_OPENAI_COMPATIBLE: "openai",
     PROTOCOL_OLLAMA: "openai",
     PROTOCOL_ANTHROPIC: "anthropic",
-    PROTOCOL_GOOGLE: "gemini",
+    PROTOCOL_RESPONSES: "responses",
 }
 DEFAULT_PROTOCOL_BASE_URLS = {
     PROTOCOL_OPENAI_COMPATIBLE: "https://api.openai.com/v1",
     PROTOCOL_OLLAMA: "http://localhost:11434/v1",
     PROTOCOL_ANTHROPIC: "https://api.anthropic.com",
-    PROTOCOL_GOOGLE: "https://generativelanguage.googleapis.com/v1beta",
+    PROTOCOL_RESPONSES: "https://api.openai.com/v1",
 }
 
 #: 唯一的角色槽位。binding 值形如 "providerId/modelId"，null = 未绑定。

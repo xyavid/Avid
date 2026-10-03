@@ -284,7 +284,7 @@ export interface StartRunInput {
  * `api_key` 有去无回，GET 只给每家的 `key_set` 布尔；鉴权隐式——密钥库里按
  * provider id 存了密钥就按协议标准头发送，没存就不带（本地服务）。
  */
-export type ByokProtocol = 'openai-compatible' | 'anthropic' | 'google' | 'ollama'
+export type ByokProtocol = 'openai-compatible' | 'anthropic' | 'responses' | 'ollama'
 
 /** 能力声明；null = 未声明。只有显式 false 才会被运行期拦截。 */
 export interface CapabilityFlags {

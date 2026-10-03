@@ -4,7 +4,7 @@
 
 * ``transport``：429/5xx/网络错误的重试矩阵（Retry-After、退避序列、耗尽后收敛）；
   流式只在首字节前可重试。
-* ``anthropic`` / ``gemini``：请求构造（system 落位、tool_calls↔原生块、tool 结果
+* ``anthropic`` / ``responses``：请求构造（system 落位、tool_calls↔原生 item、tool 结果
   映射）与响应解析（非流式 JSON 与流式 SSE 产出**同形** Turn，B9）。
 * ``config``：provider 探测与 AVID_PROVIDER 覆盖。
 
@@ -19,7 +19,7 @@ import json
 import httpx
 import pytest
 
-from avid.providers import anthropic, gemini, transport
+from avid.providers import anthropic, responses, transport
 from avid.providers.client import ask, chat_completion, stream_completion
 from avid.providers.config import Config, ConfigError, window_for
 from avid.providers.protocol import LLMError, PromptTooLongError
@@ -29,13 +29,6 @@ OPENAI_CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="test-
 ANTHROPIC_CONFIG = Config(
     api_key="k", base_url="https://api.anthropic.com", model="claude-test", provider="anthropic"
 )
-GEMINI_CONFIG = Config(
-    api_key="k",
-    base_url="https://generativelanguage.googleapis.com/v1beta",
-    model="gemini-test",
-    provider="gemini",
-)
-
 TOOLS = [
     {
         "type": "function",
@@ -193,7 +186,7 @@ class TestProviderDetection:
     def test_window_table_knows_newer_prefixes(self):
         assert window_for("claude-sonnet-4-5") == 200_000
         assert window_for("claude-haiku-4-5") == 200_000
-        assert window_for("gemini-3-pro") == 1_048_576
+        assert window_for("deepseek-chat") == 65_536
 
 
 # ---------------- Anthropic Messages API ----------------
@@ -379,212 +372,136 @@ class TestAnthropic:
                 )
 
 
-# ---------------- Gemini generateContent ----------------
+# ---------------- OpenAI Responses API ----------------
 
+RESPONSES_CONFIG = Config(
+    api_key="k",
+    base_url="https://api.openai.com/v1",
+    model="gpt-5",
+    provider="responses",
+)
 
-GEMINI_MESSAGES = [
-    {"role": "user", "content": "hi"},
+RESPONSES_TOOLS = [
     {
-        "role": "assistant",
-        "content": "calling",
-        "tool_calls": [
-            {
-                "id": "call_0",
-                "type": "function",
-                "function": {"name": "read_file", "arguments": '{"path": "a.txt"}'},
-            }
-        ],
-    },
-    {"role": "tool", "tool_call_id": "call_0", "content": "file data"},
-    {"role": "user", "content": "thanks"},
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "读文件",
+            "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
+        },
+    }
 ]
 
 
-class TestGemini:
-    def test_request_shape(self):
-        captured: dict[str, httpx.Request] = {}
+def _responses_message(text="hi", tool_calls=()):
+    message = {"role": "assistant", "content": text}
+    if tool_calls:
+        message["tool_calls"] = list(tool_calls)
+    return message
 
-        def handler(request: httpx.Request) -> httpx.Response:
-            captured["req"] = request
-            return httpx.Response(
-                200,
-                json={
-                    "candidates": [
-                        {"content": {"role": "model", "parts": [{"text": "done"}]},
-                         "finishReason": "STOP"}
-                    ],
-                    "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1},
-                },
-            )
 
-        with _mock(handler) as http:
-            gemini.chat(
-                GEMINI_CONFIG,
-                GEMINI_MESSAGES,
-                system="sys",
-                tools=TOOLS,
-                max_tokens=999,
-                client=http,
-            )
+def test_responses_request_translates_messages_and_tools():
+    request = responses.build_request(
+        RESPONSES_CONFIG,
+        [
+            {"role": "user", "content": "读 a.txt"},
+            _responses_message("", [{"id": "fc_1", "type": "function",
+                "function": {"name": "read_file", "arguments": '{"path": "a.txt"}'}}]),
+            {"role": "tool", "tool_call_id": "fc_1", "content": "内容"},
+        ],
+        system="系统提示",
+        tools=RESPONSES_TOOLS,
+        max_tokens=8000,
+    )
 
-        request = captured["req"]
-        assert (
-            str(request.url)
-            == "https://generativelanguage.googleapis.com/v1beta/models/gemini-test:generateContent"
+    assert request["instructions"] == "系统提示"
+    assert request["max_output_tokens"] == 8000
+    items = request["input"]
+    assert items[0] == {"role": "user", "content": "读 a.txt"}
+    assert items[1]["type"] == "function_call" and items[1]["call_id"] == "fc_1"
+    assert items[2] == {"type": "function_call_output", "call_id": "fc_1", "output": "内容"}
+    # 工具定义扁平化：name/parameters 顶层，不再嵌在 function 里
+    assert request["tools"][0]["name"] == "read_file"
+    assert "function" not in request["tools"][0]
+
+
+def test_responses_parses_text_tool_calls_and_usage():
+    payload = {
+        "id": "resp_1",
+        "model": "gpt-5",
+        "status": "completed",
+        "output": [
+            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "想了想"}]},
+            {"type": "function_call", "call_id": "fc_1", "name": "read_file",
+             "arguments": '{"path": "a.txt"}'},
+            {"type": "message", "role": "assistant",
+             "content": [{"type": "output_text", "text": "读完了"}]},
+        ],
+        "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15,
+                  "input_tokens_details": {"cached_tokens": 4},
+                  "output_tokens_details": {"reasoning_tokens": 2}},
+    }
+
+    turn = responses.parse_turn(payload)
+
+    assert turn.text == "读完了"
+    assert turn.tool_calls[0]["id"] == "fc_1"
+    assert turn.tool_calls[0]["function"]["name"] == "read_file"
+    assert turn.finish_reason == "stop"
+    assert turn.reasoning == "想了想"
+    assert turn.usage.prompt_tokens == 10
+    assert turn.usage.cache_read_tokens == 4
+    assert turn.usage.reasoning_tokens == 2
+
+
+def test_responses_incomplete_maps_to_its_reason():
+    payload = {"model": "gpt-5", "status": "incomplete",
+               "incomplete_details": {"reason": "max_output_tokens"}, "output": []}
+
+    assert responses.parse_turn(payload).finish_reason == "max_output_tokens"
+
+
+def test_responses_stream_folds_typed_events():
+    events = [
+        {"type": "response.output_item.added", "output_index": 0,
+         "item": {"type": "function_call", "call_id": "fc_1", "name": "read_file", "arguments": ""}},
+        {"type": "response.function_call_arguments.delta", "output_index": 0, "delta": '{"path"'},
+        {"type": "response.function_call_arguments.delta", "output_index": 0, "delta": ': "a.txt"}'},
+        {"type": "response.output_text.delta", "delta": "读"},
+        {"type": "response.output_text.delta", "delta": "完了"},
+        {"type": "response.reasoning_summary_text.delta", "delta": "略想"},
+        {"type": "response.completed", "response": {"model": "gpt-5", "status": "completed",
+         "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15,
+                   "output_tokens_details": {"reasoning_tokens": 1}}}},
+    ]
+    body = "".join(f"data: {json.dumps(event)}\n\n" for event in events)
+    deltas: list[str] = []
+    thinking: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=body,
+                              headers={"content-type": "text/event-stream"})
+
+    with _mock(handler) as http:
+        turn = responses.stream(
+            RESPONSES_CONFIG, [{"role": "user", "content": "hi"}],
+            on_delta=deltas.append, on_reasoning=thinking.append, client=http,
         )
-        assert request.headers["x-goog-api-key"] == "k"
 
-        body = json.loads(request.content)
-        assert body["systemInstruction"] == {"parts": [{"text": "sys"}]}
-        assert body["generationConfig"] == {"maxOutputTokens": 999}
-        assert body["tools"] == [
-            {
-                "functionDeclarations": [
-                    {
-                        "name": "read_file",
-                        "description": "读一个文件",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {"path": {"type": "string"}},
-                        },
-                    }
-                ]
-            }
-        ]
-        # functionResponse 按名字回给（Gemini 没有 tool_call id）；连续 user 合并。
-        assert body["contents"] == [
-            {"role": "user", "parts": [{"text": "hi"}]},
-            {
-                "role": "model",
-                "parts": [
-                    {"text": "calling"},
-                    {"functionCall": {"name": "read_file", "args": {"path": "a.txt"}}},
-                ],
-            },
-            {
-                "role": "user",
-                "parts": [
-                    {"functionResponse": {"name": "read_file", "response": {"result": "file data"}}},
-                    {"text": "thanks"},
-                ],
-            },
-        ]
+    assert turn.text == "读完了"
+    assert turn.tool_calls[0]["function"]["arguments"] == '{"path": "a.txt"}'
+    assert turn.usage.total_tokens == 15
+    assert deltas == ["读", "完了"]
+    assert thinking == ["略想"]
 
-    def test_turn_shape(self):
-        data = {
-            "modelVersion": "gemini-test",
-            "candidates": [
-                {
-                    "content": {
-                        "role": "model",
-                        "parts": [
-                            {"text": "Reading it."},
-                            {"functionCall": {"name": "read_file", "args": {"path": "a.txt"}}},
-                        ],
-                    },
-                    "finishReason": "STOP",
-                }
-            ],
-            "usageMetadata": {
-                "promptTokenCount": 100,
-                "candidatesTokenCount": 20,
-                "totalTokenCount": 120,
-                "cachedContentTokenCount": 30,
-                "thoughtsTokenCount": 7,
-            },
-        }
 
-        with _mock(lambda request: httpx.Response(200, json=data)) as http:
-            turn = gemini.chat(
-                GEMINI_CONFIG, [{"role": "user", "content": "hi"}], client=http
-            )
+def test_responses_prompt_too_long_is_classified():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"error": {"message": "context length exceeded"}})
 
-        assert turn.text == "Reading it."
-        assert turn.finish_reason == "stop"
-        assert turn.model == "gemini-test"
-        assert turn.usage.prompt_tokens == 100  # Gemini 的 promptTokenCount 含缓存
-        assert turn.usage.cache_read_tokens == 30
-        assert turn.usage.reasoning_tokens == 7
-        assert turn.tool_calls[0]["id"] == "call_0"
-        assert json.loads(turn.tool_calls[0]["function"]["arguments"]) == {"path": "a.txt"}
-        assert turn.message["role"] == "assistant"
-
-    def test_stream_turn_matches_non_stream(self):
-        chunks = [
-            {"candidates": [{"content": {"parts": [{"text": "Reading"}]}}],
-             "modelVersion": "gemini-test"},
-            {"candidates": [{"content": {"parts": [{"text": " it."}]}}]},
-            {
-                "candidates": [
-                    {
-                        "content": {
-                            "parts": [
-                                {"functionCall": {"name": "read_file", "args": {"path": "a.txt"}}}
-                            ]
-                        },
-                        "finishReason": "STOP",
-                    }
-                ],
-                "usageMetadata": {
-                    "promptTokenCount": 100,
-                    "candidatesTokenCount": 20,
-                    "totalTokenCount": 120,
-                    "cachedContentTokenCount": 30,
-                    "thoughtsTokenCount": 7,
-                },
-            },
-        ]
-        body = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks)
-
-        deltas: list[str] = []
-        with _mock(lambda request: httpx.Response(200, text=body)) as http:
-            turn = gemini.stream(
-                GEMINI_CONFIG,
-                [{"role": "user", "content": "hi"}],
-                on_delta=deltas.append,
-                client=http,
-            )
-
-        assert deltas == ["Reading", " it."]
-        assert turn.text == "Reading it."
-        assert turn.finish_reason == "stop"
-        assert turn.model == "gemini-test"
-        assert turn.usage.prompt_tokens == 100
-        assert turn.tool_calls[0]["id"] == "call_0"
-        assert json.loads(turn.tool_calls[0]["function"]["arguments"]) == {"path": "a.txt"}
-
-    def test_max_tokens_exceeded_maps_to_length(self):
-        data = {
-            "candidates": [
-                {
-                    "content": {"parts": [{"text": "half way"}]},
-                    "finishReason": "MAX_TOKENS",
-                }
-            ],
-            "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1},
-        }
-
-        with _mock(lambda request: httpx.Response(200, json=data)) as http:
-            turn = gemini.chat(
-                GEMINI_CONFIG, [{"role": "user", "content": "hi"}], client=http
-            )
-        assert turn.finish_reason == "length"
-
-    def test_prompt_too_long_is_recognised(self):
-        def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(
-                400,
-                json={
-                    "error": {
-                        "code": 400,
-                        "message": "input token count 1000 exceeds the maximum number of tokens allowed",
-                    }
-                },
-            )
-
-        with _mock(handler) as http:
-            with pytest.raises(PromptTooLongError):
-                gemini.chat(GEMINI_CONFIG, [{"role": "user", "content": "hi"}], client=http)
+    with _mock(handler) as http:
+        with pytest.raises(PromptTooLongError):
+            responses.chat(RESPONSES_CONFIG, [{"role": "user", "content": "hi"}], client=http)
 
 
 # ---------------- 门面分发 ----------------

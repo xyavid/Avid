@@ -158,7 +158,7 @@ class ByokProviderIn(BaseModel):
 
     id: str = Field(max_length=MAX_ID_CHARS, pattern=r"^[a-z0-9-]+$")
     label: str = Field(max_length=MAX_NAME_CHARS)
-    protocol: Literal["openai-compatible", "anthropic", "google", "ollama"]
+    protocol: Literal["openai-compatible", "anthropic", "responses", "ollama"]
     base_url: str = Field(max_length=MAX_PATH_CHARS)
     headers: dict[str, str] = Field(default_factory=dict)
     extra_body: dict[str, Any] = Field(default_factory=dict)
