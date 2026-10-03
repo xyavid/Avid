@@ -1,2 +1,0 @@
-code=WX93
-requires: s11

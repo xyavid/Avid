@@ -1,2 +1,0 @@
-step=s5
-code=ZB05

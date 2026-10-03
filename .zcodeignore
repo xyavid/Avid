@@ -8,9 +8,6 @@ __pycache__/
 .avid/
 .tasks/
 
-# AvidBench 的运行结果：本地研究材料（轨迹可能很大），不入库。
-# 入库的只有评测集与一行基线数字（docs/status/BENCHMARK.md）。
-benchmarks/runs/
 build/
 dist/
 *.egg-info/
@@ -19,8 +16,8 @@ dist/
 
 # 前端已整体删除（含工具链与契约种子）；产物目录只留占位，
 # 重建前端后在这里追加新的忽略规则。
-/src/avid/web/static/*
-!/src/avid/web/static/.gitkeep
+/avid/web/static/*
+!/avid/web/static/.gitkeep
 
 # ---- 文档入库规则：正式文档进 docs/，过程文档留 dev/ ----
 

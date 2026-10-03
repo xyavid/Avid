@@ -52,7 +52,7 @@ ignore = [
 
 [tool.mypy]
 python_version = "3.12"
-files = ["src/avid"]
+files = ["avid"]
 # 不追求一次性 strict：先把"能查出来的错"变成 0，再逐步收紧。
 check_untyped_defs = true
 no_implicit_optional = true
@@ -64,13 +64,8 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# benchmarks/ 不在 src/avid 包里（它是本地评测仪器，不随 wheel 分发），
-# 但 tests/ 要 import 它，所以仓库根进 pythonpath。
-pythonpath = ["."]
-# 默认不跑 stress 与 eval：前者是复杂度门禁，后者要真模型、有成本与抖动。
-addopts = "-m 'not stress and not eval and not eval_smoke' --strict-markers"
+# stress 门禁默认不跑：复杂度与长会话用例耗时，由 CI 单独 job 显式执行。
+addopts = "-m 'not stress' --strict-markers"
 markers = [
     "stress: 性能与长会话类门禁，默认不跑（需显式 -m stress）",
-    "eval: AvidBench 全量评测（真模型，有成本；需 uv run --env-file .env）",
-    "eval_smoke: AvidBench 冒烟子集（3 条 case，先确认仪器通了）",
 ]

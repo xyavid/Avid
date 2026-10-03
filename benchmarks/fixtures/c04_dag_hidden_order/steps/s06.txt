@@ -1,2 +1,0 @@
-code=HV60
-requires: s11

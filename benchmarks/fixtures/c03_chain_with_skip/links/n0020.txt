@@ -1,3 +1,0 @@
-hop=20
-SKIP links/n0023.txt
-note=前两跳已合并

@@ -1,3 +1,0 @@
-tag=shard03-3
-amount=4321
-note=记录 3-3

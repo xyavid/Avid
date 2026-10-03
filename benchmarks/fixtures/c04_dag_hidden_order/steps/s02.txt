@@ -1,2 +1,0 @@
-code=RM72
-requires: s05

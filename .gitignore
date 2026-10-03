@@ -8,9 +8,6 @@ __pycache__/
 .avid/
 .tasks/
 
-# AvidBench 的运行结果：本地研究材料（轨迹可能很大），不入库。
-# 入库的只有评测集与一行基线数字（docs/status/BENCHMARK.md）。
-benchmarks/runs/
 build/
 dist/
 *.egg-info/
@@ -18,7 +15,7 @@ dist/
 # ---- 前端 ----
 
 # 依赖与产物不入库：`pnpm -C web build && pnpm -C web run copy:dist` 会把 dist/
-# 复制进 src/avid/web/static/（随 wheel 分发）。构建戳也在产物里。
+# 复制进 avid/web/static/（随 wheel 分发）。构建戳也在产物里。
 web/node_modules/
 web/dist/
 # tsc -b 的增量缓存：构建产物，不入库（否则每次构建都产生无意义 diff）
@@ -26,8 +23,8 @@ web/tsconfig.tsbuildinfo
 *.tsbuildinfo
 web/playwright-report/
 web/test-results/
-/src/avid/web/static/*
-!/src/avid/web/static/.gitkeep
+/avid/web/static/*
+!/avid/web/static/.gitkeep
 
 # ---- 文档入库规则：正式文档进 docs/，过程文档留 dev/ ----
 

@@ -1,4 +1,0 @@
-date: 2024-04-08
-metric: 291
-owner: ops
-note: 第 05 期

@@ -1,2 +1,0 @@
-step=5
-next: chain/p06.txt

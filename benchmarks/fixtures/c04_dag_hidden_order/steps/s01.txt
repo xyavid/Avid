@@ -1,2 +1,0 @@
-code=QK41
-requires: s08

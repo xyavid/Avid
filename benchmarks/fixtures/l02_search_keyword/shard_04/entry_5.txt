@@ -1,3 +1,0 @@
-tag=shard04-5
-amount=4435
-note=记录 4-5

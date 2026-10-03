@@ -1,3 +1,0 @@
-tag=shard04-4
-amount=4428
-note=记录 4-4

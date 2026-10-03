@@ -1,2 +1,0 @@
-code=TP18
-requires: s07

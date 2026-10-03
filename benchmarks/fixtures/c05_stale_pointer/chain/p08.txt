@@ -1,2 +1,0 @@
-step=8
-next: chain/p09.txt

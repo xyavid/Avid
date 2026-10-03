@@ -1,4 +1,0 @@
-amount=3373
-amount=4676
-amount=5979
-amount=7282

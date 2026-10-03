@@ -1,2 +1,0 @@
-step=s2
-code=RM72

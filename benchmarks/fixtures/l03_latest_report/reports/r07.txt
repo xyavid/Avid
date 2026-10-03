@@ -1,4 +1,0 @@
-date: 2024-03-27
-metric: 260
-owner: ops
-note: 第 07 期

@@ -1,4 +1,0 @@
-date: 2024-08-05
-metric: 431
-owner: ops
-note: 第 08 期

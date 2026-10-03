@@ -427,7 +427,7 @@ def test_max_parallel_one_matches_the_serial_reference_byte_for_byte():
 
 
 def test_default_is_serial_so_callers_opt_in():
-    """不传 max_parallel 时保持旧行为（benchmarks / bare 循环因此不受影响）。"""
+    """不传 max_parallel 时保持旧行为（直调 / bare 路径因此不受影响）。"""
     rec = Recorder()
     registry = {"read_file": rec.handler("only")}
 

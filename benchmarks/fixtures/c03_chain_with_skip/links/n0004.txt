@@ -1,2 +1,0 @@
-hop=4
-next: links/n0005.txt

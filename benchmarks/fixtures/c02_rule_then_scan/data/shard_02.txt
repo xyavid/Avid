@@ -1,4 +1,0 @@
-amount=9717
-amount=2020
-amount=3323
-amount=4626

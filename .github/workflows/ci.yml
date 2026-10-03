@@ -16,7 +16,7 @@ jobs:
       - name: 同步依赖（含 dev group）
         run: uv sync --group dev
       - name: 代码风格与明显错误
-        run: uv run ruff check src tests
+        run: uv run ruff check avid tests
       - name: 类型检查
         run: uv run mypy
       - name: 测试（stress 由单独 job 跑）

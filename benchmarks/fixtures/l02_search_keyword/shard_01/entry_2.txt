@@ -1,3 +1,0 @@
-tag=shard01-2
-amount=4114
-note=记录 1-2

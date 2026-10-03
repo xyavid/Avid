@@ -1,4 +1,0 @@
-date: 2024-07-02
-metric: 402
-owner: ops
-note: 第 02 期

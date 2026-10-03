@@ -1,3 +1,0 @@
-tag=shard06-4
-amount=4628
-note=记录 6-4

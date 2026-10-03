@@ -1,2 +1,0 @@
-code=DM11
-requires: s12

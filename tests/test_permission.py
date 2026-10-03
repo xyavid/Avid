@@ -45,11 +45,11 @@ DENIED_COMMANDS = [
 ALLOWED_COMMANDS = [
     "rm -rf build/",
     "rm -f a.txt",
-    "rm -r src/avid/tools/__pycache__",
+    "rm -r avid/tools/__pycache__",
     "ls -la",
     "uv run pytest -q",
     "git status",
-    "grep halt src/avid/*.py",
+    "grep halt avid/*.py",
     "grep -rn reboot src/",
     "ls /usr/bin/dd",
     "mkdir -p /tmp/x",
@@ -108,7 +108,7 @@ def test_danger_categories_cover_every_pattern():
 def test_sensitive_paths_are_recognised_by_components_not_literals():
     for raw in ("~/.ssh/config", "$HOME/.ssh/id_rsa", "/home/u/.aws/credentials", "a.pem"):
         assert sensitive_reason(raw) == "敏感路径", raw
-    assert sensitive_reason("src/avid/cli.py") is None
+    assert sensitive_reason("avid/cli.py") is None
 
 
 def test_broker_normalises_the_command():

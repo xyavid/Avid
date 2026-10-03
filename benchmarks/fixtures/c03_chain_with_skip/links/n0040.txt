@@ -1,3 +1,0 @@
-hop=40
-CODE=ZP-9184
-next: none

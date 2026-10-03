@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * §4.3 的产物搬运（`pnpm copy:dist`）：`web/dist/**` → `src/avid/web/static/`。
+ * 产物搬运（`pnpm copy:dist`）：`web/dist/**` → `avid/web/static/`。
  *
  * 先清空目标目录但保留目录本身（后端 `app.py` 挂载的是这个路径，目录不存在会起不来）。
  * 复制完写 `.build.json` 构建戳：git sha、构建时间、文件数、来源。git 不可用时不报错，
@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url'
 
 const WEB_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const DIST = join(WEB_ROOT, 'dist')
-const DEST = resolve(WEB_ROOT, '../src/avid/web/static')
+const DEST = resolve(WEB_ROOT, '../avid/web/static')
 
 function countFiles(dir) {
   let count = 0

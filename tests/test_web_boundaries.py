@@ -1,8 +1,7 @@
-"""A1 – A6 / A10 – A12 / A14：架构边界用 grep 与断言守住（不依赖运行）。
+"""A1 – A6 / A10 – A13：架构边界用 grep 与断言守住（不依赖运行）。
 
 这些规则的价值在于它们**会失败**：一次「顺手 import 一下」会被立刻拦住。
-边界是正则的边界——它只匹配字面量，拼接出来的 URL 与间接 import 不在覆盖内
-（设计文档 §3.4 已写明这条限制）。
+边界是正则的边界——它只匹配字面量，拼接出来的 URL 与间接 import 不在覆盖内。
 """
 
 from __future__ import annotations
@@ -12,7 +11,7 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src" / "avid"
+SRC = ROOT / "avid"
 WEB = ROOT / "web"
 
 # svc/ 也在内核侧：它是最容易被"顺手 import 一下 pydantic"的层（离传输层最近），
@@ -60,8 +59,8 @@ def test_a1_kernel_does_not_depend_on_a_web_framework():
 
 
 def test_a2_only_web_knows_http_frameworks():
-    # 判定按设计文档原文：`grep -rln "fastapi" src/avid` 必须全部落在 web/。
-    # （`avid web` 子命令在 cli.py 里 import uvicorn 是文档指定的接线点。）
+    # 判定原文：`grep -rln "fastapi" avid` 必须全部落在 web/。
+    # （`avid web` 子命令在 cli.py 里 import uvicorn，是唯一放行点。）
     found = hits(files_under(suffix=".py"), r"\bfastapi\b")
     assert found, "应该至少有一处 fastapi"
     offenders = [item for item in found if "/web/" not in item.split(":")[0]]
@@ -70,7 +69,7 @@ def test_a2_only_web_knows_http_frameworks():
 
 def test_a2_uvicorn_is_only_used_for_the_web_subcommand():
     found = hits(files_under(suffix=".py"), r"^\s*(import|from)\s+uvicorn")
-    assert {item.split(":")[0] for item in found} == {"src/avid/cli.py"}
+    assert {item.split(":")[0] for item in found} == {"avid/cli.py"}
 
 
 def test_a1_svc_is_also_checked_for_web_framework_imports():
@@ -96,10 +95,10 @@ def test_a3_loop_is_still_only_a_scheduler():
         for item in code_hits(files_under(suffix=".py"), r"agent_loop\(")
     }
     assert callers == {
-        "src/avid/runtime/loop.py",
-        "src/avid/cli.py",
-        "src/avid/svc/runs.py",
-        "src/avid/tools/subagent.py",
+        "avid/runtime/loop.py",
+        "avid/cli.py",
+        "avid/svc/runs.py",
+        "avid/tools/subagent.py",
     }, callers
 
     # svc / web 不按轮次自己推进调度（while/for round）
@@ -147,10 +146,10 @@ def test_a10_on_message_wiring_stays_in_four_places():
         for item in hits(files_under(suffix=".py"), r"on_message")
     }
     assert found == {
-        "src/avid/runtime/loop.py",
-        "src/avid/session/recorder.py",
-        "src/avid/cli.py",
-        "src/avid/svc/runs.py",
+        "avid/runtime/loop.py",
+        "avid/session/recorder.py",
+        "avid/cli.py",
+        "avid/svc/runs.py",
     }, found
 
 
@@ -187,13 +186,13 @@ def test_frontend_sources_exist():
     assert frontend_sources(), "web/src 下没有前端源码"
 
 
-# ---------------- A13：runtime → policy 的边界（设计文档 §12 判据 9） ----------------
+# ---------------- A13：runtime → policy 的边界（判据：策略细节不进调度层） ----------------
 
 
 def policy_imports(path: Path) -> tuple[set[str], set[str]]:
     """返回 (运行时 import 的 policy 模块, 只在 TYPE_CHECKING 下 import 的)。
 
-    用 AST 而不是 grep：判据 9 特意区分"注解用的惰性 import"与"真依赖"，
+    用 AST 而不是 grep：判据特意区分"注解用的惰性 import"与"真依赖"，
     正则分不出来，而这条边界的价值恰恰在那个区分上。
     """
     tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -234,18 +233,17 @@ def policy_imports(path: Path) -> tuple[set[str], set[str]]:
 # runtime/ 允许 import policy 的文件与各自用到的模块。这不是"豁免名单"，而是把边界
 # 写成会失败的断言：`loop.py` 与 `execution.py` 必须是零运行时依赖（调度与工具协议
 # 不该认识策略），其余三个文件各有明确理由——context_manager 装配上下文并编排压缩、
-# state 持有运行期实例、hooks 注册默认回调（权限裁决 + 截断落盘，设计文档 §12 判据 9
-# 的措辞修正）。
+# state 持有运行期实例、hooks 注册默认回调（权限裁决 + 截断落盘）。
 RUNTIME_POLICY_EDGES: dict[str, set[str]] = {
-    "src/avid/runtime/context_manager.py": {"policy", "policy.compaction", "policy.prompt"},
-    "src/avid/runtime/state.py": {
+    "avid/runtime/context_manager.py": {"policy", "policy.compaction", "policy.prompt"},
+    "avid/runtime/state.py": {
         "policy.permission",
         "policy.skills",
         "policy.todo",
     },
-    "src/avid/runtime/hooks.py": {"policy.permission", "policy.compaction"},
+    "avid/runtime/hooks.py": {"policy.permission", "policy.compaction"},
 }
-POLICY_FREE_RUNTIME = ("src/avid/runtime/loop.py", "src/avid/runtime/execution.py")
+POLICY_FREE_RUNTIME = ("avid/runtime/loop.py", "avid/runtime/execution.py")
 
 
 def test_a13_loop_and_execution_have_zero_runtime_policy_dependency():
@@ -256,7 +254,7 @@ def test_a13_loop_and_execution_have_zero_runtime_policy_dependency():
 
 def test_a13_runtime_policy_edges_are_exactly_the_declared_ones():
     """边界是双向的：既不许 loop/execution 反向依赖策略层，也不许别的 runtime
-    文件偷偷多出一条没写进设计文档的边（新增一处就必须先改这里与 §12 判据 9）。"""
+    文件偷偷多出一条没申报的边（新增一处就必须先改这里）。"""
     for name in POLICY_FREE_RUNTIME:
         assert name not in RUNTIME_POLICY_EDGES
 
@@ -295,7 +293,7 @@ def test_web_imports_name_submodules_not_the_package():
     对应真实存在的模块文件/子包——只看语法会把这条合法用法一起误伤。
     """
     offenders: list[str] = []
-    for path in sorted((ROOT / "src" / "avid" / "web").rglob("*.py")):
+    for path in sorted((ROOT / "avid" / "web").rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if not isinstance(node, ast.ImportFrom) or node.module or not node.level:
@@ -312,23 +310,3 @@ def test_web_imports_name_submodules_not_the_package():
                         f"from {'.' * node.level} import {alias.name}"
                     )
     assert offenders == [], f"web 内部按子模块名 import：{offenders}"
-
-
-# ---------------- A14：benchmarks/ 是叶子消费者 ----------------
-#
-# AvidBench 在 `benchmarks/`（包外，不进 wheel）。它要靠注入点驱动内核，所以**允许**
-# import `avid` 的任何一层；反过来绝不允许：产品代码 import 评测仪器，或者评测仪器被
-# 写进 `src/avid` 的依赖图。这条边界以前不存在（那时没有 benchmarks/），现在有东西
-# 可以违反它了，所以要有一条会失败的断言。
-
-
-def test_a14_product_code_never_imports_benchmarks():
-    product = list(SRC.rglob("*.py"))
-    assert hits(product, r"^\s*(from|import)\s+benchmarks\b") == []
-
-
-def test_a14_benchmarks_stays_out_of_the_wheel():
-    """仪器不随包分发：它必须在 `src/` 之外，且 `benchmarks/runs/` 不进版本库。"""
-    assert (ROOT / "benchmarks").is_dir()
-    assert not (SRC / "benchmarks").exists()
-    assert hits([ROOT / ".gitignore"], r"^benchmarks/runs/$") != []

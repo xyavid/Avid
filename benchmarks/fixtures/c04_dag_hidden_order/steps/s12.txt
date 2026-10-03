@@ -1,2 +1,0 @@
-code=GS69
-requires: s04, s06
