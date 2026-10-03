@@ -17,6 +17,7 @@ from avid.agent.context import (
 )
 from avid.agent.skills import SkillLoader
 from avid.agent.state import RunState
+from avid.providers.client import Turn, Usage
 from avid.providers.config import Config
 from avid.providers.transcript import Transcript
 
@@ -27,6 +28,10 @@ def user(text="hi"):
     return {"role": "user", "content": text}
 
 
+def _no_summarize(*args, **kwargs):
+    raise AssertionError("这个用例不该调用模型")
+
+
 def make_manager(
     messages=None,
     *,
@@ -34,6 +39,7 @@ def make_manager(
     tool_names=("bash", "read_file"),
     state=None,
     budget=None,
+    summarize=None,
 ):
     return ContextManager(
         transcript=Transcript([user("hi")] if messages is None else messages),
@@ -42,10 +48,9 @@ def make_manager(
         instructions=instructions,
         tool_names=list(tool_names),
         budget=budget,
-        summarize=lambda *a, **k: (_ for _ in ()).throw(
-            AssertionError("这个用例不该调用模型")
-        ),
+        summarize=summarize or _no_summarize,
     )
+
 
 
 # ---------- system 落位 ----------
@@ -350,7 +355,7 @@ def tool_round(content: str, call_id: str) -> list[dict]:
 
 def test_compose_runs_compaction_and_reports_it(tmp_path):
     state = RunState(workspace_root=str(tmp_path))
-    # ① 永远保留最近 keep_recent 条工具结果，所以至少要有一条"更早的"才会落盘。
+    # 两轮工具往返；keep_recent_turns=1 时第 1 轮落入"更早历史"，被摘要替代。
     messages = [
         user("hi"),
         *tool_round("x" * 5000, "t1"),
@@ -359,16 +364,24 @@ def test_compose_runs_compaction_and_reports_it(tmp_path):
     manager = make_manager(
         messages,
         state=state,
+        summarize=lambda config, messages, **kwargs: Turn(
+            message={"role": "assistant", "content": "要点"},
+            text="要点",
+            tool_calls=[],
+            usage=Usage(1, 1, 2),
+            model="m",
+            finish_reason="stop",
+        ),
         budget=ContextBudget(
-            tool_result_chars=100, tool_result_keep_recent=1, from_window=False
+            context_chars=100, keep_recent_turns=1, from_window=False
         ),
     )
 
     request = manager.compose()
 
     assert request.changed
-    assert request.reports[0].step == "tool_result_budget"
-    assert "已落盘" in manager.transcript.text_at(2)
+    assert request.reports[0].step == "compact_history"
+    assert "[历史摘要]" in manager.transcript.as_messages()[0]["content"]
 
 
 def test_render_recomputes_tail_without_recompacting():

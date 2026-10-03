@@ -339,24 +339,28 @@ class ContextManager:
             reports=reports,
         )
 
-    # ---- 压缩编排：委托给 compaction.py（43 在那里重构阶梯本身） ----
+    # ---- 压缩：委托给 compaction.py 的单一通路（阈值触发 / force 兜底） ----
 
     def _compact(self) -> list[CompactReport]:
-        return compact.compose_ladder(
+        report = compact.run_compaction(
             transcript=self.transcript,
             state=self.state,
             config=self.config,
+            chat=self.summarize,
             limits=self.budget,
-            summarize=self.summarize,
             on_compaction=self.on_compaction,
         )
+        return [report] if report is not None else []
 
     def reactive(self) -> CompactReport | None:
-        return compact.reactive_pass(
+        """溢出兜底：同一条压缩通路，force 跳过阈值与每运行一次的守护。"""
+        return compact.run_compaction(
             transcript=self.transcript,
             state=self.state,
             config=self.config,
-            summarize=self.summarize,
+            chat=self.summarize,
+            limits=self.budget,
+            force=True,
             on_compaction=self.on_compaction,
         )
 

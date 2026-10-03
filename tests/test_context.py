@@ -1,16 +1,15 @@
-"""上下文管线编排的测试。
+"""上下文管线编排的测试：compose() 先跑压缩通路，再装配。
 
-这些用例原来在 test_agent.py 里靠 monkeypatch `agent_module.*` 来验证，
-编排逻辑并入 ContextManager 后直接在它这一层测——compose() 的第一步就是
-压缩编排，不需要为了测编排去伪造整个循环。
+编排逻辑委托给 compaction.py，这一层只验证"何时触发、触发后装配到什么"，
+不需要为了测编排去伪造整个循环。
 """
 
-import pytest
 
 from avid.agent import compaction as compact
-from avid.agent.context import ContextBudget, ContextManager
+from avid.agent.compaction import ContextBudget
+from avid.agent.context import ContextManager
 from avid.agent.state import RunState
-from avid.providers.client import Usage
+from avid.providers.client import LLMError, Turn, Usage
 from avid.providers.config import Config
 from avid.providers.transcript import Transcript
 
@@ -21,11 +20,48 @@ def user(text="hi"):
     return {"role": "user", "content": text}
 
 
-def summarize(*args, **kwargs):
+def summarize_sentinel(*args, **kwargs):
     raise AssertionError("这个用例不该调用模型")
 
 
-def prepare(transcript, state, *, budget=None):
+class Summarizer:
+    """固定返回摘要文本的假摘要模型，记录每次调用。"""
+
+    def __init__(self, text="要点摘要"):
+        self.calls = 0
+        self.text = text
+
+    def __call__(self, config, messages, **kwargs):
+        self.calls += 1
+        return Turn(
+            message={"role": "assistant", "content": self.text},
+            text=self.text,
+            tool_calls=[],
+            usage=Usage(1, 1, 2),
+            model="m",
+            finish_reason="stop",
+        )
+
+
+def rounds(count, content="x" * 200):
+    messages = [user("任务")]
+    for index in range(count):
+        messages.append({"role": "assistant", "content": "", "tool_calls": [
+            {"id": f"c{index}", "type": "function",
+             "function": {"name": "read_file", "arguments": "{}"}}
+        ]})
+        messages.append({"role": "tool", "tool_call_id": f"c{index}", "content": content})
+    return messages
+
+
+def budget(**overrides):
+    defaults = {"keep_recent_turns": 10, "context_chars": 10, "from_window": False}
+    defaults.update(overrides)
+    return ContextBudget(**defaults)
+
+
+def prepare(transcript, state, *, budget=None, summarize=summarize_sentinel,
+            on_compaction=None):
     """compose 的压缩半程：本文件只关心编排，不关心渲染。"""
     manager = ContextManager(
         transcript=transcript,
@@ -33,151 +69,116 @@ def prepare(transcript, state, *, budget=None):
         config=CONFIG,
         summarize=summarize,
         budget=budget,
+        on_compaction=on_compaction,
     )
     return manager.compose()
 
 
-def reactive(transcript, state):
+def reactive(transcript, state, *, budget=None, summarize=summarize_sentinel,
+             on_compaction=None):
     manager = ContextManager(
-        transcript=transcript, state=state, config=CONFIG, summarize=summarize
+        transcript=transcript, state=state, config=CONFIG, summarize=summarize,
+        budget=budget, on_compaction=on_compaction,
     )
     return manager.reactive()
 
 
-def test_free_steps_run_before_the_expensive_ones(monkeypatch):
-    order = []
-    monkeypatch.setattr(
-        compact, "tool_result_budget", lambda t, **k: order.append("budget")
-    )
-    monkeypatch.setattr(compact, "snip_compact", lambda t, **k: order.append("snip"))
-
-    prepare(Transcript([user()]), RunState())
-
-    assert order == ["budget", "snip"]
-
-
-def test_summary_is_skipped_when_the_free_steps_suffice(monkeypatch):
-    """③ 够用就不做 ④——"整理后仍超限才生成摘要"的直接体现。"""
-    transcript = Transcript([user("x" * 5000)])
-    state = RunState()
-    budget = ContextBudget(context_chars=100)
-
-    def fake_micro(t, **kwargs):
-        t.replace_all([user("short")])
-        return compact.CompactReport("micro_compact", "落盘 1 项", 5000, 21)
-
-    monkeypatch.setattr(compact, "tool_result_budget", lambda t, **k: None)
-    monkeypatch.setattr(compact, "snip_compact", lambda t, **k: None)
-    monkeypatch.setattr(compact, "micro_compact", fake_micro)
-    monkeypatch.setattr(
-        compact, "compact_history", lambda t, **k: pytest.fail("不该生成摘要")
-    )
-
-    result = prepare(transcript, state, budget=budget)
-
-    assert result.changed
-    assert state.compacted is False
-
-
-def test_auto_compaction_happens_at_most_once(monkeypatch):
-    transcript = Transcript([user("x" * 5000)])
-    state = RunState()
-    budget = ContextBudget(context_chars=10)
-
-    calls = []
-
-    def fake_history(t, **kwargs):
-        calls.append(1)
-        return compact.CompactReport("compact_history", "摘要替换", 5000, 10)
-
-    monkeypatch.setattr(compact, "tool_result_budget", lambda t, **k: None)
-    monkeypatch.setattr(compact, "snip_compact", lambda t, **k: None)
-    monkeypatch.setattr(compact, "micro_compact", lambda t, **k: None)
-    monkeypatch.setattr(compact, "compact_history", fake_history)
-
-    for _ in range(3):
-        prepare(transcript, state, budget=budget)
-
-    assert calls == [1]
-    assert state.compacted is True
-
-
-def test_steps_below_the_limit_do_nothing(monkeypatch):
-    """没超限就不该动 ③④，也不该付一次摘要调用。"""
+def test_below_trigger_nothing_happens():
     transcript = Transcript([user("很短")])
     state = RunState()
 
-    monkeypatch.setattr(compact, "tool_result_budget", lambda t, **k: None)
-    monkeypatch.setattr(compact, "snip_compact", lambda t, **k: None)
-    monkeypatch.setattr(
-        compact, "micro_compact", lambda t, **k: pytest.fail("没超限不该瘦身")
-    )
-    monkeypatch.setattr(
-        compact, "compact_history", lambda t, **k: pytest.fail("没超限不该摘要")
-    )
+    result = prepare(transcript, state, budget=budget(context_chars=100_000))
+
+    assert not result.changed
+    assert state.compactions == 0
+    assert state.compacted is False
+
+
+def test_above_trigger_summarizes_once_and_persists_cursor():
+    transcript = Transcript(rounds(12))
+    state = RunState()
+    summarizer = Summarizer()
+    covered = []
 
     result = prepare(
         transcript,
         state,
-        budget=ContextBudget(context_chars=100_000),
+        budget=budget(),
+        summarize=summarizer,
+        on_compaction=lambda summary, keep: covered.append((summary, keep)),
     )
+
+    assert result.changed
+    assert summarizer.calls == 1
+    assert state.compacted is True
+    assert len(covered) == 1
+    summary, keep = covered[0]
+    assert summary["content"].startswith("[历史摘要]")
+    assert keep == 20  # 最近 10 轮 = 20 条消息
+    assert transcript.as_messages()[0]["content"] == summary["content"]
+
+
+def test_auto_compaction_happens_at_most_once():
+    transcript = Transcript(rounds(12))
+    state = RunState()
+    summarizer = Summarizer()
+
+    for _ in range(3):
+        prepare(transcript, state, budget=budget(), summarize=summarizer)
+
+    assert summarizer.calls == 1
+    assert state.compacted is True
+
+
+def test_force_bypasses_threshold_and_the_once_guard():
+    transcript = Transcript(rounds(12))
+    state = RunState()
+    summarizer = Summarizer()
+
+    prepare(transcript, state, budget=budget(), summarize=summarizer)
+    report = reactive(transcript, state, budget=budget(), summarize=summarizer)
+
+    assert report is not None
+    assert summarizer.calls == 2  # force 不受每运行一次的守护限制
+
+
+def test_summarize_failure_keeps_history():
+    class Failing:
+        def __call__(self, config, messages, **kwargs):
+            raise LLMError("端点挂了")
+
+    transcript = Transcript(rounds(12))
+    state = RunState()
+    before = transcript.as_messages()
+
+    result = prepare(transcript, state, budget=budget(), summarize=Failing())
 
     assert not result.changed
-    assert state.compactions == 0
+    assert state.compacted is False
+    assert transcript.as_messages() == before
 
 
-def test_each_step_is_announced_and_counted(monkeypatch, caplog):
-    monkeypatch.setattr(
-        compact,
-        "tool_result_budget",
-        lambda t, **k: compact.CompactReport("tool_result_budget", "落盘 1 项", 300, 100),
-    )
-    monkeypatch.setattr(compact, "snip_compact", lambda t, **k: None)
-
+def test_each_compaction_is_announced_and_counted(caplog):
+    transcript = Transcript(rounds(12))
     state = RunState()
+    summarizer = Summarizer()
+
     with caplog.at_level("INFO", logger="avid.agent.compaction"):
-        prepare(Transcript([user()]), state)
+        prepare(transcript, state, budget=budget(), summarize=summarizer)
 
     assert any(
-        "compact: tool_result_budget" in record.getMessage()
-        for record in caplog.records
+        "compact: compact_history" in record.getMessage() for record in caplog.records
     )
     assert state.compactions == 1
 
 
-def test_multiple_steps_in_one_round_all_count(monkeypatch):
-    monkeypatch.setattr(
-        compact,
-        "tool_result_budget",
-        lambda t, **k: compact.CompactReport("tool_result_budget", "落盘 1 项", 300, 100),
-    )
-    monkeypatch.setattr(
-        compact,
-        "snip_compact",
-        lambda t, **k: compact.CompactReport("snip_compact", "裁掉 10 条", 60, 30),
-    )
-
+def test_compaction_arms_the_next_real_reading():
+    """压缩之后要等下一轮真实读数：编排只置"等读数"的标志，回填由 record_usage 做。"""
+    transcript = Transcript(rounds(12))
     state = RunState()
-    prepare(Transcript([user()]), state)
-
-    assert state.compactions == 2
-
-
-def test_compaction_arms_the_next_real_reading(monkeypatch):
-    """压缩之后要等下一轮真实读数：编排只置"等读数"的标志，回填由 record_usage 做。
-
-    为什么不在压缩那一层估算：省了多少只有模型说了算，本地猜一个数会与计费口径打架。
-    """
-    monkeypatch.setattr(
-        compact,
-        "tool_result_budget",
-        lambda t, **k: compact.CompactReport("tool_result_budget", "落盘 1 项", 300, 100),
-    )
-    monkeypatch.setattr(compact, "snip_compact", lambda t, **k: None)
-
-    state = RunState(context_window=200_000)
     state.record_usage(Usage(150_000, 1, 150_001))
-    prepare(Transcript([user()]), state)
+
+    prepare(transcript, state, budget=budget(), summarize=Summarizer())
 
     # 压完还没调用模型：不给数（界面显示「—」），也不猜。
     assert state.usage_report()["compaction"]["last_compaction_tokens"] is None
@@ -186,71 +187,29 @@ def test_compaction_arms_the_next_real_reading(monkeypatch):
     assert state.usage_report()["compaction"] == {
         "count": 1,
         "last_compaction_tokens": 40_000,
-        "last_step": "tool_result_budget",
+        "last_step": "compact_history",
     }
-
-
-def test_reactive_announces_and_counts(monkeypatch):
-    monkeypatch.setattr(
-        compact,
-        "reactive_compact",
-        lambda t, **k: compact.CompactReport("reactive_compact", "摘要", 10, 5),
-    )
-
-    state = RunState()
-    report = reactive(Transcript([user()]), state)
-
-    assert report is not None
-    assert state.compactions == 1
-
-
-def test_reactive_no_op_is_not_counted(monkeypatch):
-    monkeypatch.setattr(compact, "reactive_compact", lambda t, **k: None)
-
-    state = RunState()
-    report = reactive(Transcript([user()]), state)
-
-    assert report is None
-    assert state.compactions == 0
 
 
 def test_default_budget_references_the_compact_constants():
     limits = ContextBudget()
 
-    assert limits.tool_result_chars == compact.TOOL_RESULT_CHAR_BUDGET
+    assert limits.keep_recent_turns == compact.KEEP_RECENT_TURNS
+    assert limits.reserve_tokens == compact.RESERVE_TOKENS
     assert limits.context_chars == compact.CONTEXT_CHAR_LIMIT
-    assert limits.reactive_keep_recent == compact.REACTIVE_KEEP_RECENT
+    assert limits.bootstrap_chars == compact.prompt.AGENTS_MD_MAX_CHARS
+    assert limits.skill_always_chars == compact.prompt.SKILL_ALWAYS_TOTAL_MAX_CHARS
 
 
-def test_budget_is_injectable_so_orchestration_is_testable(monkeypatch):
-    """阈值可注入：测编排时不必改全局常量，也就不必建一个巨大的 transcript。
+def test_budget_is_injectable_so_orchestration_is_testable():
+    """阈值可注入：测编排时不必改全局常量，也就不必建一个巨大的 transcript。"""
+    transcript = Transcript(rounds(12))
+    state = RunState()
+    summarizer = Summarizer()
 
-    免费三步都换掉之后仍然超限（500 > 100），所以第 ④ 步一定会被走到——它也必须
-    被换掉，否则这个用例会真的去调模型。`summarize` 哨兵现在会真的炸出来
-    （`_summarize` 只吞调用类失败，不再吞 AssertionError），这正是我们要的：
-    以前它被宽 except 吞掉，用例"绿着"却发生了模型调用。
-    """
-    monkeypatch.setattr(compact, "tool_result_budget", lambda t, **k: None)
-    monkeypatch.setattr(compact, "snip_compact", lambda t, **k: None)
-
-    seen = []
-    monkeypatch.setattr(
-        compact,
-        "micro_compact",
-        lambda t, **k: seen.append(k["limit"]) or None,
-    )
-    expensive = []
-    monkeypatch.setattr(
-        compact,
-        "compact_history",
-        lambda t, **k: expensive.append(k["limit"]) or None,
-    )
-
+    # 触发线抬高到永远够不着：摘要不该被调用
     prepare(
-        Transcript([user("x" * 500)]),
-        RunState(),
-        budget=ContextBudget(context_chars=100),
+        transcript, state,
+        budget=budget(context_chars=100_000_000), summarize=summarizer,
     )
-
-    assert seen == [100]
-    assert expensive == [100], "整理后仍超限时第 ④ 步应当被走到（且阈值同样可注入）"
+    assert summarizer.calls == 0

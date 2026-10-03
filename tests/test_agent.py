@@ -1170,40 +1170,61 @@ def test_reactive_retry_sends_the_compressed_history(hook_registry, monkeypatch)
     assert seen[1][0] == "压缩后的历史"
 
 
-def test_compaction_is_logged(hook_registry, monkeypatch, caplog):
-    monkeypatch.setattr(
-        "avid.agent.compaction.tool_result_budget",
-        lambda transcript, **kwargs: CompactReport(
-            "tool_result_budget", "落盘 2 项", 300, 100
-        ),
+def test_compaction_is_logged(hook_registry, caplog):
+    """压缩发生时 announce 的一行日志要在：界面与台账同源。"""
+    from avid.agent.compaction import ContextBudget
+    from avid.agent.events import CONTEXT_COMPACTED
+
+    events = []
+    chat = FakeChat(
+        make_turn("", [tool_call("read_file")]),
+        make_turn("读完了"),
+        make_turn("好"),
     )
+    summarizer = FakeChat(make_turn("之前的要点"))
+
+    def observer(event):
+        events.append({"type": event.type})
 
     with caplog.at_level("INFO", logger="avid.agent.compaction"):
         run_loop(
-            [{"role": "user", "content": "x"}],
+            [{"role": "user", "content": "x" * 3000}],
             config=CONFIG,
-            chat=FakeChat(make_turn("好的")),
+            chat=chat,
+            registry={"read_file": lambda arguments: "内容"},
+            summarize=summarizer,
+            budget=ContextBudget(
+                context_chars=10, keep_recent_turns=1, from_window=False
+            ),
+            on_event=observer,
         )
 
     assert any(
-        "compact: tool_result_budget" in record.getMessage() for record in caplog.records
+        "compact: compact_history" in record.getMessage() for record in caplog.records
     )
+    assert any(item["type"] == CONTEXT_COMPACTED for item in events)
 
 
-def test_compaction_count_reaches_the_stop_hook(hook_registry, monkeypatch):
-    monkeypatch.setattr(
-        "avid.agent.compaction.snip_compact",
-        lambda transcript, **kwargs: CompactReport(
-            "snip_compact", "裁掉中间 10 条", 60, 30
-        ),
-    )
+def test_compaction_count_reaches_the_stop_hook(hook_registry):
+    """压缩计数要能被 Stop hook 看到（state.snapshot 一路带到终止裁决）。"""
+    from avid.agent.compaction import ContextBudget
+
     seen = []
     hook_registry.register("Stop", lambda ctx: seen.append(ctx["compactions"]))
 
     run_loop(
-        [{"role": "user", "content": "x"}],
+        [{"role": "user", "content": "x" * 3000}],
         config=CONFIG,
-        chat=FakeChat(make_turn("好的")),
+        chat=FakeChat(
+            make_turn("", [tool_call("read_file")]),
+            make_turn("读完了"),
+            make_turn("好"),
+        ),
+        registry={"read_file": lambda arguments: "内容"},
+        summarize=FakeChat(make_turn("要点")),
+        budget=ContextBudget(
+            context_chars=10, keep_recent_turns=1, from_window=False
+        ),
     )
 
     assert seen == [1]
@@ -1275,7 +1296,7 @@ def test_injected_budget_lowers_the_compaction_threshold(tmp_path, hook_registry
     assert text == "读完了"
     assert compacted == [], "默认阈值下不该压缩（400k 远高于这份 transcript）"
 
-    text, compacted = run(ContextBudget(context_chars=50_000))
+    text, compacted = run(ContextBudget(context_chars=50_000, keep_recent_turns=2))
     assert text == "读完了"
     assert compacted, "注入更低阈值后应当压缩"
     assert compacted[0].data["before"] > compacted[0].data["after"]

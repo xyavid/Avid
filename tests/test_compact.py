@@ -1,16 +1,28 @@
-import inspect
+"""压缩子系统测试：触发线（reserve 语义）、切点（安全边界）、单一压缩通路。
+
+修复前这里是五步阶梯（tool_result_budget / snip / micro / compact_history /
+reactive）各自的用例；按用户裁定收敛为一条 Pi 式通路——保留最近 N 轮完整
+历史，更早部分经固定 prompt 一次 summarize，切点绝不落在工具批中间。
+"""
+
 
 import pytest
 
 from avid.agent.compaction import (
-    SPILL_PREFIX,
-    compact_history,
-    micro_compact,
-    reactive_compact,
-    snip_compact,
-    tool_result_budget,
+    CONTEXT_CHAR_LIMIT,
+    CompactReport,
+    ContextBudget,
+    _next_spill_path,
+    _summarize,
+    _summary_message,
+    announce,
+    cut_point,
+    run_compaction,
+    spill,
+    trigger_chars,
 )
-from avid.providers.client import Turn, Usage
+from avid.agent.state import RunState
+from avid.providers.client import LLMError, Turn, Usage
 from avid.providers.config import Config
 from avid.providers.transcript import Transcript, estimate_chars, validate
 
@@ -66,11 +78,16 @@ def tool(call_id="c1", content="结果"):
     return {"role": "tool", "tool_call_id": call_id, "content": content}
 
 
-def tool_chars(messages):
-    return sum(len(m["content"]) for m in messages if m.get("role") == "tool")
+def rounds(count, content="x" * 200):
+    """构造 count 轮：每轮一条 assistant（带工具调用）加一条工具结果。"""
+    messages = [user("任务")]
+    for index in range(count):
+        messages.append(assistant("", [call(f"c{index}")]))
+        messages.append(tool(f"c{index}", content))
+    return messages
 
 
-# ---------- 基础工具 ----------
+# ---------- Transcript 基础（estimate / validate） ----------
 
 
 def test_estimate_counts_content_and_tool_calls():
@@ -93,488 +110,277 @@ def test_orphan_tool_result_is_a_violation():
     assert validate([user(), tool()]) != []
 
 
-def test_unanswered_tool_call_is_a_violation():
-    assert validate([user(), assistant("", [call()])]) != []
+# ---------- 落盘通道 ----------
 
 
-def test_partially_answered_tool_calls_are_a_violation():
-    messages = [user(), assistant("", [call("c1"), call("c2")]), tool("c1")]
+def test_spill_names_are_unique_per_tag_and_sequence(spill_root):
+    first = _next_spill_path(spill_root, "transcript", ".json", tag="runAAAAA")
+    second = _next_spill_path(spill_root, "transcript", ".json", tag="runAAAAA")
+    other = _next_spill_path(spill_root, "transcript", ".json", tag="runBBBBB")
 
-    assert validate(messages) != []
-
-
-# ---------- ① tool_result_budget ----------
-
-
-def test_budget_is_a_no_op_under_limit():
-    messages = [user(), assistant("", [call()]), tool(content="x" * 10)]
-
-    assert tool_result_budget(Transcript(messages), budget=100) is None
-    assert messages[2]["content"] == "x" * 10
+    assert first != second
+    assert "runAAAAA" in str(first) and "runBBBBB" in str(other)
 
 
-def test_budget_spills_the_largest_among_the_older_ones(spill_root):
-    messages = [user()]
-    for index, size in enumerate([100, 500, 50, 60, 10]):
-        messages.append(assistant("", [call(f"c{index}")]))
-        messages.append(tool(f"c{index}", "x" * size))
+def test_spill_writes_and_returns_workspace_relative_path(spill_root):
+    path = spill("x" * 500, "transcript")
 
-    report = tool_result_budget(Transcript(messages), budget=50, keep_recent=3)
-
-    assert report is not None
-    assert report.step == "tool_result_budget"
-    # c1（500 字符）是可落盘项里最大的
-    assert messages[4]["content"].startswith(SPILL_PREFIX)
-    assert "500" in messages[4]["content"]
-
-    path = messages[4]["content"].split("已存至 ")[1].split("；")[0]
+    assert path is not None and path.startswith(".avid/context/")
     assert (spill_root / path).read_text(encoding="utf-8") == "x" * 500
 
 
-def test_spill_names_are_unique_per_run_and_never_reused(spill_root):
-    """落盘文件名必须带运行标识。
+# ---------- 触发线（reserve 语义） ----------
 
-    只用进程内自增序号时，`_spill_seq` 重启归零 → 同一个工作区里两次运行都写
-    `tool-result-0001.txt`，后一次静默覆盖前一次；而旧摘要里还写着"完整记录：
-    …-0001.txt，需要时用 read_file 读回"，那条恢复通道就断了。
-    """
-    messages = [user()]
-    for index, size in enumerate([100, 500, 50, 60, 10]):
-        messages.append(assistant("", [call(f"c{index}")]))
-        messages.append(tool(f"c{index}", "x" * size))
+
+def test_trigger_is_window_minus_reserve_times_measured_rate():
+    # window 200k，reserve 16384，实测 0.515 字符/token，system+tools 1500 字符
+    trigger = trigger_chars(
+        window=200_000,
+        prompt_tokens=100_000,
+        chars=(1000, 500, 50_000),
+        reserve_tokens=16_384,
+    )
+    per_token = 0.515  # 51_500 / 100_000
+    assert trigger == int((200_000 - 16_384) * per_token) - 1500
+
+
+def test_trigger_without_a_reading_uses_the_default_rate():
+    """有窗口但没有读数：按 2.0 字符/token 的保守默认比率折算，而不是整个放弃派生。"""
+    trigger = trigger_chars(window=200_000, prompt_tokens=None, chars=None, reserve_tokens=16_384)
+    assert trigger == (200_000 - 16_384) * 2
+
+
+def test_trigger_falls_back_without_a_window():
+    assert trigger_chars(window=None, prompt_tokens=None, chars=None, reserve_tokens=16_384) == CONTEXT_CHAR_LIMIT
+
+
+def test_trigger_scales_with_reserve():
+    small = trigger_chars(
+        window=200_000, prompt_tokens=100_000, chars=(1000, 500, 50_000), reserve_tokens=16_384
+    )
+    big = trigger_chars(
+        window=200_000, prompt_tokens=100_000, chars=(1000, 500, 50_000), reserve_tokens=1_000
+    )
+    assert big > small  # reserve 越大，留给历史的空间越小
+
+
+# ---------- 切点 ----------
+
+
+def test_cut_point_walks_back_full_rounds():
+    messages = rounds(12)
     transcript = Transcript(messages)
 
-    tool_result_budget(transcript, budget=50, keep_recent=3, tag="runAAAAA")
-    first = messages[4]["content"].split("已存至 ")[1].split("；")[0]
-    assert "runAAAAA" in first
+    cut = cut_point(transcript, keep_recent_turns=10)
 
-    # 同一份对话再来一次（另一个 run_tag，且序号从同一个进程内计数器继续）：
-    messages2 = [user()]
-    for index, size in enumerate([100, 500, 50, 60, 10]):
-        messages2.append(assistant("", [call(f"c{index}")]))
-        messages2.append(tool(f"c{index}", "x" * size))
-    tool_result_budget(Transcript(messages2), budget=50, keep_recent=3, tag="runBBBBB")
-    second = messages2[4]["content"].split("已存至 ")[1].split("；")[0]
-
-    assert first != second
-    assert (spill_root / first).read_text(encoding="utf-8") == "x" * 500
-    assert (spill_root / second).read_text(encoding="utf-8") == "x" * 500
+    # 切点前是任务消息 + 前 2 轮；切点后保留最近 10 轮（20 条消息）
+    assert messages[cut - 1]["role"] == "tool"
+    assert messages[cut]["role"] == "assistant"
+    assert len(messages) - cut == 20
 
 
-def test_concurrent_spills_produce_distinct_files(spill_root):
-    """并行 subagent 会同时压缩：序号必须原子地取，不能两个线程拿到同一个名字。"""
-    import threading
+def test_cut_point_never_splits_a_tool_pair():
+    messages = rounds(12)
+    transcript = Transcript(messages)
 
-    from avid.agent.compaction import spill
+    cut = cut_point(transcript, keep_recent_turns=10)
 
-    paths: list[str] = []
-    lock = threading.Lock()
-
-    def worker(index: int) -> None:
-        path = spill(f"payload-{index}", "tool-result", spill_root, "shared1")
-        assert path is not None
-        with lock:
-            paths.append(path)
-
-    threads = [threading.Thread(target=worker, args=(index,)) for index in range(32)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(timeout=10)
-
-    assert len(paths) == 32
-    assert len(set(paths)) == 32, "序号竞态会让两个线程写同一个文件"
-    assert len(list((spill_root / ".avid" / "context").glob("*.txt"))) == 32
+    assert validate(messages[cut:]) == []
 
 
-def test_budget_never_spills_the_newest_results(spill_root):
-    """模型刚读到的结果正是下一步要用的，落掉它会让模型重读，然后又被落掉。"""
-    messages = [user()]
-    for index in range(5):
-        messages.append(assistant("", [call(f"c{index}")]))
-        messages.append(tool(f"c{index}", "x" * 500))
+def test_cut_point_returns_zero_when_fewer_rounds_than_the_window():
+    transcript = Transcript(rounds(5))
 
-    tool_result_budget(Transcript(messages), budget=10, keep_recent=3)
-
-    tool_messages = [m for m in messages if m["role"] == "tool"]
-    flags = [m["content"].startswith(SPILL_PREFIX) for m in tool_messages]
-
-    assert flags[-3:] == [False, False, False]  # 最近 3 条一条都不许动
-    assert any(flags[:-3])
+    assert cut_point(transcript, keep_recent_turns=10) == 0
 
 
-def test_budget_is_a_no_op_when_there_is_nothing_spillable(spill_root):
-    """结果条数不超过保留数量时，一条都不该落。"""
-    messages = [user()]
-    for index in range(3):
-        messages.append(assistant("", [call(f"c{index}")]))
-        messages.append(tool(f"c{index}", "x" * 10_000))
+# ---------- 压缩通路 ----------
 
-    assert tool_result_budget(Transcript(messages), budget=10, keep_recent=3) is None
-    assert all(
-        not m["content"].startswith(SPILL_PREFIX)
-        for m in messages
-        if m["role"] == "tool"
+
+def budget(**overrides):
+    defaults = {"keep_recent_turns": 10, "context_chars": 10, "from_window": False}
+    defaults.update(overrides)
+    return ContextBudget(**defaults)
+
+
+def test_below_trigger_nothing_happens():
+    transcript = Transcript(rounds(12))
+    chat = FakeChat()
+
+    report = run_compaction(
+        transcript=transcript,
+        state=RunState(workspace_root=str(spill_root)),
+        config=CONFIG,
+        chat=chat,
+        limits=budget(context_chars=10_000_000),
+        force=False,
     )
 
-
-def test_budget_spills_at_most_one_per_call(spill_root):
-    """一轮剥掉一批会让模型丢掉刚建立的工作集，所以每次只落一项。"""
-    messages = [user()]
-    for index in range(6):
-        messages.append(assistant("", [call(f"c{index}")]))
-        messages.append(tool(f"c{index}", "x" * 1000))
-
-    report = tool_result_budget(Transcript(messages), budget=10, keep_recent=3)
-
-    assert report is not None
-    older = [m for m in messages if m["role"] == "tool"][:-3]
-    assert sum(m["content"].startswith(SPILL_PREFIX) for m in older) == 1
+    assert report is None
+    assert chat.requests == []
+    assert len(transcript) == len(rounds(12))
 
 
-def test_repeated_budget_calls_drain_older_results_then_stop(spill_root):
-    messages = [user()]
-    for index in range(6):
-        messages.append(assistant("", [call(f"c{index}")]))
-        messages.append(tool(f"c{index}", "x" * 1000))
+def test_above_trigger_summarizes_older_history_and_keeps_recent_turns():
+    transcript = Transcript(rounds(12))
+    before_chars = transcript.estimate_chars()
+    chat = FakeChat("之前做了 A，结论 B")
 
-    for _ in range(10):
-        if tool_result_budget(Transcript(messages), budget=10, keep_recent=3) is None:
-            break
-
-    older = [m for m in messages if m["role"] == "tool"][:-3]
-    assert all(m["content"].startswith(SPILL_PREFIX) for m in older)
-    assert tool_result_budget(Transcript(messages), budget=10, keep_recent=3) is None
-    assert validate(messages) == []
-
-
-def test_budget_skips_already_spilled_items():
-    messages = [
-        user(),
-        assistant("", [call()]),
-        tool(content=SPILL_PREFIX + " 原工具结果共 999 字符，已存至 .avid/context/x.txt"),
-    ]
-
-    assert tool_result_budget(Transcript(messages), budget=10) is None
-
-
-def test_budget_ignores_non_tool_messages():
-    assert tool_result_budget(Transcript([user("x" * 1000)]), budget=10) is None
-
-
-# ---------- ② snip_compact ----------
-
-
-def test_snip_is_a_no_op_below_the_budget():
-    messages = [user(f"m{i}" + "x" * 100) for i in range(10)]
-
-    assert snip_compact(Transcript(messages), max_chars=100_000) is None
-    assert len(messages) == 10
-
-
-def test_snip_ignores_message_count_when_chars_are_cheap():
-    """诊断 C1 回归：denial 风暴式的几十条短消息只占窗口千分之几——
-    触发看字符预算，条数堆得再多也不该把信息最密的中间裁掉。"""
-    messages = [user(f"m{i}") for i in range(60)]
-
-    assert snip_compact(Transcript(messages), max_chars=100_000) is None
-    assert len(messages) == 60
-
-
-def test_snip_keeps_head_and_tail():
-    messages = [user(f"m{i}-" + "x" * 500) for i in range(60)]
-
-    report = snip_compact(Transcript(messages), max_chars=1000)
-
-    assert report is not None
-    assert report.step == "snip_compact"
-    assert messages[0]["content"].startswith("m0-")
-    assert messages[-1]["content"].startswith("m59-")
-    assert len(messages) < 60
-    assert any("已裁剪" in str(m.get("content")) for m in messages)
-
-
-def test_snip_never_splits_a_tool_pair():
-    messages = [user("开始" + "x" * 200)]
-    for index in range(30):
-        messages.append(assistant("", [call(f"c{index}")]))
-        messages.append(tool(f"c{index}", "x" * 200))
-
-    assert len(messages) == 61
-    report = snip_compact(Transcript(messages), max_chars=1000)
-
-    assert report is not None
-    assert validate(messages) == []
-
-    kept_results = {m["tool_call_id"] for m in messages if m.get("role") == "tool"}
-    declared = {
-        c["id"] for m in messages for c in (m.get("tool_calls") or [])
-    }
-    assert kept_results <= declared
-
-
-def test_snip_gives_up_when_head_and_tail_cover_everything():
-    """头尾保留量之和超过消息数时无中间可裁——放弃而不是硬裁。"""
-    messages = [user(f"m{i}" + "x" * 100) for i in range(11)]
-
-    assert (
-        snip_compact(Transcript(messages), max_chars=10, keep_head=8, keep_tail=24)
-        is None
+    report = run_compaction(
+        transcript=transcript,
+        state=RunState(workspace_root=str(spill_root)),
+        config=CONFIG,
+        chat=chat,
+        limits=budget(),
+        force=False,
     )
-    assert len(messages) == 11
-
-
-# ---------- ③ micro_compact ----------
-
-
-def test_micro_is_a_no_op_under_the_limit():
-    messages = [user(), assistant("", [call()]), tool(content="x" * 100)]
-
-    assert micro_compact(Transcript(messages), limit=10_000) is None
-
-
-def test_micro_spills_older_results_and_keeps_the_newest(spill_root):
-    messages = [user()]
-    for index in range(6):
-        messages.append(assistant("", [call(f"c{index}")]))
-        messages.append(tool(f"c{index}", "x" * 200))
-
-    report = micro_compact(Transcript(messages), limit=500, keep_recent=3)
 
     assert report is not None
-    assert report.step == "micro_compact"
-
-    tool_messages = [m for m in messages if m["role"] == "tool"]
-    flags = [m["content"].startswith(SPILL_PREFIX) for m in tool_messages]
-
-    assert flags[-3:] == [False, False, False]  # 最近 3 条原样保留
-    assert any(flags[:-3])
+    messages = transcript.as_messages()
+    assert len(messages) == 1 + 20  # 摘要一条 + 最近 10 轮
+    assert messages[0]["content"].startswith("[历史摘要]")
     assert validate(messages) == []
+    # 固定 prompt 的摘要请求里带上了被压缩的更早历史
+    assert chat.requests[0]["system"].startswith("你是上下文压缩器")
+    assert transcript.estimate_chars() < before_chars
 
 
-def test_micro_reaches_the_target_when_it_can(spill_root):
-    messages = [user()]
-    for index in range(2):  # 两条很大的旧结果
-        messages.append(assistant("", [call(f"big{index}")]))
-        messages.append(tool(f"big{index}", "x" * 20000))
-    for index in range(3):  # 三条很小的新结果，会被保留
-        messages.append(assistant("", [call(f"small{index}")]))
-        messages.append(tool(f"small{index}", "x" * 10))
+def test_summarized_history_is_still_a_valid_transcript():
+    transcript = Transcript(rounds(12))
 
-    report = micro_compact(Transcript(messages), limit=30_000, keep_recent=3)
+    run_compaction(
+        transcript=transcript,
+        state=RunState(workspace_root=str(spill_root)),
+        config=CONFIG,
+        chat=FakeChat(),
+        limits=budget(),
+    )
 
-    assert report is not None
-    assert report.after <= int(30_000 * 0.8)
-
-
-def test_micro_compacts_as_far_as_it_can(spill_root):
-    """压到目标为止；若落盘提示本身就把预算占满，压无可压就停手。
-
-    这里"保留最近 3 条 × 1000 字符 + 结构开销"已经超过目标，所以断言的是
-    「该压的都压了」，而不是「一定达标」——达标在这个输入下物理上做不到。
-    """
-    messages = [user()]
-    for index in range(10):
-        messages.append(assistant("", [call(f"c{index}")]))
-        messages.append(tool(f"c{index}", "x" * 1000))
-
-    report = micro_compact(Transcript(messages), limit=5000, keep_recent=3)
-
-    assert report is not None
-    assert report.after < report.before
-    older = [m for m in messages if m["role"] == "tool"][:-3]
-    assert all(m["content"].startswith(SPILL_PREFIX) for m in older)
+    assert validate(transcript.as_messages()) == []
 
 
-@pytest.mark.parametrize(
-    "step", [tool_result_budget, snip_compact, micro_compact], ids=lambda s: s.__name__
-)
-def test_cheap_steps_take_no_chat_argument(step):
-    """①②③ 不调用模型——连 chat 参数都不该有。"""
-    assert "chat" not in inspect.signature(step).parameters
+def test_summarize_failure_keeps_history_and_reports_nothing():
+    class FailingChat:
+        def __call__(self, config, messages, **kwargs):
+            raise LLMError("端点挂了")
+
+    transcript = Transcript(rounds(12))
+
+    report = run_compaction(
+        transcript=transcript,
+        state=RunState(workspace_root=str(spill_root)),
+        config=CONFIG,
+        chat=FailingChat(),
+        limits=budget(),
+    )
+
+    assert report is None
+    assert transcript.as_messages() == rounds(12)
 
 
-# ---------- ④ compact_history ----------
+def test_full_record_is_saved_for_recovery(spill_root):
+    transcript = Transcript(rounds(12))
+
+    run_compaction(
+        transcript=transcript,
+        state=RunState(workspace_root=str(spill_root)),
+        config=CONFIG,
+        chat=FakeChat(),
+        limits=budget(),
+    )
+
+    summary_message = transcript.as_messages()[0]["content"]
+    recorded = summary_message.split("完整记录：")[1].split("；")[0]
+    assert (spill_root / recorded).exists()
 
 
-def test_compact_history_is_a_no_op_under_the_limit():
+def test_auto_path_compacts_at_most_once_per_run():
+    transcript = Transcript(rounds(12))
+    state = RunState(workspace_root=str(spill_root))
     chat = FakeChat()
-    messages = [user("x" * 100)]
 
-    assert compact_history(Transcript(messages), config=CONFIG, chat=chat, limit=10_000) is None
-    assert chat.requests == []
+    first = run_compaction(
+        transcript=transcript, state=state, config=CONFIG, chat=chat, limits=budget()
+    )
+    second = run_compaction(
+        transcript=transcript, state=state, config=CONFIG, chat=chat, limits=budget()
+    )
 
-
-def test_compact_history_summarises_and_replaces(spill_root):
-    chat = FakeChat("这是摘要")
-    messages = [user("x" * 2000), assistant("y" * 2000)]
-
-    report = compact_history(Transcript(messages), config=CONFIG, chat=chat, limit=100)
-
-    assert report is not None
-    assert len(chat.requests) == 1  # 只有一次模型调用
-    assert len(messages) == 1
-    assert "[历史摘要]" in messages[0]["content"]
-    assert "这是摘要" in messages[0]["content"]
-    assert ".avid/context/transcript-" in messages[0]["content"]
-    assert validate(messages) == []
+    assert first is not None
+    assert second is None  # 每运行一次：防摘要失败后的逐轮重试风暴
+    assert state.compacted is True
 
 
-def test_compact_history_saves_the_full_transcript(spill_root):
-    chat = FakeChat("摘要")
-    messages = [user("原始内容" * 100)]
-
-    compact_history(Transcript(messages), config=CONFIG, chat=chat, limit=100)
-
-    transcripts = list((spill_root / ".avid/context").glob("transcript-*.json"))
-    assert len(transcripts) == 1
-    assert "原始内容" in transcripts[0].read_text(encoding="utf-8")
-
-
-def test_compact_history_keeps_history_when_the_summary_fails(spill_root):
-    from avid.providers.client import LLMError
-
-    def broken_chat(*args, **kwargs):
-        raise LLMError("摘要服务挂了")
-
-    messages = [user("x" * 2000)]
-
-    assert compact_history(Transcript(messages), config=CONFIG, chat=broken_chat, limit=100) is None
-    assert len(messages) == 1
-    assert messages[0]["content"].startswith("x")
-
-
-# ---------- ⑤ reactive_compact ----------
-
-
-def test_reactive_keeps_the_recent_messages(spill_root):
-    chat = FakeChat("早前的摘要")
-    messages = [
-        user("最早的"),
-        assistant("回复"),
-        user("中间的"),
-        assistant("回复"),
-        user("最近的1"),
-        assistant("最近的2"),
-    ]
-
-    report = reactive_compact(Transcript(messages), config=CONFIG, chat=chat, keep_recent=3)
-
-    assert report is not None
-    assert report.step == "reactive_compact"
-    assert "[历史摘要]" in messages[0]["content"]
-    assert len(messages) == 4
-    assert messages[-1]["content"] == "最近的2"
-
-
-def test_reactive_widens_the_tail_to_keep_a_pair(spill_root):
-    chat = FakeChat("摘要")
-    messages = [
-        user("开始"),
-        assistant("", [call("c1")]),
-        tool("c1", "结果"),
-        assistant("", [call("c2")]),
-        tool("c2", "结果2"),
-    ]
-
-    report = reactive_compact(Transcript(messages), config=CONFIG, chat=chat, keep_recent=1)
-
-    assert report is not None
-    assert validate(messages) == []
-    assert messages[-2]["tool_calls"][0]["id"] == "c2"
-    assert messages[-1]["tool_call_id"] == "c2"
-
-
-def test_reactive_gives_up_with_nothing_earlier():
+def test_force_bypasses_threshold_and_the_once_guard():
+    transcript = Transcript(rounds(12))
+    state = RunState(workspace_root=str(spill_root))
     chat = FakeChat()
-    messages = [user("只有这一条")]
 
-    assert reactive_compact(Transcript(messages), config=CONFIG, chat=chat, keep_recent=5) is None
-    assert chat.requests == []
+    first = run_compaction(
+        transcript=transcript, state=state, config=CONFIG, chat=chat, limits=budget(), force=True
+    )
+    second = run_compaction(
+        transcript=transcript, state=state, config=CONFIG, chat=chat, limits=budget(), force=True
+    )
+
+    assert first is not None and second is not None  # force 不受守护限制
+
+
+def test_cursor_hook_receives_summary_and_kept_count():
+    covered: list = []
+    transcript = Transcript(rounds(12))
+
+    run_compaction(
+        transcript=transcript,
+        state=RunState(workspace_root=str(spill_root)),
+        config=CONFIG,
+        chat=FakeChat(),
+        limits=budget(),
+        on_compaction=lambda summary, keep: covered.append((summary, keep)),
+    )
+
+    assert len(covered) == 1
+    summary, keep = covered[0]
+    assert summary["content"].startswith("[历史摘要]")
+    assert keep == 20  # 最近 10 轮 = 20 条消息
+
+
+def test_announce_records_ledger_and_event():
+    state = RunState()
+    events: list = []
+    state.observer = events.append
+
+    announce(
+        CompactReport("compact_history", "摘要更早 12 条", 33, 1), state
+    )
+
+    assert state.compactions == 1
+    assert events[0].type == "context_compacted"
+    assert events[0].data["step"] == "compact_history"
 
 
 def test_summary_call_is_not_capped(spill_root):
     """摘要也是模型调用：写死的上限会被推理吃光，摘要变空 → 这一步静默失效。"""
-    chat = FakeChat("这是摘要")
-    messages = [user("x" * 2000), assistant("y" * 2000)]
 
-    compact_history(Transcript(messages), config=CONFIG, chat=chat, limit=100)
+    class LongChat:
+        def __call__(self, config, messages, **kwargs):
+            assert "max_tokens" not in kwargs or kwargs["max_tokens"] is None
+            return Turn(
+                message={"role": "assistant", "content": "这是摘要"},
+                text="这是摘要",
+                tool_calls=[],
+                usage=Usage(1, 1, 2),
+                model="m",
+                finish_reason="stop",
+            )
 
-    assert len(chat.requests) == 1
-    assert chat.requests[0].get("max_tokens") is None
+    transcript = Transcript([user("x" * 2000), assistant("y" * 2000)])
 
-
-# ---------- ④/⑤ 的落盘钩子（阶段 39） ----------
-
-
-def _big_text_transcript():
-    return Transcript(
-        [user("x" * 400), assistant("y" * 400), user("z" * 400), assistant("w" * 400)]
-    )
-
-
-def test_history_compaction_calls_the_persistence_hook():
-    """④ 的摘要替换历史时，钩子拿到（摘要消息, keep=0）——投影拿它做游标。"""
-    covered: list = []
-    from avid.agent.context import ContextBudget, ContextManager
-    from avid.agent.state import RunState
-
-    manager = ContextManager(
-        transcript=_big_text_transcript(),
-        state=RunState(),
-        config=CONFIG,
-        summarize=FakeChat(),
-        budget=ContextBudget(context_chars=100, from_window=False),
-        on_compaction=lambda summary, keep: covered.append((summary, keep)),
-    )
-    result = manager.compose()
-
-    assert result.changed
-    assert len(covered) == 1
-    summary, keep = covered[0]
-    assert summary["role"] == "user" and "[历史摘要]" in summary["content"]
-    assert keep == 0
+    assert _summarize(transcript.as_messages(), config=CONFIG, chat=LongChat()) == "这是摘要"
 
 
-def test_reactive_compaction_calls_the_persistence_hook_with_its_keep():
-    covered: list = []
-    from avid.agent.context import ContextBudget, ContextManager
-    from avid.agent.state import RunState
+def test_summary_message_carries_the_recovery_path():
+    text = _summary_message("要点", ".avid/context/transcript-0001.json")
 
-    manager = ContextManager(
-        transcript=_big_text_transcript(),
-        state=RunState(),
-        config=CONFIG,
-        summarize=FakeChat(),
-        budget=ContextBudget(context_chars=100, from_window=False),
-        on_compaction=lambda summary, keep: covered.append((summary, keep)),
-    )
-    manager.compose()
-    covered.clear()
-    # ④ 已把历史换成摘要；补足超过 keep_recent(5) 的消息，reactive 才有「更早历史」
-    for i in range(7):
-        manager.transcript.append(user(f"n{i}" + "x" * 300))
-        manager.transcript.append(assistant("m" * 300))
-
-    manager.reactive()
-
-    assert len(covered) == 1
-    summary, keep = covered[0]
-    assert "[历史摘要]" in summary["content"]
-    assert keep == 5  # REACTIVE_KEEP_RECENT
-
-
-def test_persistence_hook_is_silent_when_nothing_compacts():
-    covered: list = []
-    from avid.agent.context import ContextBudget, ContextManager
-    from avid.agent.state import RunState
-
-    ContextManager(
-        transcript=Transcript([user("hi")]),
-        state=RunState(),
-        config=CONFIG,
-        budget=ContextBudget(context_chars=100_000, from_window=False),
-        on_compaction=lambda summary, keep: covered.append((summary, keep)),
-    ).compose()
-
-    assert covered == []
+    assert text.startswith("[历史摘要]")
+    assert "完整记录：.avid/context/transcript-0001.json" in text

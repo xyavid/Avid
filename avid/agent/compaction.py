@@ -1,9 +1,16 @@
-"""压缩子系统：五步阶梯（最便宜优先）+ 触发预算派生 + 编排入口。
+"""压缩子系统：一条 Pi 式压缩通路，阈值或手动触发。
 
-阶梯次序：① tool_result_budget（落盘最大项）→ ② snip（字符超预算裁中间，
-只在安全切口）→ ③ micro（超限落盘旧工具结果）→ ④ compact_history（摘要替换
-历史，每运行至多一次）→ ⑤ reactive（模型报溢出后的兜底）。①② 每轮跑，③④
-看预算，⑤ 由调用方在 PromptTooLong 后触发一次。
+Context 输入 = system prompt + 对话历史 + 用户输入。触发后：保留最近
+``keep_recent_turns``（默认 10，约 5–20 之间可配）轮的完整历史，更早的
+历史先整段落盘（可回查）再经一次固定 prompt 的 summarize 压成一条摘要
+消息。压缩后 context = system prompt + summary + 最近轮历史。
+
+- 切点只在安全边界：assistant 轮与其工具结果同生共死，绝不从批中间切。
+- 溢出兜底（PromptTooLong）与主动请求走同一条路径，只是 force=True。
+- 游标经 on_compaction 落会话值（诊断 C2）：下一个运行的投影直接从
+  摘要形态开始，摘要调用不重花。
+- 触发线 = 窗口折算字符 − reserve（给输出留的余量，Pi 同值 16384
+  tokens）；无窗口/读数时回落 CONTEXT_CHAR_LIMIT。
 """
 
 from __future__ import annotations
@@ -13,38 +20,28 @@ import logging
 import os
 import threading
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..providers.client import LLMError, chat_completion
+from ..providers.client import LLMError
 from ..providers.config import Config
 from ..providers.transcript import Transcript
 from . import events, prompt
 
 logger = logging.getLogger("avid.agent.compaction")
 
-# Thresholds are centralized here so that tuning after measurement touches only these numbers.
-TOOL_RESULT_CHAR_BUDGET = 200_000  # characters of tool results allowed before spilling the largest
-TOOL_RESULT_KEEP_RECENT = 3
-SNIP_KEEP_HEAD = 8
-SNIP_KEEP_TAIL = 24
-CONTEXT_CHAR_LIMIT = 400_000  # fallback conversation budget when no window reading is available
-MICRO_COMPACT_KEEP_RECENT = 3
-MICRO_COMPACT_TARGET_RATIO = 0.8  # fraction of the limit that the spill loop aims to reach
-REACTIVE_KEEP_RECENT = 5
-
-# Fraction of the model's real context window at which the two context-limit steps trigger.
-WINDOW_TRIGGER_RATIO = 0.8
-# Plausible band for measured chars per token: a reading outside it is ignored rather than followed.
-MIN_CHARS_PER_TOKEN = 0.5
-MAX_CHARS_PER_TOKEN = 6.0
+# 无窗口/读数时的回落触发线；阈值常量集中在这里，调参只动这些数字。
+CONTEXT_CHAR_LIMIT = 400_000
+RESERVE_TOKENS = 16_384
+KEEP_RECENT_TURNS = 10
 
 # Spilled files must stay inside the workspace, since the read tool only reads there.
 SPILL_DIR = ".avid/context"
-# Marker for content that has already been spilled, so it is never spilled a second time.
+# Marker for content that has already been spilled, so it is never treated as raw output again.
 SPILL_PREFIX = "[已落盘]"
 
+# 固定的摘要系统提示词：一次性说明保留什么、丢弃什么。
 SUMMARY_SYSTEM = (
     "你是上下文压缩器。把给定的对话记录压缩成一份要点摘要，供另一个 agent 接着干活。"
     "必须保留：任务目标、已确认的事实与结论、改动过的文件与关键位置、"
@@ -61,18 +58,9 @@ _spill_seq = 0
 _SPILL_LOCK = threading.Lock()
 
 
-def _next_spill_path(root: Path, kind: str, suffix: str, tag: str = "") -> Path:
-    """Return the next spill path, tagged per run when the caller supplies one."""
-    global _spill_seq
-    with _SPILL_LOCK:  # parallel subagents compact at once, so the sequence must be taken atomically
-        _spill_seq += 1
-        seq = _spill_seq
-    return root / f"{kind}-{tag or _PROCESS_TAG}-{seq:04d}{suffix}"
-
-
 @dataclass(frozen=True)
 class CompactReport:
-    """What one compaction step did, logged and counted by the loop."""
+    """What one compaction did, logged and counted by the loop."""
 
     step: str
     detail: str
@@ -83,33 +71,31 @@ class CompactReport:
         return f"{self.step} — {self.detail}"
 
 
-def derived_context_chars(
-    *,
-    window: int | None,
-    prompt_tokens: int | None,
-    chars: tuple[int, int, int] | None,
-    ratio: float = WINDOW_TRIGGER_RATIO,
-) -> tuple[int, float] | None:
-    """Derive a conversation character budget from the model window and this session's token reading."""
-    # The rate is measured from this session's own text, so mixed languages need no fixed coefficient.
-    # Any missing prerequisite returns None so the caller falls back to CONTEXT_CHAR_LIMIT.
-    if window is None or window <= 0:
-        return None
-    if chars is None:
-        return None
-    total = sum(chars)
-    if total <= 0:
-        return None
-    if prompt_tokens is None or prompt_tokens <= 0:
-        return None
+@dataclass(frozen=True)
+class ContextBudget:
+    """压缩预算与组装上限；默认值引用常量，按运行可注入覆盖（单变量对照用）。
 
-    # Clamping keeps an implausible reading from compacting far too hard or never at all.
-    per_token = min(
-        max(total / prompt_tokens, MIN_CHARS_PER_TOKEN), MAX_CHARS_PER_TOKEN
-    )
-    # The system prompt and tool definitions are subtracted: the budget covers messages only.
-    limit = int(window * ratio * per_token) - (chars[0] + chars[1])
-    return max(1, limit), per_token
+    组装上限（bootstrap_chars / skill_always_chars）由 CONTEXT_MAP 的 cap 字段
+    以字段名引用，渲染时从这份预算取值——上限可调但不散落。
+    """
+
+    bootstrap_chars: int = prompt.AGENTS_MD_MAX_CHARS
+    skill_always_chars: int = prompt.SKILL_ALWAYS_TOTAL_MAX_CHARS
+    keep_recent_turns: int = KEEP_RECENT_TURNS
+    reserve_tokens: int = RESERVE_TOKENS
+    context_chars: int = CONTEXT_CHAR_LIMIT
+    # Whether the trigger line follows the real window; turn it off when comparing
+    # injected values.
+    from_window: bool = True
+
+
+def _next_spill_path(root: Path, kind: str, suffix: str, tag: str = "") -> Path:
+    """Return the next spill path, tagged per run when the caller supplies one."""
+    global _spill_seq
+    with _SPILL_LOCK:  # parallel subagents compact at once, so the sequence must be taken atomically
+        _spill_seq += 1
+        seq = _spill_seq
+    return root / f"{kind}-{tag or _PROCESS_TAG}-{seq:04d}{suffix}"
 
 
 def _spill_root(root: Path | None = None) -> Path:
@@ -121,9 +107,12 @@ def _spill_root(root: Path | None = None) -> Path:
     return Path(workspace.WORKSPACE_ROOT) / SPILL_DIR
 
 
-# The tool layer reuses this for output truncation, so the model needs one recovery procedure only.
 def spill(text: str, kind: str, root: Path | None = None, tag: str = "") -> str | None:
-    """Write text under the spill directory and return its workspace-relative path, or None on failure."""
+    """Write text under the spill directory and return its workspace-relative path, or None on failure.
+
+    供 large_output_hook 使用：工具结果超长时截断并把全文放到这里，模型用
+    read_file 读回。
+    """
     root = _spill_root(root)
     path = _next_spill_path(root, kind, ".txt", tag)
     try:
@@ -138,10 +127,6 @@ def spill(text: str, kind: str, root: Path | None = None, tag: str = "") -> str 
 def spill_notice(path: str, size: int, kind: str) -> str:
     """Render the replacement text left where spilled content used to be."""
     return f"{SPILL_PREFIX} 原{kind}共 {size} 字符，已存至 {path}；需要时用 read_file 读回。"
-
-
-def _is_spilled(content: str) -> bool:
-    return content.startswith(SPILL_PREFIX)
 
 
 def _save_transcript(
@@ -190,263 +175,57 @@ def _summary_message(summary: str, transcript: str) -> str:
     )
 
 
-def tool_result_budget(
-    transcript: Transcript,
+# ---------- 触发预算 ----------
+
+
+def _chars_per_token(prompt_tokens: int | None, chars: tuple[int, int, int] | None) -> float:
+    """实测本会话的字符/token 比；缺失或离谱时回落 2.0（多数中英混合的量级）。"""
+    if prompt_tokens is None or prompt_tokens <= 0 or chars is None:
+        return 2.0
+    total = sum(chars)
+    if total <= 0:
+        return 2.0
+    measured = total / prompt_tokens
+    # 离谱的读数不采纳：0.5（token 比字符还多）到 6.0（全 ASCII）之外视为噪声。
+    return min(max(measured, 0.5), 6.0)
+
+
+def trigger_chars(
     *,
-    budget: int = TOOL_RESULT_CHAR_BUDGET,
-    keep_recent: int = TOOL_RESULT_KEEP_RECENT,
-    workdir: Path | None = None,
-    tag: str = "",
-) -> CompactReport | None:
-    """Spill the single largest tool result when the total exceeds the budget, never a recent one."""
-    # Only one result is spilled per call, and the budget must exceed the recent set or it never trips.
-    before = transcript.tool_chars()
-    if before <= budget:
-        return None
+    window: int | None,
+    prompt_tokens: int | None,
+    chars: tuple[int, int, int] | None,
+    reserve_tokens: int,
+    fallback: int = CONTEXT_CHAR_LIMIT,
+) -> int:
+    """触发线 = (窗口 − reserve) × 实测字符/token − system 与工具字符。
 
-    indexes = transcript.tool_indexes()
-    if len(indexes) <= keep_recent:
-        return None
-
-    candidates = [
-        (len(transcript.text_at(index)), index)
-        for index in indexes[:-keep_recent]
-        if not _is_spilled(transcript.text_at(index))
-    ]
-    if not candidates:
-        return None
-
-    size, index = max(candidates)
-    if size == 0:
-        return None
-
-    path = spill(transcript.text_at(index), "tool-result", workdir, tag)
-    if path is None:
-        return None
-
-    transcript.set_content(index, spill_notice(path, size, "工具结果"))
-    return CompactReport(
-        "tool_result_budget",
-        f"落盘最大的一项工具结果（保留最近 {keep_recent} 条）",
-        before,
-        transcript.tool_chars(),
-    )
-
-
-def snip_compact(
-    transcript: Transcript,
-    *,
-    max_chars: int = CONTEXT_CHAR_LIMIT,
-    keep_head: int = SNIP_KEEP_HEAD,
-    keep_tail: int = SNIP_KEEP_TAIL,
-) -> CompactReport | None:
-    """Drop the middle of a transcript once its characters pass the budget, cutting only at safe boundaries.
-
-    触发看字符预算而非消息条数（9-27 诊断 C1）：denial 风暴式的短消息堆到几十条
-    也只占窗口的千分之几，条数触发会在信息最密的中间下手。切口机制不变。
+    reserve 给输出留余量（推理模型输出很长）。窗口或读数缺失时回落 fallback。
     """
-    if transcript.estimate_chars() <= max_chars:
-        return None
-
-    before = len(transcript)
-    head_end = min(keep_head, before)
-    tail_start = max(head_end, before - keep_tail)
-
-    # Walk each cut to a safe boundary so no tool call is separated from its result.
-    while head_end < tail_start and not transcript.is_safe_boundary(head_end):
-        head_end += 1
-    while tail_start > head_end and not transcript.is_safe_boundary(tail_start):
-        tail_start -= 1
-
-    if head_end >= tail_start:
-        logger.info("compact: snip_compact 找不到安全切口，跳过本轮")
-        return None
-
-    dropped = tail_start - head_end
-    marker = {
-        "role": "user",
-        "content": (
-            f"[已裁剪] 为控制上下文长度，中间 {dropped} 条消息被移除"
-            "（较早的工具结果如需恢复，见其中的落盘路径）。"
-        ),
-    }
-    transcript.splice(head_end, tail_start, [marker])
-    return CompactReport("snip_compact", f"裁掉中间 {dropped} 条", before, len(transcript))
+    if window is None or window <= 0:
+        return fallback
+    per_token = _chars_per_token(prompt_tokens, chars)
+    budget_chars = int((window - reserve_tokens) * per_token)
+    if chars is not None:
+        budget_chars -= chars[0] + chars[1]
+    return max(1, budget_chars)
 
 
-def micro_compact(
-    transcript: Transcript,
-    *,
-    limit: int = CONTEXT_CHAR_LIMIT,
-    keep_recent: int = MICRO_COMPACT_KEEP_RECENT,
-    target_ratio: float = MICRO_COMPACT_TARGET_RATIO,
-    workdir: Path | None = None,
-    tag: str = "",
-) -> CompactReport | None:
-    """Spill older tool results until the context falls under the limit, without calling the model."""
-    before = transcript.estimate_chars()
-    if before <= limit:
-        return None
+def effective_trigger(limits: ContextBudget, state: Any) -> tuple[ContextBudget, int]:
+    """Return the trigger line this run uses (window-derived when a reading exists).
 
-    target = int(limit * target_ratio)
-    indexes = transcript.tool_indexes()
-    candidates = indexes[:-keep_recent] if keep_recent else indexes
-
-    spilled = 0
-    for index in candidates:
-        if transcript.estimate_chars() <= target:
-            break
-
-        content = transcript.text_at(index)
-        if _is_spilled(content):
-            continue
-
-        path = spill(content, "tool-result", workdir, tag)
-        if path is None:
-            break
-
-        transcript.set_content(index, spill_notice(path, len(content), "工具结果"))
-        spilled += 1
-
-    if not spilled:
-        return None
-    return CompactReport(
-        "micro_compact",
-        f"落盘 {spilled} 项较早的工具结果（保留最近 {keep_recent} 条）",
-        before,
-        transcript.estimate_chars(),
-    )
-
-
-def compact_history(
-    transcript: Transcript,
-    *,
-    config: Config,
-    chat: Any = chat_completion,
-    limit: int = CONTEXT_CHAR_LIMIT,
-    workdir: Path | None = None,
-    tag: str = "",
-) -> CompactReport | None:
-    """Save the full transcript, summarize it with one model call, and replace the history."""
-    before = transcript.estimate_chars()
-    if before <= limit:
-        return None
-
-    path = _save_transcript(transcript.as_messages(), workdir, tag)
-    summary = _summarize(transcript.as_messages(), config=config, chat=chat)
-    if summary is None:
-        logger.warning("compact: 摘要生成失败，保留原历史")
-        return None
-
-    transcript.replace_all(
-        [{"role": "user", "content": _summary_message(summary, path)}]
-    )
-    return CompactReport(
-        "compact_history",
-        f"摘要替换历史（完整记录 {path}）",
-        before,
-        transcript.estimate_chars(),
-    )
-
-
-def reactive_compact(
-    transcript: Transcript,
-    *,
-    config: Config,
-    chat: Any = chat_completion,
-    keep_recent: int = REACTIVE_KEEP_RECENT,
-    workdir: Path | None = None,
-    tag: str = "",
-) -> CompactReport | None:
-    """Last resort once the model reports an overflow: summarize earlier history, keep the tail."""
-    before = transcript.estimate_chars()
-    messages = transcript.as_messages()
-
-    tail_start = max(0, len(messages) - keep_recent)
-    # Move the cut back to a safe boundary so the kept tail never starts mid-exchange.
-    while tail_start > 0 and not transcript.is_safe_boundary(tail_start):
-        tail_start -= 1
-
-    earlier = messages[:tail_start]
-    if not earlier:
-        logger.warning("compact: 没有可总结的更早历史，兜底压缩放弃")
-        return None
-
-    path = _save_transcript(messages, workdir, tag)
-    summary = _summarize(earlier, config=config, chat=chat)
-    if summary is None:
-        return None
-
-    tail = messages[tail_start:]
-    transcript.replace_all(
-        [{"role": "user", "content": _summary_message(summary, path)}] + tail
-    )
-    return CompactReport(
-        "reactive_compact",
-        f"摘要更早的 {len(earlier)} 条，保留最近 {len(tail)} 条",
-        before,
-        transcript.estimate_chars(),
-    )
-
-
-# ---------- 触发预算与编排 ----------
-
-
-@dataclass(frozen=True)
-class ContextBudget:
-    """压缩阈值与组装上限；默认值引用常量，按运行可注入覆盖（单变量对照用）。
-
-    组装上限（bootstrap_chars / skill_always_chars）由 CONTEXT_MAP 的 cap 字段
-    以字段名引用，渲染时从这份预算取值——上限可调但不散落。
+    from_window=False 时注入的 context_chars 原样生效——单变量对照的注入不能被派生盖掉。
     """
-
-    bootstrap_chars: int = prompt.AGENTS_MD_MAX_CHARS
-    skill_always_chars: int = prompt.SKILL_ALWAYS_TOTAL_MAX_CHARS
-    tool_result_chars: int = TOOL_RESULT_CHAR_BUDGET
-    tool_result_keep_recent: int = TOOL_RESULT_KEEP_RECENT
-    keep_head: int = SNIP_KEEP_HEAD
-    keep_tail: int = SNIP_KEEP_TAIL
-    context_chars: int = CONTEXT_CHAR_LIMIT
-    micro_keep_recent: int = MICRO_COMPACT_KEEP_RECENT
-    micro_target_ratio: float = MICRO_COMPACT_TARGET_RATIO
-    reactive_keep_recent: int = REACTIVE_KEEP_RECENT
-    # Whether the character thresholds follow the real window; turn it off when comparing
-    # injected values.
-    from_window: bool = True
-    # Fraction of the window used as the derived trigger line.
-    window_ratio: float = WINDOW_TRIGGER_RATIO
-
-
-def effective_budget(
-    limits: ContextBudget, state: Any
-) -> tuple[ContextBudget, str | None]:
-    """Return the thresholds this run uses and their origin, or None when plain defaults apply."""
     if not limits.from_window:
-        return limits, None
-
-    # The reading and the part counts come from the same request, so they always arrive as a pair.
-    parts = state.prompt_parts
-    usage = state.last_usage
-    # Chars per token is measured from the last real request, because a fixed ratio is wrong
-    # for mixed scripts.
-    derived = derived_context_chars(
+        return limits, limits.context_chars
+    trigger = trigger_chars(
         window=state.context_window,
-        prompt_tokens=None if usage is None else usage.prompt_tokens,
-        chars=parts,
-        ratio=limits.window_ratio,
+        prompt_tokens=None if state.last_usage is None else state.last_usage.prompt_tokens,
+        chars=state.prompt_parts,
+        reserve_tokens=limits.reserve_tokens,
+        fallback=limits.context_chars,
     )
-    # A missing reading or part count falls back verbatim to the constant, so the default
-    # path stays unchanged.
-    if derived is None or parts is None:
-        return limits, None
-
-    limit, per_token = derived
-    note = (
-        f"阈值随窗口派生：{limit} 字符"
-        f"（窗口 {state.context_window} × {limits.window_ratio:g} × "
-        f"实测 {per_token:.2f} 字符/token − 系统与工具 {parts[0] + parts[1]} 字符）"
-    )
-    return replace(limits, context_chars=limit), note
+    return limits, trigger
 
 
 def announce(report: "CompactReport | None", state: Any) -> None:
@@ -465,108 +244,81 @@ def announce(report: "CompactReport | None", state: Any) -> None:
     )
 
 
-def compose_ladder(
+# ---------- 压缩通路 ----------
+
+
+def cut_point(transcript: Transcript, keep_recent_turns: int) -> int:
+    """Return the index where the kept window starts: the oldest of the recent turns.
+
+    一轮 = 一条 assistant 消息连同它的全部工具结果；从尾部往前数
+    ``keep_recent_turns`` 条 assistant 消息，切点再向安全边界外侧行走——
+    绝不从工具批中间切。
+    """
+    messages = transcript.as_messages()
+    rounds = 0
+    cut = 0
+    for index in range(len(messages) - 1, -1, -1):
+        if messages[index].get("role") == "assistant":
+            rounds += 1
+            if rounds == keep_recent_turns:
+                cut = index
+                break
+    if cut == 0:
+        return 0  # 轮数不足一个保留窗口：没有「更早历史」可摘要
+    while cut < len(messages) and not transcript.is_safe_boundary(cut):
+        cut += 1
+    return cut
+
+
+def run_compaction(
     *,
     transcript: Transcript,
     state: Any,
     config: Config,
+    chat: Any,
     limits: ContextBudget,
-    summarize: Any,
-    on_compaction: Any = None,
-) -> list[CompactReport]:
-    """Run the pipeline cheapest first; the fourth step happens at most once per run."""
-    limits, note = effective_budget(limits, state)
-    if note is not None:
-        logger.debug("compact: %s", note)
-    reports: list[CompactReport] = []
-    # Spill files follow the workspace root, because one process can serve several workspaces.
-    workdir = Path(state.workspace_root) if state.workspace_root else None
-
-    def run(report: CompactReport | None) -> None:
-        if report is None:
-            return
-        if note is not None:
-            # A derived threshold records its origin, which the UI reads to explain it.
-            report = replace(report, detail=f"{report.detail}（{note}）")
-        reports.append(report)
-        announce(report, state)
-
-    # Steps one and two need no API call, so they run every round.
-    run(
-        tool_result_budget(
-            transcript,
-            budget=limits.tool_result_chars,
-            keep_recent=limits.tool_result_keep_recent,
-            workdir=workdir,
-            tag=state.run_tag,
-        )
-    )
-    run(
-        snip_compact(
-            transcript,
-            # ② 与 ③④ 共用派生预算：条数不再单独触发（诊断 C1）
-            max_chars=limits.context_chars,
-            keep_head=limits.keep_head,
-            keep_tail=limits.keep_tail,
-        )
-    )
-
-    # Step three is free, so it comes before the paid one.
-    if transcript.estimate_chars() > limits.context_chars:
-        run(
-            micro_compact(
-                transcript,
-                limit=limits.context_chars,
-                keep_recent=limits.micro_keep_recent,
-                target_ratio=limits.micro_target_ratio,
-                workdir=workdir,
-                tag=state.run_tag,
-            )
-        )
-
-    # Step four pays for a summarization call, so state allows it at most once per run.
-    if transcript.estimate_chars() > limits.context_chars:
-        if state.compacted:
-            logger.info("compact: 自动压缩本运行已用过一次，跳过")
-        else:
-            report = compact_history(
-                transcript,
-                config=config,
-                chat=summarize,
-                limit=limits.context_chars,
-                workdir=workdir,
-                tag=state.run_tag,
-            )
-            if report is not None:
-                # Only this branch sets the flag, which is what bounds step four to one run.
-                state.compacted = True
-                run(report)
-                if on_compaction is not None:
-                    on_compaction(transcript.as_messages()[0], 0)
-
-    return reports
-
-
-def reactive_pass(
-    *,
-    transcript: Transcript,
-    state: Any,
-    config: Config,
-    summarize: Any,
+    force: bool = False,
     on_compaction: Any = None,
 ) -> CompactReport | None:
-    """Fallback after a provider overflow: summarize older history and keep a recent tail."""
-    report = reactive_compact(
-        transcript,
-        config=config,
-        chat=summarize,
-        workdir=Path(state.workspace_root) if state.workspace_root else None,
-        keep_recent=REACTIVE_KEEP_RECENT,
-        tag=state.run_tag,
-    )
-    # The caller bounds this to one attempt per run through state.retried.
-    announce(report, state)
-    if report is not None and on_compaction is not None:
-        on_compaction(transcript.as_messages()[0], REACTIVE_KEEP_RECENT)
-    return report
+    """把保留窗口之外的历史压成一条摘要；返回报告，未触发或失败返回 None。
 
+    force=True（溢出兜底或主动请求）跳过触发线与每运行一次的守护。
+    """
+    _limits, trigger = effective_trigger(limits, state)
+    before = transcript.estimate_chars()
+    if not force and before <= trigger:
+        return None
+    if state.compacted and not force:
+        # 自动路径每运行只尝试一次：摘要失败时保留原历史，防逐轮重试风暴。
+        logger.info("compact: 本运行已压缩过，跳过")
+        return None
+
+    messages = transcript.as_messages()
+    cut = cut_point(transcript, limits.keep_recent_turns)
+    earlier = messages[:cut]
+    if not earlier:
+        logger.info("compact: 保留窗口之外没有更早历史，无需压缩")
+        return None
+
+    workdir = Path(state.workspace_root) if state.workspace_root else None
+    path = _save_transcript(earlier, workdir, state.run_tag)
+    summary = _summarize(earlier, config=config, chat=chat)
+    if summary is None:
+        logger.warning("compact: 摘要生成失败，保留原历史")
+        return None
+
+    tail = messages[cut:]
+    transcript.replace_all(
+        [{"role": "user", "content": _summary_message(summary, path)}] + tail
+    )
+    state.compacted = True
+    report = CompactReport(
+        "compact_history",
+        f"摘要更早 {len(earlier)} 条，保留最近 {len(tail)} 条（完整记录 {path}）",
+        len(messages),
+        len(transcript),
+    )
+    announce(report, state)
+    if on_compaction is not None:
+        on_compaction(transcript.as_messages()[0], len(tail))
+    return report

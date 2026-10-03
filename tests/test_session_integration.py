@@ -241,7 +241,8 @@ def test_a_summarized_history_is_not_summarized_again_next_run(hook_registry, se
     summarizer = Summarizer()
     recorder = SessionRecorder(session)
     # 摘要消息自带 ~160 字符样板（完整记录路径），预算须与触发消息量级分开
-    budget = ContextBudget(context_chars=3000, from_window=False)
+    # keep_recent_turns=1：第二个 assistant 轮一到，第一轮就落入「更早历史」
+    budget = ContextBudget(context_chars=3000, keep_recent_turns=1, from_window=False)
 
     def spec_for(chat):
         return RunSpec.resolve(
@@ -249,12 +250,14 @@ def test_a_summarized_history_is_not_summarized_again_next_run(hook_registry, se
             chat=chat,
             summarize=summarizer,
             budget=budget,
+            registry={"read_file": lambda arguments: "内容"},
         )
 
-    # 运行一：触发消息就超预算 → ④ 摘要替换历史，游标落会话值
+    # 运行一：一轮读文件（assistant 轮 1）后再答（轮 2）——第 2 轮的 compose
+    # 时第 1 轮已落入「更早历史」（keep_recent_turns=1），摘要替换并落游标。
     run1 = Run(
         [{"role": "user", "content": "x" * 5000}],
-        spec_for(FakeChat(make_turn("干完了一"))),
+        spec_for(FakeChat(make_turn("", [tool_call("read_file")]), make_turn("干完了一"))),
         state=RunState.for_run(workspace_root=str(tmp_path)),
         on_message=recorder.on_message,
         on_compaction=recorder.record_compaction,
