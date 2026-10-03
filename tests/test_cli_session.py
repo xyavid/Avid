@@ -15,11 +15,11 @@ from pathlib import Path
 import pytest
 
 from avid import cli
-from avid.ai.client import Turn, Usage
-from avid.runtime.context_manager import TAIL_HEADER
-from avid.runtime.run import Run as RealRun
-from avid.runtime.stop import STOP_FINAL_TEXT, RunOutcome
-from avid.tools import workspace
+from avid.agent.context import TAIL_HEADER
+from avid.agent.run import Run as RealRun
+from avid.agent.stop import STOP_FINAL_TEXT, RunOutcome
+from avid.agent.tools import workspace
+from avid.providers.client import Turn, Usage
 
 
 class FakeChat:

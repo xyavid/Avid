@@ -13,8 +13,8 @@ import time
 
 from support import ScriptedChat, make_turn, new_session, wait_terminal
 
-from avid.runtime.events import RUN_FINISHED, RUN_STARTED, TERMINAL_EVENT_TYPES
-from avid.svc import MAX_CONCURRENT_STREAMS, Services
+from avid.agent.events import RUN_FINISHED, RUN_STARTED, TERMINAL_EVENT_TYPES
+from avid.services import MAX_CONCURRENT_STREAMS, Services
 
 
 def build(root, chat, **kwargs) -> Services:

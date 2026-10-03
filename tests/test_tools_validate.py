@@ -8,11 +8,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from avid.runtime.execution import execute_one
-from avid.runtime.hooks import HookRegistry
-from avid.runtime.state import RunState
-from avid.tools import TOOLS
-from avid.tools.validate import validate_arguments
+from avid.agent.execution import execute_one
+from avid.agent.hooks import HookRegistry
+from avid.agent.state import RunState
+from avid.agent.tools import TOOLS
+from avid.agent.tools.validate import validate_arguments
 
 
 def params_of(name: str) -> dict[str, Any]:

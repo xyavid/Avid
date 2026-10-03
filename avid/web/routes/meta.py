@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Request
 
-from ...runtime.events import now_ms
-from ...svc import API_VERSION
+from ...agent.events import now_ms
+from ...services import API_VERSION
 from ..schemas import HealthOut, MetaOut, SkillListOut
 from . import current_services
 

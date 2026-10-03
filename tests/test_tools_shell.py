@@ -1,7 +1,7 @@
 import pytest
 
-from avid.tools import shell, workspace
-from avid.tools.shell import bash
+from avid.agent.tools import shell, workspace
+from avid.agent.tools.shell import bash
 
 
 @pytest.fixture

@@ -15,13 +15,13 @@ import json
 import httpx
 import pytest
 
-from avid.tools.search_config import (
+from avid.agent.tools.search_config import (
     ENV_API_KEY,
     ENV_BASE_URL,
     SearchConfigError,
     load_search_config,
 )
-from avid.tools.web_search import (
+from avid.agent.tools.web_search import (
     MAX_SNIPPET_CHARS,
     web_search,
 )

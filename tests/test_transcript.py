@@ -2,7 +2,7 @@
 
 import pytest
 
-from avid.ai.transcript import Transcript, TranscriptError, estimate_chars, validate
+from avid.providers.transcript import Transcript, TranscriptError, estimate_chars, validate
 
 
 def user(text="hi"):

@@ -9,9 +9,9 @@ import time
 
 import pytest
 
-from avid.policy import permission
-from avid.policy.action import brokerize
-from avid.policy.permission import (
+from avid.security import permission
+from avid.security.action import brokerize
+from avid.security.permission import (
     APPROVAL_RULES,
     COST_RULES,
     auto_approve,

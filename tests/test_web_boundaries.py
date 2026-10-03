@@ -17,7 +17,7 @@ WEB = ROOT / "web"
 # svc/ 也在内核侧：它是最容易被"顺手 import 一下 pydantic"的层（离传输层最近），
 # 而 A1 以前只查这五个包——`pyproject.toml` 那句"web/ 是唯一 importer"因此少了
 # 一半的守护（审查里的 P2-22）。
-KERNEL_PACKAGES = ("ai", "runtime", "policy", "session", "tools", "svc")
+KERNEL_PACKAGES = ("agent", "providers", "security", "session", "services")
 
 
 def files_under(*parts: str, suffix: str = ".py") -> list[Path]:
@@ -72,18 +72,18 @@ def test_a2_uvicorn_is_only_used_for_the_web_subcommand():
     assert {item.split(":")[0] for item in found} == {"avid/cli.py"}
 
 
-def test_a1_svc_is_also_checked_for_web_framework_imports():
-    """A1 的包清单必须含 svc（P2-22）：它离传输层最近，最容易顺手 import pydantic。"""
-    assert "svc" in KERNEL_PACKAGES
-    assert hits(files_under("svc"), r"fastapi|pydantic|starlette|uvicorn") == []
+def test_a1_services_is_also_checked_for_web_framework_imports():
+    """A1 的包清单必须含 services：它离传输层最近，最容易顺手 import pydantic。"""
+    assert "services" in KERNEL_PACKAGES
+    assert hits(files_under("services"), r"fastapi|pydantic|starlette|uvicorn") == []
 
 
 # ---------------- A3 ----------------
 
 
 def test_a3_loop_is_still_only_a_scheduler():
-    # 新流程落 spec.py / run.py 后，旧 loop.py 保持包内模块：调度约束继续按文件钉。
-    loop = (SRC / "runtime" / "loop.py").read_text(encoding="utf-8")
+    # 旧 loop.py 保留（subagent 递归用）：调度约束继续按文件钉。
+    loop = (SRC / "agent" / "loop.py").read_text(encoding="utf-8")
     assert loop.count("state.hooks.trigger(") == 2, (
         "循环只该有 UserPromptSubmit 与 Stop 两个 hook 调用点"
     )
@@ -96,17 +96,17 @@ def test_a3_loop_is_still_only_a_scheduler():
         for item in code_hits(files_under(suffix=".py"), r"agent_loop\(")
     }
     assert callers == {
-        "avid/runtime/loop.py",
-        "avid/tools/subagent.py",
+        "avid/agent/loop.py",
+        "avid/agent/tools/subagent.py",
     }, callers
 
-    # svc / web 不按轮次自己推进调度（while/for round）
-    assert hits(files_under("svc") + files_under("web"), r"for round|while .*round") == []
+    # services / web 不按轮次自己推进调度（while/for round）
+    assert hits(files_under("services") + files_under("web"), r"for round|while .*round") == []
 
 
 def test_a3_observation_points_are_declared_once():
-    loop = (SRC / "runtime" / "loop.py").read_text(encoding="utf-8")
-    run = (SRC / "runtime" / "run.py").read_text(encoding="utf-8")
+    loop = (SRC / "agent" / "loop.py").read_text(encoding="utf-8")
+    run = (SRC / "agent" / "run.py").read_text(encoding="utf-8")
     assert "on_message" in loop and "on_event" in loop
     assert "on_message" in run and "on_event" in run
 
@@ -114,16 +114,16 @@ def test_a3_observation_points_are_declared_once():
 # ---------------- A4 / A5 ----------------
 
 
-def test_a4_svc_does_not_import_web():
-    assert hits(files_under("svc"), r"avid\.web|from \.\.web") == []
+def test_a4_services_does_not_import_web():
+    assert hits(files_under("services"), r"avid\.web|from \.\.web") == []
 
 
 def test_a5_svc_only_maps_kernel_errors():
-    found = hits(files_under("svc"), r"\bLLMError\b")
+    found = hits(files_under("services"), r"\bLLMError\b")
     # 只允许出现"捕获并映射"的地方：runs.py 的 except 分支
-    assert found, "svc 应当显式把内核异常映射成 run_failed"
+    assert found, "services 应当显式把内核异常映射成 run_failed"
     for item in found:
-        assert "svc/runs.py" in item, item
+        assert "services/runs.py" in item, item
 
 
 # ---------------- A6 ----------------
@@ -136,7 +136,7 @@ def test_a6_event_names_are_single_sourced():
     found = [
         item
         for item in hits(files_under(suffix=".py"), pattern)
-        if "avid/runtime/events.py" not in item.split(":")[0]
+        if "avid/agent/events.py" not in item.split(":")[0]
     ]
     assert found == [], f"事件名字面量泄漏到 events.py 之外：{found}"
 
@@ -146,13 +146,13 @@ def test_a10_on_message_wiring_stays_in_four_places():
         item.split(":")[0]
         for item in hits(files_under(suffix=".py"), r"on_message")
     }
-    # run.py 是新流程的第二个出口实现，与旧 loop.py 并存到阶段 40
+    # run.py 是新流程的出口实现，与旧 loop.py 并存（subagent 仍走旧循环）
     assert found == {
-        "avid/runtime/loop.py",
-        "avid/runtime/run.py",
+        "avid/agent/loop.py",
+        "avid/agent/run.py",
         "avid/session/recorder.py",
         "avid/cli.py",
-        "avid/svc/runs.py",
+        "avid/services/runs.py",
     }, found
 
 
@@ -189,11 +189,11 @@ def test_frontend_sources_exist():
     assert frontend_sources(), "web/src 下没有前端源码"
 
 
-# ---------------- A13：runtime → policy 的边界（判据：策略细节不进调度层） ----------------
+# ---------------- A13：agent → security 的边界（判据：策略细节不进调度层） ----------------
 
 
 def policy_imports(path: Path) -> tuple[set[str], set[str]]:
-    """返回 (运行时 import 的 policy 模块, 只在 TYPE_CHECKING 下 import 的)。
+    """返回 (运行时 import 的 security 模块, 只在 TYPE_CHECKING 下 import 的)。
 
     用 AST 而不是 grep：判据特意区分"注解用的惰性 import"与"真依赖"，
     正则分不出来，而这条边界的价值恰恰在那个区分上。
@@ -214,12 +214,12 @@ def policy_imports(path: Path) -> tuple[set[str], set[str]]:
                 continue
             if isinstance(node, ast.ImportFrom) and node.level:
                 module = node.module or ""
-                if module == "policy" or module.startswith("policy."):
-                    # `from ..policy import compaction` 也把 policy.compaction 记上：
+                if module == "security" or module.startswith("security."):
+                    # `from ..security import permission` 也把 security.permission 记上：
                     # 包级 import 同样是跨层使用。
                     targets = {
-                        f"policy.{alias.name}" for alias in node.names if module == "policy"
-                    } | ({module} if module != "policy" else {"policy"})
+                        f"security.{alias.name}" for alias in node.names if module == "security"
+                    } | ({module} if module != "security" else {"security"})
                     (typing_only if in_type_checking else runtime).update(targets)
             for field in ("body", "orelse", "finalbody"):
                 nested = getattr(node, field, None)
@@ -233,60 +233,68 @@ def policy_imports(path: Path) -> tuple[set[str], set[str]]:
     return runtime, typing_only
 
 
-# runtime/ 允许 import policy 的文件与各自用到的模块。这不是"豁免名单"，而是把边界
-# 写成会失败的断言：`loop.py`、`execution.py`、`spec.py` 与 `run.py` 必须是零运行时
-# 依赖（调度、工具协议与运行装配不该认识策略细节），其余三个文件各有明确理由——
-# context_manager 装配上下文并编排压缩、state 持有运行期实例、hooks 注册默认回调
-# （权限裁决 + 截断落盘）。注解里的 AskUser / RunSecurity / ApprovalLedger 只许在
-# TYPE_CHECKING 下出现。
-RUNTIME_POLICY_EDGES: dict[str, set[str]] = {
-    "avid/runtime/context_manager.py": {"policy", "policy.compaction", "policy.prompt"},
-    "avid/runtime/state.py": {
-        "policy.permission",
-        "policy.skills",
-        "policy.todo",
-    },
-    "avid/runtime/hooks.py": {"policy.permission", "policy.compaction"},
+# agent/ 允许 import security 的文件与各自用到的模块。这不是"豁免名单"，而是把边界
+# 写成会失败的断言：调度（loop/run）、装配（context/compaction）、工具协议（execution）、
+# 终止（stop）与 spec 必须零安全层运行时依赖；只有 state（持有 RunSecurity 实例）与
+# hooks（注册权限裁决默认回调）两条边。policy 拆包后压缩/提示词/待办/技能加载器都
+# 住在 agent 内部，不再跨层。注解里的 RunSecurity / ApprovalLedger 只许在 TYPE_CHECKING
+# 下出现。
+AGENT_SECURITY_EDGES: dict[str, set[str]] = {
+    "avid/agent/state.py": {"security.permission"},
+    "avid/agent/hooks.py": {"security.permission"},
+    # tools 取 security 的两个默认值常量（审批放行标记 / 权限模式缺省）
+    "avid/agent/tools/files.py": {"security.permission"},
+    "avid/agent/tools/subagent.py": {"security.permission"},
 }
-POLICY_FREE_RUNTIME = (
-    "avid/runtime/loop.py",
-    "avid/runtime/execution.py",
-    "avid/runtime/spec.py",
-    "avid/runtime/run.py",
-    "avid/runtime/stop.py",
+SECURITY_FREE_AGENT = (
+    "avid/agent/loop.py",
+    "avid/agent/execution.py",
+    "avid/agent/spec.py",
+    "avid/agent/run.py",
+    "avid/agent/stop.py",
+    "avid/agent/context.py",
+    "avid/agent/compaction.py",
+    "avid/agent/todo.py",
+    "avid/agent/prompt.py",
+    "avid/agent/skills.py",
 )
 
 
-def test_a13_loop_and_execution_have_zero_runtime_policy_dependency():
-    for name in POLICY_FREE_RUNTIME:
+def test_a13_scheduling_and_tools_have_zero_runtime_security_dependency():
+    for name in SECURITY_FREE_AGENT:
         runtime, _typing = policy_imports(ROOT / name)
-        assert runtime == set(), f"{name} 出现了对策略层的运行时依赖：{sorted(runtime)}"
+        assert runtime == set(), f"{name} 出现了对安全层的运行时依赖：{sorted(runtime)}"
 
 
-def test_a13_runtime_policy_edges_are_exactly_the_declared_ones():
-    """runtime 对 policy 的每一条运行时 import 都必须是申报过的边（新增先改这里）。"""
-    for name in POLICY_FREE_RUNTIME:
-        assert name not in RUNTIME_POLICY_EDGES
+def test_a13_agent_security_edges_are_exactly_the_declared_ones():
+    """agent 对 security 的每一条运行时 import 都必须是申报过的边（新增先改这里）。"""
+    for name in SECURITY_FREE_AGENT:
+        assert name not in AGENT_SECURITY_EDGES
 
     seen: dict[str, set[str]] = {}
-    for path in files_under("runtime"):
+    for path in files_under("agent"):
         runtime, _typing = policy_imports(path)
         if runtime:
             seen[str(path.relative_to(ROOT))] = runtime
 
-    assert seen == RUNTIME_POLICY_EDGES, (
-        "runtime→policy 的实际边与申报集不一致："
-        f"{sorted(set(seen) | set(RUNTIME_POLICY_EDGES))}"
+    assert seen == AGENT_SECURITY_EDGES, (
+        "agent→security 的实际边与申报集不一致："
+        f"{sorted(set(seen) | set(AGENT_SECURITY_EDGES))}"
     )
 
 
 def test_a13_type_checking_imports_stay_inert():
-    """注解用的 import 必须是惰性的：AskUser / RunSecurity / McpManager 只在
+    """注解用的 import 必须是惰性的：RunSecurity / ApprovalLedger / McpManager 只在
     TYPE_CHECKING 下出现，"零运行时依赖"不是因为名字没出现，而是 import 真没执行。
     """
-    for name in ("avid/runtime/loop.py", "avid/runtime/spec.py", "avid/runtime/run.py"):
+    for name in (
+        "avid/agent/loop.py",
+        "avid/agent/spec.py",
+        "avid/agent/run.py",
+        "avid/agent/stop.py",
+    ):
         _runtime, typing_only = policy_imports(ROOT / name)
-        assert typing_only <= {"policy.permission"}, f"{name}: {sorted(typing_only)}"
+        assert typing_only <= {"security.permission"}, f"{name}: {sorted(typing_only)}"
 
 
 def test_web_imports_name_submodules_not_the_package():

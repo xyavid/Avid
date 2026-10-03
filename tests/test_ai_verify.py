@@ -13,10 +13,10 @@ from __future__ import annotations
 
 import pytest
 
-from avid.ai import verify as verify_module
-from avid.ai.byok import ModelCapabilities, ModelDecl, ProviderDecl, set_secret
-from avid.ai.config import ConfigError
-from avid.ai.protocol import LLMError, Turn, Usage
+from avid.providers import verify as verify_module
+from avid.providers.byok import ModelCapabilities, ModelDecl, ProviderDecl, set_secret
+from avid.providers.config import ConfigError
+from avid.providers.protocol import LLMError, Turn, Usage
 
 
 @pytest.fixture(autouse=True)
@@ -136,7 +136,7 @@ def test_config_error_reports_instead_of_raising(monkeypatch):
     def boom():
         raise ConfigError("chat 槽位还没有绑定模型")
 
-    from avid.ai import byok as byok_module
+    from avid.providers import byok as byok_module
 
     monkeypatch.setattr(byok_module, "config_from_provider", lambda *a, **k: boom())
 

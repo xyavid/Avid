@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from avid.policy.permission import (
+from avid.security.permission import (
     APPROVAL_CLASSIFIER,
     APPROVAL_NONE,
     APPROVAL_USER,
@@ -23,7 +23,7 @@ from avid.policy.permission import (
     build_run_security,
     decide,
 )
-from avid.policy.sandbox import BACKEND_BWRAP, BACKEND_NONE
+from avid.security.sandbox import BACKEND_BWRAP, BACKEND_NONE
 
 WORKING_PROBE = BackendProbe(
     backend=BACKEND_BWRAP,
@@ -433,8 +433,8 @@ def test_reading_outside_the_workspace_stays_inside_the_sandbox(sandbox: Path, s
 def test_tmp_is_inside_the_sandbox_for_bash_but_not_for_file_tools(sandbox: Path, specs):
     """``bash`` 跑在沙箱里，宿主 /tmp 已被换成私有 tmpfs：写它碰不到宿主，不必问。
     文件工具在 agent 进程里跑，它的 /tmp 写会落到宿主，因此仍要授权。"""
-    from avid.runtime.state import RunState
-    from avid.tools.files import write_file
+    from avid.agent.state import RunState
+    from avid.agent.tools.files import write_file
 
     decision = run("bash", {"command": "echo x > /tmp/avid-probe.txt"}, spec=specs["manual"], root=sandbox)
     assert decision.verdict == "allow" and decision.kind == ""
@@ -465,8 +465,8 @@ def test_approval_mounts_only_the_outside_write_destination(sandbox: Path, specs
 
 
     """只读授予不能给文件工具写权限：越出沙箱的写必须按 rw 口径批准。"""
-    from avid.runtime.state import RunState
-    from avid.tools.files import write_file
+    from avid.agent.state import RunState
+    from avid.agent.tools.files import write_file
 
     with outside_files("write.txt") as (outside,):
         state = RunState.for_run(security=specs["manual"], workspace_root=str(sandbox))

@@ -6,8 +6,8 @@ import json
 
 import pytest
 
-from avid.tools import workspace
-from avid.workspaces import AVID_HOME_ENV
+from avid.agent.tools import workspace
+from avid.services.workspace_registry import AVID_HOME_ENV
 
 
 @pytest.fixture(autouse=True)
@@ -67,8 +67,8 @@ def hook_registry(monkeypatch):
     "注册回调 → 跑循环 → 断言"全发生在这份局部对象上：不再改模块级字典，也不会
     漏到别的用例（以前靠 monkeypatch `HOOKS` 来隔离）。
     """
-    from avid.runtime import hooks as hooks_module
-    from avid.runtime.hooks import HookRegistry
+    from avid.agent import hooks as hooks_module
+    from avid.agent.hooks import HookRegistry
 
     registry = HookRegistry()
     monkeypatch.setattr(hooks_module, "DEFAULT_HOOKS", registry)

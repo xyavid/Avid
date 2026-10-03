@@ -11,8 +11,8 @@ import threading
 import pytest
 from support import ScriptedChat, bound_workspace, make_turn, wait_terminal
 
-from avid.svc import Services
-from avid.svc.errors import BranchExists, InvalidRequest, SessionBusy
+from avid.services import Services
+from avid.services.errors import BranchExists, InvalidRequest, SessionBusy
 
 
 def build(root, chat, **kwargs) -> Services:

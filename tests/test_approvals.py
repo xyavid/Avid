@@ -26,7 +26,7 @@ from support import (
     wait_for,
 )
 
-from avid.runtime.events import (
+from avid.agent.events import (
     APPROVAL_REQUESTED,
     APPROVAL_RESOLVED,
     RUN_CANCELLED,
@@ -34,7 +34,7 @@ from avid.runtime.events import (
     TOOL_CALL_STARTED,
     TOOL_RESULT_MESSAGE,
 )
-from avid.svc import Services
+from avid.services import Services
 from avid.web import create_app
 
 

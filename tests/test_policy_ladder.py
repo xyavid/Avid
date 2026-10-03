@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from avid.policy.permission import (
+from avid.security.permission import (
     OPERATION_READ,
     OPERATION_WRITE,
     TIER_ADMIN,
@@ -55,8 +55,8 @@ def test_tier_order_is_the_declared_ladder():
 
 def test_admin_rules_cover_the_credential_list(host):
     """ADMIN 档的表逐条对账：漏一条就是"凭据可以被读"。"""
-    from avid.policy.permission import ADMIN_WRITABLE_SOURCES  # noqa: F401  (表在 rules 里)
-    from avid.policy.rules import ADMIN_PATH_RULES
+    from avid.security.permission import ADMIN_WRITABLE_SOURCES  # noqa: F401  (表在 rules 里)
+    from avid.security.rules import ADMIN_PATH_RULES
 
     paths = {path for path, _operations, _reason in ADMIN_PATH_RULES}
     assert {
@@ -154,7 +154,7 @@ def test_deny_beats_ask_even_when_ask_is_at_a_higher_tier():
     阶梯顺序只决定"同为 deny 时谁更硬"；deny 与 ask 之间是**另一种**优先级——
     原则③的另一半。这里直接造两条规则来钉住它，而不是指望内置表恰好凑出这个组合。
     """
-    from avid.policy.rules import Ladder, Rule
+    from avid.security.rules import Ladder, Rule
 
     ask = Rule(
         tier=TIER_SYSTEM,
@@ -178,7 +178,7 @@ def test_deny_beats_ask_even_when_ask_is_at_a_higher_tier():
 
 
 def test_builtin_project_defaults_are_deny_or_ask():
-    from avid.policy.rules import PROJECT_PATH_RULES
+    from avid.security.rules import PROJECT_PATH_RULES
 
     table = {path: verdict for path, _ops, _reason, verdict in PROJECT_PATH_RULES}
     assert table[".git/hooks"] == VERDICT_DENY
@@ -191,7 +191,7 @@ def test_builtin_project_defaults_are_deny_or_ask():
 
 
 def test_pattern_semantics(tmp_path):
-    from avid.policy.rules import path_hit
+    from avid.security.rules import path_hit
 
     # `**/` 表示"零层或多层目录"：gitignore 习惯写下来的 deny 不能静默失效
     assert path_hit("/ws/private/x", "/ws/**/private/**")

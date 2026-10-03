@@ -11,13 +11,13 @@ import itertools
 
 import pytest
 
-from avid.ai.client import Turn, Usage
-from avid.ai.config import Config
-from avid.ai.transcript import Transcript
-from avid.runtime.context_manager import TAIL_HEADER
-from avid.runtime.hooks import BLOCK
-from avid.runtime.loop import agent_loop
-from avid.runtime.state import RunState
+from avid.agent.context import TAIL_HEADER
+from avid.agent.hooks import BLOCK
+from avid.agent.loop import agent_loop
+from avid.agent.state import RunState
+from avid.providers.client import Turn, Usage
+from avid.providers.config import Config
+from avid.providers.transcript import Transcript
 from avid.session import (
     MemorySessionRepo,
     SessionClosedError,
@@ -227,9 +227,9 @@ def test_a_summarized_history_is_not_summarized_again_next_run(hook_registry, se
     ④ 再花一次摘要调用（每次运行一遍）。
     """
 
-    from avid.runtime.context_manager import ContextBudget
-    from avid.runtime.run import Run
-    from avid.runtime.spec import RunSpec
+    from avid.agent.context import ContextBudget
+    from avid.agent.run import Run
+    from avid.agent.spec import RunSpec
 
     summarize_sizes: list[int] = []
 

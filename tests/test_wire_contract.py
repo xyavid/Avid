@@ -26,7 +26,7 @@ import pytest
 from fastapi.testclient import TestClient
 from support import ScriptedChat, make_turn
 
-from avid.svc import Services
+from avid.services import Services
 from avid.web import create_app
 from avid.web.schemas import (
     AnswerApprovalOut,

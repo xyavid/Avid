@@ -6,11 +6,11 @@
 
 import pytest
 
-from avid.ai.config import Config
-from avid.ai.transcript import Transcript
-from avid.policy.skills import SkillLoader
-from avid.runtime.context_manager import SYSTEM, TAIL, Block, ContextBudget, ContextManager
-from avid.runtime.state import RunState
+from avid.agent.context import SYSTEM, TAIL, Block, ContextBudget, ContextManager
+from avid.agent.skills import SkillLoader
+from avid.agent.state import RunState
+from avid.providers.config import Config
+from avid.providers.transcript import Transcript
 
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
 
@@ -154,7 +154,7 @@ def test_bootstrap_ignores_a_directory_shaped_file(tmp_path):
 
 
 def test_bootstrap_truncates_past_the_cap(tmp_path, monkeypatch):
-    from avid.policy import prompt
+    from avid.agent import prompt
 
     monkeypatch.setattr(prompt, "AGENTS_MD_MAX_CHARS", 50)
     (tmp_path / "AGENTS.md").write_text("长" * 80, encoding="utf-8")
@@ -185,7 +185,7 @@ def test_always_skill_lands_in_system_and_leaves_the_catalog(tmp_path):
 
 
 def test_always_total_cap_skips_later_skills(tmp_path, monkeypatch):
-    from avid.policy import prompt
+    from avid.agent import prompt
 
     monkeypatch.setattr(prompt, "SKILL_ALWAYS_TOTAL_MAX_CHARS", 10)
     for name in ("a", "b"):

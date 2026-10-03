@@ -29,7 +29,7 @@ def answer_approval(
     registry = current_services(request).runs
     record = registry.get(run_id)
     if record.approvals is None:
-        from ...svc.errors import ApprovalNotFound
+        from ...services.errors import ApprovalNotFound
 
         raise ApprovalNotFound(f"运行没有待决审批：{run_id}")
 

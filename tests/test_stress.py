@@ -18,7 +18,9 @@ from pathlib import Path
 
 import pytest
 
-from avid.runtime.events import RUN_STARTED
+from avid.agent.events import RUN_STARTED
+from avid.services import Services
+from avid.services.runs import RunRecord, RunRegistry
 from avid.session import (
     STORAGE_VERSION,
     JsonlSessionMetadata,
@@ -32,8 +34,6 @@ from avid.session.jsonl import (
 )
 from avid.session.types import CommittedEntry, CommittedValueSet, NewEntry
 from avid.session.values import BRANCH_TIP_NS, SESSION_NAME_NS
-from avid.svc import Services
-from avid.svc.runs import RunRecord, RunRegistry
 
 pytestmark = pytest.mark.stress
 

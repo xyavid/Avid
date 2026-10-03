@@ -12,11 +12,11 @@ from __future__ import annotations
 import pytest
 from support import ScriptedChat, make_turn
 
-from avid.ai.config import Config
-from avid.ai.usage import Usage
-from avid.policy.compaction import CompactReport
-from avid.runtime.context_manager import announce
-from avid.runtime.state import RunState
+from avid.agent.compaction import CompactReport
+from avid.agent.context import announce
+from avid.agent.state import RunState
+from avid.providers.config import Config
+from avid.providers.usage import Usage
 from avid.session import (
     USAGE_NS,
     MemorySessionRepo,
@@ -163,7 +163,7 @@ def test_run_persists_usage_and_exposes_it_over_http(sandbox):
     from fastapi.testclient import TestClient
     from support import create_session
 
-    from avid.svc import Services
+    from avid.services import Services
     from avid.web import create_app
 
     chat = ScriptedChat(make_turn("答"))
@@ -252,7 +252,7 @@ def _window_probe(monkeypatch, *, window=200_000):
     """把 provider 的 /models 换成 MockTransport，并打开探测（conftest 默认关掉）。"""
     import httpx
 
-    from avid.ai import client as client_module
+    from avid.providers import client as client_module
 
     monkeypatch.delenv("AVID_MODEL_INFO", raising=False)
     with client_module._MODEL_WINDOW_LOCK:
@@ -267,7 +267,7 @@ def _window_probe(monkeypatch, *, window=200_000):
     http = httpx.Client(transport=httpx.MockTransport(handler))
     monkeypatch.setattr(client_module, "shared_client", lambda: http)
     monkeypatch.setattr(
-        "avid.runtime.loop.shared_client", lambda: http, raising=False
+        "avid.agent.loop.shared_client", lambda: http, raising=False
     )
     return http
 
@@ -278,7 +278,7 @@ def test_loop_probes_the_window_and_reports_utilization(monkeypatch):
     两条路径都要覆盖：CLI（`agent_loop` 自己建 state）与 Web（svc 先建 state 再进循环，
     探测结果必须回填进那份 state）。
     """
-    from avid.runtime.loop import agent_loop
+    from avid.agent.loop import agent_loop
 
     http = _window_probe(monkeypatch)
     try:

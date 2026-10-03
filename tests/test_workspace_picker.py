@@ -12,11 +12,11 @@ import pytest
 from fastapi.testclient import TestClient
 from support import ScriptedChat, create_session, make_turn
 
-from avid.svc import Services
-from avid.svc import picker as picker_module
-from avid.svc.picker import PickerFailed, PickerUnavailable, pick_directory
+from avid.services import Services
+from avid.services import picker as picker_module
+from avid.services.picker import PickerFailed, PickerUnavailable, pick_directory
+from avid.services.workspace_registry import WorkspaceRegistry
 from avid.web import create_app
-from avid.workspaces import WorkspaceRegistry
 
 # ---------------- 后端 ----------------
 
@@ -114,7 +114,7 @@ def picked(tmp_path, monkeypatch):
     def fake() -> str | None:
         return str(chosen)
 
-    monkeypatch.setattr("avid.svc.workspaces.pick_directory", fake)
+    monkeypatch.setattr("avid.services.workspaces.pick_directory", fake)
     return chosen
 
 
@@ -130,7 +130,7 @@ def test_pick_returns_the_chosen_folder(bundle, picked):
 def test_pick_cancel_changes_nothing(bundle, monkeypatch):
     client, services, _ = bundle
     before = services.workspaces.list()
-    monkeypatch.setattr("avid.svc.workspaces.pick_directory", lambda: None)
+    monkeypatch.setattr("avid.services.workspaces.pick_directory", lambda: None)
 
     response = client.post("/api/workspaces/pick")
 
@@ -145,7 +145,7 @@ def test_pick_without_a_backend_is_503_with_the_manual_way_out(bundle, monkeypat
     def unavailable():
         raise PickerUnavailable("这台机器上没有可用的系统文件夹选择器。")
 
-    monkeypatch.setattr("avid.svc.workspaces.pick_directory", unavailable)
+    monkeypatch.setattr("avid.services.workspaces.pick_directory", unavailable)
 
     response = client.post("/api/workspaces/pick")
 
@@ -166,7 +166,7 @@ def test_pick_while_one_is_open_is_409(bundle, picked):
 def test_picked_path_that_vanished_is_rejected(bundle, monkeypatch, tmp_path):
     client, _, _ = bundle
     monkeypatch.setattr(
-        "avid.svc.workspaces.pick_directory", lambda: str(tmp_path / "vanished")
+        "avid.services.workspaces.pick_directory", lambda: str(tmp_path / "vanished")
     )
 
     response = client.post("/api/workspaces/pick")
@@ -250,7 +250,7 @@ def test_meta_exposes_the_picker_backend(bundle, monkeypatch):
     于是"这台机器其实有选择器"会显示成没有（点按钮没反应时人就查错了地方）。
     """
     client, _, _ = bundle
-    monkeypatch.setattr("avid.svc.available_backend", lambda: "tkinter")
+    monkeypatch.setattr("avid.services.available_backend", lambda: "tkinter")
 
     capabilities = client.get("/api/meta").json()["capabilities"]
 

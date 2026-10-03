@@ -21,9 +21,9 @@ from support import (
     wait_for,
 )
 
-from avid.runtime.events import ASSISTANT_MESSAGE, EVENT_TYPES, TOOL_RESULT_MESSAGE, USER_MESSAGE
+from avid.agent.events import ASSISTANT_MESSAGE, EVENT_TYPES, TOOL_RESULT_MESSAGE, USER_MESSAGE
+from avid.services import API_VERSION, FEATURES, Services
 from avid.session import SessionRecorder
-from avid.svc import API_VERSION, FEATURES, Services
 from avid.web import create_app
 from avid.web.schemas import classify_tool_status
 
@@ -73,7 +73,7 @@ def test_stream_slots_refuse_over_the_limit_and_release(bundle):
     Starlette 因此长期占住一个池线程。改成异步要在 60fps 的 delta 投递与 anyio 之间
     加一层队列桥，本地单用户工具不值这个风险——于是把占用封顶、超出的显式拒绝。
     """
-    from avid.svc import StreamSlots
+    from avid.services import StreamSlots
 
     slots = StreamSlots(limit=2)
     assert slots.acquire() and slots.acquire()
@@ -93,7 +93,7 @@ def test_stream_slots_refuse_over_the_limit_and_release(bundle):
 
 def test_an_over_limit_event_stream_gets_a_503(bundle, monkeypatch):
     """额度为 0 时任何事件流都回 503 `too_many_streams`（而不是排队占线程）。"""
-    from avid.svc import TooManyStreams
+    from avid.services import TooManyStreams
 
     client, services = bundle(chat=ScriptedChat(make_turn("答")))
     _, run_id = finish_run(client, None)
@@ -213,7 +213,7 @@ def test_oversized_inputs_are_rejected_at_the_schema(bundle):
 
 def test_meta_caches_the_skills_scan(bundle, monkeypatch):
     """技能目录带短缓存：`/api/meta` 会被界面反复取，扫目录是磁盘 IO。"""
-    from avid.policy import skills as skills_module
+    from avid.agent import skills as skills_module
 
     scans: list[int] = []
     real_scan = skills_module.SkillLoader.scan

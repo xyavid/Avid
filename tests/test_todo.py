@@ -2,11 +2,11 @@ import inspect
 
 import pytest
 
-from avid.policy.todo import (
+from avid.agent.state import RunState
+from avid.agent.todo import (
     TodoList,
     todo_write,
 )
-from avid.runtime.state import RunState
 
 
 @pytest.fixture

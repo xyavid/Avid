@@ -22,7 +22,7 @@ import stat
 
 import pytest
 
-from avid.ai.byok import (
+from avid.providers.byok import (
     ByokConfig,
     ModelCapabilities,
     ModelDecl,
@@ -35,7 +35,7 @@ from avid.ai.byok import (
     secrets_path,
     set_secret,
 )
-from avid.ai.config import ConfigError
+from avid.providers.config import ConfigError
 
 
 @pytest.fixture

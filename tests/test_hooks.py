@@ -1,6 +1,6 @@
 import pytest
 
-from avid.runtime.hooks import (
+from avid.agent.hooks import (
     ALLOW,
     BLOCK,
     DEFAULT_HOOKS,
@@ -152,7 +152,7 @@ def test_permission_hook_blocks_and_records_reason(clean):
 
 def test_permission_hook_lets_the_sandbox_cover_ordinary_commands(sandbox, clean):
     """沙箱能保证的区内常规命令**不进审批**——否则 sandbox 与 approval 就退化成一件事。"""
-    from avid.runtime.state import RunState
+    from avid.agent.state import RunState
 
     state = RunState.for_run(
         permission_mode="manual", workspace_root=str(sandbox), audit_enabled=False
@@ -178,7 +178,7 @@ def test_permission_hook_writes_the_audit_record(sandbox, clean, tmp_path, monke
     """放行也要留痕：审计记录里有三轴、目标、裁决与来源。"""
     import json
 
-    from avid.runtime.state import RunState
+    from avid.agent.state import RunState
 
     monkeypatch.setenv("AVID_AUDIT_DIR", str(tmp_path / "audit"))
     state = RunState.for_run(permission_mode="auto", workspace_root=str(sandbox))
@@ -249,7 +249,7 @@ def test_hard_deny_and_user_refusal_give_different_guidance(clean):
 
 def test_brief_redacts_credentials_and_truncates():
     """工具参数进日志前必须脱敏：INFO 是默认级别，而命令里常带 token。"""
-    from avid.runtime.hooks import brief
+    from avid.agent.hooks import brief
 
     line = brief({"command": 'curl -H "Authorization: Bearer sk-live-abc123" https://x'})
     assert "sk-live-abc123" not in line
@@ -301,7 +301,7 @@ def test_log_hook_never_blocks(clean):
 
 def test_large_output_hook_spills_the_full_text(clean, monkeypatch, sandbox):
     """超限时全文落盘：模型看到首尾节选，需要细节时能自己读回来。"""
-    monkeypatch.setattr("avid.runtime.hooks.MAX_TOOL_OUTPUT_CHARS", 400)
+    monkeypatch.setattr("avid.agent.hooks.MAX_TOOL_OUTPUT_CHARS", 400)
     payload = "头" * 300 + "尾" * 300
     context = {
         "content": payload,
@@ -319,7 +319,7 @@ def test_large_output_hook_spills_the_full_text(clean, monkeypatch, sandbox):
     assert content.startswith("头")
     assert content.endswith("尾")
 
-    from avid.policy.compaction import SPILL_DIR
+    from avid.agent.compaction import SPILL_DIR
 
     files = list((sandbox / SPILL_DIR).glob("tool-output-*.txt"))
     assert len(files) == 1
@@ -329,7 +329,7 @@ def test_large_output_hook_spills_the_full_text(clean, monkeypatch, sandbox):
 
 def test_large_output_hook_falls_back_when_spill_fails(clean, monkeypatch, sandbox):
     """落盘失败（路径不可用）不能丢掉结果，也不能让这次调用失败：退回只留头部。"""
-    monkeypatch.setattr("avid.runtime.hooks.MAX_TOOL_OUTPUT_CHARS", 100)
+    monkeypatch.setattr("avid.agent.hooks.MAX_TOOL_OUTPUT_CHARS", 100)
     blocked = sandbox / "not-a-dir"
     blocked.write_text("x", encoding="utf-8")
     context = {
@@ -425,8 +425,8 @@ def test_repeat_call_hook_is_inert_without_the_run_state(clean):
 
 def test_repeat_call_hook_counts_through_execute_one():
     """接线：`execution` 必须把 `RunState.repeat_calls` 放进 PostToolUse 的 context。"""
-    from avid.runtime.execution import execute_one
-    from avid.runtime.state import RunState
+    from avid.agent.execution import execute_one
+    from avid.agent.state import RunState
 
     registry_obj = HookRegistry()
     registry_obj.register("PostToolUse", repeat_call_hook)
@@ -461,11 +461,11 @@ def test_two_runs_use_different_registries():
     （含子 agent），测试也只能 monkeypatch 全局字典来隔离。现在"这次运行用哪份"
     是一个能看见、能替换的值——这条用例在旧设计下根本写不出来。
     """
-    from avid.ai.client import Turn, Usage
-    from avid.ai.config import Config
-    from avid.runtime.hooks import HookRegistry
-    from avid.runtime.loop import agent_loop
-    from avid.runtime.state import RunState
+    from avid.agent.hooks import HookRegistry
+    from avid.agent.loop import agent_loop
+    from avid.agent.state import RunState
+    from avid.providers.client import Turn, Usage
+    from avid.providers.config import Config
 
     seen: list[str] = []
     loud = HookRegistry()
@@ -515,7 +515,7 @@ def test_two_runs_use_different_registries():
 
 def test_copy_is_independent_but_inherits():
     """子运行拿的是父注册表的副本：继承已有回调，自己追加的不回漏。"""
-    from avid.runtime.hooks import HookRegistry
+    from avid.agent.hooks import HookRegistry
 
     parent = HookRegistry()
     parent.register("Stop", lambda context: None)
@@ -536,7 +536,7 @@ def test_post_tool_use_block_stops_the_result_from_entering_context():
     以前这个返回值被直接丢掉：注册了拦截的回调等于静默失效，而且失败方向正好是
     最糟的那个——内容照样进了上下文（比如输出里带凭据）。
     """
-    from avid.runtime.execution import POST_BLOCKED_CONTENT, execute_one
+    from avid.agent.execution import POST_BLOCKED_CONTENT, execute_one
 
     def runner(arguments, *, state=None):
         return "SECRET=topsecret"
@@ -548,7 +548,7 @@ def test_post_tool_use_block_stops_the_result_from_entering_context():
 
     registry_obj = HookRegistry()
     registry_obj.register("PostToolUse", blocking)
-    from avid.runtime.state import RunState
+    from avid.agent.state import RunState
 
     state = RunState.for_run(hooks=registry_obj, auto_approve=True)
     content = execute_one(
@@ -561,8 +561,8 @@ def test_post_tool_use_block_stops_the_result_from_entering_context():
 
 def test_post_tool_use_without_block_passes_the_content_through():
     """没有拦截时结果照常回传（别把"显式处理 BLOCK"做成"总是拦截"）。"""
-    from avid.runtime.execution import execute_one
-    from avid.runtime.state import RunState
+    from avid.agent.execution import execute_one
+    from avid.agent.state import RunState
 
     registry = {"bash": lambda arguments, *, state=None: "正常输出"}
     state = RunState.for_run(hooks=HookRegistry(), auto_approve=True)

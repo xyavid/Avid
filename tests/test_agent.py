@@ -4,13 +4,13 @@ from dataclasses import replace
 
 import pytest
 
-from avid.ai.client import Turn, Usage
-from avid.ai.config import Config
-from avid.policy.compaction import CompactReport
-from avid.runtime.hooks import BLOCK, large_output_hook, permission_hook
-from avid.runtime.loop import agent_loop
-from avid.runtime.state import MAX_CONSECUTIVE_DENIALS
-from avid.tools import TOOLS
+from avid.agent.compaction import CompactReport
+from avid.agent.hooks import BLOCK, large_output_hook, permission_hook
+from avid.agent.loop import agent_loop
+from avid.agent.state import MAX_CONSECUTIVE_DENIALS
+from avid.agent.tools import TOOLS
+from avid.providers.client import Turn, Usage
+from avid.providers.config import Config
 
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
 
@@ -649,7 +649,7 @@ def test_post_tool_use_sees_the_raw_content(hook_registry):
 
 
 def test_large_output_hook_truncates_real_tool_output(hook_registry, monkeypatch):
-    monkeypatch.setattr("avid.runtime.hooks.MAX_TOOL_OUTPUT_CHARS", 100)
+    monkeypatch.setattr("avid.agent.hooks.MAX_TOOL_OUTPUT_CHARS", 100)
     hook_registry.register("PostToolUse", large_output_hook)
     chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
     messages = [{"role": "user", "content": "读"}]
@@ -992,7 +992,7 @@ def point_skills_at(tmp_path, monkeypatch):
     技能目录是"运行级工作区根 / skills"，且在**构造时**解析（P2-18 之前是 import 时
     绑定的模块常量）。所以这里换 cwd，而不是改模块常量——那个常量已经不存在了。
     """
-    from avid.policy import skills as skill_loader
+    from avid.agent import skills as skill_loader
 
     monkeypatch.chdir(tmp_path)
     return skill_loader.default_skills_dir(tmp_path)
@@ -1045,7 +1045,7 @@ def test_load_skill_returns_the_full_text_as_tool_result(hook_registry, tmp_path
 
 
 def test_load_skill_is_not_in_the_permission_gate(hook_registry, tmp_path, monkeypatch):
-    from avid.policy.permission import APPROVAL_RULES
+    from avid.security.permission import APPROVAL_RULES
 
     assert "load_skill" not in APPROVAL_RULES
 
@@ -1075,7 +1075,7 @@ def test_unknown_skill_returns_error_text_without_raising(hook_registry, tmp_pat
 def test_context_pipeline_runs_before_every_model_call(hook_registry, monkeypatch):
     rounds = []
     monkeypatch.setattr(
-        "avid.runtime.context_manager.ContextManager._compact",
+        "avid.agent.context.ContextManager._compact",
         lambda self: rounds.append(self.state.round) or [],
     )
 
@@ -1091,7 +1091,7 @@ def test_context_pipeline_runs_before_every_model_call(hook_registry, monkeypatc
 
 
 def test_prompt_too_long_triggers_one_reactive_retry(hook_registry, monkeypatch):
-    from avid.ai.client import PromptTooLongError
+    from avid.providers.client import PromptTooLongError
 
     calls = {"chat": 0, "reactive": 0}
 
@@ -1107,7 +1107,7 @@ def test_prompt_too_long_triggers_one_reactive_retry(hook_registry, monkeypatch)
         return CompactReport("reactive_compact", "摘要更早的 3 条", 999, 10)
 
     monkeypatch.setattr(
-        "avid.runtime.context_manager.ContextManager.reactive", fake_reactive
+        "avid.agent.context.ContextManager.reactive", fake_reactive
     )
     messages = [{"role": "user", "content": "x"}]
 
@@ -1119,7 +1119,7 @@ def test_prompt_too_long_triggers_one_reactive_retry(hook_registry, monkeypatch)
 
 
 def test_reactive_is_not_retried_twice(hook_registry, monkeypatch):
-    from avid.ai.client import PromptTooLongError
+    from avid.providers.client import PromptTooLongError
 
     calls = {"chat": 0, "reactive": 0}
 
@@ -1132,7 +1132,7 @@ def test_reactive_is_not_retried_twice(hook_registry, monkeypatch):
         return CompactReport("reactive_compact", "摘要", 999, 10)
 
     monkeypatch.setattr(
-        "avid.runtime.context_manager.ContextManager.reactive", fake_reactive
+        "avid.agent.context.ContextManager.reactive", fake_reactive
     )
 
     with pytest.raises(PromptTooLongError):
@@ -1145,7 +1145,7 @@ def test_reactive_is_not_retried_twice(hook_registry, monkeypatch):
 
 def test_reactive_retry_sends_the_compressed_history(hook_registry, monkeypatch):
     """重试必须拿压缩后的历史再发一次，不能把旧的原样重发。"""
-    from avid.ai.client import PromptTooLongError
+    from avid.providers.client import PromptTooLongError
 
     seen = []
 
@@ -1160,7 +1160,7 @@ def test_reactive_retry_sends_the_compressed_history(hook_registry, monkeypatch)
         return CompactReport("reactive_compact", "摘要", 999, 10)
 
     monkeypatch.setattr(
-        "avid.runtime.context_manager.ContextManager.reactive", fake_reactive
+        "avid.agent.context.ContextManager.reactive", fake_reactive
     )
 
     agent_loop([{"role": "user", "content": "x"}], config=CONFIG, chat=fake_chat)
@@ -1172,13 +1172,13 @@ def test_reactive_retry_sends_the_compressed_history(hook_registry, monkeypatch)
 
 def test_compaction_is_logged(hook_registry, monkeypatch, caplog):
     monkeypatch.setattr(
-        "avid.policy.compaction.tool_result_budget",
+        "avid.agent.compaction.tool_result_budget",
         lambda transcript, **kwargs: CompactReport(
             "tool_result_budget", "落盘 2 项", 300, 100
         ),
     )
 
-    with caplog.at_level("INFO", logger="avid.runtime.context_manager"):
+    with caplog.at_level("INFO", logger="avid.agent.context"):
         agent_loop(
             [{"role": "user", "content": "x"}],
             config=CONFIG,
@@ -1192,7 +1192,7 @@ def test_compaction_is_logged(hook_registry, monkeypatch, caplog):
 
 def test_compaction_count_reaches_the_stop_hook(hook_registry, monkeypatch):
     monkeypatch.setattr(
-        "avid.policy.compaction.snip_compact",
+        "avid.agent.compaction.snip_compact",
         lambda transcript, **kwargs: CompactReport(
             "snip_compact", "裁掉中间 10 条", 60, 30
         ),
@@ -1218,7 +1218,7 @@ def test_run_state_is_created_per_run(hook_registry, monkeypatch):
         return []
 
     monkeypatch.setattr(
-        "avid.runtime.context_manager.ContextManager._compact", fake_compact
+        "avid.agent.context.ContextManager._compact", fake_compact
     )
 
     agent_loop(
@@ -1246,7 +1246,7 @@ def test_injected_budget_lowers_the_compaction_threshold(tmp_path, hook_registry
     用空 hook 注册表是为了让字符数可算——生产路径上 `large_output_hook` 会先把每个
     工具结果截到 8000 字符，实机要达到同一个阈值需要更多轮。
     """
-    from avid.runtime.context_manager import ContextBudget
+    from avid.agent.context import ContextBudget
 
     for index in range(5):
         (tmp_path / f"big{index}.txt").write_text("x" * 20_000, encoding="utf-8")

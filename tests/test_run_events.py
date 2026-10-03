@@ -23,8 +23,7 @@ from support import (
     wait_terminal,
 )
 
-from avid.ai.client import LLMError
-from avid.runtime.events import (
+from avid.agent.events import (
     APPROVAL_REQUESTED,
     ASSISTANT_DELTA,
     ASSISTANT_MESSAGE,
@@ -41,10 +40,11 @@ from avid.runtime.events import (
     TOOL_RESULT_MESSAGE,
     USER_MESSAGE,
 )
+from avid.providers.client import LLMError
+from avid.services import Services, runs
+from avid.services.errors import RunNotFound
 from avid.session import SessionStorageError, messages_for_branch
 from avid.session.types import NOTICE_ENTRY
-from avid.svc import Services, runs
-from avid.svc.errors import RunNotFound
 
 
 def build(root, chat, tools=None, **kwargs) -> Services:
@@ -203,7 +203,7 @@ def test_deltas_are_opt_in_and_carry_no_seq(sandbox, monkeypatch):
         on_delta("好")
         return make_turn("你好")
 
-    monkeypatch.setattr("avid.svc.runs.stream_completion", fake_stream)
+    monkeypatch.setattr("avid.services.runs.stream_completion", fake_stream)
     services = Services(root=sandbox / ".avid" / "sessions")
     session_id = new_session(services)
     record = services.runs.start(session_id, "打个招呼")
@@ -254,7 +254,7 @@ def test_many_deltas_do_not_evict_durable_events(sandbox, monkeypatch):
     durable，按 durable 计数则一条都不丢。
     """
     monkeypatch.setattr(
-        "avid.svc.runs.stream_completion",
+        "avid.services.runs.stream_completion",
         streaming_reply(tuple(f"片{index}" for index in range(50)), "".join(f"片{index}" for index in range(50))),
     )
     services = Services(root=sandbox / ".avid" / "sessions", buffer_size=10)
@@ -762,7 +762,7 @@ def test_loop_records_the_three_prompt_parts(sandbox):
     脚本模型的 usage 是 1 个 token（`support.make_turn`），整数分配下三块里只有一个能
     拿到 1——所以这里显式给一份**大**用量，才看得出三块都有份额。
     """
-    from avid.ai.client import Turn, Usage
+    from avid.providers.client import Turn, Usage
 
     turn = Turn(
         message={"role": "assistant", "content": "好"},

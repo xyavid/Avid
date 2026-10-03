@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from avid.policy import permission
-from avid.policy.permission import (
+from avid.security import permission
+from avid.security.permission import (
     ADMIN_WRITABLE_SOURCES,
     APPROVAL_CLASSIFIER,
     APPROVAL_NONE,

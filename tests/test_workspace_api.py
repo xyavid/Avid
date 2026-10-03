@@ -10,9 +10,9 @@ from __future__ import annotations
 import pytest
 from support import ScriptedChat, make_turn
 
-from avid.svc import Services
+from avid.services import Services
+from avid.services.workspace_registry import WorkspaceRegistry
 from avid.web import create_app
-from avid.workspaces import WorkspaceRegistry
 
 
 @pytest.fixture
@@ -50,7 +50,7 @@ def test_direct_sessions_root_still_binds_one_workplace(tmp_path):
     """
     from fastapi.testclient import TestClient
 
-    from avid.svc import Services
+    from avid.services import Services
     from avid.web import create_app
 
     root = tmp_path.parent / f"direct-{tmp_path.name}" / ".avid" / "sessions"
@@ -360,8 +360,8 @@ def test_session_lookup_scans_once_then_hits_the_cache(sandbox, monkeypatch):
 
     扫一次就把所有会话记进缓存；TTL 内再查同一个会话不该再扫。
     """
+    from avid.services import Services
     from avid.session import JsonlSessionRepo
-    from avid.svc import Services
 
     services = Services(root=sandbox / ".avid" / "sessions")
     try:
@@ -390,7 +390,7 @@ def test_session_lookup_scans_once_then_hits_the_cache(sandbox, monkeypatch):
 
 
 def test_deleting_a_session_invalidates_its_lookup(sandbox):
-    from avid.svc import Services
+    from avid.services import Services
 
     services = Services(root=sandbox / ".avid" / "sessions")
     try:

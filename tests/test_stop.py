@@ -9,11 +9,10 @@ from __future__ import annotations
 
 from support import make_turn
 
-from avid.ai.transcript import Transcript
-from avid.runtime.events import STOP_NUDGE
-from avid.runtime.hooks import BLOCK, HookRegistry
-from avid.runtime.state import RunState
-from avid.runtime.stop import (
+from avid.agent.events import STOP_NUDGE
+from avid.agent.hooks import BLOCK, HookRegistry
+from avid.agent.state import RunState
+from avid.agent.stop import (
     MAX_STOP_BLOCKS,
     STOP_BLANK_NOTICE,
     STOP_FINAL_TEXT,
@@ -23,6 +22,7 @@ from avid.runtime.stop import (
     decide,
     is_blank,
 )
+from avid.providers.transcript import Transcript
 
 USER = {"role": "user", "content": "问"}
 

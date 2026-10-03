@@ -3,15 +3,15 @@ import time
 
 import pytest
 
-from avid.ai.config import Config
-from avid.runtime.state import RunState
-from avid.tools import SUB_HANDLERS, SUB_TOOLS, TOOLS
-from avid.tools.subagent import (
+from avid.agent.state import RunState
+from avid.agent.tools import SUB_HANDLERS, SUB_TOOLS, TOOLS
+from avid.agent.tools.subagent import (
     MAX_PARALLEL,
     SUB_SYSTEM,
     run_subagent,
     subagent,
 )
+from avid.providers.config import Config
 
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
 
@@ -39,7 +39,7 @@ def test_sub_tools_exclude_subagent():
 
 def test_subagent_has_no_turn_cap_of_its_own():
     """子 agent 不自带轮数上限——内核里已经没有这个限制。"""
-    import avid.tools.subagent as sub
+    import avid.agent.tools.subagent as sub
 
     assert not hasattr(sub, "SUBAGENT_MAX_TURNS")
 
@@ -212,7 +212,7 @@ def test_auto_approve_defaults_to_false(monkeypatch):
 
 
 def test_run_subagent_initialises_messages_with_the_prompt(monkeypatch):
-    from avid.runtime import loop as agent_module
+    from avid.agent import loop as agent_module
 
     seen = {}
 
@@ -233,7 +233,7 @@ def test_run_subagent_initialises_messages_with_the_prompt(monkeypatch):
 
 
 def test_run_subagent_returns_no_summary_for_empty_text(monkeypatch):
-    from avid.runtime import loop as agent_module
+    from avid.agent import loop as agent_module
 
     monkeypatch.setattr(agent_module, "agent_loop", lambda *a, **k: "   ")
 
@@ -244,7 +244,7 @@ def test_run_subagent_returns_no_summary_for_empty_text(monkeypatch):
 
 
 def test_check_cancelled_consults_the_external_probe():
-    from avid.runtime.loop import RunCancelled
+    from avid.agent.loop import RunCancelled
 
     state = RunState(cancel_probe=lambda: "外部要求停止")
 
@@ -257,7 +257,7 @@ def test_probe_none_means_no_external_source():
 
 
 def test_adopt_child_usage_sums_tokens_and_counts_calls():
-    from avid.ai.usage import Usage
+    from avid.providers.usage import Usage
 
     parent = RunState()
     child = RunState()
@@ -272,7 +272,7 @@ def test_adopt_child_usage_sums_tokens_and_counts_calls():
 
 
 def test_usage_report_carries_subagent_totals():
-    from avid.ai.usage import Usage
+    from avid.providers.usage import Usage
 
     parent = RunState()
     assert parent.usage_report()["subagent"] == {"calls": 0, "tokens": 0}
@@ -286,8 +286,8 @@ def test_usage_report_carries_subagent_totals():
 
 def test_run_subagent_wires_probe_observer_and_state(monkeypatch):
     """run_subagent 自建子 RunState：probe/observer 落在它身上，引用交给 on_state。"""
-    from avid.runtime import loop as agent_module
-    from avid.runtime.loop import RunCancelled
+    from avid.agent import loop as agent_module
+    from avid.agent.loop import RunCancelled
 
     seen = {}
 
@@ -314,9 +314,9 @@ def test_run_subagent_wires_probe_observer_and_state(monkeypatch):
 
 def test_subagent_tags_child_events_and_adopts_usage(monkeypatch):
     """子事件带 subagent 标记进父事件流；结束后子 token 并进父台账。"""
-    import avid.runtime.events as runtime_events
-    from avid.ai.usage import Usage
-    from avid.runtime import loop as agent_module
+    import avid.agent.events as runtime_events
+    from avid.agent import loop as agent_module
+    from avid.providers.usage import Usage
 
     def fake_loop(messages, *, state=None, **kwargs):
         state.record_usage(Usage(5, 2, 7))
@@ -341,7 +341,7 @@ def test_subagent_tags_child_events_and_adopts_usage(monkeypatch):
 
 def test_parent_cancel_surfaces_quickly(monkeypatch):
     """父取消后 collect 提前收敛返回，不再等慢子任务自然结束。"""
-    from avid.runtime import loop as agent_module
+    from avid.agent import loop as agent_module
 
     started = threading.Event()
 
@@ -371,8 +371,8 @@ def test_parent_cancel_surfaces_quickly(monkeypatch):
 
 def test_deadline_reaches_child_checkpoints(monkeypatch):
     """墙钟到点：超时文案照回，同时子任务在下个检查点被 probe 停掉（不再是孤儿）。"""
-    from avid.runtime import loop as agent_module
-    from avid.runtime.loop import RunCancelled
+    from avid.agent import loop as agent_module
+    from avid.agent.loop import RunCancelled
 
     raised = []
 

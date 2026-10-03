@@ -12,16 +12,16 @@ import copy
 import pytest
 from support import ScriptedChat, make_turn, tool_call
 
-from avid.ai.client import DEFAULT_MAX_TOKENS
-from avid.ai.config import Config
-from avid.runtime.events import RUN_STATUS, STOP_NUDGE
-from avid.runtime.hooks import DEFAULT_HOOKS
-from avid.runtime.loop import RunCancelled, agent_loop
-from avid.runtime.run import Run
-from avid.runtime.spec import RunSpec
-from avid.runtime.state import RunState
-from avid.runtime.stop import STOP_BLANK_NOTICE, STOP_FINAL_TEXT
-from avid.tools import TOOL_IMPLS, TOOLS
+from avid.agent.events import RUN_STATUS, STOP_NUDGE
+from avid.agent.hooks import DEFAULT_HOOKS
+from avid.agent.loop import RunCancelled, agent_loop
+from avid.agent.run import Run
+from avid.agent.spec import RunSpec
+from avid.agent.state import RunState
+from avid.agent.stop import STOP_BLANK_NOTICE, STOP_FINAL_TEXT
+from avid.agent.tools import TOOL_IMPLS, TOOLS
+from avid.providers.client import DEFAULT_MAX_TOKENS
+from avid.providers.config import Config
 
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
 USER = {"role": "user", "content": "读 a.txt"}

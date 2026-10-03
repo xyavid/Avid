@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import itertools
 
-from avid.ai.transcript import Transcript
+from avid.providers.transcript import Transcript
 from avid.session import (
     MemorySessionRepo,
     SessionRecorder,

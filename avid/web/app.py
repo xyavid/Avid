@@ -16,8 +16,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from ..svc import API_VERSION, Services
-from ..svc.errors import ServiceError
+from ..services import API_VERSION, Services
+from ..services.errors import ServiceError
 from .routes import approvals, events, meta, runs, sessions, settings, workspaces
 from .schemas import ErrorBody, ErrorOut
 

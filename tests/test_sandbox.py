@@ -11,11 +11,11 @@ from pathlib import Path
 
 import pytest
 
-from avid.policy.permission import (
+from avid.security.permission import (
     BackendProbe,
     build_spec,
 )
-from avid.policy.sandbox import (
+from avid.security.sandbox import (
     BACKEND_BWRAP,
     BACKEND_NONE,
     DEFAULT_MASK_DIRS,

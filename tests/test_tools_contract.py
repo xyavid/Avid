@@ -3,10 +3,10 @@ import json
 
 import pytest
 
+from avid.agent.tools import TOOL_IMPLS, TOOLS
+from avid.agent.tools.schemas import tool
+from avid.agent.tools.validate import validate_arguments
 from avid.cli import AGENT_TOOL_HELP, build_parser
-from avid.tools import TOOL_IMPLS, TOOLS
-from avid.tools.schemas import tool
-from avid.tools.validate import validate_arguments
 
 NAMES = [item["function"]["name"] for item in TOOLS]
 VALID_TYPES = {"string", "integer", "number", "boolean", "array", "object"}
@@ -36,7 +36,7 @@ def test_stateful_tools_are_exactly_the_handlers_that_take_state():
     任务工具的子集断言。漏进这张表（或反过来多写一个名字）会让执行时抛 TypeError，
     再被兜底成「工具执行失败」——错误信息指向工具，根因却在注册表。
     """
-    from avid.runtime.execution import STATEFUL_TOOLS
+    from avid.agent.execution import STATEFUL_TOOLS
 
     takes_state = {
         name
@@ -49,7 +49,7 @@ def test_stateful_tools_are_exactly_the_handlers_that_take_state():
 
 def test_approval_rules_only_name_registered_tools():
     """审批规则表不许出现已删除或拼错的工具名（静默失效的规则等于没有规则）。"""
-    from avid.policy.permission import APPROVAL_RULES
+    from avid.security.permission import APPROVAL_RULES
 
     assert set(APPROVAL_RULES) <= set(NAMES)
 
@@ -61,7 +61,7 @@ def test_concurrency_tables_are_a_partition_of_the_registry():
     （慢，但安全）；但**两张表都写**或**表里出现不存在的名字**说明分类在漂移——
     到时候没人知道某个工具到底安不安全，所以让它红在契约测试里。
     """
-    from avid.tools.safety import CONCURRENCY_SAFE, EXCLUSIVE
+    from avid.agent.tools.safety import CONCURRENCY_SAFE, EXCLUSIVE
 
     assert not (CONCURRENCY_SAFE & EXCLUSIVE), "同一个工具不能既安全又独占"
     assert set(TOOL_IMPLS) == CONCURRENCY_SAFE | EXCLUSIVE
@@ -73,7 +73,7 @@ def test_concurrency_safe_tools_are_read_only_by_name():
     真正判"会不会写"要靠人，这里只把最容易搞错的那几个钉住：写文件、跑命令、
     改任务/待办、派子 agent 全都在独占侧。
     """
-    from avid.tools.safety import CONCURRENCY_SAFE, EXCLUSIVE
+    from avid.agent.tools.safety import CONCURRENCY_SAFE, EXCLUSIVE
 
     assert {
         "write_file",
@@ -99,7 +99,7 @@ def test_integer_parameters_declare_a_lower_bound(item):
 
 def test_timeout_parameter_matches_the_enforced_cap():
     """`timeout_seconds` 的上界以前只写在描述里，实现里另有一份 clamp（300 秒）。"""
-    from avid.tools import shell
+    from avid.agent.tools import shell
 
     spec = PARAMETERS["bash"]["properties"]["timeout_seconds"]
 

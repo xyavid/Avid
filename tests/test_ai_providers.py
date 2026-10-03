@@ -19,12 +19,12 @@ import json
 import httpx
 import pytest
 
-from avid.ai import transport
-from avid.ai.client import ask, chat_completion, stream_completion
-from avid.ai.config import Config, ConfigError, window_for
-from avid.ai.protocol import LLMError, PromptTooLongError
-from avid.ai.providers import anthropic, gemini
-from avid.ai.transport import RetryPolicy
+from avid.providers import transport
+from avid.providers.client import ask, chat_completion, stream_completion
+from avid.providers.config import Config, ConfigError, window_for
+from avid.providers.protocol import LLMError, PromptTooLongError
+from avid.providers.providers import anthropic, gemini
+from avid.providers.transport import RetryPolicy
 
 OPENAI_CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="test-model")
 ANTHROPIC_CONFIG = Config(
@@ -665,7 +665,7 @@ class TestDispatch:
         assert str(captured["req"].url) == "https://api.test/v1/chat/completions"
 
     def test_unknown_provider_raises(self):
-        from avid.ai.config import ConfigError
+        from avid.providers.config import ConfigError
 
         config = Config(api_key="k", base_url="https://x.test", model="m", provider="palm")
         with pytest.raises(ConfigError, match="palm"):

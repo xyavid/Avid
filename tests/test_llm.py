@@ -5,7 +5,7 @@ from importlib import import_module
 import httpx
 import pytest
 
-from avid.ai.client import (
+from avid.providers.client import (
     LLMError,
     PromptTooLongError,
     StreamState,
@@ -19,7 +19,7 @@ from avid.ai.client import (
     parse_turn,
     stream_completion,
 )
-from avid.ai.config import Config
+from avid.providers.config import Config
 
 CONFIG = Config(api_key="test-key", base_url="https://api.test/v1", model="test-model")
 
@@ -162,7 +162,7 @@ def test_other_400s_stay_plain_llm_errors():
 def test_server_error_with_overflow_wording_is_not_treated_as_overflow(monkeypatch):
     """状态码不对就不算上下文超限，避免把服务端故障当成可恢复的。"""
     # 500 属于传输层可重试：这里抹掉真实等待，只验证"耗尽后按 LLMError 收敛"。
-    monkeypatch.setattr("avid.ai.transport._sleep", lambda seconds: None)
+    monkeypatch.setattr("avid.providers.transport._sleep", lambda seconds: None)
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -560,7 +560,7 @@ def test_the_http_client_is_created_once_and_reused(monkeypatch):
     """
     import httpx as httpx_module
 
-    from avid.ai import client as client_module
+    from avid.providers import client as client_module
 
     created: list[int] = []
     real_client = httpx_module.Client
@@ -570,7 +570,7 @@ def test_the_http_client_is_created_once_and_reused(monkeypatch):
         return real_client(*args, **kwargs)
 
     # 单例归 transport 所有：patch 它的 Client 与状态（client 从 transport 再导出）。
-    transport_module = import_module("avid.ai.transport")
+    transport_module = import_module("avid.providers.transport")
     monkeypatch.setattr(transport_module.httpx, "Client", counting_client)
     monkeypatch.setattr(transport_module, "_CLIENT", None)
 
@@ -583,7 +583,7 @@ def test_the_http_client_is_created_once_and_reused(monkeypatch):
 
 def test_connect_timeout_is_tighter_than_the_read_timeout():
     """端点不可达时不该等满 60 秒；长回答的读超时仍留足。"""
-    from avid.ai.client import CONNECT_TIMEOUT_SECONDS, TIMEOUT_SECONDS, _timeout
+    from avid.providers.client import CONNECT_TIMEOUT_SECONDS, TIMEOUT_SECONDS, _timeout
 
     timeout = _timeout()
     assert timeout.connect == CONNECT_TIMEOUT_SECONDS

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from avid.tools import workspace
+from avid.agent.tools import workspace
 
 
 @pytest.fixture

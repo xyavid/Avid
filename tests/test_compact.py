@@ -2,10 +2,7 @@ import inspect
 
 import pytest
 
-from avid.ai.client import Turn, Usage
-from avid.ai.config import Config
-from avid.ai.transcript import Transcript, estimate_chars, validate
-from avid.policy.compaction import (
+from avid.agent.compaction import (
     SPILL_PREFIX,
     compact_history,
     micro_compact,
@@ -13,6 +10,9 @@ from avid.policy.compaction import (
     snip_compact,
     tool_result_budget,
 )
+from avid.providers.client import Turn, Usage
+from avid.providers.config import Config
+from avid.providers.transcript import Transcript, estimate_chars, validate
 
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
 
@@ -20,7 +20,7 @@ CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
 @pytest.fixture(autouse=True)
 def spill_root(tmp_path, monkeypatch):
     """落盘写到临时工作区，测试不污染仓库。"""
-    from avid.tools import workspace
+    from avid.agent.tools import workspace
 
     monkeypatch.setattr(workspace, "WORKSPACE_ROOT", tmp_path)
     return tmp_path
@@ -165,7 +165,7 @@ def test_concurrent_spills_produce_distinct_files(spill_root):
     """并行 subagent 会同时压缩：序号必须原子地取，不能两个线程拿到同一个名字。"""
     import threading
 
-    from avid.policy.compaction import spill
+    from avid.agent.compaction import spill
 
     paths: list[str] = []
     lock = threading.Lock()
@@ -432,7 +432,7 @@ def test_compact_history_saves_the_full_transcript(spill_root):
 
 
 def test_compact_history_keeps_history_when_the_summary_fails(spill_root):
-    from avid.ai.client import LLMError
+    from avid.providers.client import LLMError
 
     def broken_chat(*args, **kwargs):
         raise LLMError("摘要服务挂了")
@@ -516,8 +516,8 @@ def _big_text_transcript():
 def test_history_compaction_calls_the_persistence_hook():
     """④ 的摘要替换历史时，钩子拿到（摘要消息, keep=0）——投影拿它做游标。"""
     covered: list = []
-    from avid.runtime.context_manager import ContextBudget, ContextManager
-    from avid.runtime.state import RunState
+    from avid.agent.context import ContextBudget, ContextManager
+    from avid.agent.state import RunState
 
     manager = ContextManager(
         transcript=_big_text_transcript(),
@@ -538,8 +538,8 @@ def test_history_compaction_calls_the_persistence_hook():
 
 def test_reactive_compaction_calls_the_persistence_hook_with_its_keep():
     covered: list = []
-    from avid.runtime.context_manager import ContextBudget, ContextManager
-    from avid.runtime.state import RunState
+    from avid.agent.context import ContextBudget, ContextManager
+    from avid.agent.state import RunState
 
     manager = ContextManager(
         transcript=_big_text_transcript(),
@@ -566,8 +566,8 @@ def test_reactive_compaction_calls_the_persistence_hook_with_its_keep():
 
 def test_persistence_hook_is_silent_when_nothing_compacts():
     covered: list = []
-    from avid.runtime.context_manager import ContextBudget, ContextManager
-    from avid.runtime.state import RunState
+    from avid.agent.context import ContextBudget, ContextManager
+    from avid.agent.state import RunState
 
     ContextManager(
         transcript=Transcript([user("hi")]),

@@ -9,11 +9,16 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from .ai.byok import resolve_chat
-from .ai.client import LLMError, ask
-from .ai.config import Config, ConfigError
-from .ai.usage import Usage, hit_ratio
-from .policy.permission import (
+from .agent.run import Run
+from .agent.spec import RunSpec
+from .agent.state import RunState
+from .agent.tools import TOOLS, build_toolset, workspace
+from .agent.tools.mcp import McpManager
+from .providers.byok import resolve_chat
+from .providers.client import LLMError, ask
+from .providers.config import Config, ConfigError
+from .providers.usage import Usage, hit_ratio
+from .security.permission import (
     DEFAULT_MODE,
     FULL_MODE,
     MODE_LABELS,
@@ -23,9 +28,14 @@ from .policy.permission import (
     RunSecurity,
     full_grant_error,
 )
-from .runtime.run import Run
-from .runtime.spec import RunSpec
-from .runtime.state import RunState
+from .services.workspace_registry import (
+    Workspace,
+    WorkspaceError,
+    WorkspaceNotFound,
+    WorkspaceRegistry,
+    sessions_root,
+)
+from .services.workspaces import WorkspaceInvalid, bound_workspace
 from .session import (
     JsonlSessionMetadata,
     JsonlSessionRepo,
@@ -33,19 +43,9 @@ from .session import (
     SessionRecorder,
     messages_for_branch,
 )
-from .svc.workspaces import WorkspaceInvalid, bound_workspace
-from .tools import TOOLS, build_toolset, workspace
-from .tools.mcp import McpManager
 from .web.app import (
     LOOPBACK_HOSTS,
     trusted_hosts,
-)
-from .workspaces import (
-    Workspace,
-    WorkspaceError,
-    WorkspaceNotFound,
-    WorkspaceRegistry,
-    sessions_root,
 )
 
 # Derived from the tool registry so the help text cannot drift from the shipped toolset.

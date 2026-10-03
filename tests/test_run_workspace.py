@@ -9,13 +9,13 @@ from __future__ import annotations
 
 import pytest
 
-from avid.ai.config import Config
-from avid.ai.transcript import Transcript
-from avid.policy import compaction
-from avid.runtime.context_manager import ContextManager
-from avid.runtime.state import RunState
-from avid.tools import shell
-from avid.tools.files import read_file, write_file
+from avid.agent import compaction
+from avid.agent.context import ContextManager
+from avid.agent.state import RunState
+from avid.agent.tools import shell
+from avid.agent.tools.files import read_file, write_file
+from avid.providers.config import Config
+from avid.providers.transcript import Transcript
 
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
 

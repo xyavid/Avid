@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import pytest
 
-from avid.ai.config import Config, window_for
-from avid.ai.usage import Usage, hit_ratio, normalize_usage
+from avid.providers.config import Config, window_for
+from avid.providers.usage import Usage, hit_ratio, normalize_usage
 
 # ---------------- provider adapter ----------------
 
@@ -150,7 +150,7 @@ def probe_on(monkeypatch):
 @pytest.fixture
 def probe_cache():
     """清掉进程内探测缓存：它是跨用例的（真实运行时正是靠它只问一次）。"""
-    from avid.ai import client as client_module
+    from avid.providers import client as client_module
 
     with client_module._MODEL_WINDOW_LOCK:
         client_module._MODEL_WINDOWS.clear()
@@ -167,7 +167,7 @@ def probe(config, payload, *, status=200, transport_calls=None):
     """用 MockTransport 跑一次探测，返回 (窗口, transport 调用次数)。"""
     import httpx
 
-    from avid.ai.client import fetch_context_length
+    from avid.providers.client import fetch_context_length
 
     calls = transport_calls if transport_calls is not None else []
 
@@ -214,7 +214,7 @@ def test_probe_returns_none_on_anything_unusable(probe_cache, probe_on, payload,
 def test_probe_never_raises_on_network_error(probe_cache, probe_on):
     import httpx
 
-    from avid.ai.client import fetch_context_length
+    from avid.providers.client import fetch_context_length
 
     def boom(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("unreachable", request=request)

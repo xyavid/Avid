@@ -7,7 +7,7 @@
 
 import pytest
 
-from avid.ai.config import (
+from avid.providers.config import (
     KNOWN_MODELS,
     Config,
     ConfigError,

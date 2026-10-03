@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from avid.ai.client import Turn, Usage
+from avid.providers.client import Turn, Usage
 
 
 def make_turn(
@@ -119,8 +119,8 @@ def real_config_or_skip():
     `test-key` / `test-model` 的 BYOK 配置。那对 eval 是致命的：运行会全部 401
     （实测踩到过一次），所以这里显式挡一道——缺配置跳过，拿到夹具的假配置直接失败。
     """
-    from avid.ai.byok import resolve_chat
-    from avid.ai.config import ConfigError
+    from avid.providers.byok import resolve_chat
+    from avid.providers.config import ConfigError
 
     try:
         config = resolve_chat()

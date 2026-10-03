@@ -18,17 +18,17 @@ import contextlib
 
 from fastapi import APIRouter, Response, status
 
-from ...ai import byok
-from ...ai.byok import (
+from ...providers import byok
+from ...providers.byok import (
     CAPABILITY_FIELDS,
     ByokConfig,
     ModelCapabilities,
     ModelDecl,
     ProviderDecl,
 )
-from ...ai.config import ConfigError
-from ...ai.verify import verify_provider
-from ...svc.errors import InvalidRequest
+from ...providers.config import ConfigError
+from ...providers.verify import verify_provider
+from ...services.errors import InvalidRequest
 from ..schemas import (
     ByokModel,
     ByokProviderIn,

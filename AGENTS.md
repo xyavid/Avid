@@ -45,33 +45,33 @@ CLI 与 Web 是**两个平级接线点**，内核不知道有几个调用方（`
 CLI  avid --agent / --session ─┐
 Web  POST /api/sessions/{id}/runs ─┴─► svc/runs.RunRegistry（线程 + 事件重放缓冲）
                                        ▼
-                         runtime/loop.agent_loop —— 只表达调度顺序
-                           ├ ContextManager.compose()  装配 SYSTEM / tail 块，编排压缩
+                         agent/loop.agent_loop —— 只表达调度顺序（subagent 递归用）
+                           ├ ContextManager(context).compose()  装配 SYSTEM / tail 块，编排压缩
                            ├ chat() → Turn             正文 + tool_calls
                            └ execution.execute_batch()
-                                ├ policy/action 归一化 → policy/engine 裁决（deny > ask > allow）
-                                ├ policy/sandbox 按能力账本组装 bwrap argv
-                                └ 工具 handler（tools/*，含 MCP 包装）
+                                ├ security/action 归一化 → security/engine 裁决（deny > ask > allow）
+                                ├ security/sandbox 按能力账本组装 bwrap argv
+                                └ 工具 handler（agent/tools/*，含 MCP 包装）
        on_message ─► SessionRecorder ─► <工作区>/.avid/sessions/*.jsonl（durable 真相）
        on_event   ─► RunRegistry 缓冲 ─► SSE ─► 浏览器消费方（React 前端 web/）
 ```
 
 - **`on_message` 是消息的唯一出口**：循环不 import 会话层，落库与否由回调决定。
 - **`on_event` 是步骤级事实的通道**，不是第二个消息通道；事件不写进会话 JSONL。
-- 五步压缩阶梯在 `policy/compaction.py`，编排归 `ContextManager`。
+- 五步压缩阶梯在 `agent/compaction.py`，编排归 `ContextManager`（`agent/context.py`）。
 - 跨包依赖方向由 `tests/test_web_boundaries.py` 门禁钉住：循环与工具协议对策略层零运行时依赖（A13）。
 
 ### 1.3 关键子系统
 
 | 子系统 | 位置 | 职责 |
 |---|---|---|
-| 模型适配 | `ai/`：`transport` 退避重试、`protocol` 共享词表、`providers/{openai_compat,anthropic,gemini}`、`usage` 四家 usage 归一、`transcript` 独占消息写入、`byok` 模型配置 | 换模型只动这一层 |
-| 循环与运行期 | `runtime/`：`loop` 只调度、`state.RunState` 一次运行的全部可变状态、`execution` 工具协议、`context_manager` 上下文装配与压缩编排、`events` 事件名单点、`hooks` 默认回调 | 一次运行的生命周期 |
-| 策略层 | `policy/`：`action` 归一化与风险分类、`engine`（deny > ask > allow）、`rules` 四级阶梯、`sandbox` bwrap、`audit`、`permission` 唯一装配点、`compaction`、`modes` 三轴预设、`skills`、`todo` | 阈值、规则与文案的高频变化集中地 |
+| Agent 核心 | `agent/`：`loop`（旧循环，subagent 递归用）与 `run`（新流程）、`spec` 运行输入收口、`state.RunState` 全部可变状态、`context` 上下文装配、`compaction` 五步压缩、`stop` 终止路径（StopReason）、`execution` 工具协议、`events` 事件名单点、`hooks` 默认回调、`todo`/`prompt`/`skills` | 一次运行的生命周期与上下文策略 |
+| 模型适配 | `providers/`：`providers/{openai_compat,anthropic,gemini}`、`transport` 退避重试、`protocol` 共享词表、`client`、`usage` 四家 usage 归一、`transcript` 独占消息写入、`byok` 模型配置 | 换模型只动这一层 |
+| 安全 | `security/`：`action` 归一化与风险分类、`engine`（deny > ask > allow）、`rules` 四级阶梯、`modes` 三轴预设、`sandbox` bwrap、`audit`、`permission` 唯一装配点、`userdirs` | 阈值、规则与文案的高频变化集中地 |
 | 会话 | `session/`：条目树 + 值 + 分支 + 变更线，`memory` 与 `jsonl` 两后端共用一套一致性用例，`recorder` 是唯一写入者 | 磁盘上的会话真相 |
-| 应用服务 | `svc/`：`runs` 运行注册表与重放缓冲、`approvals` 待决表、`sessions` 读视图、`workspaces`、`picker` | 内核的第二个调用方 |
+| 应用服务 | `services/`：`runs` 运行注册表与重放缓冲、`approvals` 待决表、`sessions` 读视图、`workspaces`、`workspace_registry`、`picker` | 内核的第二个调用方 |
 | 传输适配 | `web/`：FastAPI 路由 + pydantic DTO + SSE 编帧 + 静态资源 | 线格式的唯一所有者 |
-| 工具 | `tools/`：`registry` 单点声明、`files`/`shell`/`subagent`/`skill`/`web_search`/`mcp`、`validate` 参数校验 | 9 个内置工具 + 该工作区声明的 MCP 工具 |
+| 工具 | `agent/tools/`：`registry` 单点声明、`files`/`shell`/`subagent`/`skill`/`web_search`/`mcp`、`validate` 参数校验 | 9 个内置工具 + 该工作区声明的 MCP 工具 |
 | 工作区 | `workspaces.py` + `~/.avid/workspaces.json` | 用户级注册表（索引，非权威） |
 | 前端 | `web/`（React 18 + Vite + pnpm）：`api/types.ts` 与 `events/types.ts` 契约种子、`styles/tokens.css` 纸本 token 层、`markdown/` 自研渲染、`surfaces/` 页面 | 浏览器侧全部代码；交付走 `copy:dist` 进 `avid/web/static/` |
 
@@ -88,11 +88,11 @@ Web  POST /api/sessions/{id}/runs ─┴─► svc/runs.RunRegistry（线程 + �
 
 | 要改什么 | 动哪里 |
 |---|---|
-| 新增工具 | 在实现函数上挂 `@tool(...)`——`tools/registry.py` 是单点，其余表全部派生 |
-| 新增模型协议 | `ai/providers/` 加一个 provider，对循环返回**同形** `Turn` |
-| 新增一类上下文 | `ContextManager.register_source(kind, fn)` 一行 |
-| 调阈值 / 规则 / 文案 | `policy/` |
-| 加一个事件 | `runtime/events.py`（唯一单点）；同时在 `web/src/events/types.ts` 的 EVENTS 块里加同名成员——`tests/test_event_contract.py` 拦住两侧漂移 |
+| 新增工具 | 在实现函数上挂 `@tool(...)`——`agent/tools/registry.py` 是单点，其余表全部派生 |
+| 新增模型协议 | `providers/providers/` 加一个 provider，对循环返回**同形** `Turn` |
+| 新增一类上下文 | `ContextManager.register_source(kind, fn)` 一行（`agent/context.py`） |
+| 调权限阈值 / 规则 / 文案 | `security/`；压缩阈值在 `agent/compaction.py` |
+| 加一个事件 | `agent/events.py`（唯一单点）；同时在 `web/src/events/types.ts` 的 EVENTS 块里加同名成员——`tests/test_event_contract.py` 拦住两侧漂移 |
 | 加一个界面 | `web/src/surfaces/` 加页面并在 `app/App.tsx` 挂路由；颜色 / 字号 / 圆角只取 `styles/tokens.css` 的 token，不写散档 |
 
 ## 2. 提交规范

@@ -13,10 +13,10 @@ from pathlib import Path
 
 import pytest
 
-from avid.policy.action import brokerize
-from avid.policy.engine import decide
-from avid.policy.permission import ApprovalLedger
-from avid.tools.mcp import McpManager, mcp_config_path
+from avid.agent.tools.mcp import McpManager, mcp_config_path
+from avid.security.action import brokerize
+from avid.security.engine import decide
+from avid.security.permission import ApprovalLedger
 
 SERVER = [sys.executable, str(Path(__file__).parent / "support" / "fake_mcp_server.py")]
 

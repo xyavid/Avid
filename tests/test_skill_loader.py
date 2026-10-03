@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from avid.policy.skills import SkillLoader
+from avid.agent.skills import SkillLoader
 
 REPO_SKILLS = Path(__file__).resolve().parent.parent / "skills"
 
@@ -273,7 +273,7 @@ def test_default_skills_dir_is_resolved_at_construction_time(monkeypatch, tmp_pa
 
 def test_default_skills_dir_follows_the_workspace_root(tmp_path):
     """有运行级工作区根时，技能目录跟着它走（阶段 18 的落点之一）。"""
-    from avid.policy.skills import default_skills_dir
+    from avid.agent.skills import default_skills_dir
 
     assert default_skills_dir(tmp_path) == tmp_path / "skills"
     assert default_skills_dir(str(tmp_path)) == tmp_path / "skills"

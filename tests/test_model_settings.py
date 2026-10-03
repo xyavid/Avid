@@ -19,9 +19,9 @@ import pytest
 from fastapi.testclient import TestClient
 from support import collect  # noqa: F401  (统一收集器，保持与其它 web 用例同构)
 
-from avid.ai.byok import config_path, load_byok, read_secrets, resolve_chat, secrets_path
-from avid.ai.config import ConfigError
-from avid.svc import Services
+from avid.providers.byok import config_path, load_byok, read_secrets, resolve_chat, secrets_path
+from avid.providers.config import ConfigError
+from avid.services import Services
 from avid.web import create_app
 
 
@@ -186,8 +186,8 @@ def test_put_rejects_unknown_binding_slot(tmp_path):
 
 
 def test_test_endpoint_reports_both_steps(tmp_path, monkeypatch):
-    from avid.ai import verify as verify_module
-    from avid.ai.protocol import Turn, Usage
+    from avid.providers import verify as verify_module
+    from avid.providers.protocol import Turn, Usage
 
     def fake(config, messages, *, system=None, tools=None, max_tokens=None, client=None):
         return Turn(
@@ -214,8 +214,8 @@ def test_test_endpoint_reports_both_steps(tmp_path, monkeypatch):
 
 
 def test_test_endpoint_reports_smoke_failure(tmp_path, monkeypatch):
-    from avid.ai import verify as verify_module
-    from avid.ai.protocol import Turn, Usage
+    from avid.providers import verify as verify_module
+    from avid.providers.protocol import Turn, Usage
 
     def fake(config, messages, *, system=None, tools=None, max_tokens=None, client=None):
         return Turn(

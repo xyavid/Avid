@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from avid.policy.audit import AuditLog, default_audit_dir, redact_inline
+from avid.security.audit import AuditLog, default_audit_dir, redact_inline
 
 
 def log(directory: Path, *, clock=lambda: 1_700_000_000.0, **kwargs) -> AuditLog:

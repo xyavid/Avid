@@ -6,8 +6,8 @@ import json
 
 import pytest
 
-from avid.policy.permission import MODE_MANUAL
-from avid.workspaces import (
+from avid.security.permission import MODE_MANUAL
+from avid.services.workspace_registry import (
     AVID_HOME_ENV,
     WorkspaceError,
     WorkspaceNotFound,

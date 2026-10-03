@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import Request
 
-from ...svc import Services
+from ...services import Services
 
 
 def current_services(request: Request) -> Services:
