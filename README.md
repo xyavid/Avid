@@ -48,15 +48,20 @@ cp .env.example .env   # 按需填入；模型连接不在这里配
 
 ## 运行
 
-单轮问答：
+交互会话（推荐；默认续接最近会话）：
+
+```bash
+uv run --env-file .env avid
+# avid> 读 pyproject.toml，告诉我项目名
+# avid> /compact          ← 压缩当前会话历史（保留最近轮，更早部分摘要化）
+# avid> /code-review      ← 载入技能全文（写入会话，下一轮模型即见）
+# Ctrl-D 退出；--new-session 起新会话，--session ID 续指定会话
+```
+
+单轮问答（带问题即单轮，不进入交互）：
 
 ```bash
 uv run --env-file .env avid "用一句话说明你是谁"
-```
-
-agent 循环（模型可自主调用工具）：
-
-```bash
 uv run --env-file .env avid --agent "读 pyproject.toml，告诉我项目名"
 ```
 

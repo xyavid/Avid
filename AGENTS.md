@@ -79,7 +79,7 @@ Web  POST /api/sessions/{id}/runs ─┴─► svc/runs.RunRegistry（线程 + �
 
 | 入口 | 位置 |
 |---|---|
-| CLI | `avid/cli.py`：单轮 / `--agent` 循环 / `--session` 会话 / `avid workspace` / `avid web` |
+| CLI | `avid/cli.py`：无参数进交互会话（`/compact` 与 `/<技能名>`，解析单点在 `agent/commands.py`）；带问题为单轮 / `--agent` / `--session` / `avid workspace` / `avid web` |
 | Web 服务 | `avid/web/app.py`（FastAPI）；接口面看 `avid/web/routes/` 与 `schemas.py` |
 | 测试 | `tests/`，镜像 `avid/` 结构；`tests/test_web_boundaries.py` 是分层门禁 |
 | 模块入口 | `avid/__main__.py`（`python -m avid`） |
@@ -89,6 +89,7 @@ Web  POST /api/sessions/{id}/runs ─┴─► svc/runs.RunRegistry（线程 + �
 | 要改什么 | 动哪里 |
 |---|---|
 | 新增工具 | 在实现函数上挂 `@tool(...)`——`agent/tools/registry.py` 是单点，其余表全部派生 |
+| 新增会话内命令 | `agent/commands.py` 的 COMMANDS 加名字 + 执行分支（CLI 与 Web 自动继承解析）|
 | 新增模型协议 | `providers/` 加一个实现模块 + `__init__.py` 的 PROVIDERS 一条表项，对循环返回**同形** `Turn` |
 | 新增一类上下文 | `ContextManager.register_source(kind, fn)` 一行（`agent/context.py`） |
 | 调权限阈值 / 规则 / 文案 | `security/`；压缩阈值在 `agent/compaction.py` |
