@@ -137,6 +137,10 @@ WRITE_TOOLS: frozenset[str] = frozenset({"write_file", "edit_file"})
 OPERATION_READ = "read"
 OPERATION_WRITE = "write"
 
+# Risk marker for "a target lies outside the workspace"; it records position, not danger —
+# reading outside is already granted, and outside WRITES are ruled on by exceeds_sandbox.
+OUTSIDE_RISK = "越界"
+
 # Capabilities that change state outside the sandbox; reading the host is already granted.
 WRITE_CAPABILITIES: frozenset[str] = frozenset({"filesystem_write", "filesystem_delete"})
 
@@ -447,8 +451,8 @@ def brokerize(
     )
     # The outside fact is always recorded, even where nothing is enforced: the engine decides that.
     risks = list(danger_categories(name, args))
-    if outside and "越界" not in risks:
-        risks.append("越界")
+    if outside and OUTSIDE_RISK not in risks:
+        risks.append(OUTSIDE_RISK)
     normalized = normalize_command(command) if command else ""
     if name == "bash" and command:
         caps = set(parse_shell(command).capabilities)
@@ -507,6 +511,7 @@ __all__ = [
     "NETWORK_HINTS",
     "OPERATION_READ",
     "OPERATION_WRITE",
+    "OUTSIDE_RISK",
     "PATH_TOOLS",
     "MCP_TOOL_PREFIX",
     "SANDBOX_WRITABLE_PREFIXES",

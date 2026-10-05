@@ -39,6 +39,11 @@ class ShellUnavailableError(RuntimeError):
     """No usable shell interpreter on this platform; the tool reports it instead of guessing."""
 
 
+# Windows PowerShell 5.1 emits the system codepage (GBK on zh-CN hosts), which the child
+# pipes cannot decode reliably; forcing UTF-8 makes the output match the decoder below.
+_UTF8_PREFIX = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
+
+
 def shell_argv(command: str, *, platform: str | None = None) -> list[str]:
     """Builds the interpreter argv for one command: ``bash -c`` on POSIX, PowerShell on Windows.
 
@@ -47,12 +52,15 @@ def shell_argv(command: str, *, platform: str | None = None) -> list[str]:
     """
     system = platform if platform is not None else sys.platform
     if system != "win32":
-        return ["bash", "-c", command]
-    resolved = shutil.which("pwsh") or shutil.which("powershell")
-    if resolved is None:
+        resolved = shutil.which("bash")
+        if resolved is None:
+            raise ShellUnavailableError("找不到 bash")
+        return [resolved, "-c", command]
+    shell = shutil.which("pwsh") or shutil.which("powershell")
+    if shell is None:
         raise ShellUnavailableError("找不到 PowerShell（需要 pwsh 或 powershell 在 PATH 中）")
     # -NoProfile keeps startup scripts out of the child; -NonInteractive stops prompts hanging.
-    return [resolved, "-NoProfile", "-NonInteractive", "-Command", command]
+    return [shell, "-NoProfile", "-NonInteractive", "-Command", _UTF8_PREFIX + command]
 
 
 def _timeout(value: Any) -> int:
@@ -199,6 +207,13 @@ def bash(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
         grants = state.sandbox_grants() if state is not None else ()
         argv = spec.argv_prefix(argv, grants=grants, root=str(cwd))
         env = spec.child_env()
+    # Decode the child to text: POSIX uses the locale, Windows is pinned to UTF-8 because
+    # the argv prefix above forces PowerShell to emit UTF-8.
+    decode: dict[str, Any] = (
+        {"encoding": "utf-8", "errors": "replace"}
+        if sys.platform == "win32"
+        else {"text": True, "errors": "replace"}
+    )
     try:
         process = subprocess.Popen(
             argv,
@@ -206,11 +221,8 @@ def bash(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
-            errors="replace",
-            # Its own process group, so a timeout can clear the descendants as well.
-            # POSIX-only parameter: Windows relies on taskkill /T walking the PID tree.
             start_new_session=(sys.platform != "win32"),
+            **decode,
         )
     except OSError as exc:
         return f"错误：无法执行命令：{exc}"

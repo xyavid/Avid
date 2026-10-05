@@ -38,6 +38,9 @@ _READ_COMMANDS = {
     "whoami",
 }
 _NETWORK_COMMANDS = {"curl", "wget", "ssh", "scp", "sftp", "rsync", "nc", "ncat", "telnet", "ftp"}
+# PowerShell 别名与 POSIX 同语义档合表：这些名字不与任何标准 POSIX 工具冲突，
+# 而缺了它们 Windows 的第一天体验就是「全问」。别名语义：del/erase/ri/rd =
+# Remove-Item（删），ni/cpi/mi/rni/ac = 写，gci/gi/sls/gps/gsv = 读，iwr/irm = 网。
 _WRITE_COMMANDS = {
     "rm",
     "rmdir",
@@ -53,7 +56,20 @@ _WRITE_COMMANDS = {
     "tee",
     "truncate",
     "dd",
+    "del",
+    "erase",
+    "ri",
+    "rd",
+    "ni",
+    "cpi",
+    "mi",
+    "rni",
+    "ac",
 }
+_NETWORK_COMMANDS = _NETWORK_COMMANDS | {"iwr", "irm"}
+_READ_COMMANDS = _READ_COMMANDS | {"gci", "gi", "sls", "gps", "gsv"}
+# rm/rmdir/del/erase/ri/rd 之外，find -delete 也给删除能力（见分段循环）。
+_DELETE_PROGRAMS = {"rm", "rmdir", "del", "erase", "ri", "rd"}
 _INTERPRETERS = {"bash", "sh", "zsh", "powershell", "pwsh"}
 # PowerShell 动词表：cmdlet 靠名字识别，语义与 POSIX 同名档对齐（读/写/删/网）。
 _POWERSHELL_READ = {
@@ -104,6 +120,21 @@ _POWERSHELL_DELETE = {"remove-item", "clear-content", "clear-item"}
 _POWERSHELL_NETWORK = {"invoke-webrequest", "invoke-restmethod", "send-mailmessage"}
 # 只改导航不改状态：与 POSIX 的 cd 一样不带能力、也不算未知程序。
 _POWERSHELL_NAV = {"set-location", "push-location", "pop-location"}
+# 状态改变类能力：这些能力出现在脚本块/子表达式里时必须向整条命令传播——
+# 只读判定容不下任何一种。其余能力（如纯读）不传播。
+_STATE_CAPS = frozenset(
+    {
+        "filesystem_write",
+        "filesystem_delete",
+        "network_connect",
+        "shell_execute",
+        "privilege_escalation",
+        "external_side_effect",
+        "device_access",
+        "secret_access",
+        "credential_access",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -160,6 +191,49 @@ def _nested_substitutions(command: str) -> tuple[list[str], bool]:
     return nested, uncertain
 
 
+def _script_blocks(command: str) -> tuple[list[str], bool]:
+    """Extracts balanced ``{...}`` blocks outside quotes; unbalanced braces make it uncertain.
+
+    引号内的花括号（``echo '{'``、``awk '{...}'``）不算块：字符串内容不是脚本，
+    不进扫描，否则无害字符串会把整条命令拖成 uncertain。
+    """
+    blocks: list[str] = []
+    uncertain = False
+    depth = 0
+    start = -1
+    in_single = in_double = False
+    i = 0
+    while i < len(command):
+        ch = command[i]
+        if ch == "\\" and not in_single and not in_double:
+            i += 2
+            continue
+        if ch == "`":  # PowerShell escape; POSIX substitution pairs are handled elsewhere
+            i += 2
+            continue
+        if ch == "'" and not in_double:
+            in_single = not in_single
+        elif ch == '"' and not in_single:
+            in_double = not in_double
+        elif not in_single and not in_double:
+            if ch == "{":
+                if depth == 0:
+                    start = i + 1
+                depth += 1
+            elif ch == "}":
+                if depth == 0:
+                    uncertain = True  # stray closing brace proves nothing
+                else:
+                    depth -= 1
+                    if depth == 0 and start >= 0:
+                        blocks.append(command[start:i])
+                        start = -1
+        i += 1
+    if depth:
+        uncertain = True
+    return blocks, uncertain
+
+
 def parse_shell(command: str, *, depth: int = 0) -> ShellFacts:
     """Splits a command into segments and derives capabilities, recursing into interpreters."""
     # Past the depth limit the command counts as an uncertain shell execution, never as safe.
@@ -211,10 +285,6 @@ def parse_shell(command: str, *, depth: int = 0) -> ShellFacts:
         program = words[0].rsplit("/", 1)[-1].rsplit("\\", 1)[-1].lower()
         args = words[1:]
         capabilities.add("process_spawn")
-        # A word with $ expands to a value whose target cannot be proven ($VAR may name
-        # anything), so the whole segment stays unproven instead of guessing.
-        if any("$" in word for word in words):
-            uncertain = True
         # Secret file names are matched anywhere in the word because the path may carry a prefix.
         if any(re.search(r"(?:^|/|\\).env(?:\..*)?$", word) for word in words):
             capabilities.add("secret_access")
@@ -241,8 +311,13 @@ def parse_shell(command: str, *, depth: int = 0) -> ShellFacts:
             capabilities.add("network_connect")
         if program in _WRITE_COMMANDS or any(word in {">", ">>", ">&", "<>"} for word in words):
             capabilities.add("filesystem_write")
-        if program in {"rm", "rmdir"} or (program == "find" and "-delete" in args):
+        if program in {"rm", "rmdir", "del", "erase", "ri", "rd"} or (
+            program == "find" and "-delete" in args
+        ):
             capabilities.add("filesystem_delete")
+        if program == "sed" and any(arg.startswith("-i") for arg in args):
+            # In-place edit writes the named file, so sed -i carries the write capability.
+            capabilities.add("filesystem_write")
         if program == "find" and any(word in args for word in ("-exec", "-execdir", "-ok")):
             capabilities.add("shell_execute")
         if program == "base64" and any(word in args for word in ("-o", "--output")):
@@ -338,6 +413,11 @@ def parse_shell(command: str, *, depth: int = 0) -> ShellFacts:
         } | _POWERSHELL_READ | _POWERSHELL_WRITE | _POWERSHELL_DELETE | _POWERSHELL_NETWORK | _POWERSHELL_NAV:
             # A program outside the known tables is unprovable, so it is reported uncertain.
             uncertain = True
+        # A word with $ expands to a value whose target cannot be proven ($VAR may name
+        # anything), but only state-changing segments care: `echo $HOME` proves nothing
+        # is written, while `echo $X > $Y` cannot have its write target proven.
+        if capabilities & _STATE_CAPS and any(re.search(r"\$(?!_)", word) for word in words):
+            uncertain = True
 
     nested, incomplete = _nested_substitutions(command)
     uncertain |= incomplete
@@ -348,4 +428,12 @@ def parse_shell(command: str, *, depth: int = 0) -> ShellFacts:
         capabilities.update(child.capabilities)
         uncertain |= child.uncertain
         capabilities.add("shell_execute")
+    # Script blocks ({...}) do not segment, so their contents are scanned separately:
+    # state-changing capabilities propagate to the whole command, unknown inner words
+    # do not make it uncertain (awk and PS filter blocks are legitimate read idioms).
+    blocks, brace_uncertain = _script_blocks(command)
+    uncertain |= brace_uncertain
+    for block in blocks:
+        inner = parse_shell(block, depth=depth + 1)
+        capabilities.update(inner.capabilities & _STATE_CAPS)
     return ShellFacts(tuple(segments), frozenset(capabilities), uncertain)

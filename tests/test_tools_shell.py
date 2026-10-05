@@ -122,14 +122,18 @@ def test_bash_timeout_kills_the_whole_process_group(sandbox):
 
 
 def test_shell_argv_selects_the_interpreter_per_platform():
+    import avid.agent.tools.shell as shell_module
     from avid.agent.tools.shell import shell_argv
 
-    assert shell_argv("ls", platform="linux") == ["bash", "-c", "ls"]
+    assert shell_argv("ls", platform="linux")[0].endswith("bash")
+    assert shell_argv("ls", platform="linux")[1:] == ["-c", "ls"]
 
     windows = shell_argv("Get-Date", platform="win32")
     assert windows[0].endswith(("pwsh", "pwsh.exe", "powershell", "powershell.exe"))
     assert "-NoProfile" in windows and "-NonInteractive" in windows
-    assert windows[-1] == "Get-Date"
+    assert windows[-1].endswith("Get-Date")
+    # 输出编码强制 UTF-8：PS 5.1 默认系统代码页，中文输出必乱码
+    assert shell_module._UTF8_PREFIX in windows[-1]
 
 
 def test_shell_argv_reports_a_missing_powershell(monkeypatch):

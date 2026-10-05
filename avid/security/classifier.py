@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .action import Action, exceeds_sandbox, is_mcp_tool
+from .action import OUTSIDE_RISK, Action, exceeds_sandbox, is_mcp_tool
 from .rules import VERDICT_ASK, VERDICT_DENY, Rule  # noqa: F401  (re-exported for type readers)
 from .sandbox import SandboxSpec
 
@@ -35,8 +35,13 @@ class Review:
 
 
 def _proven(action: Action, allowed_caps: frozenset[str]) -> bool:
-    """A call is proven when every observed capability sits in the set and no fact flags it."""
-    if action.risks or action.network or action.outside_writes:
+    """A call is proven when every observed capability sits in the set and no fact flags it.
+
+    「越界」只记录目标在工作区之外，读写都记；读区外是既有能力（沙箱 ``--ro-bind /``），
+    真正的区外**写**已由 ``exceeds_sandbox`` 裁决，所以这里把它排除。
+    """
+    risks = [risk for risk in action.risks if risk != OUTSIDE_RISK]
+    if risks or action.network or action.outside_writes:
         return False
     return action.capabilities <= allowed_caps
 
@@ -64,8 +69,10 @@ def classify(
         return Review(False, f"需要写沙箱保证之外的目标：{target}（{capability}）")
     if action.network:
         return Review(False, f"网络出口（{action.network_target or 'unknown'}）")
-    if action.risks:
-        return Review(False, "、".join(action.risks))
+    # 「越界」是位置事实不是风险：读区外本来就是放行的能力，真正的区外写在上面已裁决。
+    risks = [risk for risk in action.risks if risk != OUTSIDE_RISK]
+    if risks:
+        return Review(False, "、".join(risks))
 
     if sandbox is not None and sandbox.degraded:
         if _proven(action, READ_ONLY_CAPS) or _proven(action, WORKSPACE_WRITE_CAPS):

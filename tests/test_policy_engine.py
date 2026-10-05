@@ -720,3 +720,71 @@ def test_approval_answers_grant_rw_for_write_commands(sandbox: Path, specs):
         assert decision.allowed
         assert decision.grants == ((str(outside), "rw"),)
         assert specs["manual"].approval == APPROVAL_USER
+
+
+# ---------------------------------------------------------------- 脚本块与 $ 精化（shell 适配二）
+
+
+def test_script_blocks_propagate_state_capabilities(sandbox: Path):
+    """块内写/删/网必须向整条命令传播：`ForEach-Object { Remove-Item $_ }` 不是只读。"""
+    auto = security(sandbox, "auto", probe=BROKEN_PROBE)
+    bypass = "Get-ChildItem | ForEach-Object { Remove-Item $_ }"
+
+    assert not run("bash", {"command": bypass}, spec=auto, root=sandbox).allowed
+    asked = run(
+        "bash",
+        {"command": bypass},
+        spec=auto,
+        root=sandbox,
+        ledger=ApprovalLedger(),
+        ask=lambda *a: True,
+    )
+    assert asked.allowed and asked.answered_by == "user"
+
+
+def test_filter_blocks_stay_read_only(sandbox: Path):
+    """$_ 是管道变量不是写落点：PS 过滤块保持只读档，不受 $ 加固误伤。"""
+    auto = security(sandbox, "auto", probe=BROKEN_PROBE)
+    decision = run(
+        "bash",
+        {"command": "Get-Process | Where-Object {$_.CPU -gt 10}"},
+        spec=auto,
+        root=sandbox,
+    )
+    assert decision.allowed and decision.answered_by == "classifier"
+
+
+def test_braces_inside_quotes_are_not_script_blocks(sandbox: Path):
+    auto = security(sandbox, "auto", probe=BROKEN_PROBE)
+    decision = run("bash", {"command": "echo '{'"}, spec=auto, root=sandbox)
+    assert decision.allowed and decision.answered_by == "classifier"
+
+
+def test_reading_a_variable_is_still_read_only(sandbox: Path):
+    """$ 精化的另一面：纯读段落里的 $ 不降级（写落点证明不了才交人）。"""
+    auto = security(sandbox, "auto", probe=BROKEN_PROBE)
+    decision = run("bash", {"command": "echo $HOME"}, spec=auto, root=sandbox)
+    assert decision.allowed and decision.answered_by == "classifier"
+
+
+def test_sed_inplace_counts_as_a_write(sandbox: Path):
+    auto = security(sandbox, "auto", probe=BROKEN_PROBE)
+    inside = run("bash", {"command": "sed -i s/a/b/ a.txt"}, spec=auto, root=sandbox)
+    assert inside.allowed and inside.answered_by == "classifier"
+
+    outside = run("bash", {"command": "sed -i s/a/b/ /etc/hosts"}, spec=auto, root=sandbox)
+    assert not outside.allowed
+
+
+def test_powershell_aliases_walk_the_same_ladder(sandbox: Path):
+    auto = security(sandbox, "auto", probe=BROKEN_PROBE)
+    assert run("bash", {"command": "gci"}, spec=auto, root=sandbox).allowed
+    assert not run("bash", {"command": "del a.txt"}, spec=auto, root=sandbox).allowed
+    net = run("bash", {"command": "iwr https://api.example.com"}, spec=auto, root=sandbox)
+    assert not net.allowed
+
+
+def test_posix_function_definition_with_a_write_is_reviewed(sandbox: Path):
+    auto = security(sandbox, "auto", probe=BROKEN_PROBE)
+    decision = run("bash", {"command": "f() { rm -rf /tmp/x; }"}, spec=auto, root=sandbox)
+    assert not decision.allowed
