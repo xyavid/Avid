@@ -1,7 +1,8 @@
 """Implements the file tools: read, write, edit and glob.
 
 Failures come back as text so the loop continues; reads outside the workspace are allowed and
-writes need a ledger grant.
+writes need a ledger grant. Both write paths take a write-ahead checkpoint (agent/checkpoints)
+after validation and refuse to write when it fails.
 
 """
 
@@ -17,7 +18,7 @@ from .registry import tool
 from .workspace import relative, resolve
 
 if TYPE_CHECKING:  # annotation only: tools must not depend on runtime at run time
-    from ..runtime.state import RunState
+    from ..state import RunState
 
 MAX_READ_CHARS = 20000
 MAX_READ_LINES = 2000
@@ -66,6 +67,21 @@ def _protected(state: "RunState | None", path: Path, operation: str) -> str | No
     if state is not None and state.ledger.outside_allowed(str(path), "rw" if operation == "write" else "ro"):
         return None
     return f"错误：{rule.reason}（{rule.tier} 策略，需逐次批准）"
+
+
+def _snapshot_before_write(state: "RunState | None", path: Path) -> str | None:
+    """Takes the write-ahead checkpoint once every validation has passed; refuses on failure.
+
+    None (no run state, no checkpointer wired, or a taken snapshot) lets the write proceed;
+    an error line means the backup failed and the caller must not write — a change without
+    a snapshot would be unrecoverable.
+    """
+    if state is None:
+        return None
+    checkpointer = state.checkpoint
+    if checkpointer is None:
+        return None
+    return checkpointer.snapshot(path)
 
 
 def _int(value: Any, *, default: int, minimum: int) -> int:
@@ -208,6 +224,10 @@ def write_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     if path.is_dir():
         return f"错误：{raw} 是目录"
 
+    refused = _snapshot_before_write(state, path)
+    if refused:
+        return refused
+
     existed = path.exists()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -276,6 +296,10 @@ def edit_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
             f"错误：old_string 在文件中出现 {occurrences} 次，不唯一；"
             "请带上更多上下文让它唯一"
         )
+
+    refused = _snapshot_before_write(state, path)
+    if refused:
+        return refused
 
     try:
         path.write_text(text.replace(old, new, 1), encoding="utf-8")

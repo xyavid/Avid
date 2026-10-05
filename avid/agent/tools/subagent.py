@@ -25,7 +25,7 @@ from .registry import tool
 if TYPE_CHECKING:  # a runtime import would be circular (state.py imports this package)
     from ..events import RunEvent, RunObserver
     from ..hooks import HookRegistry
-    from ..state import RunState
+    from ..state import Checkpointer, RunState
 
 logger = logging.getLogger("avid.subagent")
 
@@ -66,11 +66,12 @@ def run_subagent(
     observer: "RunObserver | None" = None,
     cancel_probe: "Callable[[], str | None] | None" = None,
     on_state: "Callable[[RunState], None] | None" = None,
+    checkpoint: "Checkpointer | None" = None,
 ) -> str:
     """Runs one child agent and returns its conclusion summary.
 
-    Permission mode, ledger, security and root are forwarded field by field, since a child on
-    another thread inherits no run state.
+    Permission mode, ledger, security, root and the write-ahead checkpointer are forwarded
+    field by field, since a child on another thread inherits no run state.
     """
     # A deferred import, since agent/state.py imports this package for the tool tables.
     from ..run import Run
@@ -88,6 +89,9 @@ def run_subagent(
         workspace_root=workspace_root,
         hooks=hooks,
     )
+    # The parent's sink is shared as-is: its tip_seq closure points at the parent's session,
+    # which stays open for as long as the parent waits on this batch.
+    child_state.checkpoint = checkpoint
     if cancel_probe is not None:
         child_state.cancel_probe = cancel_probe
     if on_state is not None:
@@ -227,6 +231,8 @@ def subagent(
     # The whole security spec is reused, so child verdicts join the same sandbox and audit.
     security = state.security
     workspace_root = state.workspace_root
+    # Write-ahead checkpoints keep landing in the parent session's checkpoint directory.
+    checkpoint = state.checkpoint
     # The child takes a copy of the parent registry, so user hooks apply while callbacks the
     # child adds stay out of the parent run.
     hooks = state.hooks.copy()
@@ -294,6 +300,7 @@ def subagent(
                 observer=observer_for(index, task["description"]),
                 cancel_probe=probe_for(task["description"]),
                 on_state=remember(index),
+                checkpoint=checkpoint,
             )
             for index, task in enumerate(tasks)
         ]

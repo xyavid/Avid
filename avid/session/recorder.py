@@ -47,6 +47,14 @@ class SessionRecorder:
     def count(self) -> int:
         return len(self.entry_ids)
 
+    def tip_seq(self) -> int | None:
+        """当前分支 tip 条目的 seq；分支还没有条目时返回 None（写前快照的落点探针）。"""
+        tip = self.ensure_branch().get_tip_id()
+        if tip is None:
+            return None
+        entry = self.session.get_entry(tip)
+        return None if entry is None else entry.seq
+
     def record_usage(self, payload: dict[str, Any]) -> None:
         """Per-branch usage value, same address overwritten each run; usage is not history, so it is not an entry."""
         # Kept out of the entry projection, so usage never becomes history and needs no type exception there.

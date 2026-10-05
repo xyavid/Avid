@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .agent import commands as commands_module
+from .agent.checkpoints import DirCheckpointSink
 from .agent.run import Run
 from .agent.spec import RunSpec
 from .agent.state import RunState
@@ -400,6 +401,11 @@ def _interactive(args: argparse.Namespace, config) -> int:
             session.set_name(args.session_name)
         recorder = SessionRecorder(session)
         recorder.ensure_branch()
+        # 写前快照随会话接线：files 工具覆盖前把原内容落进本会话的检查点目录，
+        # 落点跟随分支 tip 条目。sink 全程复用（seq 单调递增，目录不冲突）。
+        checkpoint = DirCheckpointSink(
+            root=Path(target.root), session_id=session.metadata.id, tip_seq=recorder.tip_seq
+        )
     except SessionError as exc:
         print(f"会话错误：{exc}", file=sys.stderr)
         if session is not None and not session.closed:
@@ -457,6 +463,7 @@ def _interactive(args: argparse.Namespace, config) -> int:
                 full_ack=args.allow_full_access,
                 grant_source="cli",
             )
+            state.checkpoint = checkpoint
             _start_mcp(state)
             try:
                 schemas, impls = build_toolset(state)

@@ -168,6 +168,90 @@ def test_edit_file_requires_old_string(sandbox):
     assert "old_string" in edit_file({"path": "a.txt", "new_string": "x"})
 
 
+# ---------- 写前快照（阶段 B） ----------
+
+
+class RecordingCheckpoint:
+    """快照器替身：记录被快照的路径，可注入失败文案。"""
+
+    def __init__(self, result=None):
+        self.calls = []
+        self.result = result
+
+    def snapshot(self, path):
+        self.calls.append(path)
+        return self.result
+
+
+def _state_with_checkpoint(sandbox, checkpoint):
+    from avid.agent.state import RunState
+
+    state = RunState.for_run(
+        permission_mode="manual", workspace_root=str(sandbox), audit_enabled=False
+    )
+    state.checkpoint = checkpoint
+    return state
+
+
+def test_write_file_snapshots_before_writing(sandbox):
+    checkpoint = RecordingCheckpoint()
+    state = _state_with_checkpoint(sandbox, checkpoint)
+
+    write_file({"path": "a.txt", "content": "新"}, state=state)
+
+    assert checkpoint.calls == [sandbox / "a.txt"]
+    assert (sandbox / "a.txt").read_text(encoding="utf-8") == "新"
+
+
+def test_write_file_refuses_to_write_when_snapshot_fails(sandbox):
+    """快照失败必须拒写：宁可拒写，不留无快照的改动。"""
+    (sandbox / "a.txt").write_text("旧", encoding="utf-8")
+    state = _state_with_checkpoint(
+        sandbox, RecordingCheckpoint(result="错误：快照失败")
+    )
+
+    result = write_file({"path": "a.txt", "content": "新"}, state=state)
+
+    assert result == "错误：快照失败"
+    assert (sandbox / "a.txt").read_text(encoding="utf-8") == "旧"
+
+
+def test_edit_file_snapshots_before_writing(sandbox):
+    (sandbox / "a.txt").write_text("alpha beta", encoding="utf-8")
+    checkpoint = RecordingCheckpoint()
+    state = _state_with_checkpoint(sandbox, checkpoint)
+
+    edit_file({"path": "a.txt", "old_string": "beta", "new_string": "B"}, state=state)
+
+    assert checkpoint.calls == [sandbox / "a.txt"]
+    assert (sandbox / "a.txt").read_text(encoding="utf-8") == "alpha B"
+
+
+def test_edit_file_refuses_to_write_when_snapshot_fails(sandbox):
+    (sandbox / "a.txt").write_text("alpha beta", encoding="utf-8")
+    state = _state_with_checkpoint(
+        sandbox, RecordingCheckpoint(result="错误：快照失败")
+    )
+
+    result = edit_file(
+        {"path": "a.txt", "old_string": "beta", "new_string": "B"}, state=state
+    )
+
+    assert result == "错误：快照失败"
+    assert (sandbox / "a.txt").read_text(encoding="utf-8") == "alpha beta"
+
+
+def test_snapshot_happens_after_validation(sandbox):
+    """校验没过就不写盘，也不该产生快照：快照点在全部校验之后。"""
+    checkpoint = RecordingCheckpoint()
+    state = _state_with_checkpoint(sandbox, checkpoint)
+
+    write_file({"path": "a.txt", "content": None}, state=state)
+    edit_file({"path": "a.txt", "old_string": "x", "new_string": "y"}, state=state)
+
+    assert checkpoint.calls == []
+
+
 # ---------- glob ----------
 
 

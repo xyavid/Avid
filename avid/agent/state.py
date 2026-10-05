@@ -6,7 +6,8 @@ import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Protocol
 
 from ..providers.usage import Usage, hit_ratio
 from ..security.permission import (
@@ -28,6 +29,16 @@ if TYPE_CHECKING:  # Annotations only: these two are never imported at run time.
 
 # Abort the run after this many consecutive denials; any allowed call resets the streak.
 MAX_CONSECUTIVE_DENIALS = 5
+
+
+class Checkpointer(Protocol):
+    """files 工具写路径的写前快照契约；实现在 agent/checkpoints.py。
+
+    None=快照成功（或无需快照）；字符串=备份失败的错误文案，调用方必须拒绝写入，
+    不留无快照的改动。
+    """
+
+    def snapshot(self, path: Path) -> str | None: ...
 
 
 def _split_context(
@@ -137,6 +148,9 @@ class RunState:
     skills: SkillLoader = field(default_factory=SkillLoader)
     # MCP tool manager assembled by the run entry point; None means this run exposes no MCP tools.
     mcp: "McpManager | None" = None
+    # Write-ahead file checkpointer, wired by session-aware entry points; None (sessionless
+    # runs, tests) means the file tools write without snapshotting.
+    checkpoint: Checkpointer | None = None
     # Hook registry owned by the run, reached through the module so replacing the default works.
     hooks: "hooks_module.HookRegistry" = field(
         default_factory=lambda: hooks_module.DEFAULT_HOOKS

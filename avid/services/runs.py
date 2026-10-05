@@ -9,9 +9,11 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from ..agent import commands as commands_module
+from ..agent.checkpoints import DirCheckpointSink
 from ..agent.events import (
     ASSISTANT_DELTA,
     ASSISTANT_MESSAGE,
@@ -777,6 +779,14 @@ class RunRegistry:
                 security=safety,
                 # The utilization denominator follows this run's actual model configuration.
                 context_window=config.context_window,
+            )
+            # 写前快照接线：files 工具的两个写路径在覆盖前把原内容落进本会话的检查点
+            # 目录。probe 指向本会话的 recorder；subagent 透传共享同一个 sink，父运行
+            # 在等待期内会话一直打开。
+            state.checkpoint = DirCheckpointSink(
+                root=Path(workspace.root),
+                session_id=session.metadata.id,
+                tip_seq=recorder.tip_seq,
             )
             record.state = state
             # A cancel can land between thread start and this point, while record.state is
