@@ -54,6 +54,7 @@ cp .env.example .env   # 按需填入；模型连接不在这里配
 uv run --env-file .env avid
 # avid> 读 pyproject.toml，告诉我项目名
 # avid> /compact          ← 压缩当前会话历史（保留最近轮，更早部分摘要化）
+# avid> /rewind           ← 回滚最近一次用户输入（对话指针回移，文件恢复到该点）
 # avid> /code-review      ← 载入技能全文（写入会话，下一轮模型即见）
 # Ctrl-D 退出；--new-session 起新会话，--session ID 续指定会话
 ```

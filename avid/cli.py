@@ -116,7 +116,7 @@ def _announce_security(security: RunSecurity | None) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="avid",
-        description="不带参数直接进入交互会话（/compact 压缩、/<技能名> 载入技能）；"
+        description="不带参数直接进入交互会话（/compact 压缩、/rewind 回滚上一轮、/<技能名> 载入技能）；"
         "带问题则单轮提问后退出",
     )
     parser.add_argument("prompt", nargs="?", help="要发送给模型的问题（缺省进入交互会话）")
@@ -366,7 +366,7 @@ def _run_session(args: argparse.Namespace, config, state: RunState | None = None
 
 
 def _interactive(args: argparse.Namespace, config) -> int:
-    """交互会话：默认续接最近会话；/compact 压缩、/<技能名> 载入技能、其余发给模型。"""
+    """交互会话：默认续接最近会话；/compact 压缩、/rewind 回滚上一轮、/<技能名> 载入技能、其余发给模型。"""
     logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
     try:
@@ -419,7 +419,7 @@ def _interactive(args: argparse.Namespace, config) -> int:
     print(
         f"工作区 {target.id}（{target.root}，默认权限 {target.default_permission}）\n"
         f"会话 {session.metadata.id}{'（新建）' if created else '（续接）'}；"
-        "输入问题回车发送，/compact 压缩，/<技能名> 载入技能，Ctrl-D 退出",
+        "输入问题回车发送，/compact 压缩，/rewind 回滚上一轮，/<技能名> 载入技能，Ctrl-D 退出",
         file=sys.stderr,
     )
     try:

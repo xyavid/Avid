@@ -79,7 +79,7 @@ Web  POST /api/sessions/{id}/runs ─┴─► svc/runs.RunRegistry（线程 + �
 
 | 入口 | 位置 |
 |---|---|
-| CLI | `avid/cli.py`：无参数进交互会话（`/compact` 与 `/<技能名>`，解析单点在 `agent/commands.py`）；带问题为单轮 / `--agent` / `--session` / `avid workspace` / `avid web` |
+| CLI | `avid/cli.py`：无参数进交互会话（`/compact`、`/rewind` 与 `/<技能名>`，解析单点在 `agent/commands.py`）；带问题为单轮 / `--agent` / `--session` / `avid workspace` / `avid web` |
 | Web 服务 | `avid/web/app.py`（FastAPI）；接口面看 `avid/web/routes/` 与 `schemas.py` |
 | 测试 | `tests/`，镜像 `avid/` 结构；`tests/test_web_boundaries.py` 是分层门禁 |
 | 模块入口 | `avid/__main__.py`（`python -m avid`） |
