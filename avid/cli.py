@@ -107,8 +107,8 @@ def _announce_security(security: RunSecurity | None) -> None:
         print(f"[安全] {note}", file=sys.stderr)
     if security.sandbox.degraded:
         print(
-            "⚠ 沙箱不可用：manual 下受管动作将逐个问人，auto 下直接拒绝。"
-            "装好 bubblewrap（bwrap）后重试，或改用 manual。",
+            "⚠ 沙箱不可用：manual 下受管动作逐个问人；auto 下只读与工作区内写直接跑，"
+            "其余征询确认（无确认通道时拒绝）。装好 bubblewrap（bwrap）可获得内核级隔离。",
             file=sys.stderr,
         )
 

@@ -1,4 +1,8 @@
-"""Conservative shell segmentation for policy analysis; bwrap, not this parser, enforces."""
+"""Conservative shell segmentation for policy analysis; the policy ladder, not this parser, enforces.
+
+分段按 POSIX 词法近似，PowerShell 命令靠动词表识别（cmdlet 名带连字符，与
+POSIX 程序名不冲突）；两边都识别不了的程序本来就是 uncertain，走交人档。
+"""
 
 from __future__ import annotations
 
@@ -51,6 +55,55 @@ _WRITE_COMMANDS = {
     "dd",
 }
 _INTERPRETERS = {"bash", "sh", "zsh", "powershell", "pwsh"}
+# PowerShell 动词表：cmdlet 靠名字识别，语义与 POSIX 同名档对齐（读/写/删/网）。
+_POWERSHELL_READ = {
+    "get-childitem",
+    "get-content",
+    "get-item",
+    "get-itemproperty",
+    "get-location",
+    "get-process",
+    "get-service",
+    "get-command",
+    "get-member",
+    "get-date",
+    "get-random",
+    "select-string",
+    "measure-object",
+    "test-path",
+    "split-path",
+    "join-path",
+    "resolve-path",
+    "compare-object",
+    "write-output",
+    "write-host",
+    "out-string",
+    "format-table",
+    "format-list",
+    "where-object",
+    "foreach-object",
+    "select-object",
+    "sort-object",
+    "convertto-json",
+    "convertfrom-json",
+}
+_POWERSHELL_WRITE = {
+    "set-content",
+    "add-content",
+    "new-item",
+    "copy-item",
+    "move-item",
+    "rename-item",
+    "out-file",
+    "set-itemproperty",
+    "new-itemproperty",
+    "export-csv",
+    "export-clixml",
+}
+_POWERSHELL_DELETE = {"remove-item", "clear-content", "clear-item"}
+_POWERSHELL_NETWORK = {"invoke-webrequest", "invoke-restmethod", "send-mailmessage"}
+# 只改导航不改状态：与 POSIX 的 cd 一样不带能力、也不算未知程序。
+_POWERSHELL_NAV = {"set-location", "push-location", "pop-location"}
 
 
 @dataclass(frozen=True)
@@ -153,10 +206,15 @@ def parse_shell(command: str, *, depth: int = 0) -> ShellFacts:
                 words.pop(0)  # the duration argument is not the program
         if not words:
             continue
-        # Only the basename is compared, so /usr/bin/rm is treated as rm.
-        program = words[0].rsplit("/", 1)[-1].lower()
+        # Only the basename is compared, so /usr/bin/rm is treated as rm; Windows paths
+        # carry backslash separators, so they are stripped the same way.
+        program = words[0].rsplit("/", 1)[-1].rsplit("\\", 1)[-1].lower()
         args = words[1:]
         capabilities.add("process_spawn")
+        # A word with $ expands to a value whose target cannot be proven ($VAR may name
+        # anything), so the whole segment stays unproven instead of guessing.
+        if any("$" in word for word in words):
+            uncertain = True
         # Secret file names are matched anywhere in the word because the path may carry a prefix.
         if any(re.search(r"(?:^|/|\\).env(?:\..*)?$", word) for word in words):
             capabilities.add("secret_access")
@@ -173,6 +231,14 @@ def parse_shell(command: str, *, depth: int = 0) -> ShellFacts:
             capabilities.add("network_listen")
         if program in _READ_COMMANDS:
             capabilities.add("filesystem_read")
+        if program in _POWERSHELL_READ:
+            capabilities.add("filesystem_read")
+        if program in _POWERSHELL_WRITE:
+            capabilities.add("filesystem_write")
+        if program in _POWERSHELL_DELETE:
+            capabilities.add("filesystem_delete")
+        if program in _POWERSHELL_NETWORK:
+            capabilities.add("network_connect")
         if program in _WRITE_COMMANDS or any(word in {">", ">>", ">&", "<>"} for word in words):
             capabilities.add("filesystem_write")
         if program in {"rm", "rmdir"} or (program == "find" and "-delete" in args):
@@ -269,7 +335,7 @@ def parse_shell(command: str, *, depth: int = 0) -> ShellFacts:
             "doas",
             "pkexec",
             "cd",
-        }:
+        } | _POWERSHELL_READ | _POWERSHELL_WRITE | _POWERSHELL_DELETE | _POWERSHELL_NETWORK | _POWERSHELL_NAV:
             # A program outside the known tables is unprovable, so it is reported uncertain.
             uncertain = True
 

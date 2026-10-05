@@ -29,7 +29,7 @@ from .action import (
 from .audit import AuditLog, default_audit_dir
 from .classifier import Review, classify
 from .engine import (
-    CLASSIFIER_MESSAGE,
+    AUTO_UNANSWERED_MESSAGE,
     CREDENTIAL_MESSAGE,
     DANGER_MESSAGE,
     DEGRADED_MESSAGE,
@@ -383,7 +383,7 @@ __all__ = [
     "BACKEND_BWRAP",
     "BACKEND_NONE",
     "BackendProbe",
-    "CLASSIFIER_MESSAGE",
+    "AUTO_UNANSWERED_MESSAGE",
     "COST_RULES",
     "CREDENTIAL_MESSAGE",
     "DANGER_MESSAGE",

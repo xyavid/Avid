@@ -70,7 +70,7 @@ MODE_TABLE: dict[str, Mode] = {
         sandbox=SANDBOX_WORKSPACE,
         network=NETWORK_RESTRICTED,
         label="自动",
-        summary="沙箱内免问；越界与危险由分类器裁决，判不准即拒（不问人）",
+        summary="只读与工作区内写自动放行；网络、越界、危险与判不准的命令征询用户（无询问通道时拒绝）",
     ),
     MODE_FULL: Mode(
         name=MODE_FULL,

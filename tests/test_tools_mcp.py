@@ -193,19 +193,25 @@ def test_full_mode_allows_without_asking(workspace):
     manager.close()
 
 
-def test_auto_mode_denies_unreadable_mcp_tools(workspace):
-    """分类器看不见 MCP 工具的语义：auto 判不准即拒，而不是放行。"""
+def test_auto_mode_hands_unreadable_mcp_tools_to_the_user(workspace):
+    """分类器看不见 MCP 工具的语义：auto 交人（有人可问），无人可问才拒。"""
     write_config(workspace, CONFIG_OK)
     manager = McpManager(str(workspace))
     manager.start_all()
 
-    decision = decide(
+    allowed = decide(
         brokerize("mcp__demo__echo", _action_args()),
         mode="auto",
         ledger=ApprovalLedger(),
-        ask=lambda *a: pytest.fail("auto 不问人"),
+        ask=lambda *a: True,
     )
+    assert allowed.allowed and allowed.answered_by == "user"
 
-    assert decision.verdict == "deny"
-    assert "mcp" in decision.reason.lower() or "MCP" in decision.reason
+    refused = decide(
+        brokerize("mcp__demo__echo", _action_args()),
+        mode="auto",
+        ledger=ApprovalLedger(),
+    )
+    assert refused.verdict == "deny"
+    assert "mcp" in refused.reason.lower() or "MCP" in refused.reason
     manager.close()

@@ -26,11 +26,14 @@ DENY_PATTERNS: tuple[tuple[str, str], ...] = (
         _CMD_START + r"rm\b[^|;&]*\s(?:/\*?|~/?\*?|\$HOME/?\*?)(?:\s|;|&|$)",
         "删除根目录或家目录",
     ),
-    (_CMD_START + r"mkfs(?:\.\w+)?\b", "格式化文件系统"),
+    (
+        _CMD_START + r"mkfs(?:\.\w+)?\b|(?:format-volume|clear-disk|initialize-disk)\b",
+        "格式化文件系统",
+    ),
     (_CMD_START + r"dd\b[^|;&]*\bof=/dev/", "直接写入块设备"),
     (r">\s*/dev/(?:sd|hd|vd|nvme|mmcblk)\w*", "覆盖块设备"),
     (r":\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:", "fork 炸弹"),
-    (_CMD_START + r"(?:shutdown|reboot|halt|poweroff)\b", "关机或重启系统"),
+    (_CMD_START + r"(?:shutdown|reboot|halt|poweroff|stop-computer|restart-computer)\b", "关机或重启系统"),
     (_CMD_START + r"ch(?:mod|own)\s+-R\s+\S+\s+/(?:\s|$)", "递归修改根目录的权限或属主"),
 )
 
@@ -66,6 +69,16 @@ DANGER_PATTERNS: tuple[tuple[str, str], ...] = (
     (_CMD_START + r"find\b[^|;&]*\s-delete\b", "批量删除文件"),
     (_CMD_START + r"(?:ssh|scp|rsync)\b", "远程访问或传输"),
     (_CMD_START + r"(?:docker|podman|kubectl|helm)\b", "容器或编排操作"),
+    # PowerShell 动词：与 POSIX 同类目同档（表按命令文本匹配，PS 命令不会出现在
+    # bash 的正常用法里，反之亦然，合一张表没有误伤）。
+    (
+        _CMD_START + r"remove-item\b[^|;&]*(?:-recurse\b|-force\b)",
+        "递归或强制删除",
+    ),
+    (_CMD_START + r"(?:invoke-expression|iex)\b", "动态执行代码"),
+    (_CMD_START + r"(?:start-process|invoke-command|start-job)\b", "派生进程或远程执行"),
+    (_CMD_START + r"(?:stop-process|stop-service|set-service)\b", "进程或服务操作"),
+    (_CMD_START + r"set-executionpolicy\b", "更改执行策略"),
 )
 
 # Network commands: the network is a first-class boundary, so reaching it is recorded for the audit.

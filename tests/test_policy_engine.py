@@ -160,15 +160,34 @@ def test_manual_asks_once_per_path_not_per_command(sandbox: Path, specs):
 
 
 
-def test_auto_never_asks_the_user(sandbox: Path, specs):
-    def ask(*args):
-        raise AssertionError("auto 下没有人在环，不该调用审批回调")
+def test_auto_asks_the_user_when_one_is_reachable(sandbox: Path, specs):
+    """auto 的 REVIEW 交人：有人答就由人定，账本记一次——「判不准即拒」的旧口径已废。"""
+    ledger = ApprovalLedger()
+    asked: list[str] = []
 
-    decision = run("bash", {"command": SECRET}, spec=specs["auto"], root=sandbox, ask=ask)
+    decision = run(
+        "bash",
+        {"command": SECRET},
+        spec=specs["auto"],
+        root=sandbox,
+        ledger=ledger,
+        ask=lambda name, arguments, reason: asked.append(reason) or True,
+    )
+    assert decision.allowed and decision.answered_by == "user"
+    assert asked == ["提权"]
+    assert specs["auto"].approval == APPROVAL_CLASSIFIER
+
+    # 同意一次即生效：同一条命令不再问
+    again = run("bash", {"command": SECRET}, spec=specs["auto"], root=sandbox, ledger=ledger)
+    assert again.allowed and again.answered_by == "ledger"
+
+
+def test_auto_denies_when_nobody_can_answer(sandbox: Path, specs):
+    """无人可问才 fail closed——这是 auto 与 manual 的唯一判别差异。"""
+    decision = run("bash", {"command": SECRET}, spec=specs["auto"], root=sandbox)
     assert not decision.allowed
     assert (decision.kind, decision.answered_by) == ("danger", "classifier")
-    assert "自动审查判定风险过高" in decision.message
-    assert specs["auto"].approval == APPROVAL_CLASSIFIER
+    assert "没有可用的询问通道" in decision.message
 
 
 def test_full_allows_without_asking_but_records_it(sandbox: Path, specs):
@@ -304,13 +323,32 @@ def test_manual_review_becomes_a_prompt(sandbox: Path, specs, label, tool, argum
 @pytest.mark.parametrize(
     ("label", "tool", "arguments", "kind"), REVIEW_TABLE, ids=[row[0] for row in REVIEW_TABLE]
 )
-def test_auto_answers_the_same_review_by_itself(sandbox: Path, specs, label, tool, arguments, kind):
-    """auto 把同一批 REVIEW 交给分类器：放行或拒绝，**绝不问人**。"""
-    decision = run(tool, arguments, spec=specs["auto"], root=sandbox, ledger=ApprovalLedger())
-    assert decision.answered_by in {"classifier", "policy"}
-    if not decision.allowed:
-        assert decision.kind == kind
-        assert "自动审查判定风险过高" in decision.message
+def test_auto_review_reaches_the_user(sandbox: Path, specs, label, tool, arguments, kind):
+    """auto 把同一批 REVIEW 交给用户：有人可问就问（kind 原样保留），无人可问才拒。
+
+    「成本」是例外：subagent 的成本档不是安全审查，auto 仍由分类器直接放行。
+    """
+    if kind == "cost":
+        decision = run(tool, arguments, spec=specs["auto"], root=sandbox, ledger=ApprovalLedger())
+        assert decision.allowed and decision.answered_by in {"classifier", "policy"}
+        return
+
+    asked: list[str] = []
+    allowed = run(
+        tool,
+        arguments,
+        spec=specs["auto"],
+        root=sandbox,
+        ledger=ApprovalLedger(),
+        ask=lambda name, arguments, reason: asked.append(reason) or True,
+    )
+    assert allowed.allowed and allowed.answered_by == "user", label
+    assert allowed.kind == kind
+    assert asked, f"{label} 没有发起询问"
+
+    # 干净账本 + 无应答者：分类器交不出去，按同一 kind 拒绝
+    refused = run(tool, arguments, spec=specs["auto"], root=sandbox, ledger=ApprovalLedger())
+    assert not refused.allowed and refused.kind == kind
 
 
 @pytest.mark.parametrize(
@@ -368,7 +406,6 @@ def test_full_never_bypasses_the_ladder(sandbox: Path, specs):
 
 def test_degraded_sandbox_pushes_managed_tools_back_to_review(sandbox: Path):
     manual = security(sandbox, "manual", probe=BROKEN_PROBE)
-    auto = security(sandbox, "auto", probe=BROKEN_PROBE)
 
     asked = []
     decision = run(
@@ -381,17 +418,86 @@ def test_degraded_sandbox_pushes_managed_tools_back_to_review(sandbox: Path):
     assert (decision.verdict, decision.kind) == ("allow", "degraded")
     assert asked and "沙箱不可用" in asked[0]
 
-    denied = run("bash", {"command": "ls"}, spec=auto, root=sandbox)
-    assert (denied.verdict, denied.kind) == ("deny", "degraded")
-
     # 区内只读不因为"没有沙箱"而多问一句（它的保证来自路径校验，不来自沙箱）
     assert run("read_file", {"path": "a.txt"}, spec=manual, root=sandbox).allowed
 
 
-def test_degraded_network_still_fails_closed(sandbox: Path):
-    spec = security(sandbox, "manual", probe=BROKEN_PROBE)
-    decision = run("bash", {"command": "curl https://api.example.com"}, spec=spec, root=sandbox, ask=lambda *a: True)
-    assert (decision.type, decision.code) == ("SANDBOX_DENIED", "SANDBOX_NETWORK_DENIED")
+def test_auto_degraded_runs_proven_read_only_and_workspace_writes(sandbox: Path):
+    """无沙箱平台的 auto 新阶梯：证明得了「只读」或「只写工作区」就裸跑。"""
+    auto = security(sandbox, "auto", probe=BROKEN_PROBE)
+
+    listed = run("bash", {"command": "ls"}, spec=auto, root=sandbox)
+    assert listed.allowed and listed.answered_by == "classifier"
+
+    written = run("bash", {"command": "echo hi > note.txt"}, spec=auto, root=sandbox)
+    assert written.allowed and written.answered_by == "classifier"
+
+
+def test_auto_degraded_asks_for_the_unproven(sandbox: Path):
+    """证明不了的命令：有人可问就问，无人可问才拒——删除属于此类（不可逆）。"""
+    auto = security(sandbox, "auto", probe=BROKEN_PROBE)
+
+    assert not run("bash", {"command": "rm a.txt"}, spec=auto, root=sandbox).allowed
+    assert not run("bash", {"command": "python -c 'print(1)'"}, spec=auto, root=sandbox).allowed
+
+    asked = run(
+        "bash",
+        {"command": "rm a.txt"},
+        spec=auto,
+        root=sandbox,
+        ledger=ApprovalLedger(),
+        ask=lambda name, arguments, reason: True,
+    )
+    assert asked.allowed and asked.answered_by == "user"
+
+
+def test_auto_degraded_network_becomes_a_review(sandbox: Path):
+    """沙箱缺席时网络出口由人把守：问人而非物理拒绝（物理拒绝只在沙箱强制时成立）。"""
+    manual = security(sandbox, "manual", probe=BROKEN_PROBE)
+    auto = security(sandbox, "auto", probe=BROKEN_PROBE)
+    command = {"command": "curl https://api.example.com"}
+
+    asked = run("bash", command, spec=manual, root=sandbox, ask=lambda name, arguments, reason: True)
+    assert (asked.verdict, asked.kind) == ("allow", "net_ask")
+
+    assert not run("bash", command, spec=auto, root=sandbox).allowed
+    auto_allowed = run(
+        "bash", command, spec=auto, root=sandbox, ledger=ApprovalLedger(), ask=lambda *a: True
+    )
+    assert auto_allowed.allowed and auto_allowed.answered_by == "user"
+
+
+def test_variable_targets_stay_unproven(sandbox: Path):
+    """$VAR 的落点证明不了（可能指向任何地方）：含 $ 的命令不进 proven 档。"""
+    auto = security(sandbox, "auto", probe=BROKEN_PROBE)
+    decision = run("bash", {"command": "echo hi > $HOME/notes"}, spec=auto, root=sandbox)
+    assert not decision.allowed
+
+
+def test_powershell_commands_walk_the_same_ladder(sandbox: Path):
+    """Windows 上 bash 工具跑 PowerShell：PS 动词表让它与 POSIX 同一套阶梯。"""
+    auto = security(sandbox, "auto", probe=BROKEN_PROBE)
+
+    assert run("bash", {"command": "Get-ChildItem"}, spec=auto, root=sandbox).allowed
+    assert run("bash", {"command": "Get-Content .\\a.txt"}, spec=auto, root=sandbox).allowed
+    assert run("bash", {"command": "Set-Location"}, spec=auto, root=sandbox).allowed
+
+    # 网络类交人：无人可问 → 拒（与 curl 同口径）
+    net = run(
+        "bash", {"command": "Invoke-WebRequest https://api.example.com"}, spec=auto, root=sandbox
+    )
+    assert not net.allowed
+
+    # 递归删除进危险档：有人可问就问，而不是判死
+    asked = run(
+        "bash",
+        {"command": "Remove-Item -Recurse build"},
+        spec=auto,
+        root=sandbox,
+        ledger=ApprovalLedger(),
+        ask=lambda name, arguments, reason: True,
+    )
+    assert asked.allowed and asked.answered_by == "user"
 
 
 def test_full_ignores_degradation(sandbox: Path):

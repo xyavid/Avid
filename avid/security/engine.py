@@ -23,6 +23,7 @@ from .modes import (
     APPROVAL_NONE,
     APPROVAL_USER,
     DEFAULT_MODE,
+    NETWORK_RESTRICTED,
     Mode,
     mode_spec,
 )
@@ -58,6 +59,7 @@ KIND_OUTSIDE = "outside"
 KIND_DANGER = "danger"
 KIND_DEGRADED = "degraded"
 KIND_NETWORK = "network"
+KIND_NET_ASK = "net_ask"
 KIND_COST = "cost"
 #: External MCP tools: unclassifiable semantics, so manual asks, auto refuses and full allows.
 KIND_MCP = "mcp"
@@ -86,16 +88,21 @@ OUTSIDE_MESSAGE = (
     "不要重复尝试同一目标。"
 )
 DEGRADED_MESSAGE = (
-    "Permission denied. 原因：沙箱不可用（{reason}），当前模式不再信任自动化放行。"
-    "请让用户在 manual 模式下逐条批准，或先装好 bubblewrap。"
+    "Permission denied. 原因：沙箱不可用（{reason}），且这次动作证明不了只落在工作区内。"
+    "请让用户批准这一条，或改用确定性更高的做法；只读与工作区内写不受影响。"
 )
 NETWORK_MESSAGE = (
     "SANDBOX_NETWORK_DENIED: network_connect 被网络沙箱禁止（{reason}）。"
     "请勿重试同一网络请求；由用户显式调整网络能力或使用已授权的工具。"
 )
-CLASSIFIER_MESSAGE = (
-    "Permission denied. 原因：自动审查判定风险过高（{reason}）。"
-    "auto 模式下无人可以批准它；请改用非破坏性做法，或让用户切到 manual 后自己批准。"
+NET_ASK_MESSAGE = (
+    "Permission denied. 原因：网络类命令需要批准（{reason}）。"
+    "沙箱缺席时网络出口由人把守；请向用户说明要访问哪个地址、为什么，"
+    "或改用已授权的工具（如 web_search）。"
+)
+AUTO_UNANSWERED_MESSAGE = (
+    "Permission denied. 原因：auto 模式需要就「{reason}」征询用户，但本次运行没有可用的询问通道。"
+    "请让用户改用 manual 模式逐条批准，或调整权限模式后重试；不要重复提交同一调用。"
 )
 USER_MESSAGE = (
     "Permission denied. 原因：本次未获用户批准。"
@@ -115,6 +122,7 @@ MESSAGE_FOR: dict[str, str] = {
     KIND_OUTSIDE: OUTSIDE_MESSAGE,
     KIND_DEGRADED: DEGRADED_MESSAGE,
     KIND_NETWORK: NETWORK_MESSAGE,
+    KIND_NET_ASK: NET_ASK_MESSAGE,
     KIND_COST: USER_MESSAGE,
     KIND_MCP: MCP_MESSAGE,
 }
@@ -246,6 +254,13 @@ def review_facts(
         joined = "、".join(risks)
         return KIND_DANGER, joined, joined
 
+    # Without an enforcing sandbox the network boundary is held by a human, so a network
+    # command becomes a review instead of running silently. The enforcing case is denied
+    # physically before this point, and full mode runs with network=open and never lands here.
+    if action.network and sandbox is not None and sandbox.network == NETWORK_RESTRICTED:
+        target = action.network_target or "unknown"
+        return KIND_NET_ASK, f"网络出口（{target}）", target
+
     if sandbox is not None and sandbox.degraded and action.tool in APPROVAL_RULES:
         # Only managed tools come back to review: an in-workspace read never needed approval anyway.
         detail = sandbox.reason or "后端不可用"
@@ -318,8 +333,9 @@ def decide(
                 )
 
     # Resource limits are orthogonal to approval, so a restricted network is refused up front
-    # instead of surfacing later as a DNS error from the command itself.
-    if action.network and sandbox.network == "restricted":
+    # instead of surfacing later as a DNS error from the command itself. The gate needs the
+    # sandbox to be enforced: without a backend the network boundary moves to a human instead.
+    if action.network and sandbox.enforced and sandbox.network == NETWORK_RESTRICTED:
         operation = "network_listen" if "network_listen" in action.capabilities else "network_connect"
         target = action.network_target or "unknown"
         code = "SANDBOX_NETWORK_DENIED"
@@ -351,20 +367,23 @@ def decide(
     if ledger is not None and (ledger.knows(key) or paths_granted):
         return Decision(VERDICT_ALLOW, kind, "", reason, key=key, answered_by="ledger")
 
-    # Step 5, classifier: deterministic review, refusing whenever it cannot be sure.
+    # Step 5, classifier: prove the call safe, else hand it to a human. Refusal happens
+    # only when nobody can answer — a reachable human outranks the classifier's doubt.
     if approval == APPROVAL_CLASSIFIER:
         review = classify(action, rule=rule, sandbox=sandbox)
         if review.allowed:
             return Decision(VERDICT_ALLOW, kind, "classifier", reason, answered_by="classifier")
-        return Decision(
-            VERDICT_DENY,
-            kind,
-            "classifier",
-            reason,
-            CLASSIFIER_MESSAGE.format(reason=review.reason),
-            key=key,
-            answered_by="classifier",
-        )
+        if ask is None:
+            return Decision(
+                VERDICT_DENY,
+                kind,
+                "classifier",
+                reason,
+                AUTO_UNANSWERED_MESSAGE.format(reason=review.reason),
+                key=key,
+                answered_by="classifier",
+            )
+        # 判不准交人：落到第 6 步，批准与拒绝都记在用户名下。
 
     # Step 6, approval user: ask a human; a missing answerer, EOF or timeout all end in refusal.
     answerer = ask
@@ -422,29 +441,28 @@ def gate(
 
 __all__ = [
     "AskUser",
-    "CLASSIFIER_MESSAGE",
+    "AUTO_UNANSWERED_MESSAGE",
     "CREDENTIAL_MESSAGE",
     "DANGER_MESSAGE",
     "DEGRADED_MESSAGE",
     "Decision",
     "HARD_MESSAGE",
-    "NETWORK_MESSAGE",
-    "NEEDS_APPROVAL",
-    "POLICY_DENIED",
-    "SAFE_AUTO",
-    "SANDBOX_DENIED",
     "KIND_COST",
     "KIND_CREDENTIAL",
     "KIND_DANGER",
     "KIND_DEGRADED",
     "KIND_HARD",
+    "KIND_NET_ASK",
     "KIND_NETWORK",
     "KIND_OUTSIDE",
     "KIND_RULE",
     "Ledger",
     "MESSAGE_FOR",
-    "OUTSIDE_MESSAGE",
-    "RULE_MESSAGE",
+    "NET_ASK_MESSAGE",
+    "NEEDS_APPROVAL",
+    "POLICY_DENIED",
+    "SAFE_AUTO",
+    "SANDBOX_DENIED",
     "USER_MESSAGE",
     "VERDICT_ALLOW",
     "VERDICT_ASK",
