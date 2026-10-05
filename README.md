@@ -67,16 +67,18 @@ uv run --env-file .env avid --agent "读 pyproject.toml，告诉我项目名"
 ```
 
 工具执行前过一道四层裁决（硬拒绝 → 危险命令 → 越界 → 常规规则），配合三档权限模式
-（`--permission manual|auto|full`，决策表见 `avid/policy/modes.py` 模块注释）：
+（`--permission manual|auto|full`，决策事实见 `avid/security/modes.py` 与 `engine.py` 注释）：
 
-- **硬拒绝**（`rm -rf /` 这类）三种模式一律不执行；
-- **危险命令**（提权、递归删除、系统级包管理、`~/.ssh` 这类敏感路径等 15 类）三种模式
-  一律问一次，按规范化命令原文记账，同一次运行内不再重复问；
-- **越界**（目标在工作区之外）在 `strict` / `workspace` 问一次、`system` 放行；
-- 区内常规操作在 `workspace` / `system` 免问。
+- **硬拒绝**（`rm -rf /` 这类灾难命令）三种模式一律不执行；
+- **manual**：沙箱内免问；危险命令、越界写与降级后的受管动作逐个问人；
+- **auto**：只读与工作区内写自动放行；网络出口（curl/ssh/git push 等）、越界写、
+  危险命令与证明不了的命令征询用户，没有询问通道时拒绝；
+- **full**（须显式授权）：不问、不套沙箱、不限网络；硬拒绝与策略 deny 仍然生效。
 
-提示写在 stderr；非交互场景加 `--yes` 跳过询问（**硬拒绝仍然生效**）。`subagent` 的审批
-由父运行前传（子 agent 在别的线程跑），账本共用一本。
+沙箱按平台取最强可用机制：Linux 用 bubblewrap（bwrap）做内核隔离；Windows/macOS
+没有可用后端时不上锁，靠命令分类 + 审批兜底（Windows 上 `bash` 工具经 PowerShell
+运行）。提示写在 stderr；非交互场景加 `--yes` 跳过询问（**硬拒绝仍然生效**）。
+`subagent` 的审批由父运行前传（子 agent 在别的线程跑），账本共用一本。
 
 stdout 打印模型回复，stderr 打印逐轮 trace 与 token 用量。
 
