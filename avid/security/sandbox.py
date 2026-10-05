@@ -284,11 +284,13 @@ class SandboxSpec:
         return kept
 
     def child_env(self, source: Mapping[str, str] | None = None) -> dict[str, str] | None:
-        """Return the trimmed environment only when the sandbox is enforced, else None to inherit.
+        """Return the trimmed environment only when the sandbox is enforced, else the scrubbed env.
 
-        Degraded runs inherit too, since a half-applied environment is harder to diagnose.
+        降级路径不再整体继承：全量白名单在 Windows 会砍掉 SystemRoot/PSModulePath
+        弄死 PowerShell，所以降级用黑名单（:func:`scrubbed_env`）——凭据形状的
+        变量不进子进程，其余保留。
         """
-        return self.apply_env(source) if self.enforced else None
+        return self.apply_env(source) if self.enforced else scrubbed_env(source)
 
     def argv_prefix(
         self,
@@ -381,6 +383,23 @@ def _contains(base: str | Path, path: str | Path) -> bool:
     base_text = str(Path(base)).rstrip("/")
     text = str(Path(path)).rstrip("/")
     return text == base_text or text.startswith(base_text + "/")
+
+
+def scrubbed_env(source: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Blacklist-trimmed child environment for runs without an enforcing sandbox.
+
+    Drops credential-shaped names (``*TOKEN*``/``*API_KEY*``/``*SECRET*``…) and the
+    deny list (agent forwarding, desktop sockets); everything else passes through so
+    PowerShell and normal tools keep working. Enforcing runs use the stricter
+    :meth:`SandboxSpec.apply_env` whitelist instead.
+    """
+    raw = dict(os.environ if source is None else source)
+    return {
+        name: value
+        for name, value in raw.items()
+        if name not in ENV_DENY_EXACT
+        and not any(mark in name.upper() for mark in ENV_SECRET_MARKERS)
+    }
 
 
 @lru_cache(maxsize=1)
@@ -529,4 +548,5 @@ __all__ = [
     "default_backend_summary",
     "landlock_abi",
     "probe_backend",
+    "scrubbed_env",
 ]

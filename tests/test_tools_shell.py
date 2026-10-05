@@ -122,6 +122,8 @@ def test_bash_timeout_kills_the_whole_process_group(sandbox):
 
 
 def test_shell_argv_selects_the_interpreter_per_platform():
+    import base64
+
     import avid.agent.tools.shell as shell_module
     from avid.agent.tools.shell import shell_argv
 
@@ -131,9 +133,11 @@ def test_shell_argv_selects_the_interpreter_per_platform():
     windows = shell_argv("Get-Date", platform="win32")
     assert windows[0].endswith(("pwsh", "pwsh.exe", "powershell", "powershell.exe"))
     assert "-NoProfile" in windows and "-NonInteractive" in windows
-    assert windows[-1].endswith("Get-Date")
-    # 输出编码强制 UTF-8：PS 5.1 默认系统代码页，中文输出必乱码
-    assert shell_module._UTF8_PREFIX in windows[-1]
+    # -EncodedCommand（UTF-16LE base64）命令原样到达，绕开命令行转义；前缀强制 UTF-8 输出
+    assert windows[-2] == "-EncodedCommand"
+    script = base64.b64decode(windows[-1]).decode("utf-16-le")
+    assert script.startswith(shell_module._UTF8_PREFIX)
+    assert script.endswith("Get-Date")
 
 
 def test_shell_argv_reports_a_missing_powershell(monkeypatch):

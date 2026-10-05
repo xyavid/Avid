@@ -284,9 +284,11 @@ def test_env_home_is_the_host_we_computed_the_masks_for(home, tmp_path):
     assert spec.apply_env({"PATH": "/usr/bin", "HOME": "/somewhere/else"})["HOME"] == str(home)
 
 
-def test_child_env_is_none_when_not_enforced(tmp_path, home):
+def test_child_env_scrubs_instead_of_inheriting_when_not_enforced(tmp_path, home):
+    """非强制的子环境走黑名单：凭据形状的变量不进子进程，其余原样保留。"""
     spec = build_spec(policy="disabled", network="open", root=str(tmp_path), home=home, probe=WORKING)
-    assert spec.child_env({"PATH": "/usr/bin", "TAVILY_API_KEY": "x"}) is None
+    scrubbed = spec.child_env({"PATH": "/usr/bin", "TAVILY_API_KEY": "x", "SYSTEMROOT": r"C:\W"})
+    assert scrubbed == {"PATH": "/usr/bin", "SYSTEMROOT": r"C:\W"}
 
     enforced = build_spec(policy="workspace", root=str(tmp_path), home=home, probe=WORKING)
     assert enforced.child_env({"PATH": "/usr/bin", "TAVILY_API_KEY": "x"}) == {"PATH": "/usr/bin", "HOME": str(home)}
@@ -373,3 +375,30 @@ def test_real_run_can_read_a_granted_path_read_only(real_spec, tmp_path):
     assert "outside" in done.stdout
     assert "Read-only file system" in done.stdout + done.stderr
     target.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------- 降级环境黑名单（shell 适配三）
+
+
+def test_scrubbed_env_drops_credential_shaped_names():
+    from avid.security.sandbox import scrubbed_env
+
+    kept = scrubbed_env(
+        {
+            "PATH": "/usr/bin",
+            "SYSTEMROOT": r"C:\Windows",
+            "TAVILY_API_KEY": "tvly-x",
+            "AWS_SESSION_TOKEN": "tok",
+            "SOME_PASSWORD": "p",
+        }
+    )
+    assert kept == {"PATH": "/usr/bin", "SYSTEMROOT": r"C:\Windows"}
+
+
+def test_degraded_child_env_is_scrubbed_not_inherited():
+    from avid.security.modes import SANDBOX_WORKSPACE
+    from avid.security.sandbox import SandboxSpec
+
+    spec = SandboxSpec(policy=SANDBOX_WORKSPACE, available=False, reason="无后端")
+    kept = spec.child_env({"PATH": "/bin", "MY_SECRET_TOKEN": "x"})
+    assert kept == {"PATH": "/bin"}

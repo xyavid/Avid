@@ -8,6 +8,7 @@ boundary back to approvals.
 
 from __future__ import annotations
 
+import base64
 import os
 import shutil
 import signal
@@ -44,6 +45,17 @@ class ShellUnavailableError(RuntimeError):
 _UTF8_PREFIX = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
 
 
+def _encode_ps_command(script: str) -> str:
+    """Base64 of UTF-16LE bytes — the quoting-proof way to hand PowerShell a script.
+
+    ``-Command`` goes through Windows command-line escaping where embedded quotes and
+    trailing backslashes can rewrite semantics; ``-EncodedCommand`` delivers the text
+    verbatim. The downside is an opaque child cmdline in process listings, which the
+    audit log covers by recording the model's command itself.
+    """
+    return base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+
+
 def shell_argv(command: str, *, platform: str | None = None) -> list[str]:
     """Builds the interpreter argv for one command: ``bash -c`` on POSIX, PowerShell on Windows.
 
@@ -52,15 +64,23 @@ def shell_argv(command: str, *, platform: str | None = None) -> list[str]:
     """
     system = platform if platform is not None else sys.platform
     if system != "win32":
-        resolved = shutil.which("bash")
+        # sh keeps minimal POSIX systems (Alpine) working; a bashism fails at runtime
+        # and the error reaches the model, which is better than refusing to start.
+        resolved = shutil.which("bash") or shutil.which("sh")
         if resolved is None:
-            raise ShellUnavailableError("找不到 bash")
+            raise ShellUnavailableError("找不到 bash 或 sh")
         return [resolved, "-c", command]
     shell = shutil.which("pwsh") or shutil.which("powershell")
     if shell is None:
         raise ShellUnavailableError("找不到 PowerShell（需要 pwsh 或 powershell 在 PATH 中）")
     # -NoProfile keeps startup scripts out of the child; -NonInteractive stops prompts hanging.
-    return [shell, "-NoProfile", "-NonInteractive", "-Command", _UTF8_PREFIX + command]
+    return [
+        shell,
+        "-NoProfile",
+        "-NonInteractive",
+        "-EncodedCommand",
+        _encode_ps_command(_UTF8_PREFIX + command),
+    ]
 
 
 def _timeout(value: Any) -> int:
@@ -165,11 +185,11 @@ def kill_tree(process: subprocess.Popen, *, platform: str | None = None) -> None
     description="在工作区根目录执行一条 shell 命令，返回合并后的 stdout/stderr 与退出码。"
     "适合运行测试、构建、git、批量文本处理。每次调用都是独立的新 shell——"
     "需要切换目录时在同一条命令里用 cd。读写单个文件请优先用专用工具。"
-    "POSIX 上经 bash -c 运行，Windows 上经 PowerShell（-NoProfile -NonInteractive -Command）运行。",
+    "POSIX 上经 bash（缺失时 sh）运行，Windows 上经 PowerShell 运行。",
     properties={
         "command": {
             "type": "string",
-            "description": "要执行的 shell 命令（POSIX 经 bash -c，Windows 经 PowerShell -Command）。",
+            "description": "要执行的 shell 命令（POSIX 经 bash/sh，Windows 经 PowerShell）。",
         },
         "timeout_seconds": {
             "type": "integer",
