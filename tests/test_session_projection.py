@@ -1,4 +1,4 @@
-"""条目 → messages 的投影：完整链原样返回，不完整的尾巴截断。
+"""条目 → messages 的投影：完整链原样返回；没等到结果的工具批补上「结果未落盘」的合成结果（只存在于投影返回值，不落库）。
 
 判据是硬的：投影结果必须能通过 ``Transcript`` 的结构校验——否则"续接"
 在真实运行里会直接抛错。
@@ -52,6 +52,13 @@ def call(call_id="c1"):
 
 def tool(call_id="c1", content="结果"):
     return {"role": "tool", "tool_call_id": call_id, "content": content}
+
+
+# 与实现的合成文案逐字一致：恢复语义是契约，内容漂移必须被这里拦住。
+CUT_OFF = (
+    "（此调用的结果没有落盘：运行在结果记录前被切断，执行状态未知，"
+    "可能已生效。请先核实实际状态（读文件/查状态）再决定是否重做。）"
+)
 
 
 # ---------------- 压缩游标（诊断 C2：splice 只改内存，投影时应用） ----------------
@@ -163,13 +170,20 @@ def test_complete_batches_pass_through():
     assert repair_incomplete_batches(messages) == messages
 
 
-def test_trailing_assistant_without_results_is_dropped():
-    messages = [user(), assistant("", [call()])]
-    assert repair_incomplete_batches(messages) == [user()]
+def test_trailing_incomplete_batch_gets_synthesized_results():
+    # 链尾未完成批：assistant 保留，每个缺失 call 按原顺序补一条合成结果。
+    messages = [user(), assistant("", [call("c2"), call("c1")])]
+    projected = repair_incomplete_batches(messages)
+    assert projected == [
+        user(),
+        assistant("", [call("c2"), call("c1")]),
+        tool("c2", CUT_OFF),
+        tool("c1", CUT_OFF),
+    ]
 
 
-def test_incomplete_batch_in_the_middle_is_removed_and_the_rest_kept():
-    # 崩溃之后又续接出来的轮次必须保留：只丢那半截批次。
+def test_incomplete_batch_in_the_middle_is_completed_and_the_rest_kept():
+    # 崩溃之后又续接出来的轮次必须保留：半截批补全（缺的补合成结果），后面照常。
     messages = [
         user("一"),
         assistant("", [call("c1"), call("c2")]),
@@ -179,9 +193,25 @@ def test_incomplete_batch_in_the_middle_is_removed_and_the_rest_kept():
     ]
     assert repair_incomplete_batches(messages) == [
         user("一"),
+        assistant("", [call("c1"), call("c2")]),
+        tool("c1"),
+        tool("c2", CUT_OFF),
         user("续接的问题"),
         assistant("续接的回答"),
     ]
+
+
+def test_partial_results_are_kept_verbatim_and_missing_ones_synthesized():
+    messages = [user(), assistant("", [call("c1"), call("c2")]), tool("c1", "已到的结果")]
+    projected = repair_incomplete_batches(messages)
+    assert projected == [
+        user(),
+        assistant("", [call("c1"), call("c2")]),
+        tool("c1", "已到的结果"),
+        tool("c2", CUT_OFF),
+    ]
+    # 合成结果只追加在返回值里，入参列表不动：落库由 recorder 决定，投影永不写。
+    assert len(messages) == 3
 
 
 def test_orphan_tool_results_are_dropped():
@@ -194,8 +224,14 @@ def test_complete_chain_after_repair_passes_transcript_validation():
     assert Transcript(repair_incomplete_batches(messages)).validate() == []
 
 
-def test_crash_tail_is_invisible_after_projection():
-    """崩在工具结果之前：会话里留着半截，投影后模型看不到它。"""
+def test_chain_completed_with_synthesized_results_passes_transcript_validation():
+    messages = [user(), assistant("", [call("c1"), call("c2")]), tool("c1"), user("后续")]
+    repaired = repair_incomplete_batches(messages)
+    assert Transcript(repaired).validate() == []
+
+
+def test_crash_tail_is_completed_after_projection():
+    """崩在工具结果之前：投影补上「结果未落盘」的合成结果，模型先核实再决定是否重做。"""
     _, session = make_session()
     recorder = SessionRecorder(session)
     recorder.on_message(user("问题"))
@@ -203,6 +239,8 @@ def test_crash_tail_is_invisible_after_projection():
     assert session.get_stats().message_count == 2
 
     projected = messages_for_branch(session)
-    assert projected == [user("问题")]
+    assert projected == [user("问题"), assistant("", [call()]), tool("c1", CUT_OFF)]
     assert Transcript(projected).validate() == []
+    # 合成结果不落库：条目数不变
+    assert session.get_stats().message_count == 2
     session.close()

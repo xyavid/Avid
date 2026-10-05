@@ -1,4 +1,4 @@
-"""Entry chain to messages: reading a session back as one model call's input, dropping unfinished tool-call batches."""
+"""Entry chain to messages: reading a session back as one model call's input, synthesizing results for tool-call batches cut off before completion."""
 
 from __future__ import annotations
 
@@ -12,6 +12,13 @@ __all__ = ["messages_for_branch", "entries_to_messages", "repair_incomplete_batc
 
 # Both types project, because kernel-injected notices were part of the transcript the model actually saw.
 _TRANSCRIPT_TYPES = (MESSAGE_ENTRY, NOTICE_ENTRY)
+
+# 崩溃窗口的合成结果文案：对模型说明执行状态未知，先核实再决定是否重做。
+# 只存在于投影返回值（recorder 不经过这里），永不落库。
+_CUT_OFF_RESULT = (
+    "（此调用的结果没有落盘：运行在结果记录前被切断，执行状态未知，"
+    "可能已生效。请先核实实际状态（读文件/查状态）再决定是否重做。）"
+)
 
 
 def messages_for_branch(session: Any, branch: str = "main") -> list[dict[str, Any]]:
@@ -70,10 +77,20 @@ def entries_to_messages(entries: Sequence[Entry]) -> list[dict[str, Any]]:
 
 
 def repair_incomplete_batches(messages: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Drop calls whose results never all arrived, plus orphan tool results, keeping the rest in order."""
+    """Keep the chain intact; calls whose results never arrived get a synthesized cut-off notice, orphan tool results are dropped."""
     kept: list[dict[str, Any]] = []
     pending: set[str] = set()
-    batch_start: int | None = None
+    call_order: list[str] = []
+
+    def fill_missing() -> None:
+        # 按 call 在 assistant 消息里的原顺序补，缺一个补一条。
+        for call_id in call_order:
+            if call_id in pending:
+                kept.append(
+                    {"role": "tool", "tool_call_id": call_id, "content": _CUT_OFF_RESULT}
+                )
+        pending.clear()
+        call_order.clear()
 
     for message in messages:
         if message.get("role") == "tool":
@@ -85,19 +102,19 @@ def repair_incomplete_batches(messages: Sequence[dict[str, Any]]) -> list[dict[s
             kept.append(message)
             continue
 
-        # A new non-tool message means the previous batch never finished, so drop its partial results.
+        # A new non-tool message closes an unfinished batch: the assistant message and the
+        # results that did arrive stay, the missing ones get the synthesized notice.
         if pending:
-            del kept[batch_start:]
-            pending = set()
-            batch_start = None
+            fill_missing()
 
         calls = message.get("tool_calls") or []
         if calls:
-            pending = {str(call.get("id")) for call in calls}
-            batch_start = len(kept)
+            ids = [str(call.get("id")) for call in calls]
+            pending = set(ids)
+            call_order = list(dict.fromkeys(ids))
         kept.append(message)
 
     # A batch still pending at the end of the chain never completed either.
     if pending:
-        del kept[batch_start:]
+        fill_missing()
     return kept
