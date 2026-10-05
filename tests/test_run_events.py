@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import threading
 import time
+from contextlib import contextmanager
 
 import pytest
 from support import (
@@ -43,7 +44,14 @@ from avid.agent.events import (
 from avid.providers.client import LLMError
 from avid.services import Services, runs
 from avid.services.errors import RunNotFound
-from avid.session import SessionStorageError, messages_for_branch
+from avid.session import (
+    BranchScan,
+    EntryQuery,
+    SessionRecorder,
+    SessionStorageError,
+    branch_compaction,
+    messages_for_branch,
+)
 from avid.session.types import NOTICE_ENTRY
 
 
@@ -828,4 +836,101 @@ def test_skill_command_feeds_the_skill_body_as_the_user_message(sandbox):
     assert record.text == "照做"
     first_request = chat.requests[0]["messages"]
     assert any("这是演示技能的正文" in str(m.get("content")) for m in first_request)
+
+
+@contextmanager
+def open_session(services, session_id: str):
+    """等句柄交还后持锁直读会话（运行线程在终态事件之后才关句柄）。
+
+    先进句柄锁再 open：运行线程交还句柄也走同一把锁，否则有撞
+    SessionAlreadyOpenError 的窗口。
+    """
+    wait_handle_released(services, session_id)
+    with services.runs.session_lock(session_id):
+        session = services.repo.open(services.runs.find_metadata(session_id))
+        try:
+            yield session
+        finally:
+            session.close()
+
+
+def test_rewind_command_rolls_back_the_last_user_turn(sandbox):
+    """'/rewind'：对话指针回移、压缩游标清除、文件恢复到该输入前，run 以 command 收尾。
+
+    两轮都用真的 write_file（不注入注册表），写前快照随运行落盘：回滚第二轮后，
+    第一轮写的文件回到原样，第二轮新建的文件被删。
+    """
+    chat = ScriptedChat(
+        make_turn("", [tool_call("write_file", '{"path": "notes.txt", "content": "第一版"}')]),
+        make_turn("第一答"),
+        make_turn(
+            "",
+            [
+                tool_call("write_file", '{"path": "notes.txt", "content": "第二版"}', "call_2"),
+                tool_call("write_file", '{"path": "created.txt", "content": "第二轮新建"}', "call_3"),
+            ],
+        ),
+        make_turn("第二答"),
+    )
+    services = build(sandbox, chat)
+    session_id = new_session(services)
+
+    first = services.runs.start(session_id, "第一问", auto_approve=True)
+    assert wait_terminal(first)
+    second = services.runs.start(session_id, "第二问", auto_approve=True)
+    assert wait_terminal(second)
+    assert (sandbox / "notes.txt").read_text(encoding="utf-8") == "第二版"
+    assert (sandbox / "created.txt").exists()
+
+    # 模拟 /compact 留下的现场：投影用摘要替代被游标覆盖的前缀
+    with open_session(services, session_id) as session:
+        SessionRecorder(session).record_compaction(
+            {"role": "user", "content": "[历史摘要] 前两轮"}, keep=2
+        )
+        assert session.get_value(branch_compaction("main")) is not None
+
+    record = services.runs.start(session_id, "/rewind")
+    assert wait_terminal(record), record.status
+
+    assert record.status == "finished"
+    finished = next(e for e in collect(services, record.run_id) if e.type == RUN_FINISHED)
+    assert finished.data["reason"] == "command"
+
+    # 文件：第二轮改过的恢复原样，第二轮新建的删除
+    assert (sandbox / "notes.txt").read_text(encoding="utf-8") == "第一版"
+    assert not (sandbox / "created.txt").exists()
+
+    # 汇总：移出第二问及其全部后续（5 条），恢复 1 个、删除 1 个
+    assert "移出 5 条" in record.text
+    assert "恢复 1 个" in record.text and "删除 1 个" in record.text
+
+    with open_session(services, session_id) as session:
+        entries = session.branch("main").find_entries(BranchScan(order="oldestFirst"))
+        contents = [str(entry.message.get("content")) for entry in entries if entry.message]
+        assert contents[0] == "第一问"
+        assert "第二问" not in contents and "第二答" not in contents
+        # 汇总作为 assistant 条目落在回滚后的链尾
+        assert entries[-1].message is not None
+        assert entries[-1].message["role"] == "assistant"
+        assert "已回滚" in contents[-1]
+        # 压缩游标被清掉：不清则投影把摘要接在被回滚的链上
+        assert session.get_value(branch_compaction("main")) is None
+        # 孤儿条目留在盘上（append-only）：全局扫描仍能看到被移出的对话
+        every = session.find_entries(EntryQuery(order="asc"))
+        assert any(
+            entry.message and entry.message.get("content") == "第二问" for entry in every
+        )
+
+
+def test_rewind_command_without_a_user_input_says_so(sandbox):
+    """空会话没有可回滚的锚点：命令照常以 assistant 汇总收尾，不报错。"""
+    services = build(sandbox, ScriptedChat())
+    record = run_to_end(services, prompt="/rewind")
+
+    assert record.status == "finished"
+    assert record.text == "没有可回滚的用户输入"
+    finished = next(
+        e for e in collect(services, record.run_id) if e.type == RUN_FINISHED
+    )
+    assert finished.data["reason"] == "command"
 

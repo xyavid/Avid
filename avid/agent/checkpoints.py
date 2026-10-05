@@ -22,6 +22,9 @@ tip 条目的 seq；目录内 manifest.json 是条目数组 [{path, blob, absent
 一个 sink 实例服务一个会话的进程内生命周期：会话条目 seq 全局单调，每次落库
 都会推进 tip，所以「当前 seq 已快照路径」的内存记录不会与其它 sink 实例冲突。
 并行 subagent 共享同一个实例，snapshot 全程持锁。
+
+/rewind 的纯件也在这里：rewind_target 在一条分支链上找回滚锚点，restore_tally
+把 restore 的报告行折成计数。会话访问（tip 回指、游标清除）由调用方接线。
 """
 
 from __future__ import annotations
@@ -29,14 +32,18 @@ from __future__ import annotations
 import json
 import os
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple, Protocol
 
 _CHECKPOINTS_RELPATH = Path(".avid") / "checkpoints"
 _MANIFEST = "manifest.json"
 _SEQ_WIDTH = 12
 _NOTHING_TO_RESTORE = "没有需要恢复的文件"
+
+# 会话层条目判别（session.types.MESSAGE_ENTRY）：内核不反向 import 会话层，
+# 这个字面量由用真实 Entry 构造的单元测试钉住。
+_TRANSCRIPT_ENTRY = "message"
 
 
 class DirCheckpointSink:
@@ -148,3 +155,43 @@ def _seq_dirs(session_dir: Path, *, after: int) -> list[Path]:
         if child.is_dir() and child.name.isdigit() and int(child.name) > after:
             found.append((int(child.name), child))
     return [path for _, path in sorted(found)]
+
+
+class RewindTarget(NamedTuple):
+    """一次 /rewind 的落点：对话指针回到 parent_id，文件恢复到 through_seq 时的样子。"""
+
+    parent_id: str | None
+    through_seq: int
+
+
+class _ChainEntry(Protocol):
+    """rewind_target 依赖的最小条目形状；会话层的 Entry 满足它（内核不 import 会话层）。"""
+
+    type: str
+    parent_id: str | None
+    seq: int
+    message: dict[str, Any] | None
+
+
+def rewind_target(entries: Sequence[_ChainEntry]) -> RewindTarget | None:
+    """在 oldest-first 的分支链上找最后一次用户输入，作为 /rewind 的锚点。
+
+    只认 message 型且 role=user 的条目——notice 条目（role 同为 user 的内核注入）
+    不是人说的话，不能当锚点。链上没有这样的条目返回 None（无可回滚）。锚点的
+    seq 同时是 restore 的 through_seq：该输入落库时刻文件尚未被本轮改动。
+    """
+    for entry in reversed(entries):
+        if entry.type != _TRANSCRIPT_ENTRY or entry.message is None:
+            continue
+        if entry.message.get("role") != "user":
+            continue
+        return RewindTarget(entry.parent_id, entry.seq)
+    return None
+
+
+def restore_tally(lines: Sequence[str]) -> tuple[int, int]:
+    """把 restore 的报告行折成（恢复数，删除数）；失败行不算成功，如实落进文本。"""
+    return (
+        sum(1 for line in lines if line.startswith("已恢复")),
+        sum(1 for line in lines if line.startswith("已删除")),
+    )

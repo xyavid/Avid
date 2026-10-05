@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .agent import commands as commands_module
-from .agent.checkpoints import DirCheckpointSink
+from .agent.checkpoints import DirCheckpointSink, restore, restore_tally, rewind_target
 from .agent.run import Run
 from .agent.spec import RunSpec
 from .agent.state import RunState
@@ -39,10 +39,13 @@ from .services.workspace_registry import (
 )
 from .services.workspaces import WorkspaceInvalid, bound_workspace
 from .session import (
+    BranchScan,
     JsonlSessionMetadata,
     JsonlSessionRepo,
     SessionError,
     SessionRecorder,
+    branch_compaction,
+    branch_tip,
     messages_for_branch,
 )
 from .web.app import (
@@ -437,7 +440,10 @@ def _interactive(args: argparse.Namespace, config) -> int:
                     skill_names=commands_module.skill_names(workspace_root=target.root),
                 )
             if match is not None and match.kind == commands_module.KIND_COMMAND:
-                _compact_now(session, recorder, config, target)
+                if match.name == "rewind":
+                    _rewind_now(session, recorder, Path(target.root))
+                else:
+                    _compact_now(session, recorder, config, target)
                 continue
             if match is not None and match.kind == commands_module.KIND_SKILL:
                 body = commands_module.skill_text(match.name, workspace_root=target.root)
@@ -505,6 +511,38 @@ def _compact_now(session, recorder: SessionRecorder, config, target) -> None:
         print("没有可压缩的更早历史（或摘要失败），会话保持不变", file=sys.stderr)
     else:
         print(f"已压缩：{report.describe()}", file=sys.stderr)
+
+
+def _rewind_now(session, recorder: SessionRecorder, root: Path) -> None:
+    """/rewind 的执行体：对话指针回移到最近一次用户输入之前，文件恢复到该点。
+
+    条目只追加：被移出的对话留在盘上；压缩游标覆盖的前缀属于旧链，必须一并清掉，
+    否则投影把摘要接在被回滚的链上。
+    """
+    branch = session.branch(recorder.branch)
+    chain = (
+        branch.find_entries(BranchScan(order="oldestFirst"))
+        if branch is not None
+        else []
+    )
+    found = rewind_target(chain)
+    if found is None:
+        print("没有可回滚的用户输入", file=sys.stderr)
+        return
+    if found.parent_id is None:
+        session.delete_value(branch_tip(recorder.branch))
+    else:
+        session.set_value(branch_tip(recorder.branch), found.parent_id)
+    session.delete_value(branch_compaction(recorder.branch))
+    lines = restore(
+        root=root, session_id=session.metadata.id, through_seq=found.through_seq
+    )
+    restored, deleted = restore_tally(lines)
+    removed = sum(1 for entry in chain if entry.seq >= found.through_seq)
+    print(
+        f"已回滚：移出 {removed} 条；文件恢复 {restored} 个、删除 {deleted} 个",
+        file=sys.stderr,
+    )
 
 
 def _session_admin(args: argparse.Namespace) -> int:

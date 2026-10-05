@@ -13,6 +13,8 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from support import make_turn as scripted_turn
+from support import tool_call
 
 from avid import cli
 from avid.agent.context import TAIL_HEADER
@@ -408,6 +410,64 @@ def test_interactive_turn_skill_and_unknown_command(sandbox, model, monkeypatch,
         try:
             contents = [m["content"] for m in messages_for_branch(session)]
             assert any("这是演示技能的正文" in str(c) for c in contents)
+        finally:
+            session.close()
+    finally:
+        repo.close()
+
+
+def test_interactive_rewind_restores_files_and_moves_the_tip_back(
+    sandbox, monkeypatch, capsys
+):
+    """/rewind：文件恢复到该输入之前，第二问及其全部后续移出对话（孤儿留在盘上）。"""
+    # Model.answer 只会包装纯文本回合；这里要真 write_file（写前快照 + 落盘），自己接 FakeRun。
+    chat = FakeChat(
+        scripted_turn("", [tool_call("write_file", '{"path": "notes.txt", "content": "第一版"}')]),
+        scripted_turn("第一答"),
+        scripted_turn(
+            "",
+            [tool_call("write_file", '{"path": "notes.txt", "content": "第二版"}', "call_2")],
+        ),
+        scripted_turn("第二答"),
+    )
+
+    class FakeRun:
+        def __init__(self, messages, spec, **kwargs):
+            self._args = (messages, replace(spec, chat=chat), kwargs)
+
+        def run(self):
+            messages, spec, kwargs = self._args
+            return RealRun(messages, spec, **kwargs).run()
+
+    monkeypatch.setattr(cli, "Run", FakeRun)
+
+    answers = iter(["写一下", "改成第二版", "/rewind"])
+
+    def fake_input(prompt=""):
+        try:
+            return next(answers)
+        except StopIteration:
+            raise EOFError() from None
+
+    monkeypatch.setattr("builtins.input", fake_input)
+
+    assert cli.main(["--new-session"]) == 0
+
+    err = capsys.readouterr().err
+    assert "已回滚" in err and "移出 4 条" in err and "恢复 1 个" in err
+    assert (sandbox / "notes.txt").read_text(encoding="utf-8") == "第一版"
+
+    from avid.services.workspace_registry import sessions_root
+    from avid.session import JsonlSessionRepo, messages_for_branch
+
+    target = cli._resolve_workspace(None)
+    repo = JsonlSessionRepo(sessions_root(target), workspace=target.id)
+    try:
+        session = repo.open(repo.list()[0])
+        try:
+            contents = [str(m.get("content")) for m in messages_for_branch(session)]
+            assert contents[0] == "写一下" and contents[-1] == "第一答"
+            assert "改成第二版" not in contents and "第二答" not in contents
         finally:
             session.close()
     finally:

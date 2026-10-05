@@ -53,6 +53,15 @@ def test_registered_command_matches():
     assert match.name == "compact"
 
 
+def test_rewind_is_a_registered_command():
+    match = commands.match_command("/rewind")
+
+    assert "rewind" in commands.COMMANDS
+    assert match is not None
+    assert match.kind == commands.KIND_COMMAND
+    assert match.name == "rewind"
+
+
 def test_skill_name_matches_before_unknown():
     match = commands.match_command("/pdf", skill_names=["pdf", "code-review"])
 
@@ -75,7 +84,7 @@ def test_help_text_lists_commands_and_skills(tmp_path):
 
     text = commands.help_text(workspace_root=str(tmp_path))
 
-    assert "/compact" in text and "/pdf" in text
+    assert "/compact" in text and "/rewind" in text and "/pdf" in text
 
 
 # ---------- 技能文本 ----------

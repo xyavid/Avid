@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from ..agent import commands as commands_module
-from ..agent.checkpoints import DirCheckpointSink
+from ..agent.checkpoints import DirCheckpointSink, restore, restore_tally, rewind_target
 from ..agent.events import (
     ASSISTANT_DELTA,
     ASSISTANT_MESSAGE,
@@ -45,9 +45,12 @@ from ..providers.config import ConfigError
 from ..security.permission import build_run_security, full_grant_error
 from ..session import (
     DEFAULT_BRANCH,
+    BranchScan,
     SessionError,
     SessionMetadata,
     SessionRecorder,
+    branch_compaction,
+    branch_tip,
     messages_for_branch,
 )
 from .approvals import APPROVAL_TIMEOUT_SECONDS, ApprovalTable
@@ -110,7 +113,7 @@ class RunRecord:
     finished_at: int | None = None
     # 本次运行的模型覆盖（界面选的那个）；None = 按设置解析。
     model: str | None = None
-    # 会话内命令（"compact" / "unknown"）；None = 普通运行。
+    # 会话内命令（"compact" / "rewind" / "unknown"）；None = 普通运行。
     command: str | None = None
 
     # Event buffer holding durable and transient events; deltas never take part in replay.
@@ -758,6 +761,40 @@ class RunRegistry:
                     if report is not None
                     else "没有可压缩的更早历史（或摘要失败），会话保持不变"
                 )
+                self._message_sink(record, recorder)({"role": "assistant", "content": text})
+                record.text = text
+                self._finish(record, RUN_FINISHED, text=text, reason="command")
+                return
+            if record.command == "rewind":
+                branch_view = session.branch(recorder.branch)
+                chain = (
+                    branch_view.find_entries(BranchScan(order="oldestFirst"))
+                    if branch_view is not None
+                    else []
+                )
+                target = rewind_target(chain)
+                if target is None:
+                    text = "没有可回滚的用户输入"
+                else:
+                    if target.parent_id is None:
+                        session.delete_value(branch_tip(recorder.branch))
+                    else:
+                        session.set_value(branch_tip(recorder.branch), target.parent_id)
+                    # 游标覆盖的前缀属于被回滚的旧链：不清则投影把摘要接在残链上。
+                    session.delete_value(branch_compaction(recorder.branch))
+                    lines = restore(
+                        root=Path(workspace.root),
+                        session_id=session.metadata.id,
+                        through_seq=target.through_seq,
+                    )
+                    restored, deleted = restore_tally(lines)
+                    removed = sum(
+                        1 for entry in chain if entry.seq >= target.through_seq
+                    )
+                    text = (
+                        f"已回滚：移出 {removed} 条；"
+                        f"文件恢复 {restored} 个、删除 {deleted} 个"
+                    )
                 self._message_sink(record, recorder)({"role": "assistant", "content": text})
                 record.text = text
                 self._finish(record, RUN_FINISHED, text=text, reason="command")

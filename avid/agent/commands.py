@@ -1,12 +1,13 @@
-"""会话内命令：`/compact` 与 `/<技能名>`（内核单点解析，CLI 与 Web 共用）。
+"""会话内命令：`/compact`、`/rewind` 与 `/<技能名>`（内核单点解析，CLI 与 Web 共用）。
 
 规则：`/name` **单 token**（名字形如 `[a-z][a-z0-9_-]*`，无嵌套斜杠与点）才落
 进命令命名空间——`/home/x` 这类路径与含空白的文本原样透传。落在命名空间内：
 命中已注册命令或当前工作区的技能名 → 命令；否则 unknown（调用方给提示，
 不发给模型）。
 
-执行体也在这里：`compact_session` 对一段历史强制压缩一次（摘要调用由调用方
-注入），`skill_text` 取技能全文（写入会话由调用方落库）。
+执行体分两类：`compact_session` 与 `skill_text` 在这里（会话写入由调用方落库）；
+`rewind` 只在本模块注册名字——它要回移分支 tip、清压缩游标，会话访问由调用方
+接线（CLI 与 svc 各自实现，本模块不 import session 包）。
 """
 
 from __future__ import annotations
@@ -22,8 +23,8 @@ from .skills import SkillLoader, default_skills_dir
 #: 命令命名空间：单 token 的 /name；路径（多段斜杠）与散文本都落在命名空间外。
 _TOKEN = re.compile(r"^/([a-z][a-z0-9_-]*)$")
 
-#: 已注册命令（v1 只有压缩；技能名不与它们冲突时按技能解析）。
-COMMANDS = ("compact",)
+#: 已注册命令（技能名不与它们冲突时按技能解析）。
+COMMANDS = ("compact", "rewind")
 
 KIND_COMMAND = "command"
 KIND_SKILL = "skill"
@@ -69,7 +70,7 @@ def help_text(*, workspace_root: str | None) -> str:
     """未知命令时的提示：可用命令与当前工作区的技能。"""
     skills = skill_names(workspace_root=workspace_root)
     skill_part = "、".join(f"/{name}" for name in skills) if skills else "（当前没有技能）"
-    return f"可用命令：/compact；可用技能：{skill_part}"
+    return f"可用命令：/compact、/rewind；可用技能：{skill_part}"
 
 
 def compact_session(
