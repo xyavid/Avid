@@ -9,8 +9,10 @@ boundary back to approvals.
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import subprocess
+import sys
 import threading
 from collections import deque
 from collections.abc import Callable
@@ -31,6 +33,26 @@ MAX_OUTPUT_CHARS = 20000
 # otherwise marks the command as flooding; it bounds memory at 12 x MAX_OUTPUT_CHARS.
 DRAIN_FACTOR = 12
 READ_CHUNK = 8192
+
+
+class ShellUnavailableError(RuntimeError):
+    """No usable shell interpreter on this platform; the tool reports it instead of guessing."""
+
+
+def shell_argv(command: str, *, platform: str | None = None) -> list[str]:
+    """Builds the interpreter argv for one command: ``bash -c`` on POSIX, PowerShell on Windows.
+
+    pwsh (PowerShell 7) is preferred, Windows PowerShell 5.1 is the fallback. The tool keeps
+    the name ``bash`` for contract stability — the platform fact lives in the schema text.
+    """
+    system = platform if platform is not None else sys.platform
+    if system != "win32":
+        return ["bash", "-c", command]
+    resolved = shutil.which("pwsh") or shutil.which("powershell")
+    if resolved is None:
+        raise ShellUnavailableError("找不到 PowerShell（需要 pwsh 或 powershell 在 PATH 中）")
+    # -NoProfile keeps startup scripts out of the child; -NonInteractive stops prompts hanging.
+    return [resolved, "-NoProfile", "-NonInteractive", "-Command", command]
 
 
 def _timeout(value: Any) -> int:
@@ -107,8 +129,22 @@ def _read_into(
         return
 
 
-def _kill_group(process: subprocess.Popen) -> None:
-    """Kills the whole process group, falling back to the process when the group is gone."""
+def kill_tree(process: subprocess.Popen, *, platform: str | None = None) -> None:
+    """Kills the whole process tree: the POSIX process group, or ``taskkill /T`` on Windows.
+
+    taskkill walks the PID tree, which stands in for the process group there.
+    """
+    system = platform if platform is not None else sys.platform
+    if system == "win32":
+        with suppress(OSError, subprocess.SubprocessError):
+            subprocess.run(  # noqa: S603 - fixed argv built from the child's pid
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+                check=False,
+            )
+        return
     try:
         os.killpg(os.getpgid(process.pid), signal.SIGKILL)
     except (OSError, ProcessLookupError):
@@ -120,11 +156,12 @@ def _kill_group(process: subprocess.Popen) -> None:
     name="bash",
     description="在工作区根目录执行一条 shell 命令，返回合并后的 stdout/stderr 与退出码。"
     "适合运行测试、构建、git、批量文本处理。每次调用都是独立的新 shell——"
-    "需要切换目录时在同一条命令里用 cd。读写单个文件请优先用专用工具。",
+    "需要切换目录时在同一条命令里用 cd。读写单个文件请优先用专用工具。"
+    "POSIX 上经 bash -c 运行，Windows 上经 PowerShell（-NoProfile -NonInteractive -Command）运行。",
     properties={
         "command": {
             "type": "string",
-            "description": "要执行的 shell 命令，通过 bash -lc 运行。",
+            "description": "要执行的 shell 命令（POSIX 经 bash -c，Windows 经 PowerShell -Command）。",
         },
         "timeout_seconds": {
             "type": "integer",
@@ -153,7 +190,10 @@ def bash(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     # or a unit test) means the caller is the host itself, so nothing is wrapped.
     security = getattr(state, "security", None)
     spec = getattr(security, "sandbox", None)
-    argv = ["bash", "-c", command]
+    try:
+        argv = shell_argv(command)
+    except ShellUnavailableError as exc:
+        return f"错误：{exc}"
     env = None
     if spec is not None:
         grants = state.sandbox_grants() if state is not None else ()
@@ -169,7 +209,8 @@ def bash(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
             text=True,
             errors="replace",
             # Its own process group, so a timeout can clear the descendants as well.
-            start_new_session=True,
+            # POSIX-only parameter: Windows relies on taskkill /T walking the PID tree.
+            start_new_session=(sys.platform != "win32"),
         )
     except OSError as exc:
         return f"错误：无法执行命令：{exc}"
@@ -178,12 +219,12 @@ def bash(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     readers = [
         threading.Thread(
             target=_read_into,
-            args=(process.stdout, out, lambda: _kill_group(process)),
+            args=(process.stdout, out, lambda: kill_tree(process)),
             daemon=True,
         ),
         threading.Thread(
             target=_read_into,
-            args=(process.stderr, err, lambda: _kill_group(process)),
+            args=(process.stderr, err, lambda: kill_tree(process)),
             daemon=True,
         ),
     ]
@@ -194,7 +235,7 @@ def bash(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
 
     def on_deadline() -> None:
         timed_out.set()
-        _kill_group(process)
+        kill_tree(process)
 
     watchdog = threading.Timer(timeout, on_deadline)
     watchdog.start()

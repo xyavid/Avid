@@ -116,3 +116,63 @@ def test_bash_timeout_kills_the_whole_process_group(sandbox):
 
     time.sleep(1.2)  # 越过子壳原本要写标记的时刻
     assert not (sandbox / "late-marker").exists(), "子进程活下来了：超时没清进程组"
+
+
+# ---------------------------------------------------------------- 平台适配
+
+
+def test_shell_argv_selects_the_interpreter_per_platform():
+    from avid.agent.tools.shell import shell_argv
+
+    assert shell_argv("ls", platform="linux") == ["bash", "-c", "ls"]
+
+    windows = shell_argv("Get-Date", platform="win32")
+    assert windows[0].endswith(("pwsh", "pwsh.exe", "powershell", "powershell.exe"))
+    assert "-NoProfile" in windows and "-NonInteractive" in windows
+    assert windows[-1] == "Get-Date"
+
+
+def test_shell_argv_reports_a_missing_powershell(monkeypatch):
+    import pytest
+
+    import avid.agent.tools.shell as shell_module
+    from avid.agent.tools.shell import ShellUnavailableError, shell_argv
+
+    monkeypatch.setattr(shell_module.shutil, "which", lambda name: None)
+    with pytest.raises(ShellUnavailableError):
+        shell_argv("Get-Date", platform="win32")
+
+
+def test_kill_tree_uses_taskkill_on_windows(monkeypatch):
+    from types import SimpleNamespace
+
+    import avid.agent.tools.shell as shell_module
+    from avid.agent.tools.shell import kill_tree
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        shell_module.subprocess, "run", lambda argv, **kwargs: calls.append(argv)
+    )
+    kill_tree(SimpleNamespace(pid=4321), platform="win32")
+    assert calls == [["taskkill", "/PID", "4321", "/T", "/F"]]
+
+
+def test_kill_tree_posix_path_kills_the_process_group(monkeypatch):
+    import avid.agent.tools.shell as shell_module
+    from avid.agent.tools.shell import kill_tree
+
+    seen: list[tuple[int, int]] = []
+
+    class FakeProcess:
+        pid = 777
+
+    def fake_getpgid(pid):
+        return 700 + pid
+
+    def fake_killpg(pgid, sig):
+        seen.append((pgid, sig))
+
+    monkeypatch.setattr(shell_module.os, "getpgid", fake_getpgid)
+    monkeypatch.setattr(shell_module.os, "killpg", fake_killpg)
+    kill_tree(FakeProcess(), platform="linux")
+    assert seen == [(700 + 777, shell_module.signal.SIGKILL)]
