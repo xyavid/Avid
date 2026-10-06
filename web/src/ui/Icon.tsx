@@ -32,6 +32,8 @@
  * | user | 消息组的用户侧标识（阶段 4） |
  * | more-horizontal | 项目行的「更多」（悬停现形，按下出删除，阶段 12） |
  * | sparkle | 输入区的模型选择胶囊（阶段 13） |
+ * | panel-right | 顶栏的侧边 dock 入口（阶段 48） |
+ * | activity | dock 进程面板页签（阶段 48） |
  */
 
 import type { ReactNode } from 'react'
@@ -104,6 +106,13 @@ const PATHS = {
       <path d="M12 19h8" />
     </>
   ),
+  'panel-right': (
+    <>
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M15 3v18" />
+    </>
+  ),
+  activity: <path d="M22 12h-4l-3 9L9 3l-3 9H2" />,
   globe: (
     <>
       <circle cx="12" cy="12" r="10" />

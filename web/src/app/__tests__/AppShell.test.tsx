@@ -4,16 +4,15 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { AppShell } from '../AppShell'
 
-describe('AppShell 骨架（阶段 1）', () => {
+describe('AppShell 骨架（阶段 1 立，阶段 48 支持无 rail 两列）', () => {
   afterEach(cleanup)
 
-  it('渲染顶栏字标与三栏区域的验收标注', () => {
+  it('渲染顶栏字标与侧栏、对话列的验收标注', () => {
     render(<AppShell />)
 
     expect(screen.getByText('Avid')).toBeTruthy()
     expect(screen.getByText(/侧栏 240px/)).toBeTruthy()
     expect(screen.getByText(/对话列 ≤720px/)).toBeTruthy()
-    expect(screen.getByText(/右栏 280px/)).toBeTruthy()
   })
 
   it('顶栏是「标记 + 字标」的锁定组合（标记是图，不是内联 SVG）', () => {
@@ -35,6 +34,21 @@ describe('AppShell 骨架（阶段 1）', () => {
     expect(container.querySelectorAll('button, input, svg')).toHaveLength(0)
     expect(container.querySelectorAll('img')).toHaveLength(1)
     expect(screen.getByText(/侧栏 240px/)).toBeTruthy()
-    expect(screen.getByText(/右栏 280px/)).toBeTruthy()
+  })
+
+  it('不给 rail：骨架退两列（style 覆盖三列模板），dock 接管右缘', () => {
+    const { container } = render(<AppShell />)
+
+    const grid = container.querySelector('div[class*="grid-cols-"]') as HTMLElement
+    expect(grid.getAttribute('style') ?? '').toContain('grid-template-columns')
+    expect(screen.queryByText(/右栏 280px/)).toBeNull()
+  })
+
+  it('给 rail：三列骨架原样，右栏内容进第三列', () => {
+    const { container } = render(<AppShell rail={<p>右栏内容</p>} />)
+
+    const grid = container.querySelector('div[class*="grid-cols-"]') as HTMLElement
+    expect(grid.getAttribute('style')).toBeNull()
+    expect(screen.getByText('右栏内容')).toBeTruthy()
   })
 })

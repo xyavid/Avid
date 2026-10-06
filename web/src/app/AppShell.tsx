@@ -38,16 +38,21 @@ export function AppShell({ sidebar, main, rail, actions }: AppShellProps) {
         {actions}
       </header>
 
-      <div className="grid min-h-0 grid-cols-[var(--sidebar-width)_minmax(0,1fr)_var(--channel-inspector-width)]">
+      <div
+        className="grid min-h-0 grid-cols-[var(--sidebar-width)_minmax(0,1fr)_var(--channel-inspector-width)]"
+        style={rail ? undefined : { gridTemplateColumns: 'var(--sidebar-width) minmax(0, 1fr)' }}
+      >
         <aside className="flex min-h-0 flex-col border-r border-hair bg-sidebar p-a12">
           {sidebar ?? <RegionNote>侧栏 240px · 会话列表占位</RegionNote>}
         </aside>
 
         <main className="min-h-0 overflow-hidden">{main ?? <RegionNote>对话列 ≤720px · 阶段 4 组装</RegionNote>}</main>
 
-        <aside ref={railScrollRef} className="scroll-auto min-h-0 overflow-y-auto border-l border-hair p-a12">
-          {rail ?? <RegionNote>右栏 280px · 上下文占位</RegionNote>}
-        </aside>
+        {rail && (
+          <aside ref={railScrollRef} className="scroll-auto min-h-0 overflow-y-auto border-l border-hair p-a12">
+            {rail}
+          </aside>
+        )}
       </div>
     </div>
   )

@@ -35,11 +35,13 @@ import { Timeline, toolIcon } from '../../components/chat/Timeline'
 import { ToolCard } from '../../components/chat/ToolCard'
 import { UserBubble } from '../../components/chat/UserBubble'
 import { useRunStream } from '../../state/useRunStream'
+import { useDock } from '../../state/dock'
+import { Dock } from '../../components/dock/Dock'
 import { Button } from '../../ui/Button'
+import { IconButton } from '../../ui/IconButton'
 import { AvidMark } from '../../ui/Mark'
 import { Icon } from '../../ui/Icon'
 import { useConversationScroll, type ScrollAnchor } from '../../ui/useConversationScroll'
-import { ContextRail } from '../../components/rail/ContextRail'
 import { SettingsModal } from '../../components/settings/SettingsModal'
 import { ProjectCard } from '../../components/session/ProjectCard'
 import { SessionNav } from '../../components/session/SessionNav'
@@ -146,6 +148,7 @@ export function ConversationPage() {
   const liveHereForScroll =
     liveSession === selectedId &&
     (live.phase === 'starting' || live.phase === 'running' || live.phase === 'settling')
+  const dock = useDock()
   const scroll = useConversationScroll(
     `${entries?.length ?? -1}|${liveHereForScroll ? live.assistantText.length : 0}|${
       liveHereForScroll ? live.reasoning.length : 0
@@ -466,6 +469,14 @@ export function ConversationPage() {
   return (
     <>
       <AppShell
+      actions={
+        <IconButton
+          icon="panel-right"
+          label="侧边栏"
+          aria-pressed={dock.open}
+          onClick={dock.toggle}
+        />
+      }
       sidebar={
         <div className="flex min-h-0 flex-1 flex-col gap-a12">
           <ProjectCard
@@ -561,7 +572,17 @@ export function ConversationPage() {
           />
         </div>
       }
-        rail={<ContextRail usage={usage} />}
+      />
+      <Dock
+        open={dock.open}
+        active={dock.active}
+        onSelect={dock.select}
+        onClose={dock.close}
+        usage={usage}
+        phase={liveHere ? live.phase : null}
+        tools={liveHere ? live.tools : []}
+        approvals={liveHere ? live.approvals : []}
+        onDecide={(id, decision) => void live.decide(id, decision)}
       />
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
     </>
