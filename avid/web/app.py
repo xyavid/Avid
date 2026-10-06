@@ -18,7 +18,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from ..services import API_VERSION, Services
 from ..services.errors import ServiceError
-from .routes import approvals, events, meta, runs, sessions, settings, workspaces
+from .routes import approvals, events, meta, runs, sessions, settings, terminal, workspaces
 from .schemas import ErrorBody, ErrorOut
 
 logger = logging.getLogger("avid.web.app")
@@ -183,7 +183,7 @@ def create_app(
             ),
         )
 
-    for module in (meta, sessions, runs, approvals, events, workspaces, settings):
+    for module in (meta, sessions, runs, approvals, events, workspaces, settings, terminal):
         app.include_router(module.router, prefix="/api")
 
     @app.api_route(

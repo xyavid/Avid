@@ -172,13 +172,17 @@ def test_a12_frontend_has_no_third_party_urls_outside_api():
     #     而它们不产生请求；
     #   · `www.w3.org/`：XML 命名空间标识（`xmlns="http://www.w3.org/2000/svg"`）。
     #     它是格式要求的名字，不是可请求的端点——SVG 数据地址里必须有它，
-    #     浏览器才认这是 SVG。规则拦的是运行时代码里的第三方端点，这两类都不沾边。
+    #     浏览器才认这是 SVG。
+    #   · `https://${…}`：协议补全前缀（浏览器面板地址栏的默认 scheme）——
+    #     模板串里没有主机名，主机名来自运行时的用户输入，不存在硬编码端点。
+    #     规则拦的是运行时代码里的第三方端点，这三类都不沾边。
     found = [
         item
         for item in hits(frontend_sources(), r"https?://")
         if not item.split(":")[0].startswith("web/src/api/")
         and "/__tests__/" not in item.split(":")[0]
         and "www.w3.org/" not in item
+        and "https://${" not in item
     ]
     assert found == [], f"前端在 api/ 之外直连了第三方：{found}"
 
