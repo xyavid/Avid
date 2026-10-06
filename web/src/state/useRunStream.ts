@@ -14,7 +14,7 @@
  * 流异常断开：轮询 getRun 到终态（web-ui §终端兜底），不无限重连。
  */
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { cancelRun, decideApproval, getRun, startRun } from '../api/client'
 import { subscribeRun } from '../api/events'
@@ -43,12 +43,55 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
   const runIdRef = useRef<string | null>(null)
   const subRef = useRef<{ abort: () => void } | null>(null)
   const settlingRef = useRef(false)
+  // delta 合帧：增量文本先进 ref，rAF 每帧至多刷一次 state——流式重渲染从
+  // 「每 token 两次」（assistant/reasoning 各一次）降到「每帧至多一次」，
+  // Markdown 的重解析随之合帧（它是按文本记忆化的，state 不变就不重算）。
+  // 哨兵用独立布尔而非帧句柄：句柄赋值发生在 rAF 注册之后，同步执行的
+  // 测试桩会把「已消费」的句柄覆盖回非空，卡死后续所有增量。
+  const pendingFrameRef = useRef(false)
+  const frameHandleRef = useRef<number | null>(null)
+  const pendingAssistantRef = useRef('')
+  const pendingReasoningRef = useRef('')
+  const flushDeltas = useCallback(() => {
+    if (pendingAssistantRef.current) {
+      const text = pendingAssistantRef.current
+      pendingAssistantRef.current = ''
+      setAssistantText((cur) => cur + text)
+    }
+    if (pendingReasoningRef.current) {
+      const text = pendingReasoningRef.current
+      pendingReasoningRef.current = ''
+      setReasoning((cur) => cur + text)
+    }
+  }, [])
+  const scheduleDeltaFlush = useCallback(() => {
+    if (pendingFrameRef.current) return
+    pendingFrameRef.current = true
+    frameHandleRef.current = requestAnimationFrame(() => {
+      pendingFrameRef.current = false
+      frameHandleRef.current = null
+      flushDeltas()
+    })
+  }, [flushDeltas])
+  // 最终消息/重置取代 delta 累积：未刷帧的增量必须作废，否则终态文本后面
+  // 会再接一截旧增量。
+  const discardPendingDeltas = useCallback(() => {
+    pendingFrameRef.current = false
+    if (frameHandleRef.current !== null) {
+      cancelAnimationFrame(frameHandleRef.current)
+      frameHandleRef.current = null
+    }
+    pendingAssistantRef.current = ''
+    pendingReasoningRef.current = ''
+  }, [])
+  useEffect(() => () => discardPendingDeltas(), [discardPendingDeltas])
 
   const reset = useCallback(() => {
     subRef.current?.abort()
     subRef.current = null
     runIdRef.current = null
     settlingRef.current = false
+    discardPendingDeltas()
     setRunId(null)
     setUserText(null)
     setAssistantText('')
@@ -57,7 +100,7 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
     setApprovals([])
     setError(null)
     setPhase('idle')
-  }, [])
+  }, [discardPendingDeltas])
 
   const handleEvent = useCallback(
     (e: EventFrame) => {
@@ -72,6 +115,7 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
         }
         case 'assistant_message': {
           // 最终消息取代 delta 累积（attach 重放时 delta 已丢失，durable 是权威）
+          discardPendingDeltas()
           const msg = data.message as { content?: unknown } | undefined
           if (msg && typeof msg.content === 'string' && msg.content.trim()) {
             setAssistantText(msg.content)
@@ -100,12 +144,18 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
           break
         }
         case 'assistant_delta': {
-          if (typeof data.text === 'string') setAssistantText((cur) => cur + (data.text as string))
+          if (typeof data.text === 'string') {
+            pendingAssistantRef.current += data.text
+            scheduleDeltaFlush()
+          }
           break
         }
         case 'reasoning_delta': {
           // 思考与正文分开累积：它们在同一次运行里交替到达，混在一起会串行
-          if (typeof data.text === 'string') setReasoning((cur) => cur + (data.text as string))
+          if (typeof data.text === 'string') {
+            pendingReasoningRef.current += data.text
+            scheduleDeltaFlush()
+          }
           break
         }
         case 'approval_requested': {
@@ -139,7 +189,7 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
           break
       }
     },
-    [onSettled],
+    [discardPendingDeltas, onSettled, scheduleDeltaFlush],
   )
 
   const pollUntilTerminal = useCallback(
@@ -186,6 +236,7 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
       if (!sessionId) return
       setPhase('starting')
       setError(null)
+      discardPendingDeltas()
       setUserText(prompt)
       setAssistantText('')
       setReasoning('')
@@ -210,7 +261,7 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
         setPhase('error')
       }
     },
-    [sessionId, subscribe],
+    [discardPendingDeltas, sessionId, subscribe],
   )
 
   const attach = useCallback(

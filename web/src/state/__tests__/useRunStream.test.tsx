@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useRunStream } from '../useRunStream'
 
@@ -30,11 +30,21 @@ function emitter(): { send: (type: string, data: Record<string, unknown>, seq?: 
 }
 
 beforeEach(() => {
+  // delta 合帧走 rAF；jsdom 没有实现，测试里同步触发（帧内合并不变）
+  vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+    cb(0)
+    return 1
+  })
+  vi.stubGlobal('cancelAnimationFrame', () => {})
   startRun.mockReset().mockResolvedValue({ run_id: 'r1', session_id: 's1', status: 'running' })
   cancelRun.mockReset().mockResolvedValue({ run_id: 'r1', status: 'running', cancel_requested: true })
   getRun.mockReset()
   decideApproval.mockReset().mockResolvedValue({ accepted: true, decision: 'allow' })
   subscribe.mockReset().mockResolvedValue({ cursor: () => 0, abort: vi.fn() })
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
 })
 
 describe('useRunStream（发送 → 订阅 → 活事件 → 终态回拉）', () => {
@@ -99,6 +109,37 @@ describe('useRunStream（发送 → 订阅 → 活事件 → 终态回拉）', (
 
     expect(result.current.reasoning).toBe('先看 五层状态…再想想')
     expect(result.current.assistantText).toBe('结论是这样')
+  })
+
+  it('delta 合帧：同一帧内多次增量一次刷出；assistant_message 作废未刷的增量', async () => {
+    const frames: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      frames.push(cb)
+      return frames.length
+    })
+    const { result } = renderHook(() => useRunStream('s1', () => {}))
+    await act(async () => {
+      await result.current.send('跑', 'manual')
+    })
+    const bus = emitter()
+
+    act(() => {
+      bus.send('assistant_delta', { text: 'a' })
+      bus.send('assistant_delta', { text: 'b' })
+    })
+    // 帧没跑：state 保持原样（这正是合帧的目的一一回渲染不随 token 数增长）
+    expect(result.current.assistantText).toBe('')
+    act(() => {
+      frames.splice(0).forEach((cb) => cb(0))
+    })
+    expect(result.current.assistantText).toBe('ab')
+
+    act(() => {
+      bus.send('assistant_delta', { text: 'c' })
+      bus.send('assistant_message', { message: { role: 'assistant', content: '最终' } }, 5)
+    })
+    // 最终消息权威：未刷帧的增量作废，不得接在最终文本之后
+    expect(result.current.assistantText).toBe('最终')
   })
 
   it('新一次发送会清掉上一轮的思考（它只属于那一次运行）', async () => {
