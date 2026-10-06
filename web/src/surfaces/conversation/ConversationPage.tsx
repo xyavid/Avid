@@ -37,7 +37,8 @@ import { UserBubble } from '../../components/chat/UserBubble'
 import { useRunStream } from '../../state/useRunStream'
 import { Button } from '../../ui/Button'
 import { AvidMark } from '../../ui/Mark'
-import { useAutoHideScroll } from '../../ui/useAutoHideScroll'
+import { Icon } from '../../ui/Icon'
+import { useConversationScroll, type ScrollAnchor } from '../../ui/useConversationScroll'
 import { ContextRail } from '../../components/rail/ContextRail'
 import { SettingsModal } from '../../components/settings/SettingsModal'
 import { ProjectCard } from '../../components/session/ProjectCard'
@@ -78,6 +79,14 @@ export function ConversationPage() {
   const [branchHint, setBranchHint] = useState<string | null>(null)
   const [usage, setUsage] = useState<UsageReport | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // 「加载更早」：desc 首页只含最近 50 条，更早历史经 next_cursor 追加；
+  // anchorRef 记录追加前的视口位置，prepend 后把视口钉回同一条旧消息。
+  const [earlier, setEarlier] = useState<{ hasMore: boolean; cursor: number | null }>({
+    hasMore: false,
+    cursor: null,
+  })
+  const [loadingEarlier, setLoadingEarlier] = useState(false)
+  const anchorRef = useRef<ScrollAnchor | null>(null)
   // 权限「态势」：随选中会话回落到其工作区的默认权限，用户可在输入区改（下次发送生效）。
   const [permission, setPermission] = useState<PermissionMode>('manual')
   // 本次运行用的模型（输入区可选）：null = 跟随设置。粘住直到用户改回来——
@@ -98,7 +107,6 @@ export function ConversationPage() {
   const [settingsOpen, setSettingsOpen] = useState(
     () => new URLSearchParams(window.location.search).has('settings'),
   )
-  const conversationScrollRef = useAutoHideScroll<HTMLDivElement>()
   const selectedIdRef = useRef<string | null>(null)
   selectedIdRef.current = selectedId
   const branchRef = useRef('main')
@@ -118,6 +126,7 @@ export function ConversationPage() {
           listBranches(id),
         ])
         setEntries([...page.entries].reverse())
+        setEarlier({ hasMore: page.has_more, cursor: page.next_cursor })
         const hit = bl.branches.find((b) => b.name === viewed) ?? bl.branches.find((b) => b.is_default)
         setUsage(hit?.usage ?? null)
       } catch {
@@ -132,6 +141,17 @@ export function ConversationPage() {
     }
     live.reset()
   }
+
+  // 贴底跟随的依据：条目数与活区块的内容量。放在 live 之后（dep 要读它）。
+  const liveHereForScroll =
+    liveSession === selectedId &&
+    (live.phase === 'starting' || live.phase === 'running' || live.phase === 'settling')
+  const scroll = useConversationScroll(
+    `${entries?.length ?? -1}|${liveHereForScroll ? live.assistantText.length : 0}|${
+      liveHereForScroll ? live.reasoning.length : 0
+    }|${liveHereForScroll ? live.tools.length : 0}|${liveHereForScroll ? (live.userText?.length ?? 0) : 0}`,
+    anchorRef,
+  )
 
   useEffect(() => {
     let alive = true
@@ -164,7 +184,9 @@ export function ConversationPage() {
     // 用量快照与条目分属两个端点；快照失败不该连累对话流，静默回退到「—」。
     listEntries(selectedId, { branch, limit: 50 })
       .then((page) => {
-        if (alive) setEntries([...page.entries].reverse())
+        if (!alive) return
+        setEntries([...page.entries].reverse())
+        setEarlier({ hasMore: page.has_more, cursor: page.next_cursor })
       })
       .catch((e: unknown) => {
         if (alive) {
@@ -207,6 +229,23 @@ export function ConversationPage() {
       setBranchHint(`已从这条消息分叉到「${created.name}」；之后的发送都落在这个分支上`)
     } catch (e) {
       setBranchHint(e instanceof ApiError ? e.message : String(e))
+    }
+  }
+
+  /** 追加更早历史：先记视口锚点，prepend 后钉回同一条旧消息；失败保留原视图可重试。 */
+  const loadEarlier = async () => {
+    if (!selectedId || loadingEarlier || !earlier.hasMore || earlier.cursor === null) return
+    setLoadingEarlier(true)
+    try {
+      const page = await listEntries(selectedId, { branch, limit: 50, cursorSeq: earlier.cursor })
+      const el = scroll.ref.current
+      anchorRef.current = el ? { top: el.scrollTop, height: el.scrollHeight } : null
+      setEntries((cur) => [...[...page.entries].reverse(), ...(cur ?? [])])
+      setEarlier({ hasMore: page.has_more, cursor: page.next_cursor })
+    } catch {
+      // 追加失败不打断对话视图；按钮保持可点，用户可重试
+    } finally {
+      setLoadingEarlier(false)
     }
   }
 
@@ -388,6 +427,18 @@ export function ConversationPage() {
         {selected?.truncated_tail && (
           <p className="mb-a16 text-center font-ui text-hint text-ink-muted">上次运行在此中断</p>
         )}
+        {earlier.hasMore && hasEntries && (
+          <div className="mb-a8 flex justify-center">
+            <button
+              type="button"
+              onClick={() => void loadEarlier()}
+              disabled={loadingEarlier}
+              className="rounded-sm border-hairline border-hair px-a10 py-a4 font-ui text-hint text-ink-muted transition-colors duration-fast ease-out hover:bg-overlay-light disabled:opacity-40"
+            >
+              {loadingEarlier ? '加载中…' : '加载更早'}
+            </button>
+          </div>
+        )}
         {hasEntries && <Timeline entries={entries} onBranch={(id) => void branchFrom(id)} />}
         {liveHere && (
           <div className="mt-a16 flex flex-col gap-a16">
@@ -445,8 +496,25 @@ export function ConversationPage() {
       }
       main={
         <div className="mx-auto flex h-full max-w-chat-input flex-col">
-          <div ref={conversationScrollRef} className="scroll-auto flex min-h-0 flex-1 flex-col overflow-y-auto px-a16 pt-a16">
-            {body}
+          <div className="relative min-h-0 flex-1">
+            <div
+              ref={scroll.ref}
+              onScroll={scroll.handleScroll}
+              className="scroll-auto flex h-full flex-col overflow-y-auto px-a16 pt-a16"
+            >
+              {body}
+            </div>
+            {!scroll.pinned && (
+              <button
+                type="button"
+                onClick={scroll.scrollToBottom}
+                aria-label="跳到底部"
+                className="absolute bottom-a8 left-1/2 flex h-[28px] -translate-x-1/2 items-center gap-a4 rounded-full border-hairline border-hair bg-card px-a12 font-ui text-hint text-ink shadow-soft transition-colors duration-fast ease-out hover:bg-overlay-light"
+              >
+                <Icon name="chevron-down" size={12} />
+                最新
+              </button>
+            )}
           </div>
           {(branch !== 'main' || branchHint) && (
             <div className="mx-auto flex w-full max-w-chat-input items-center justify-between gap-a8 border-t border-hair px-a16 py-a6">
