@@ -24,6 +24,8 @@ _META_CHARS = ";|&()<>"
 #: Prefixes that let a quoted span pass as one absolute path (`~/` equals `$HOME/`).
 _QUOTED_WHOLE_PREFIXES = ("/", "~", "$HOME")
 _PATHLIKE = re.compile(r"(?:^|/)(?:\.\.?)(?:/|$)")
+#: Windows 绝对/UNC 形态：盘符（C:\ 或 C:/）与 \\server\share。
+_WINDOWS_ABSOLUTE = re.compile(r"^[A-Za-z]:[\\/]|^\\\\")
 
 
 def _base(root: Path | None = None) -> Path:
@@ -108,6 +110,10 @@ def _candidate(token: str, base: Path) -> Path | None:
             return None
     if "://" in token:
         return None
+    if _WINDOWS_ABSOLUTE.search(token):
+        # Windows 绝对/UNC 路径：在 Windows 宿主上由 ntpath 解析，is_within 因此
+        # 正确判区外；POSIX 上它只能是字面文件名，认进来只多不少（保守方向）。
+        return Path(token)
     if token.startswith("~"):
         return Path.home() / token[2:] if token.startswith("~/") else Path.home()
     if token.startswith("$HOME"):
@@ -122,6 +128,7 @@ def _candidate(token: str, base: Path) -> Path | None:
         or token.startswith("../")
         or _PATHLIKE.search(token)
         or "/" in token
+        or "\\" in token
         or token.startswith(".")
     ):
         return base / token

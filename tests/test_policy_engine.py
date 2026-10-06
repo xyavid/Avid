@@ -788,3 +788,60 @@ def test_posix_function_definition_with_a_write_is_reviewed(sandbox: Path):
     auto = security(sandbox, "auto", probe=BROKEN_PROBE)
     decision = run("bash", {"command": "f() { rm -rf /tmp/x; }"}, spec=auto, root=sandbox)
     assert not decision.allowed
+
+
+# ---------------------------------------------------------------- 评审回归（块与引号盲区）
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "Get-ChildItem | ForEach-Object { Invoke-Expression $cmd }",
+        "Get-Process | ForEach-Object { Start-Process $_.Name }",
+        "Get-ChildItem | ForEach-Object { socat TCP-LISTEN:4444 - }",
+        "Get-ChildItem | ForEach-Object { Set-Content $p evil }",
+        "Get-ChildItem | ForEach-Object { Set-Content $_.FullName evil }",
+        "awk '{ system(\"rm -rf ./src\") }'",
+    ],
+)
+def test_block_and_quote_blind_spots_reach_a_human(sandbox: Path, command):
+    """评审发现的三类盲区（块内未知程序/块内 $ 写目标/引号内 system()）必须交人。"""
+    auto = security(sandbox, "auto", probe=BROKEN_PROBE)
+
+    assert not run("bash", {"command": command}, spec=auto, root=sandbox).allowed, command
+    asked = run(
+        "bash",
+        {"command": command},
+        spec=auto,
+        root=sandbox,
+        ledger=ApprovalLedger(),
+        ask=lambda *a: True,
+    )
+    assert asked.allowed and asked.answered_by == "user", command
+
+
+def test_legitimate_read_idioms_survive_the_tightening(sandbox: Path):
+    """收紧不误伤：过滤块与 awk 纯打印保持只读档。"""
+    auto = security(sandbox, "auto", probe=BROKEN_PROBE)
+    for command in (
+        "Get-Process | Where-Object {$_.CPU -gt 10}",
+        "awk '{ print $1 }' a.txt",
+        "echo hi > note.txt",
+    ):
+        decision = run("bash", {"command": command}, spec=auto, root=sandbox)
+        assert decision.allowed and decision.answered_by == "classifier", command
+
+
+def test_windows_style_paths_are_scan_candidates(sandbox: Path):
+    """评审 Finding 2 的识别层修复：盘符/UNC/反斜杠相对路径都进目标扫描。
+
+    区外判定由宿主的 ntpath 解析（is_within），Linux 上无法端到端复现
+    「写 C:\\Users」，这里钉住识别层不漏 token。
+    """
+    from avid.agent.tools.workspace import _candidate
+
+    base = Path(sandbox)
+    assert _candidate("C:\\Users\\me\\x", base) is not None
+    assert _candidate("\\\\server\\share\\x", base) is not None
+    assert _candidate("..\\..\\escape", base) is not None
+    assert _candidate("C:/Users/me/x", base) is not None

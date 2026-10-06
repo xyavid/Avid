@@ -61,7 +61,8 @@ KIND_DEGRADED = "degraded"
 KIND_NETWORK = "network"
 KIND_NET_ASK = "net_ask"
 KIND_COST = "cost"
-#: External MCP tools: unclassifiable semantics, so manual asks, auto refuses and full allows.
+#: External MCP tools: unclassifiable semantics, so manual asks, auto hands it to a
+#: reachable human, and full allows.
 KIND_MCP = "mcp"
 
 # Messages for the model; each denial kind points at a different next step, because "never allowed"
@@ -240,7 +241,8 @@ def review_facts(
         return kind, f"{prefix}（{rule.reason}）", rule.reason
 
     if is_mcp_tool(action.tool):
-        # An external MCP tool always goes to review: manual asks once, auto has nobody to ask.
+        # An external MCP tool always goes to review: manual asks once, auto hands it to a
+        # reachable human (and denies when nobody answers).
         server = mcp_server(action.tool)
         return KIND_MCP, f"外部 MCP 工具（{server} server）", action.tool
 

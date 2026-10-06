@@ -89,7 +89,8 @@ MODE_LABELS: dict[str, str] = {name: mode.label for name, mode in MODE_TABLE.ite
 LEGACY_MODES: dict[str, str] = {
     # The old strict semantics survive as the sandbox plus review of outside and dangerous calls.
     "strict": MODE_MANUAL,
-    # The old workspace mode asked a human about danger, while auto has nobody in the loop.
+    # The old workspace mode asked a human about danger; auto now does the same when a
+    # human is reachable, and defers to the classifier only when nobody answers.
     "workspace": MODE_MANUAL,
     # The old system mode asked only about danger; the classifier is the tighter equivalent.
     "system": MODE_AUTO,

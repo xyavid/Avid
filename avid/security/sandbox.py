@@ -284,13 +284,18 @@ class SandboxSpec:
         return kept
 
     def child_env(self, source: Mapping[str, str] | None = None) -> dict[str, str] | None:
-        """Return the trimmed environment only when the sandbox is enforced, else the scrubbed env.
+        """Return the trimmed environment: whitelist when enforced, scrubbed when degraded.
 
-        降级路径不再整体继承：全量白名单在 Windows 会砍掉 SystemRoot/PSModulePath
-        弄死 PowerShell，所以降级用黑名单（:func:`scrubbed_env`）——凭据形状的
-        变量不进子进程，其余保留。
+        full（policy=disabled）是显式信任，整体继承——凭据可用是它的语义之一
+        （gh api 这类工作流依赖 token）；降级路径用黑名单（:func:`scrubbed_env`）：
+        凭据形状的变量不进子进程，其余保留。全量白名单在 Windows 会砍掉
+        SystemRoot/PSModulePath 弄死 PowerShell，所以降级不用白名单。
         """
-        return self.apply_env(source) if self.enforced else scrubbed_env(source)
+        if self.enforced:
+            return self.apply_env(source)
+        if self.policy == SANDBOX_DISABLED:
+            return None
+        return scrubbed_env(source)
 
     def argv_prefix(
         self,

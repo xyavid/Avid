@@ -284,11 +284,17 @@ def test_env_home_is_the_host_we_computed_the_masks_for(home, tmp_path):
     assert spec.apply_env({"PATH": "/usr/bin", "HOME": "/somewhere/else"})["HOME"] == str(home)
 
 
-def test_child_env_scrubs_instead_of_inheriting_when_not_enforced(tmp_path, home):
-    """非强制的子环境走黑名单：凭据形状的变量不进子进程，其余原样保留。"""
-    spec = build_spec(policy="disabled", network="open", root=str(tmp_path), home=home, probe=WORKING)
-    scrubbed = spec.child_env({"PATH": "/usr/bin", "SOME_API_KEY": "x", "SYSTEMROOT": r"C:\W"})
+def test_child_env_full_inherits_and_degraded_scrubs(tmp_path, home):
+    """full 显式信任整体继承（env=None，凭据可用）；降级走黑名单；强制走白名单。"""
+    full = build_spec(policy="disabled", network="open", root=str(tmp_path), home=home, probe=WORKING)
+    assert full.child_env({"PATH": "/usr/bin", "GITHUB_TOKEN": "x"}) is None
+
+    degraded = SandboxSpec(policy="workspace", network="restricted", available=False, reason="无后端")
+    scrubbed = degraded.child_env({"PATH": "/usr/bin", "SOME_API_KEY": "x", "SYSTEMROOT": r"C:\W"})
     assert scrubbed == {"PATH": "/usr/bin", "SYSTEMROOT": r"C:\W"}
+
+    enforced = build_spec(policy="workspace", root=str(tmp_path), home=home, probe=WORKING)
+    assert enforced.child_env({"PATH": "/usr/bin", "SOME_API_KEY": "x"}) == {"PATH": "/usr/bin", "HOME": str(home)}
 
     enforced = build_spec(policy="workspace", root=str(tmp_path), home=home, probe=WORKING)
     assert enforced.child_env({"PATH": "/usr/bin", "SOME_API_KEY": "x"}) == {"PATH": "/usr/bin", "HOME": str(home)}

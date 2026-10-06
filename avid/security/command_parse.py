@@ -71,6 +71,32 @@ _READ_COMMANDS = _READ_COMMANDS | {"gci", "gi", "sls", "gps", "gsv"}
 # rm/rmdir/del/erase/ri/rd 之外，find -delete 也给删除能力（见分段循环）。
 _DELETE_PROGRAMS = {"rm", "rmdir", "del", "erase", "ri", "rd"}
 _INTERPRETERS = {"bash", "sh", "zsh", "powershell", "pwsh"}
+# 运行/编排类：执行任意代码或触达编排面，按解释器同档（shell_execute 进 _STATE_CAPS，
+# 块内出现时同样向整条命令传播——DANGER 正则的锚点够不着块内，能力才是执法点）。
+_RUN_PROGRAMS = {
+    "invoke-expression",
+    "start-process",
+    "invoke-command",
+    "start-job",
+    "set-executionpolicy",
+    "systemctl",
+    "service",
+    "crontab",
+    "at",
+    "docker",
+    "podman",
+    "kubectl",
+    "helm",
+}
+# 进程/服务控制：副作用出工作区，按对外副作用处理。
+_CONTROL_PROGRAMS = {
+    "stop-process",
+    "stop-service",
+    "set-service",
+    "kill",
+    "pkill",
+    "killall",
+}
 # PowerShell 动词表：cmdlet 靠名字识别，语义与 POSIX 同名档对齐（读/写/删/网）。
 _POWERSHELL_READ = {
     "get-childitem",
@@ -120,6 +146,41 @@ _POWERSHELL_DELETE = {"remove-item", "clear-content", "clear-item"}
 _POWERSHELL_NETWORK = {"invoke-webrequest", "invoke-restmethod", "send-mailmessage"}
 # 只改导航不改状态：与 POSIX 的 cd 一样不带能力、也不算未知程序。
 _POWERSHELL_NAV = {"set-location", "push-location", "pop-location"}
+# socat 既能连也能听，一律按网络处理（network_connect 进 _STATE_CAPS）。
+_NETWORK_COMMANDS = _NETWORK_COMMANDS | {"socat"}
+# 全部可识别程序的并集：不在这里的程序在程序位出现即 unknown_program。
+_KNOWN_PROGRAMS = (
+    _READ_COMMANDS
+    | _WRITE_COMMANDS
+    | _NETWORK_COMMANDS
+    | _INTERPRETERS
+    | _RUN_PROGRAMS
+    | _CONTROL_PROGRAMS
+    | {
+        "git",
+        "python",
+        "python3",
+        "node",
+        "npm",
+        "pnpm",
+        "yarn",
+        "pip",
+        "pip3",
+        "uv",
+        "cargo",
+        "go",
+        "sudo",
+        "su",
+        "doas",
+        "pkexec",
+        "cd",
+    }
+    | _POWERSHELL_READ
+    | _POWERSHELL_WRITE
+    | _POWERSHELL_DELETE
+    | _POWERSHELL_NETWORK
+    | _POWERSHELL_NAV
+)
 # 状态改变类能力：这些能力出现在脚本块/子表达式里时必须向整条命令传播——
 # 只读判定容不下任何一种。其余能力（如纯读）不传播。
 _STATE_CAPS = frozenset(
@@ -144,6 +205,9 @@ class ShellFacts:
     segments: tuple[tuple[str, ...], ...]
     capabilities: frozenset[str]
     uncertain: bool = False  # true when the parser cannot prove the construct safe
+    # 程序位出现了不认识的程序（且不是 $_ 管道属性访问）：脚本块扫描用它在
+    # 「块内未知程序」与「块内未知参数词」之间做区分，前者传播、后者不传播。
+    unknown_program: bool = False
 
 
 def _lex(command: str) -> list[str]:
@@ -258,6 +322,17 @@ def parse_shell(command: str, *, depth: int = 0) -> ShellFacts:
     if current:
         segments.append(tuple(current))
 
+    # Script blocks first: their state capabilities must already be in the set when the
+    # per-segment $ rule below runs, or `{ Set-Content $p x }` would look like a read.
+    blocks, brace_uncertain = _script_blocks(command)
+    uncertain |= brace_uncertain
+    for block in blocks:
+        inner = parse_shell(block, depth=depth + 1)
+        capabilities.update(inner.capabilities & _STATE_CAPS)
+        # 块内程序位出现未知程序时整条命令交人；未知参数词（$_ 的属性等）不算。
+        uncertain |= inner.unknown_program
+
+    unknown_program = False
     for segment in segments:
         words = list(segment)
         # Leading assignments and wrapper commands are stripped so the real program name is reached.
@@ -392,31 +467,28 @@ def parse_shell(command: str, *, depth: int = 0) -> ShellFacts:
         ):
             # An inline eval flag runs arbitrary code, so it counts as shell execution.
             capabilities.add("shell_execute")
-        if program not in _READ_COMMANDS | _WRITE_COMMANDS | _NETWORK_COMMANDS | _INTERPRETERS | {
-            "git",
-            "python",
-            "python3",
-            "node",
-            "npm",
-            "pnpm",
-            "yarn",
-            "pip",
-            "pip3",
-            "uv",
-            "cargo",
-            "go",
-            "sudo",
-            "su",
-            "doas",
-            "pkexec",
-            "cd",
-        } | _POWERSHELL_READ | _POWERSHELL_WRITE | _POWERSHELL_DELETE | _POWERSHELL_NETWORK | _POWERSHELL_NAV:
+        if program in _RUN_PROGRAMS:
+            # 运行/编排类按解释器同档：它们执行的内容解析层看不见。
+            capabilities.add("shell_execute")
+        if program in _CONTROL_PROGRAMS:
+            capabilities.add("external_side_effect")
+        if program in {"awk", "gawk", "perl"} and re.search(
+            r"\bsystem\b|\bgetline\b", " ".join(words)
+        ):
+            # 脚本文本整体在引号里，块扫描看不见；system()/getline 能执行任意命令。
+            capabilities.add("shell_execute")
+        if program not in _KNOWN_PROGRAMS:
             # A program outside the known tables is unprovable, so it is reported uncertain.
             uncertain = True
+            # $_ 开头的词是管道对象的属性访问（Where-Object {$_.CPU -gt 10}），
+            # 不是被执行的程序，不算未知程序。
+            if not program.startswith("$_"):
+                unknown_program = True
         # A word with $ expands to a value whose target cannot be proven ($VAR may name
-        # anything), but only state-changing segments care: `echo $HOME` proves nothing
-        # is written, while `echo $X > $Y` cannot have its write target proven.
-        if capabilities & _STATE_CAPS and any(re.search(r"\$(?!_)", word) for word in words):
+        # anything). Only state-changing commands care: `echo $HOME` proves nothing is
+        # written, while `Set-Content $p x` cannot have its write target proven — and in
+        # a stateful segment even `$_` is a real target, so no exemption there.
+        if capabilities & _STATE_CAPS and any("$" in word for word in words):
             uncertain = True
 
     nested, incomplete = _nested_substitutions(command)
@@ -428,12 +500,6 @@ def parse_shell(command: str, *, depth: int = 0) -> ShellFacts:
         capabilities.update(child.capabilities)
         uncertain |= child.uncertain
         capabilities.add("shell_execute")
-    # Script blocks ({...}) do not segment, so their contents are scanned separately:
-    # state-changing capabilities propagate to the whole command, unknown inner words
-    # do not make it uncertain (awk and PS filter blocks are legitimate read idioms).
-    blocks, brace_uncertain = _script_blocks(command)
-    uncertain |= brace_uncertain
-    for block in blocks:
-        inner = parse_shell(block, depth=depth + 1)
-        capabilities.update(inner.capabilities & _STATE_CAPS)
-    return ShellFacts(tuple(segments), frozenset(capabilities), uncertain)
+    return ShellFacts(
+        tuple(segments), frozenset(capabilities), uncertain, unknown_program
+    )

@@ -20,8 +20,9 @@ DENY = "deny"
 
 # proven 档允许出现的能力全集：观察到集合之外的能力（删除、网络、解释器、
 # 凭据、对外副作用…）就证明不了「只读」或「只写工作区」。bash 恒带
-# process_spawn，所以它总在集合里；含 $ 的命令在解析层就标 uncertain，
-# 而 uncertain 会变成危险类别，因此天然进不了 proven 档。
+# process_spawn，所以它总在集合里；带状态能力的命令里出现 $ 一律在解析层
+# 标 uncertain（写落点证明不了），因此进不了 proven 档——$_ 也不例外，
+# 管道对象的属性同样可能是写目标。
 READ_ONLY_CAPS = frozenset({"process_spawn", "filesystem_read"})
 WORKSPACE_WRITE_CAPS = READ_ONLY_CAPS | {"filesystem_write"}
 
