@@ -407,22 +407,38 @@ def test_legacy_session_inherits_the_repo_workspace(tmp_path):
     repo.close()
 
 
-def test_open_refuses_a_session_from_another_workspace(tmp_path):
-    """护栏：metadata 带着别的工作区时不许静默打开（_locate 会优先用 metadata.path）。"""
+def test_open_ignores_a_stale_workspace_label_in_its_own_directory(tmp_path):
+    """工作区重新登记后 id 会变，旧文件头里的 id 与仓库 id 不一致——文件就在
+    本仓库目录里，位置即归属，必须能打开（重新登记不能把旧会话变砖）。"""
     mine = JsonlSessionRepo(tmp_path, workspace="w-mine")
     session = mine.create(id="demo", workspace="w-other")
     session.close()
     metadata = mine.list()[0]
     mine.close()
 
+    reopened = JsonlSessionRepo(tmp_path, workspace="w-after-re-register")
+    assert reopened.open(metadata).metadata.id == "demo"
+    reopened.close()
+
+    # 旧标签的仓库仍按标签打开（双向不受影响）
     other = JsonlSessionRepo(tmp_path, workspace="w-other")
     assert other.open(metadata).metadata.workspace == "w-other"
     other.close()
 
+
+def test_open_refuses_a_session_that_lives_in_another_directory(tmp_path):
+    """护栏本意：metadata.path 指向别的目录时，不许借道打开别家的文件。"""
+    mine = JsonlSessionRepo(tmp_path / "mine", workspace="w-mine")
+    foreign_repo = JsonlSessionRepo(tmp_path / "elsewhere", workspace="w-other")
+    session = foreign_repo.create(id="demo")
+    session.close()
+    metadata = session.metadata
+    foreign_repo.close()
+
     with pytest.raises(SessionStorageError) as exc:
-        mine2 = JsonlSessionRepo(tmp_path, workspace="w-mine")
-        mine2.open(metadata)
+        mine.open(metadata)
     assert "另一个工作区" in str(exc.value)
+    mine.close()
 
 
 # ---------------- 分支扫描与会话定位的成本（P2-16） ----------------
@@ -497,17 +513,29 @@ def test_delete_refuses_a_metadata_from_another_session(tmp_path):
     repo.close()
 
 
-def test_delete_refuses_a_session_from_another_workspace(tmp_path):
+def test_delete_ignores_a_stale_workspace_label_in_its_own_directory(tmp_path):
+    """与 open 同一条位置规则：重新登记后的旧标签不拦删除。"""
     mine = JsonlSessionRepo(tmp_path, workspace="w-mine")
-    mine.create(id="demo").close()  # 归属 w-mine
+    mine.create(id="demo", workspace="w-old").close()
     metadata = mine.list()[0]
     mine.close()
 
-    other = JsonlSessionRepo(tmp_path, workspace="w-other")
+    reregistered = JsonlSessionRepo(tmp_path, workspace="w-new")
+    reregistered.delete(metadata)
+    reregistered.close()
+
+
+def test_delete_refuses_a_session_that_lives_in_another_directory(tmp_path):
+    mine = JsonlSessionRepo(tmp_path / "mine", workspace="w-mine")
+    foreign_repo = JsonlSessionRepo(tmp_path / "elsewhere", workspace="w-other")
+    foreign_repo.create(id="demo").close()
+    metadata = foreign_repo.list()[0]
+    foreign_repo.close()
+
     with pytest.raises(SessionStorageError) as info:
-        other.delete(metadata)
+        mine.delete(metadata)
     assert "另一个工作区" in str(info.value)
-    other.close()
+    mine.close()
 
 
 # ---------------- 读路径的隔离与并发（P1-16 / P1-17） ----------------
@@ -882,3 +910,36 @@ def test_a_short_write_is_rolled_back_and_reported(tmp_path, monkeypatch):
     assert reopened.branch("main").append_message(ASSISTANT)
     reopened.close()
     again.close()
+
+
+# ---------------------------------------------------------------- 工作区守卫与锁泄漏（评审回归）
+
+
+def test_stale_workspace_id_in_header_still_opens_in_its_own_directory(tmp_path):
+    """工作区重新登记后 id 变了，旧文件头里的 id 与仓库 id 不一致——文件就在
+    本仓库目录里，位置即归属，必须能打开（此前被守卫拒绝后还泄漏锁）。"""
+    repo = make_repo(tmp_path)
+    created = repo.create(id="demo", workspace="w-new")
+    created.close()
+    repo.close()
+
+    reopened = JsonlSessionRepo(tmp_path, workspace="w-new-after-re-register")
+    session = reopened.open(created.metadata)
+    assert session.metadata.id == "demo"
+    session.close()
+    reopened.close()
+
+
+def test_a_failed_guard_open_does_not_leak_the_lock(tmp_path):
+    """守卫拒绝（id 不符）时 storage 必须先关闭：否则 flock 泄漏，同一会话
+    在本进程里永远打不开（表现为「被另一个进程占用」）。"""
+    repo = make_repo(tmp_path)
+    repo.create(id="demo").close()
+
+    wrong = replace(repo.list()[0], id="another-id")
+    with pytest.raises(SessionStorageError):
+        repo.open(wrong)
+
+    # 锁必须已释放：同一会话立刻能再打开。
+    session = repo.open(repo.list()[0])
+    session.close()

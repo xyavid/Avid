@@ -60,14 +60,25 @@ def make_workspace_repo(backend: str, root, clock, workspace: str):
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
-def test_a_session_claiming_another_workspace_is_refused(backend, tmp_path):
-    """归属护栏两个后端必须同义：文件后端早就有，内存后端以前什么都不校验。"""
+def test_a_session_from_outside_the_repository_is_refused(backend, tmp_path):
+    """归属护栏两个后端必须同义：不属于本仓库的会话 open/delete 都被拒。
+
+    归属判据分后端：jsonl 按位置（文件在自己目录里即归属，头里的旧 workspace
+    id 是重新登记前的产物，不拦）；memory 没有位置，按记录上的标签判。
+    """
     clock = ticking_clock()
-    repo = make_workspace_repo(backend, tmp_path / "sessions", clock, "w-mine")
-    session = repo.create(id="s1", workspace="w-other")
-    metadata = session.metadata
-    assert metadata.workspace == "w-other"
-    session.close()
+    if backend == "jsonl":
+        repo = make_workspace_repo(backend, tmp_path / "sessions", clock, "w-mine")
+        foreign_repo = make_workspace_repo(backend, tmp_path / "elsewhere", clock, "w-other")
+        session = foreign_repo.create(id="s1")
+        session.close()
+        metadata = session.metadata
+        foreign_repo.close()
+    else:
+        repo = make_workspace_repo(backend, tmp_path / "sessions", clock, "w-mine")
+        session = repo.create(id="s1", workspace="w-other")
+        session.close()
+        metadata = session.metadata
 
     with pytest.raises(SessionStorageError):
         repo.open(metadata)

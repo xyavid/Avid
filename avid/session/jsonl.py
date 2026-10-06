@@ -730,33 +730,43 @@ class JsonlSessionRepo:
             raise SessionAlreadyOpenError(metadata.id)
         path = self._locate(metadata)
         storage = JsonlStorage.open(path, now=self._now)
-        # metadata.path alone would let a repository open a file that belongs to another workspace.
-        if (
-            self.workspace
-            and storage.header.workspace
-            and storage.header.workspace != self.workspace
-        ):
-            raise SessionStorageError(
-                f"会话 {metadata.id} 属于另一个工作区（{storage.header.workspace}），"
-                f"不能在 {self.workspace} 的仓库里打开"
+        # 守卫段：任何拒绝都必须先 close storage——flock 从 open 起就持有，
+        # 这里漏一句，会话在本进程里就永远打不开了（锁泄漏）。
+        try:
+            # metadata.path alone would let a repository open a file that belongs to
+            # another workspace. 文件头记录的 id 可能是重新登记前的旧值：只要文件
+            # 就在本仓库的 sessions 目录里，位置即归属，放行（旧 id 不迁移）。
+            foreign = (
+                storage.header.workspace is not None
+                and self.workspace is not None
+                and storage.header.workspace != self.workspace
+                and path.parent != self.root
             )
-        if storage.header.id != metadata.id:
-            raise SessionStorageError(
-                f"文件的 id 与请求不符：{path} 里是 {storage.header.id}，请求的是 {metadata.id}"
+            if foreign:
+                raise SessionStorageError(
+                    f"会话 {metadata.id} 属于另一个工作区（{storage.header.workspace}），"
+                    f"不能在 {self.workspace} 的仓库里打开"
+                )
+            if storage.header.id != metadata.id:
+                raise SessionStorageError(
+                    f"文件的 id 与请求不符：{path} 里是 {storage.header.id}，请求的是 {metadata.id}"
+                )
+            if storage.header.storage_version != STORAGE_VERSION:
+                raise SessionStorageError(
+                    f"会话 {metadata.id} 的存储版本不认识：{storage.header.storage_version}"
+                )
+            resolved = JsonlSessionMetadata(
+                id=storage.header.id,
+                created_at=storage.header.created_at,
+                storage_version=storage.header.storage_version,
+                parent_session_id=storage.header.parent_session_id,
+                path=path,
+                # A file without a workspace entry belongs to the repository that found it.
+                workspace=storage.header.workspace or self.workspace,
             )
-        if storage.header.storage_version != STORAGE_VERSION:
-            raise SessionStorageError(
-                f"会话 {metadata.id} 的存储版本不认识：{storage.header.storage_version}"
-            )
-        resolved = JsonlSessionMetadata(
-            id=storage.header.id,
-            created_at=storage.header.created_at,
-            storage_version=storage.header.storage_version,
-            parent_session_id=storage.header.parent_session_id,
-            path=path,
-            # A file without a workspace entry belongs to the repository that found it.
-            workspace=storage.header.workspace or self.workspace,
-        )
+        except BaseException:
+            storage.close()
+            raise
         return self._publish(resolved, storage)
 
     def list(self) -> list[JsonlSessionMetadata]:
@@ -783,11 +793,13 @@ class JsonlSessionRepo:
             raise SessionStorageError(
                 f"文件的 id 与请求不符：{path} 里是 {header.id}，请求的是 {metadata.id}"
             )
-        if (
-            self.workspace
-            and header.workspace
+        foreign = (
+            header.workspace is not None
+            and self.workspace is not None
             and header.workspace != self.workspace
-        ):
+            and path.parent != self.root
+        )
+        if foreign:
             raise SessionStorageError(
                 f"会话 {metadata.id} 属于另一个工作区（{header.workspace}），"
                 f"不能在 {self.workspace} 的仓库里删除"
