@@ -8,7 +8,6 @@
 import pytest
 
 from avid.providers.config import (
-    KNOWN_MODELS,
     Config,
     ConfigError,
     max_parallel_tool_calls,
@@ -86,7 +85,10 @@ def test_model_info_probe_defaults_on_and_can_be_turned_off():
 # ---------- 内置窗口表 ----------
 
 
-def test_known_models_excludes_family_fallbacks():
-    """界面候选表不能把 `claude-` 这种族回退当模型 id 列出来。"""
-    assert "deepseek-chat" in KNOWN_MODELS and "deepseek-reasoner" in KNOWN_MODELS
-    assert all(not name.endswith("-") for name in KNOWN_MODELS)
+def test_window_table_covers_prefixes_and_family_fallbacks():
+    """窗口表按最长前缀命中：具体条目优先于族回退（窗口元数据，与模型选项无关）。"""
+    from avid.providers.config import window_for
+
+    assert window_for("gpt-4.1") == 1_047_576
+    assert window_for("claude-sonnet-4-5") == 200_000  # 族回退兜住具体表没列的型号
+    assert window_for("mystery-model") is None

@@ -83,8 +83,7 @@ export interface Capabilities {
   skills: Skill[]
   model: string | null
   /** 可切换的模型候选（内核窗口表；不是提供商目录）。 */
-  known_models: string[]
-  /** BYOK 候选（providerId/modelId ref）；没有 BYOK 配置时为空，回落 known_models。 */
+  /** BYOK 候选（providerId/modelId ref）；不预置模型选项，没配 BYOK 时为空。 */
   models: ModelCandidate[]
   workspace: string
   /** 这台机器上会用到哪个文件夹选择器后端（null = 没有可用的）。诊断用。 */

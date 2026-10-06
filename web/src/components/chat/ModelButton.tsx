@@ -5,9 +5,8 @@
  * 高频动作——同一个问题换个模型再问一遍，不该先把全局设置改掉再改回来。所以这里给的是
  * **按运行的覆盖**：`StartRunInput.model` 只作用于这一次运行，其余按设置解析。
  *
- * 候选的来源要说清楚：`capabilities.known_models` 取自内核的**窗口表**（它认得上下文
- * 窗口的模型），不是提供商的模型目录。选了一个你的中转站没开通的名字，会在调用时由
- * 提供方报错——弹层里那句「内核认得的模型」就是提醒这件事。
+ * 候选只有 BYOK（「设置 → 模型」里配的提供商），内核不预置任何模型选项。
+ * 选了一个你的中转站没开通的名字，会在调用时由提供方报错。
  *
  * 形态与权限胶囊同一套（胶囊按钮 + 底部弹层，点外部不关、选完自己关）。
  */
@@ -24,13 +23,11 @@ export type ModelButtonProps = {
   onChange: (model: string | null) => void
   /** 设置里解析出来的模型（「跟随设置」那一行的说明）。 */
   effective: string | null
-  /** 内核认得的模型候选（窗口表；没有 BYOK 配置时的回落）。 */
-  known: string[]
-  /** BYOK 候选（providerId/modelId ref + 展示名）；非空时优先展示。 */
+  /** BYOK 候选（providerId/modelId ref + 展示名）；来自「设置 → 模型」的用户配置。 */
   candidates: ModelCandidate[]
 }
 
-export function ModelButton({ model, onChange, effective, known, candidates }: ModelButtonProps) {
+export function ModelButton({ model, onChange, effective, candidates }: ModelButtonProps) {
   const [open, setOpen] = useState(false)
   const pick = (next: string | null) => {
     onChange(next)
@@ -104,23 +101,10 @@ export function ModelButton({ model, onChange, effective, known, candidates }: M
               ))}
             </>
           ) : (
-            <p className="mt-a4 px-a8 font-ui text-micro text-ink-muted">内核认得的模型</p>
+            <p className="mt-a4 px-a8 py-a4 font-ui text-micro text-ink-muted">
+              还没有自定义模型——在「设置 → 模型」里添加 BYOK 提供商后，这里就会出现候选。
+            </p>
           )}
-          {known.map((name) => (
-            <button
-              key={name}
-              type="button"
-              onClick={() => pick(name)}
-              className="flex w-full items-center justify-between gap-a8 rounded-sm px-a8 py-a4 text-left font-ui text-caption text-ink transition-colors duration-fast ease-out hover:bg-overlay-light"
-            >
-              <span className="min-w-0 truncate">{name}</span>
-              {model === name && (
-                <span className="shrink-0 text-accent">
-                  <Icon name="check" size={12} />
-                </span>
-              )}
-            </button>
-          ))}
         </div>
       )}
     </div>

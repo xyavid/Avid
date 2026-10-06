@@ -16,7 +16,7 @@ from ..agent.events import (
 from ..agent.skills import SkillLoader, default_skills_dir
 from ..agent.tools import TOOLS, workspace
 from ..providers.byok import byok_model_candidates, resolve_chat
-from ..providers.config import KNOWN_MODELS, ConfigError
+from ..providers.config import ConfigError
 from ..security.sandbox import default_backend_summary
 from ..session import JsonlSessionRepo
 from .approvals import APPROVAL_TIMEOUT_SECONDS
@@ -175,10 +175,8 @@ class Services:
                 "tools": [item["function"]["name"] for item in TOOLS],
                 "skills": self.skills(),
                 "model": self.model_name(),
-                # 可切换的候选（本次运行的模型覆盖用）；空内核配置下也能列出来。
-                "known_models": list(KNOWN_MODELS),
-                # BYOK 候选（providerId/modelId ref + 展示名）；没有 BYOK 配置时为空，
-                # 界面回落 known_models。
+                # BYOK 候选（providerId/modelId ref + 展示名）；不预置任何模型选项，
+                # 没配 BYOK 时就是空的——模型选项只来自用户自己的配置。
                 "models": self.model_candidates(),
                 # Root of the process-bound workspace; candidates come from the workspaces endpoint.
                 "workspace": (
@@ -223,10 +221,7 @@ class Services:
 
     @staticmethod
     def model_candidates() -> list[dict[str, str]]:
-        """Per-run model picker candidates: BYOK refs first; empty when unconfigured.
-
-        未配置任何 BYOK 提供商时返回空列表，界面回落内核窗口表的 known_models。
-        """
+        """Per-run model picker candidates: BYOK refs only; empty when unconfigured."""
         try:
             return byok_model_candidates()
         except ConfigError:

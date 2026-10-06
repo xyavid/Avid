@@ -38,7 +38,6 @@ export type ComposerProps = {
   onChangeModel?: (model: string | null) => void
   /** 设置里解析出来的模型（展示用）。 */
   effectiveModel?: string | null
-  knownModels?: string[]
   /** BYOK 候选（providerId/modelId ref）；非空时模型胶囊优先展示。 */
   byokModels?: ModelCandidate[]
 }
@@ -53,7 +52,6 @@ export function Composer({
   model = null,
   onChangeModel,
   effectiveModel = null,
-  knownModels = [],
   byokModels = [],
 }: ComposerProps) {
   const [text, setText] = useState('')
@@ -105,7 +103,6 @@ export function Composer({
                 model={model}
                 onChange={onChangeModel}
                 effective={effectiveModel}
-                known={knownModels}
                 candidates={byokModels}
               />
             )}

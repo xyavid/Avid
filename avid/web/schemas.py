@@ -55,8 +55,7 @@ class Capabilities(BaseModel):
     skills: list[SkillOut]
     model: str | None = None
     # 可切换的模型候选（本次运行的覆盖用）；取自内核的窗口表，不是提供商目录。
-    known_models: list[str] = Field(default_factory=list)
-    # BYOK 候选（providerId/modelId ref）；没有 BYOK 配置时为空，界面回落 known_models。
+    # BYOK 候选（providerId/modelId ref）；不预置模型选项，没配 BYOK 时为空。
     models: list[ModelCandidate] = Field(default_factory=list)
     workspace: str
     # Declared because the response model silently drops undeclared keys, which would read as absent.

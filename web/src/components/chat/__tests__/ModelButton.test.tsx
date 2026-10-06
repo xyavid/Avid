@@ -7,17 +7,19 @@ import type { ModelCandidate } from '../../../api/types'
 
 /**
  * 模型选择（输入区）：默认跟随设置，可以只对「本次运行」换一个模型。
- * 候选来自内核的窗口表，不是提供商目录——这条语义写在弹层的说明里，别让用户以为
- * 列出来的都一定可用。
+ * 候选只有 BYOK（用户在「设置 → 模型」里配的提供商）——内核不预置任何模型选项，
+ * 没配 BYOK 时弹层里给的是去设置里添加的指引，而不是一张预置清单。
  */
 describe('模型选择', () => {
   afterEach(cleanup)
 
+  const byok: ModelCandidate[] = [
+    { ref: 'command/deepseek/deepseek-v4.1-flash', label: 'command · deepseek-v4.1-flash' },
+  ]
   const base = {
     model: null,
-    effective: 'deepseek-chat',
-    known: ['deepseek-chat', 'deepseek-reasoner'],
-    candidates: [] as ModelCandidate[],
+    effective: 'deepseek/deepseek-v4.1-flash',
+    candidates: byok,
     onChange: () => {},
   }
 
@@ -26,37 +28,49 @@ describe('模型选择', () => {
 
     const chip = screen.getByRole('button', { name: /模型/ })
     expect(chip.textContent).toContain('跟随设置')
-    expect(chip.textContent).toContain('deepseek-chat')
+    expect(chip.textContent).toContain('deepseek/deepseek-v4.1-flash')
     expect(chip.getAttribute('aria-expanded')).toBe('false')
   })
 
-  it('按下展开候选：跟随设置 + 内核认得的模型；当前项打勾', () => {
+  it('展开候选：跟随设置 + BYOK 提供商；当前项打勾', () => {
     render(<ModelButton {...base} />)
 
     fireEvent.click(screen.getByRole('button', { name: /模型/ }))
 
     const dialog = screen.getByRole('dialog', { name: '模型' })
     expect(dialog.textContent).toContain('跟随设置')
-    expect(dialog.textContent).toContain('deepseek-reasoner')
-    expect(dialog.textContent).toContain('内核认得的模型')  // 说明候选的来源
+    expect(dialog.textContent).toContain('BYOK 提供商')
+    expect(dialog.textContent).toContain('command · deepseek-v4.1-flash')
     expect(screen.getByRole('button', { name: /模型/ }).getAttribute('aria-expanded')).toBe('true')
   })
 
-  it('选一个模型 → onChange(名字) 并收起', () => {
+  it('选一个 BYOK 候选 → onChange(ref) 并收起', () => {
     const onChange = vi.fn()
     render(<ModelButton {...base} onChange={onChange} />)
 
     fireEvent.click(screen.getByRole('button', { name: /模型/ }))
-    fireEvent.click(screen.getByText('deepseek-reasoner'))
+    fireEvent.click(screen.getByText('command · deepseek-v4.1-flash'))
 
-    expect(onChange).toHaveBeenCalledWith('deepseek-reasoner')
+    expect(onChange).toHaveBeenCalledWith('command/deepseek/deepseek-v4.1-flash')
     expect(screen.queryByRole('dialog', { name: '模型' })).toBeNull()
+  })
+
+  it('没有 BYOK 候选时不列任何预置模型，给出去设置里添加的指引', () => {
+    render(<ModelButton {...base} candidates={[]} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /模型/ }))
+
+    const dialog = screen.getByRole('dialog', { name: '模型' })
+    expect(dialog.textContent).toContain('设置 → 模型')
+    // 预置模型（gpt-4o / claude-* 之类）不再出现
+    expect(screen.queryByText('gpt-4o')).toBeNull()
+    expect(screen.queryByText('deepseek-chat')).toBeNull()
   })
 
   it('选了别的模型后，胶囊显示它；再选「跟随设置」回到 null', () => {
     const onChange = vi.fn()
-    const { rerender } = render(<ModelButton {...base} model="deepseek-reasoner" onChange={onChange} />)
-    expect(screen.getByRole('button', { name: /模型/ }).textContent).toContain('deepseek-reasoner')
+    const { rerender } = render(<ModelButton {...base} model="command/deepseek/deepseek-v4.1-flash" onChange={onChange} />)
+    expect(screen.getByRole('button', { name: /模型/ }).textContent).toContain('deepseek-v4.1-flash')
 
     fireEvent.click(screen.getByRole('button', { name: /模型/ }))
     fireEvent.click(screen.getByText('跟随设置'))

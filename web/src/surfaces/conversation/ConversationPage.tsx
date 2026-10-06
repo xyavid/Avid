@@ -552,7 +552,6 @@ export function ConversationPage() {
             model={runModel}
             onChangeModel={setRunModel}
             effectiveModel={meta?.capabilities.model ?? null}
-            knownModels={meta?.capabilities.known_models ?? []}
             byokModels={meta?.capabilities.models ?? []}
             onSend={(text) => {
               setLiveSession(selectedId)
