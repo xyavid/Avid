@@ -20,7 +20,7 @@
  * | copy | 消息动作「复制回复」（阶段 4） |
  * | file-frame | 工具卡的通用文件头（阶段 3，墙原件） |
  * | file-text | 右栏文件清单条目（阶段 4） |
- * | terminal / globe | bash 与 web_search 工具卡（阶段 3） |
+ * | terminal | bash 工具卡（阶段 3）；globe 备用（联网工具移除后空置） |
  * | folder | 工作区面板（阶段 4） |
  * | list-checks | 待办/计划块（阶段 4） |
  * | git-branch | 分支选择器 / subagent 卡（阶段 4） |

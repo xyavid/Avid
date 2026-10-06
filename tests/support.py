@@ -49,7 +49,6 @@ PLACEHOLDER_ARGS: dict[str, str] = {
     "todo_write": '{"todos": []}',
     "subagent": '{"tasks": [{"description": "子任务", "prompt": "把这件事做完"}]}',
     "load_skill": '{"name": "demo"}',
-    "web_search": '{"query": "avid agent runtime"}',
 }
 
 

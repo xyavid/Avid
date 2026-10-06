@@ -38,7 +38,6 @@ type MessagePayload = {
 /** 工具名 → 图标；未登记的工具回落到通用文件帧。 */
 const TOOL_ICONS: Record<string, IconName> = {
   bash: 'terminal',
-  web_search: 'globe',
   subagent: 'git-branch',
 }
 

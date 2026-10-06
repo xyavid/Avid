@@ -42,7 +42,6 @@ cp .env.example .env   # 按需填入；模型连接不在这里配
 
 | 变量 | 必填 | 说明 |
 |---|---|---|
-| `TAVILY_API_KEY` | 否 | `web_search` 工具的检索凭据；缺省只有该工具失败关闭 |
 | `AVID_MAX_PARALLEL_TOOL_CALLS` | 否 | 一步内并行工具调用上限，默认 10，硬上限 32 |
 | `AVID_MODEL_INFO` | 否 | 设 `off` 关闭「向 provider 问模型窗口」的探测 |
 

@@ -60,8 +60,8 @@ describe('ToolCard（双形态：折叠单行 ↔ 展开完整卡）', () => {
   })
 
   it('不同工具换不同图标（globe）', () => {
-    const { container } = render(<ToolCard icon="globe" title="web_search" status="ok" />)
+    const { container } = render(<ToolCard icon="globe" title="custom_tool" status="ok" />)
     expect(container.querySelector('svg')).toBeTruthy()
-    expect(screen.getByText('web_search')).toBeTruthy()
+    expect(screen.getByText('custom_tool')).toBeTruthy()
   })
 })

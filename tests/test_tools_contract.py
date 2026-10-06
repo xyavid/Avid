@@ -86,7 +86,6 @@ def test_concurrency_safe_tools_are_read_only_by_name():
         "read_file",
         "glob",
         "load_skill",
-        "web_search",
     } <= CONCURRENCY_SAFE
 
 
@@ -116,7 +115,6 @@ def test_expected_tools_are_registered():
         "read_file",
         "subagent",
         "todo_write",
-        "web_search",
         "write_file",
     ]
 

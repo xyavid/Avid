@@ -10,7 +10,7 @@ Avid 是一个自建的 agent 运行时（harness）：模型调用、工具执�
 - **目标**：改动任一模块（模型 / 工具 / 上下文策略）不需要动其它部分。
 - **验收基准**：参考场景 **R**（读取本地文件 + 计算）——首个工具从它长出来。
 - **技术栈**：内核 Python 3.12，`uv` 管理依赖，运行期依赖只有 `httpx`；前端在 `web/`（React 18 + Vite + pnpm + TypeScript）。
-- **现状**：模型调用 → 循环 → 9 个内置工具 + stdio MCP → 权限三轴预设（四级 deny 阶梯 + 跨平台沙箱/审批阶梯 + 审计）→ hook 四事件 → 技能 → 上下文压缩 → 会话持久化 → 本地 Web 服务，端到端可用；浏览器界面随阶段 33 重建（纸本视觉对话界面 + 会话/工作区管理 + 设置）。
+- **现状**：模型调用 → 循环 → 8 个内置工具 + stdio MCP → 权限三轴预设（四级 deny 阶梯 + 跨平台沙箱/审批阶梯 + 审计）→ hook 四事件 → 技能 → 上下文压缩 → 会话持久化 → 本地 Web 服务，端到端可用；浏览器界面随阶段 33 重建（纸本视觉对话界面 + 会话/工作区管理 + 设置）。
 - **阶段 35 重置**：包平铺到仓库根（`avid/`，无 src 层）；评测仪器（benchmarks）整体删除，评测另立阶段；docs 体系撤除，**代码与模块注释是唯一现状**。
 
 **仓库现状问谁**：不问文档，问代码——每个模块的职责、边界与不变量写在模块 docstring 与注释里；跨包边界由 `tests/test_web_boundaries.py` 的门禁（A1–A13）钉住，前端契约由 `test_wire_contract.py` / `test_event_contract.py` 双侧钉住。
@@ -34,7 +34,7 @@ pnpm -C web run copy:dist         # 构建产物交付到 avid/web/static/（avi
 **模型连接只认 BYOK 配置**：`~/.avid/models.json` + 0600 的
 `~/.avid/secrets.json`，由界面「设置 → 模型」或手编文件维护（结构见
 `avid/ai/byok.py` 模块注释）；未配置时运行报「还没有模型配置」。`.env`
-（`--env-file`）只承载 TAVILY 等旁路凭据与运行期开关。安装、配置项与
+（`--env-file`）只承载运行期开关。安装、配置项与
 CLI 全量参数见 `README.md`。
 
 ### 1.2 数据流
@@ -71,7 +71,7 @@ Web  POST /api/sessions/{id}/runs ─┴─► svc/runs.RunRegistry（线程 + �
 | 会话 | `session/`：条目树 + 值 + 分支 + 变更线，`memory` 与 `jsonl` 两后端共用一套一致性用例，`recorder` 是唯一写入者 | 磁盘上的会话真相 |
 | 应用服务 | `services/`：`runs` 运行注册表与重放缓冲、`approvals` 待决表、`sessions` 读视图、`workspaces`、`workspace_registry`、`picker` | 内核的第二个调用方 |
 | 传输适配 | `web/`：FastAPI 路由 + pydantic DTO + SSE 编帧 + 静态资源 | 线格式的唯一所有者 |
-| 工具 | `agent/tools/`：`registry` 单点声明、`files`/`shell`/`subagent`/`skill`/`web_search`/`mcp`、`validate` 参数校验 | 9 个内置工具 + 该工作区声明的 MCP 工具 |
+| 工具 | `agent/tools/`：`registry` 单点声明、`files`/`shell`/`subagent`/`skill`/`mcp`、`validate` 参数校验 | 8 个内置工具 + 该工作区声明的 MCP 工具 |
 | 工作区 | `workspaces.py` + `~/.avid/workspaces.json` | 用户级注册表（索引，非权威） |
 | 前端 | `web/`（React 18 + Vite + pnpm）：`api/types.ts` 与 `events/types.ts` 契约种子、`styles/tokens.css` 纸本 token 层、`markdown/` 自研渲染、`surfaces/` 页面 | 浏览器侧全部代码；交付走 `copy:dist` 进 `avid/web/static/` |
 

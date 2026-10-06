@@ -252,7 +252,7 @@ def test_env_whitelist_drops_secrets_and_desktop_access(home, tmp_path):
             "PATH": "/usr/bin",
             "LANG": "C.UTF-8",
             "LC_ALL": "C.UTF-8",
-            "TAVILY_API_KEY": "sk-live",
+            "SOME_API_KEY": "sk-live",
             "MY_DATABASE_URL": "postgres://u:p@h/db",
             "GITHUB_TOKEN": "ghp_x",
             "DISPLAY": ":0",
@@ -265,7 +265,7 @@ def test_env_whitelist_drops_secrets_and_desktop_access(home, tmp_path):
     )
     assert kept["PATH"] == "/usr/bin" and kept["LANG"] == "C.UTF-8" and kept["LC_ALL"] == "C.UTF-8"
     for dropped in (
-        "TAVILY_API_KEY",
+        "SOME_API_KEY",
         "MY_DATABASE_URL",
         "GITHUB_TOKEN",
         "DISPLAY",
@@ -287,16 +287,16 @@ def test_env_home_is_the_host_we_computed_the_masks_for(home, tmp_path):
 def test_child_env_scrubs_instead_of_inheriting_when_not_enforced(tmp_path, home):
     """非强制的子环境走黑名单：凭据形状的变量不进子进程，其余原样保留。"""
     spec = build_spec(policy="disabled", network="open", root=str(tmp_path), home=home, probe=WORKING)
-    scrubbed = spec.child_env({"PATH": "/usr/bin", "TAVILY_API_KEY": "x", "SYSTEMROOT": r"C:\W"})
+    scrubbed = spec.child_env({"PATH": "/usr/bin", "SOME_API_KEY": "x", "SYSTEMROOT": r"C:\W"})
     assert scrubbed == {"PATH": "/usr/bin", "SYSTEMROOT": r"C:\W"}
 
     enforced = build_spec(policy="workspace", root=str(tmp_path), home=home, probe=WORKING)
-    assert enforced.child_env({"PATH": "/usr/bin", "TAVILY_API_KEY": "x"}) == {"PATH": "/usr/bin", "HOME": str(home)}
+    assert enforced.child_env({"PATH": "/usr/bin", "SOME_API_KEY": "x"}) == {"PATH": "/usr/bin", "HOME": str(home)}
 
 
 def test_env_allow_list_is_explicit():
     assert "PATH" in ENV_ALLOW_EXACT and "HOME" in ENV_ALLOW_EXACT
-    assert "TAVILY_API_KEY" not in ENV_ALLOW_EXACT
+    assert "SOME_API_KEY" not in ENV_ALLOW_EXACT
     assert all(isinstance(item, str) for item in DEFAULT_MASK_DIRS + DEFAULT_MASK_FILES)
 
 
@@ -387,7 +387,7 @@ def test_scrubbed_env_drops_credential_shaped_names():
         {
             "PATH": "/usr/bin",
             "SYSTEMROOT": r"C:\Windows",
-            "TAVILY_API_KEY": "tvly-x",
+            "SOME_API_KEY": "tvly-x",
             "AWS_SESSION_TOKEN": "tok",
             "SOME_PASSWORD": "p",
         }

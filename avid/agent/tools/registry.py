@@ -101,7 +101,7 @@ def ensure_loaded() -> None:
         return
     _LOADED = True
     from .. import todo  # noqa: F401  (todo_write lives in the agent layer)
-    from . import files, shell, skill, subagent, web_search  # noqa: F401
+    from . import files, shell, skill, subagent  # noqa: F401
 
 
 def specs() -> tuple[ToolSpec, ...]:

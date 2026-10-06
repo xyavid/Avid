@@ -117,7 +117,7 @@ def test_plan_segments_isolates_exclusive_calls(limit, expected):
         call("read_file", call_id="c1"),
         call("write_file", call_id="c2"),
         call("glob", call_id="c3"),
-        call("web_search", call_id="c4"),
+        call("load_skill", call_id="c4"),
     ]
 
     assert plan_segments(calls, limit) == expected
@@ -128,7 +128,7 @@ def test_plan_segments_keeps_every_call_exactly_once():
         call("read_file", call_id="c1"),
         call("bash", call_id="c2"),
         call("glob", call_id="c3"),
-        call("web_search", call_id="c4"),
+        call("load_skill", call_id="c4"),
     ]
 
     flat = [index for group in plan_segments(calls, 10) for index in group]
@@ -187,13 +187,13 @@ def test_results_keep_source_order_when_completion_is_reversed():
 
 def test_exclusive_call_forms_a_barrier():
     rec = Recorder()
-    names = ("read_file", "glob", "write_file", "web_search", "get_task")
+    names = ("read_file", "glob", "write_file", "load_skill", "get_task")
     registry = {name: rec.handler(name) for name in names}
     batch = [
         call("read_file", call_id="c1"),
         call("glob", call_id="c2"),
         call("write_file", call_id="c3"),
-        call("web_search", call_id="c4"),
+        call("load_skill", call_id="c4"),
         call("get_task", call_id="c5"),
     ]
 
@@ -203,11 +203,11 @@ def test_exclusive_call_forms_a_barrier():
 
     assert [item.tool_call_id for item in outcomes] == ["c1", "c2", "c3", "c4", "c5"]
     # 屏障本身不与任何调用重叠
-    for other in ("read_file", "glob", "web_search", "get_task"):
+    for other in ("read_file", "glob", "load_skill", "get_task"):
         assert not rec.overlaps("write_file", other), f"write_file 与 {other} 重叠了"
     # 屏障两侧的两个并发段也不互相重叠
     for before in ("read_file", "glob"):
-        for after in ("web_search", "get_task"):
+        for after in ("load_skill", "get_task"):
             assert not rec.overlaps(before, after), f"{before} 与 {after} 跨屏障重叠了"
 
 

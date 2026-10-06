@@ -98,7 +98,7 @@ NETWORK_MESSAGE = (
 NET_ASK_MESSAGE = (
     "Permission denied. 原因：网络类命令需要批准（{reason}）。"
     "沙箱缺席时网络出口由人把守；请向用户说明要访问哪个地址、为什么，"
-    "或改用已授权的工具（如 web_search）。"
+    "或改用已授权的工具。"
 )
 AUTO_UNANSWERED_MESSAGE = (
     "Permission denied. 原因：auto 模式需要就「{reason}」征询用户，但本次运行没有可用的询问通道。"

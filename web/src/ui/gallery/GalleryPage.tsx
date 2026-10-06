@@ -191,7 +191,6 @@ export function GalleryPage() {
    - \`uv sync\` 装内核依赖
    - \`uv sync --extra web\` 追加 Web 依赖
 
-> 需要联网的只有 \`web_search\`，Key 走环境变量。
 
 | 项 | 值 | 备注 |
 | :--- | ---: | :--- |
