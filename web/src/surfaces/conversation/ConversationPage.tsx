@@ -582,6 +582,7 @@ export function ConversationPage() {
         phase={liveHere ? live.phase : null}
         tools={liveHere ? live.tools : []}
         approvals={liveHere ? live.approvals : []}
+        workspaceRoot={selected?.workspace?.root ?? null}
         onDecide={(id, decision) => void live.decide(id, decision)}
       />
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}

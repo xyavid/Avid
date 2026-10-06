@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { Dock } from '../Dock'
+import type { DockPanelId } from '../../../state/dock'
 import type { LiveTool, RunPhase } from '../../../state/useRunStream'
 import type { UsageReport } from '../../../api/types'
 
@@ -21,11 +22,12 @@ const runningTools: LiveTool[] = [
 
 function renderDock(overrides: {
   open?: boolean
-  active?: 'context' | 'processes' | 'review'
+  active?: DockPanelId
   phase?: RunPhase | null
   tools?: LiveTool[]
   approvals?: { approvalId: string; tool: string; arguments: string; reason: string }[]
   onDecide?: (id: string, decision: 'allow' | 'deny') => void
+  workspaceRoot?: string | null
 } = {}) {
   const { open = true, active = 'processes', phase = 'running' as RunPhase, tools = runningTools, approvals = [], onDecide = vi.fn() } = overrides
   return render(
@@ -39,6 +41,7 @@ function renderDock(overrides: {
       tools={tools}
       approvals={approvals}
       onDecide={onDecide}
+      workspaceRoot={'workspaceRoot' in overrides ? (overrides.workspaceRoot ?? null) : '/tmp/ws'}
     />,
   )
 }
@@ -90,6 +93,7 @@ describe('右侧 dock（阶段 48）', () => {
         tools={[]}
         approvals={[]}
         onDecide={onDecide}
+        workspaceRoot="/tmp/ws"
       />,
     )
     expect(screen.getByText('没有待决审批')).toBeTruthy()
@@ -115,6 +119,7 @@ describe('右侧 dock（阶段 48）', () => {
         tools={[]}
         approvals={[]}
         onDecide={() => {}}
+        workspaceRoot="/tmp/ws"
       />,
     )
     fireEvent.keyDown(window, { key: 'Escape' })
@@ -131,9 +136,47 @@ describe('右侧 dock（阶段 48）', () => {
         tools={[]}
         approvals={[]}
         onDecide={() => {}}
+        workspaceRoot="/tmp/ws"
       />,
     )
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(onClose).toHaveBeenCalledOnce()
+  })
+})
+
+
+describe('dock 重面板（阶段 49）', () => {
+  afterEach(cleanup)
+
+  it('终端面板：无工作区时空态，不拉 xterm（lazy 面板等 Suspense 落定）', async () => {
+    renderDock({ active: 'terminal', phase: null, tools: [], workspaceRoot: null })
+
+    expect(await screen.findByText('未选择工作区')).toBeTruthy()
+    expect(screen.queryByText('连接中…')).toBeNull()
+  })
+
+  it('浏览器面板：非法 scheme 拒绝；合法 URL 渲染 iframe 与新窗口兜底', async () => {
+    const { default: BrowserPanel } = await import('../BrowserPanel')
+    render(<BrowserPanel />)
+
+
+    const address = screen.getByLabelText('浏览器地址') as HTMLInputElement
+    fireEvent.change(address, { target: { value: 'javascript:alert(1)' } })
+    fireEvent.click(screen.getByRole('button', { name: '打开' }))
+    expect(screen.getByText(/地址不合法/)).toBeTruthy()
+    expect(screen.queryByTitle('浏览器面板')).toBeNull()
+
+    fireEvent.change(address, { target: { value: 'localhost:8799' } })
+    fireEvent.click(screen.getByRole('button', { name: '打开' }))
+    const frame = screen.getByTitle('浏览器面板') as HTMLIFrameElement
+    expect(frame.getAttribute('src')).toBe('https://localhost:8799/')
+    expect(screen.getByText('新窗口打开')).toBeTruthy()
+  })
+
+  it('页签扩展：终端与浏览器都在标签条里', () => {
+    renderDock({ active: 'context' })
+
+    expect(screen.getByTitle('终端')).toBeTruthy()
+    expect(screen.getByTitle('浏览器')).toBeTruthy()
   })
 })

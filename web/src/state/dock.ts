@@ -5,10 +5,10 @@
 
 import { useCallback, useEffect, useState } from 'react'
 
-export type DockPanelId = 'context' | 'processes' | 'review'
+export type DockPanelId = 'context' | 'processes' | 'review' | 'terminal' | 'browser'
 
 const STORAGE_KEY = 'avid.dock'
-const PANEL_IDS: DockPanelId[] = ['context', 'processes', 'review']
+const PANEL_IDS: DockPanelId[] = ['context', 'processes', 'review', 'terminal', 'browser']
 
 type StoredDock = { open: boolean; active: DockPanelId }
 

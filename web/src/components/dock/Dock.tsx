@@ -1,5 +1,5 @@
 /**
- * 右侧 dock（阶段 48）：顶栏按钮开关的常驻面板——贴纸本语言的 ZCode 式状态列。
+ * 右侧 dock（阶段 48 立，阶段 49 加重面板）：顶栏按钮开关的常驻面板。
  *
  * 形态语义：常驻而非模态——无蒙层、不挡主列交互（边聊边看），按钮或 Esc 开关。
  * 收起 = translate-x-full 移出视口（面板状态保留，再展开不闪）。
@@ -7,7 +7,7 @@
  * 页面下发（useRunStream 的活状态与会话快照），自己不发请求。
  */
 
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 
 import type { LiveApproval, LiveTool, RunPhase } from '../../state/useRunStream'
 import type { UsageReport } from '../../api/types'
@@ -18,10 +18,16 @@ import { cx } from '../../ui/cx'
 import { ContextRail } from '../rail/ContextRail'
 import { ApprovalBar } from '../chat/ApprovalBar'
 
+// 重面板按需加载：xterm 的体积隔离进异步 chunk（体积门禁分档计量）
+const TerminalPanel = lazy(() => import('./TerminalPanel'))
+const BrowserPanel = lazy(() => import('./BrowserPanel'))
+
 const PANELS: { id: DockPanelId; label: string; icon: IconName }[] = [
   { id: 'context', label: '上下文', icon: 'file-text' },
   { id: 'processes', label: '进程', icon: 'activity' },
   { id: 'review', label: '审查', icon: 'shield-check' },
+  { id: 'terminal', label: '终端', icon: 'terminal' },
+  { id: 'browser', label: '浏览器', icon: 'globe' },
 ]
 
 export type DockProps = {
@@ -35,6 +41,8 @@ export type DockProps = {
   tools: LiveTool[]
   approvals: LiveApproval[]
   onDecide: (approvalId: string, decision: 'allow' | 'deny') => void
+  /** 终端面板的工作目录：选中会话的工作区根。 */
+  workspaceRoot: string | null
 }
 
 const PHASE_LABEL: Record<RunPhase, string> = {
@@ -91,7 +99,7 @@ function ProcessesPanel({ phase, tools, approvals }: { phase: RunPhase | null; t
   )
 }
 
-export function Dock({ open, active, onSelect, onClose, usage, phase, tools, approvals, onDecide }: DockProps) {
+export function Dock({ open, active, onSelect, onClose, usage, phase, tools, approvals, onDecide, workspaceRoot }: DockProps) {
   // Esc 关闭：dock 是常驻面板，但键盘要有一条不找鼠标的退出路径。
   useEffect(() => {
     if (!open) return
@@ -147,6 +155,18 @@ export function Dock({ open, active, onSelect, onClose, usage, phase, tools, app
             ) : (
               <ApprovalBar approvals={approvals} busy={false} onDecide={onDecide} />
             )}
+          </div>
+        )}
+        {active === 'terminal' && (
+          <div className="h-full p-a12">
+            <Suspense fallback={<p className="font-ui text-hint text-ink-muted">加载终端组件…</p>}>
+              <TerminalPanel root={workspaceRoot} />
+            </Suspense>
+          </div>
+        )}
+        {active === 'browser' && (
+          <div className="h-full p-a12">
+            <BrowserPanel />
           </div>
         )}
       </div>
