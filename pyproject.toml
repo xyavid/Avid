@@ -11,7 +11,7 @@ avid = "avid.cli:main"
 [project.optional-dependencies]
 # Web 传输适配层的依赖。内核使用路径（CLI）不装它：`web/` 是唯一 importer，
 # 由 tests/test_web_boundaries.py 的 grep 门禁守着（设计文档 §4.2/A1/A2）。
-web = ["fastapi>=0.110", "uvicorn>=0.27", "pydantic>=2.6"]
+web = ["fastapi>=0.110", "uvicorn>=0.27", "pydantic>=2.6", "websockets>=12"]
 
 [build-system]
 requires = ["hatchling"]
