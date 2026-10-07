@@ -1,7 +1,7 @@
 /**
  * 工具组（参考图「N 个工具」）：同一轮的连续工具调用聚在一组，组头可开关
- * 整组——开：逐条折叠行；关：只剩组头（chevron 右转）。组内每条仍是独立的
- * 工具卡，可单独点开展开成完整卡。
+ * 整组——**默认折叠**（只显示「N 个工具」组头），点开后逐条折叠行。组内
+ * 每条仍是独立的工具卡，可单独点开展开成完整卡。
  */
 
 import { useState } from 'react'
@@ -16,7 +16,7 @@ export type ToolGroupProps = {
 }
 
 export function ToolGroup({ count, children }: ToolGroupProps) {
-  const [open, setOpen] = useState(true)
+  const [open, setOpen] = useState(false)
 
   return (
     <div className="flex flex-col gap-a8">

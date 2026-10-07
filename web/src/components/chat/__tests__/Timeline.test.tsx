@@ -65,13 +65,16 @@ describe('Timeline（durable 条目 → 冻结组件）', () => {
       />,
     )
 
+    // 默认折叠：只显示组头，卡片要点开组头才出现
     expect(screen.getByText('2 个工具')).toBeTruthy()
+    expect(screen.queryByText('one')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /2 个工具/ }))
     expect(screen.getByText('one')).toBeTruthy()
+    expect(screen.getByText('two')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: /2 个工具/ }))
     expect(screen.queryByText('one')).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: /2 个工具/ }))
-    expect(screen.getByText('two')).toBeTruthy()
   })
 
   it('失败结果（错误：前缀）标失败叉；中断批次标运行中并显示参数', () => {
@@ -91,6 +94,8 @@ describe('Timeline（durable 条目 → 冻结组件）', () => {
       />,
     )
 
+    // 组默认折叠：先点开组头，再断言卡片的失败/运行中状态与参数预览
+    fireEvent.click(screen.getByRole('button', { name: /2 个工具/ }))
     expect(screen.getByLabelText('失败')).toBeTruthy()
     expect(screen.getByLabelText('运行中')).toBeTruthy()
     expect(screen.getByText('{"command":"echo hi"}')).toBeTruthy()
