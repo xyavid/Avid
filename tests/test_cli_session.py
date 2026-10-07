@@ -22,6 +22,8 @@ from avid.agent.run import Run as RealRun
 from avid.agent.stop import STOP_FINAL_TEXT, RunOutcome
 from avid.agent.tools import workspace
 from avid.providers.client import Turn, Usage
+from avid.security import sandbox as sandbox_module
+from avid.security.sandbox import BACKEND_BWRAP, BackendProbe
 
 
 class FakeChat:
@@ -263,7 +265,19 @@ def test_session_list_shows_the_workspace_column(sandbox, model, capsys):
 
 
 def test_run_state_carries_the_workspace_and_the_default_permission(sandbox, model, monkeypatch, capsys):
-    """没有工作区默认权限、也没有 --permission：不给旗标就是 normal，沙箱照常启用。"""
+    """没有工作区默认权限、也没有 --permission：不给旗标就是 normal，沙箱照常请求强制隔离。"""
+    # 沙箱后端是宿主事实（CI runner 上通常没有 bwrap）：注入一个可用探针，把断言钉在
+    # 「CLI 请求了强制隔离」而不是「这台机器装了 bwrap」。
+    probe = BackendProbe(
+        backend=BACKEND_BWRAP,
+        binary="/usr/bin/bwrap",
+        available=True,
+        network_isolation=True,
+        reason=None,
+        landlock=3,
+    )
+    monkeypatch.setattr(sandbox_module, "probe_backend", lambda: probe)
+
     registry = cli.WorkspaceRegistry()
     ws = registry.add(sandbox)
     seen = {}
@@ -285,6 +299,7 @@ def test_run_state_carries_the_workspace_and_the_default_permission(sandbox, mod
     assert state.permission_mode == "normal"
     assert state.workspace_root == ws.root
     assert state.security.full is False
+    assert state.security.sandbox.policy == "workspace"
     assert state.security.sandbox.enforced is True
     capsys.readouterr()
 
