@@ -40,9 +40,8 @@ SECURITY_HEADERS: dict[str, str] = {
         "img-src 'self' data:; "
         "font-src 'self'; "
         "connect-src 'self'; "
-        # frame-src 放开 http/https：dock 的浏览器面板按用户输入内嵌任意站点。
-        # frame-ancestors 'none' 不变——它拦的是别人把我们嵌进去，方向相反。
-        "frame-src 'self' http: https:; "
+        # 没有 frame-src：本页不内嵌任何站点，子框架落回 default-src 'self'。
+        # frame-ancestors 'none' 是另一个方向——拦的是别人把我们嵌进去。
         "object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
     ),
     "Referrer-Policy": "no-referrer",

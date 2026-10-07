@@ -157,28 +157,13 @@ describe('dock 重面板（阶段 49）', () => {
     expect(screen.queryByText('连接中…')).toBeNull()
   })
 
-  it('浏览器面板：非法 scheme 拒绝；合法 URL 渲染 iframe 与新窗口兜底', async () => {
-    const { default: BrowserPanel } = await import('../BrowserPanel')
-    render(<BrowserPanel />)
-
-
-    const address = screen.getByLabelText('浏览器地址') as HTMLInputElement
-    fireEvent.change(address, { target: { value: 'javascript:alert(1)' } })
-    fireEvent.click(screen.getByRole('button', { name: '打开' }))
-    expect(screen.getByText(/地址不合法/)).toBeTruthy()
-    expect(screen.queryByTitle('浏览器面板')).toBeNull()
-
-    fireEvent.change(address, { target: { value: 'localhost:8799' } })
-    fireEvent.click(screen.getByRole('button', { name: '打开' }))
-    const frame = screen.getByTitle('浏览器面板') as HTMLIFrameElement
-    expect(frame.getAttribute('src')).toBe('https://localhost:8799/')
-    expect(screen.getByText('新窗口打开')).toBeTruthy()
-  })
-
-  it('页签扩展：终端与浏览器都在标签条里', () => {
+  it('页签只有四项：浏览器面板已下线（内嵌外站受 X-Frame-Options 限制，废多留少）', () => {
     renderDock({ active: 'context' })
 
+    expect(screen.getByTitle('上下文')).toBeTruthy()
+    expect(screen.getByTitle('进程')).toBeTruthy()
+    expect(screen.getByTitle('审查')).toBeTruthy()
     expect(screen.getByTitle('终端')).toBeTruthy()
-    expect(screen.getByTitle('浏览器')).toBeTruthy()
+    expect(screen.queryByTitle('浏览器')).toBeNull()
   })
 })

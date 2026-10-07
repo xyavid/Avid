@@ -20,14 +20,12 @@ import { ApprovalBar } from '../chat/ApprovalBar'
 
 // 重面板按需加载：xterm 的体积隔离进异步 chunk（体积门禁分档计量）
 const TerminalPanel = lazy(() => import('./TerminalPanel'))
-const BrowserPanel = lazy(() => import('./BrowserPanel'))
 
 const PANELS: { id: DockPanelId; label: string; icon: IconName }[] = [
   { id: 'context', label: '上下文', icon: 'file-text' },
   { id: 'processes', label: '进程', icon: 'activity' },
   { id: 'review', label: '审查', icon: 'shield-check' },
   { id: 'terminal', label: '终端', icon: 'terminal' },
-  { id: 'browser', label: '浏览器', icon: 'globe' },
 ]
 
 export type DockProps = {
@@ -162,11 +160,6 @@ export function Dock({ open, active, onSelect, onClose, usage, phase, tools, app
             <Suspense fallback={<p className="font-ui text-hint text-ink-muted">加载终端组件…</p>}>
               <TerminalPanel root={workspaceRoot} />
             </Suspense>
-          </div>
-        )}
-        {active === 'browser' && (
-          <div className="h-full p-a12">
-            <BrowserPanel />
           </div>
         )}
       </div>
