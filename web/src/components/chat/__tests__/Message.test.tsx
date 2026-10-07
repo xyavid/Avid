@@ -55,6 +55,13 @@ describe('AssistantMessage（报告 §7.3：头像行 + 正文分列）', () => 
     expect(screen.getByLabelText('生成中')).toBeTruthy()
   })
 
+  it('续段（showHead=false）不重复标识行，正文照常渲染', () => {
+    const { container } = render(<AssistantMessage showHead={false}>接着说后半段。</AssistantMessage>)
+
+    expect(screen.queryByText('Avid')).toBeNull()
+    expect(container.querySelector('.serif-text')?.textContent).toContain('接着说后半段。')
+  })
+
   it('流式态有部分文本：渲染正文 + 光标呼吸尾标', () => {
     const { container } = render(<AssistantMessage streaming>正在生成</AssistantMessage>)
 

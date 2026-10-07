@@ -1,17 +1,19 @@
 /**
- * 一次运行的生命周期 hook（发送 → 订阅 → 活事件叠加 → 终态回拉）。
+ * 一次运行的生命周期 hook（发送 → 订阅 → 段落归并 → 终态收尾）。
  *
- * 阶段：idle → starting（POST run）→ running（SSE 订阅中）→ settling
- * （收到终态事件，页面回拉 durable 后调 reset 回 idle）；error = 发送/订阅失败。
- * 活事件规则：
- * - durable 消息事件（user/assistant_message）重建视图——attach 到进行中的运行时
- *   靠重放；assistant 的最终消息取代 delta 累积（deltas 永不重放）；
- * - 工具行由 tool_call_started 登记、finished/denied 迁移状态；
- * - 审批入列/出列；终态（finished/failed/cancelled）→ settling + onSettled()
- * - reasoning_delta 单独累积（思考 ≠ 正文）：它属于 delta 档，不落盘、不重放，
- *   只在流里存在——所以刷新或切走会话后就没了，这是刻意的（见 ReasoningBlock）
- *   （页面回拉 entries/usage/sessions 后调 reset）。
- * 流异常断开：轮询 getRun 到终态（web-ui §终端兜底），不无限重连。
+ * 阶段：idle → starting（POST run）→ running（SSE 订阅中）→ settling（收到终态事件，
+ * 页面回拉 durable 后调 settle 回 idle）；error = 发送/订阅失败。
+ *
+ * 它持有的是**本次运行产出的段落**（`items`），不是整个会话的时间线：页面把
+ * 这份段落并回会话历史（`timeline.mergeItems`），过程与收尾共用同一个渲染器。
+ * 事件怎么变成段落全在 `timeline.applyEvent`（纯函数，按 entry_id / tool_call_id
+ * 幂等——中途刷新附着会从 seq 0 重放，重复投递不能变成重复段落）。
+ *
+ * 收尾**不清 items**：清了就等于「过程一个样、最后另起一个样」，那正是这次要治的病。
+ * 段落一直留到会话切换/刷新（那时页面按会话条目重建，live-only 段——思考与子 agent
+ * 步骤——随之消失，见 timeline.ts 的注释）。
+ *
+ * 流异常断开：轮询 getRun 到终态（终端兜底），不无限重连。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -19,50 +21,46 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { cancelRun, decideApproval, getRun, startRun } from '../api/client'
 import { subscribeRun } from '../api/events'
 import type { RunPermission } from '../events/types'
+import type { TimelineEvent, TimelineItem, ToolStatus } from './timeline'
+import { appendUser, applyEvent } from './timeline'
 
 export type RunPhase = 'idle' | 'starting' | 'running' | 'settling' | 'error'
 
 export type LiveTool = {
   callId: string
   tool: string
-  status: 'running' | 'ok' | 'failed' | 'denied'
+  status: ToolStatus
   /** 调用参数（JSON 串）——活卡片预览用，来自 tool_call_started。 */
   arguments: string
   /** 工具结果（tool_result_message 落地后填入）；null = 结果未到。 */
   result: string | null
 }
 
-/**
- * 活区块的有序段：思考与工具按事件流的先后交错（ZCode 式时间线），不再
- * 「所有工具一行 + 一大块思考」。相邻思考段合并；工具段逐卡独立。
- */
-export type LiveSegment =
-  | { kind: 'reasoning'; text: string }
-  | ({ kind: 'tool'; callId: string; tool: string } & Omit<LiveTool, 'callId' | 'tool'>)
-
 export type LiveApproval = { approvalId: string; tool: string; arguments: string; reason: string }
 
-type EventFrame = { type: string; seq: number | null; data: Record<string, unknown> }
+/** 事件帧：只读这四处；`ts` 用来算思考段的时长。 */
+type EventFrame = { type: string; ts: number; data?: Record<string, unknown> }
 
 export type RunStream = ReturnType<typeof useRunStream>
 
 export function useRunStream(sessionId: string | null, onSettled: () => void) {
   const [phase, setPhase] = useState<RunPhase>('idle')
   const [runId, setRunId] = useState<string | null>(null)
-  const [userText, setUserText] = useState<string | null>(null)
-  const [assistantText, setAssistantText] = useState('')
-  const [segments, setSegments] = useState<LiveSegment[]>([])
+  const [items, setItems] = useState<TimelineItem[]>([])
+  // items 属于哪个会话：切走会话后它的段落不跟过去，切回来时按 entry_id 去重后重并。
+  const [attachedSession, setAttachedSession] = useState<string | null>(null)
   const [approvals, setApprovals] = useState<LiveApproval[]>([])
   const [error, setError] = useState<string | null>(null)
   // 内核在 run_started 里记录的实际权限形态（normal/full）；null = 还没有这个事实。
-  // 附着到进行中的运行时它是重放来源——"这次运行是不是完全访问"不从意图反推。
   const [runPermission, setRunPermission] = useState<RunPermission | null>(null)
 
   const runIdRef = useRef<string | null>(null)
+  const sessionRef = useRef<string | null>(null)
+  sessionRef.current = attachedSession
   const subRef = useRef<{ abort: () => void } | null>(null)
   const settlingRef = useRef(false)
   // delta 合帧：增量文本先进 ref，rAF 每帧至多刷一次 state——流式重渲染从
-  // 「每 token 两次」（assistant/reasoning 各一次）降到「每帧至多一次」，
+  // 「每 token 两次」（正文/思考各一次）降到「每帧至多一次」，
   // Markdown 的重解析随之合帧（它是按文本记忆化的，state 不变就不重算）。
   // 哨兵用独立布尔而非帧句柄：句柄赋值发生在 rAF 注册之后，同步执行的
   // 测试桩会把「已消费」的句柄覆盖回非空，卡死后续所有增量。
@@ -72,17 +70,18 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
   const frameHandleRef = useRef<number | null>(null)
   const fallbackTimerRef = useRef<number | null>(null)
   const pendingAssistantRef = useRef('')
+  const pendingAssistantTsRef = useRef(0)
   const flushDeltas = useCallback(() => {
     pendingFrameRef.current = false
     if (fallbackTimerRef.current !== null) {
       window.clearTimeout(fallbackTimerRef.current)
       fallbackTimerRef.current = null
     }
-    if (pendingAssistantRef.current) {
-      const text = pendingAssistantRef.current
-      pendingAssistantRef.current = ''
-      setAssistantText((cur) => cur + text)
-    }
+    const text = pendingAssistantRef.current
+    if (!text) return
+    pendingAssistantRef.current = ''
+    const event: TimelineEvent = { type: 'assistant_delta', ts: pendingAssistantTsRef.current, data: { text } }
+    setItems((cur) => applyEvent(cur, event))
   }, [])
   const scheduleDeltaFlush = useCallback(() => {
     if (pendingFrameRef.current) return
@@ -102,8 +101,8 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
     frameHandleRef.current = requestAnimationFrame(flush)
     fallbackTimerRef.current = window.setTimeout(flush, 1000)
   }, [flushDeltas])
-  // 最终消息/重置取代 delta 累积：未刷帧的增量必须作废，否则终态文本后面
-  // 会再接一截旧增量。
+  // 最终消息/重置取代 delta 累积：未刷帧的增量必须作废，否则持久消息之后
+  // 会再冒出一段只有增量的残段。
   const discardPendingDeltas = useCallback(() => {
     pendingFrameRef.current = false
     if (frameHandleRef.current !== null) {
@@ -118,19 +117,16 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
   }, [])
   useEffect(() => () => discardPendingDeltas(), [discardPendingDeltas])
 
-  const reset = useCallback(() => {
+  /** 收尾：收订阅、清运行态，**保留 items**（时间线不跳变）；下次发送或切会话再收拾。 */
+  const settle = useCallback(() => {
     subRef.current?.abort()
     subRef.current = null
     runIdRef.current = null
     settlingRef.current = false
     discardPendingDeltas()
     setRunId(null)
-    setUserText(null)
-    setAssistantText('')
-    setSegments([])
     setApprovals([])
     setError(null)
-    setRunPermission(null)
     setPhase('idle')
   }, [discardPendingDeltas])
 
@@ -144,95 +140,22 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
           if (data.permission === 'normal' || data.permission === 'full') {
             setRunPermission(data.permission)
           }
-          break
-        }
-        case 'user_message': {
-          const msg = data.message as { content?: unknown } | undefined
-          if (msg && typeof msg.content === 'string' && msg.content) {
-            setUserText((cur) => cur ?? msg.content as string)
-          }
-          break
-        }
-        case 'assistant_message': {
-          // 最终消息取代 delta 累积（attach 重放时 delta 已丢失，durable 是权威）
-          discardPendingDeltas()
-          const msg = data.message as { content?: unknown } | undefined
-          if (msg && typeof msg.content === 'string' && msg.content.trim()) {
-            setAssistantText(msg.content)
-          }
-          break
-        }
-        case 'tool_call_started': {
-          const callId = String(data.tool_call_id ?? '')
-          setSegments((segs) =>
-            segs.some((s) => s.kind === 'tool' && s.callId === callId)
-              ? segs
-              : [
-                  ...segs,
-                  {
-                    kind: 'tool' as const,
-                    callId,
-                    tool: String(data.tool ?? ''),
-                    status: 'running' as const,
-                    arguments: JSON.stringify(data.arguments ?? {}),
-                    result: null,
-                  },
-                ],
-          )
-          break
-        }
-        case 'tool_call_finished': {
-          const callId = String(data.tool_call_id ?? '')
-          setSegments((segs) =>
-            segs.map((s) =>
-              s.kind === 'tool' && s.callId === callId
-                ? { ...s, status: data.status === 'ok' ? ('ok' as const) : ('failed' as const) }
-                : s,
-            ),
-          )
-          break
-        }
-        case 'tool_call_denied': {
-          const callId = String(data.tool_call_id ?? '')
-          setSegments((segs) =>
-            segs.map((s) => (s.kind === 'tool' && s.callId === callId ? { ...s, status: 'denied' as const } : s)),
-          )
-          break
-        }
-        case 'tool_result_message': {
-          // 结果以 durable 消息事件落地（重放也会出现）：按 callId 归位到工具段。
-          const msg = data.message as { tool_call_id?: unknown; content?: unknown } | undefined
-          if (!msg || typeof msg.tool_call_id !== 'string') break
-          const callId = msg.tool_call_id
-          const content =
-            typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content ?? '')
-          setSegments((segs) =>
-            segs.map((s) => (s.kind === 'tool' && s.callId === callId ? { ...s, result: content } : s)),
-          )
-          break
+          return
         }
         case 'assistant_delta': {
-          if (typeof data.text === 'string') {
-            pendingAssistantRef.current += data.text
+          const text = data.text
+          if (typeof text === 'string' && text) {
+            if (pendingAssistantRef.current === '') pendingAssistantTsRef.current = e.ts
+            pendingAssistantRef.current += text
             scheduleDeltaFlush()
           }
-          break
+          return
         }
-        case 'reasoning_delta': {
-          // 思考即时写段（不进合帧）：合帧按帧落 state，帧的时机会让「先思考后
-          // 调工具」的段落错序。ReasoningBlock 是纯文本渲染，逐 delta 更新便宜；
-          // 需要合帧的是走 Markdown 的 assistant 增量。相邻思考段合并为一块。
-          if (typeof data.text === 'string' && data.text) {
-            const text = data.text
-            setSegments((segs) => {
-              const last = segs.at(-1)
-              if (last !== undefined && last.kind === 'reasoning') {
-                return [...segs.slice(0, -1), { kind: 'reasoning' as const, text: last.text + text }]
-              }
-              return [...segs, { kind: 'reasoning' as const, text }]
-            })
-          }
-          break
+        case 'assistant_message': {
+          // 持久消息取代增量累积（重放时 delta 已丢失，durable 是权威）。
+          discardPendingDeltas()
+          setItems((cur) => applyEvent(cur, { type: e.type, ts: e.ts, data }))
+          return
         }
         case 'approval_requested': {
           setApprovals((a) => [
@@ -244,25 +167,29 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
               reason: String(data.reason ?? ''),
             },
           ])
-          break
+          return
         }
         case 'approval_resolved': {
           const id = String(data.approval_id ?? '')
           setApprovals((a) => a.filter((x) => x.approvalId !== id))
-          break
+          return
         }
         case 'run_finished':
         case 'run_failed':
         case 'run_cancelled': {
-          if (settlingRef.current) break
+          if (settlingRef.current) return
           settlingRef.current = true
+          discardPendingDeltas()
           if (e.type === 'run_failed') setError(String(data.message ?? '运行失败'))
           setPhase('settling')
           onSettled()
-          break
+          return
         }
-        default:
-          break
+        default: {
+          // 其余全交给归并：不相关的事件类型是空操作，返回同一个数组引用，
+          // React 也不会因为一次无关事件重渲染。
+          setItems((cur) => applyEvent(cur, { type: e.type, ts: e.ts, data }))
+        }
       }
     },
     [discardPendingDeltas, onSettled, scheduleDeltaFlush],
@@ -313,9 +240,9 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
       setPhase('starting')
       setError(null)
       discardPendingDeltas()
-      setUserText(prompt)
-      setAssistantText('')
-      setSegments([])
+      // 换会话就另起一条：上一条会话的段落不跟着走。
+      setItems((cur) => (sessionRef.current === sessionId ? appendUser(cur, prompt) : appendUser([], prompt)))
+      setAttachedSession(sessionId)
       setApprovals([])
       setRunPermission(null)
       try {
@@ -342,12 +269,15 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
 
   const attach = useCallback(
     (id: string) => {
+      settle()
+      setItems([])
+      setAttachedSession(sessionId)
       runIdRef.current = id
       setRunId(id)
       setPhase('running')
       subscribe(id)
     },
-    [subscribe],
+    [sessionId, settle, subscribe],
   )
 
   const stop = useCallback(async () => {
@@ -364,19 +294,18 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
     [],
   )
 
-  // Dock 进程面板用的扁平工具表：从有序段派生，状态与结果随段实时更新。
-  const tools: LiveTool[] = segments.flatMap((s) =>
-    s.kind === 'tool'
-      ? [{ callId: s.callId, tool: s.tool, status: s.status, arguments: s.arguments, result: s.result }]
+  // Dock 的进程面板用的扁平工具表：从工具段派生，状态与结果随段实时更新。
+  const tools: LiveTool[] = items.flatMap((item) =>
+    item.kind === 'tool'
+      ? [{ callId: item.callId, tool: item.name, status: item.status, arguments: item.args, result: item.result }]
       : [],
   )
 
   return {
     phase,
     runId,
-    userText,
-    assistantText,
-    segments,
+    items,
+    attachedSession,
     tools,
     approvals,
     runPermission,
@@ -385,6 +314,6 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
     stop,
     decide,
     attach,
-    reset,
+    settle,
   }
 }

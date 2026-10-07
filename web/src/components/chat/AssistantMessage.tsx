@@ -19,6 +19,9 @@ export type AssistantMessageProps = {
   streaming?: boolean
   name?: string
   className?: string
+  /** 是否显示标识行（标识 + 名称）。同一轮里第二次以后的正文是续写，
+   *  再挂一次名字只是噪音——调用方按「本轮出现过正文没有」决定。 */
+  showHead?: boolean
 }
 
 /** 字符串走 markdown 渲染；已经是元素（或空）就原样放。 */
@@ -32,7 +35,13 @@ function Body({ children, trailing }: { children?: ReactNode; trailing?: ReactNo
   )
 }
 
-export function AssistantMessage({ children, streaming = false, name = 'Avid', className }: AssistantMessageProps) {
+export function AssistantMessage({
+  children,
+  streaming = false,
+  name = 'Avid',
+  className,
+  showHead = true,
+}: AssistantMessageProps) {
   const cursor = (
     <span
       aria-hidden
@@ -43,12 +52,14 @@ export function AssistantMessage({ children, streaming = false, name = 'Avid', c
   return (
     <div className={cx('flex gap-a8', className)}>
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-a8">
-          {/* 头像：标识直接贴在纸面上——不做圆托、不垫色板（用户要求背景透明），
-              图案自带配色，与旁边名称行同一片底色。 */}
-          <AvidMark size={24} className="shrink-0" />
-          <span className="font-ui text-ui leading-[18px] text-ink-light">{name}</span>
-        </div>
+        {showHead && (
+          <div className="flex items-center gap-a8">
+            {/* 头像：标识直接贴在纸面上——不做圆托、不垫色板（用户要求背景透明），
+                图案自带配色，与旁边名称行同一片底色。 */}
+            <AvidMark size={24} className="shrink-0" />
+            <span className="font-ui text-ui leading-[18px] text-ink-light">{name}</span>
+          </div>
+        )}
         {streaming ? (
           children ? (
             <div className="serif-text mt-a4 text-chat text-ink">

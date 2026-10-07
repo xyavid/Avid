@@ -2,6 +2,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import type { TimelineItem } from '../timeline'
 import { useRunStream } from '../useRunStream'
 
 const startRun = vi.fn()
@@ -20,13 +21,18 @@ vi.mock('../../api/events', () => ({
   subscribeRun: (...a: unknown[]) => subscribe(...a),
 }))
 
-function emitter(): { send: (type: string, data: Record<string, unknown>, seq?: number | null) => void } {
-  const handlers = subscribe.mock.calls.at(-1)?.[2] as {
-    onEvent: (e: { type: string; seq: number | null; data: Record<string, unknown> }) => void
-  }
+type Frame = { type: string; ts: number; seq: number | null; data: Record<string, unknown> }
+
+function emitter(): { send: (type: string, data: Record<string, unknown>, seq?: number, ts?: number) => void } {
+  const handlers = subscribe.mock.calls.at(-1)?.[2] as { onEvent: (e: Frame) => void }
   return {
-    send: (type, data, seq = null) => handlers.onEvent({ type, seq: seq ?? null, data }),
+    send: (type, data, seq = 0, ts = 0) => handlers.onEvent({ type, ts, seq: seq ?? null, data }),
   }
+}
+
+/** 时间线上的正文与用户段，按顺序取出来断言。 */
+function texts(items: TimelineItem[], kind: 'assistant' | 'user'): string[] {
+  return items.filter((item) => item.kind === kind).map((item) => (item.kind === kind ? item.text : ''))
 }
 
 beforeEach(() => {
@@ -47,7 +53,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('useRunStream（发送 → 订阅 → 活事件 → 终态回拉）', () => {
+describe('useRunStream（发送 → 订阅 → 段落归并 → 终态收尾）', () => {
   it('send：POST 只带 prompt 与非默认字段；完全访问时附 full_access_ack', async () => {
     const { result } = renderHook(() => useRunStream('s1', () => {}))
     await act(async () => {
@@ -90,6 +96,19 @@ describe('useRunStream（发送 → 订阅 → 活事件 → 终态回拉）', (
     expect(startRun).toHaveBeenLastCalledWith('s1', { prompt: '在主线上问' })
   })
 
+  it('发送先画乐观用户段，user_message 到达后就地收编（不来回多一条）', async () => {
+    const { result } = renderHook(() => useRunStream('s1', () => {}))
+    await act(async () => {
+      await result.current.send('你好', false)
+    })
+    expect(result.current.items).toEqual([{ kind: 'user', entryId: null, text: '你好' }])
+
+    act(() => {
+      emitter().send('user_message', { entry_id: 'e1', message: { role: 'user', content: '你好' } }, 1)
+    })
+    expect(result.current.items).toEqual([{ kind: 'user', entryId: 'e1', text: '你好' }])
+  })
+
   it('run_started 的两值权限口径落到 runPermission；沙箱事实不从这里反推', async () => {
     const { result } = renderHook(() => useRunStream('s1', () => {}))
     await act(async () => {
@@ -120,23 +139,41 @@ describe('useRunStream（发送 → 订阅 → 活事件 → 终态回拉）', (
     const { send } = emitter()
 
     act(() => {
-      send('reasoning_delta', { text: '先看 ' })
-      send('reasoning_delta', { text: '五层状态' })
-      send('tool_call_started', { tool: 'bash', tool_call_id: 'c1', arguments: { command: 'ls' } }, 2)
-      send('reasoning_delta', { text: '…再想想' })
-      send('assistant_delta', { text: '结论是这样' })
-      send('tool_result_message', { message: { role: 'tool', tool_call_id: 'c1', content: 'total 0' } }, 3)
+      send('reasoning_delta', { text: '先看 ' }, 0, 1000)
+      send('reasoning_delta', { text: '五层状态' }, 0, 1200)
+      send('tool_call_started', { tool: 'bash', tool_call_id: 'c1', arguments: { command: 'ls' } }, 2, 1300)
+      send('reasoning_delta', { text: '…再想想' }, 0, 1400)
+      send('assistant_delta', { text: '结论是这样' }, 0, 1500)
+      send('tool_result_message', { message: { role: 'tool', tool_call_id: 'c1', content: 'total 0' } }, 3, 1600)
     })
 
-    expect(result.current.segments).toEqual([
-      { kind: 'reasoning', text: '先看 五层状态' },
-      { kind: 'tool', callId: 'c1', tool: 'bash', status: 'running', arguments: '{"command":"ls"}', result: 'total 0' },
-      { kind: 'reasoning', text: '…再想想' },
+    expect(result.current.items.map((item) => item.kind)).toEqual([
+      'user',
+      'reasoning',
+      'tool',
+      'reasoning',
+      'assistant',
     ])
-    expect(result.current.assistantText).toBe('结论是这样')
+    expect(result.current.items[1]).toMatchObject({
+      kind: 'reasoning',
+      text: '先看 五层状态',
+      startedAt: 1000,
+      endedAt: 1200,
+    })
+    // 结果先落地、终态事件还没来：状态按结果文案定（与重读会话同一口径）
+    expect(result.current.items[2]).toMatchObject({
+      kind: 'tool',
+      callId: 'c1',
+      name: 'bash',
+      args: '{"command":"ls"}',
+      result: 'total 0',
+      status: 'ok',
+    })
+    expect(texts(result.current.items, 'assistant')).toEqual(['结论是这样'])
+    expect(texts(result.current.items, 'user')).toEqual(['跑一下'])
     // Dock 进程面板的扁平表随段派生
     expect(result.current.tools).toEqual([
-      { callId: 'c1', tool: 'bash', status: 'running', arguments: '{"command":"ls"}', result: 'total 0' },
+      { callId: 'c1', tool: 'bash', status: 'ok', arguments: '{"command":"ls"}', result: 'total 0' },
     ])
   })
 
@@ -157,35 +194,58 @@ describe('useRunStream（发送 → 订阅 → 活事件 → 终态回拉）', (
       bus.send('assistant_delta', { text: 'b' })
     })
     // 帧没跑：state 保持原样（这正是合帧的目的一一回渲染不随 token 数增长）
-    expect(result.current.assistantText).toBe('')
+    expect(texts(result.current.items, 'assistant')).toEqual([])
     act(() => {
       frames.splice(0).forEach((cb) => cb(0))
     })
-    expect(result.current.assistantText).toBe('ab')
+    expect(texts(result.current.items, 'assistant')).toEqual(['ab'])
 
     act(() => {
       bus.send('assistant_delta', { text: 'c' })
-      bus.send('assistant_message', { message: { role: 'assistant', content: '最终' } }, 5)
+      bus.send('assistant_message', { entry_id: 'e2', message: { role: 'assistant', content: '最终' } }, 5)
     })
     // 最终消息权威：未刷帧的增量作废，不得接在最终文本之后
-    expect(result.current.assistantText).toBe('最终')
+    expect(texts(result.current.items, 'assistant')).toEqual(['最终'])
   })
 
-  it('新一次发送会清掉上一轮的思考（它只属于那一次运行）', async () => {
+  it('同一条会话里连着问：上一条的段落留着（时间线是一条，不因换轮次清空）', async () => {
     const { result } = renderHook(() => useRunStream('s1', () => {}))
     await act(async () => {
       await result.current.send('第一轮', false)
     })
-    act(() => emitter().send('reasoning_delta', { text: '上一轮的思考' }))
-    expect(result.current.segments).toEqual([{ kind: 'reasoning', text: '上一轮的思考' }])
+    act(() => {
+      emitter().send('reasoning_delta', { text: '上一轮的思考' }, 0, 1000)
+    })
+    expect(result.current.items).toHaveLength(2)
 
     await act(async () => {
       await result.current.send('第二轮', false)
     })
-    expect(result.current.segments).toEqual([])
+    expect(result.current.items.map((item) => item.kind)).toEqual(['user', 'reasoning', 'user'])
+    expect(texts(result.current.items, 'user')).toEqual(['第一轮', '第二轮'])
   })
 
-  it('活事件：delta 累积、工具行登记与状态迁移、审批入列', async () => {
+  it('换会话发送：上一条会话的段落不跟过去', async () => {
+    const { result, rerender } = renderHook(({ id }) => useRunStream(id, () => {}), {
+      initialProps: { id: 's1' },
+    })
+    await act(async () => {
+      await result.current.send('旧会话的问题', false)
+    })
+    act(() => {
+      emitter().send('reasoning_delta', { text: '旧会话的思考' }, 0, 1000)
+    })
+
+    rerender({ id: 's2' })
+    await act(async () => {
+      await result.current.send('新会话的问题', false)
+    })
+
+    expect(result.current.items).toEqual([{ kind: 'user', entryId: null, text: '新会话的问题' }])
+    expect(result.current.attachedSession).toBe('s2')
+  })
+
+  it('活事件：工具行登记与状态迁移、审批入列', async () => {
     const onSettled = vi.fn()
     const { result } = renderHook(() => useRunStream('s1', onSettled))
     await act(async () => {
@@ -194,15 +254,14 @@ describe('useRunStream（发送 → 订阅 → 活事件 → 终态回拉）', (
     const bus = emitter()
 
     await act(async () => {
-      bus.send('user_message', { entry_id: 'e1', message: { role: 'user', content: '你好' } }, 1)
       bus.send('assistant_delta', { text: '你好' })
       bus.send('assistant_delta', { text: '呀' })
       bus.send('tool_call_started', { tool: 'bash', tool_call_id: 'c1', arguments: {} }, 2)
-      bus.send('tool_call_finished', { tool: 'bash', tool_call_id: 'c1', status: 'ok' }, 3)
+      bus.send('tool_call_finished', { tool: 'bash', tool_call_id: 'c1', status: 'ok', duration_ms: 40 }, 3)
       bus.send('approval_requested', { approval_id: 'a1', tool: 'bash', arguments: '{}', reason: '递归删除根目录' }, 4)
     })
 
-    expect(result.current.assistantText).toBe('你好呀')
+    expect(texts(result.current.items, 'assistant')).toEqual(['你好呀'])
     expect(result.current.tools).toEqual([
       { callId: 'c1', tool: 'bash', status: 'ok', arguments: '{}', result: null },
     ])
@@ -215,7 +274,7 @@ describe('useRunStream（发送 → 订阅 → 活事件 → 终态回拉）', (
     expect(decideApproval).toHaveBeenCalledWith('r1', 'a1', 'allow')
   })
 
-  it('终态：置 settling 并回调 onSettled（由页面回拉后 reset 回 idle）', async () => {
+  it('终态：置 settling 并回调 onSettled；settle 只清运行态，段落留着', async () => {
     const onSettled = vi.fn()
     const { result } = renderHook(() => useRunStream('s1', onSettled))
     await act(async () => {
@@ -224,16 +283,21 @@ describe('useRunStream（发送 → 订阅 → 活事件 → 终态回拉）', (
     const bus = emitter()
 
     await act(async () => {
+      bus.send('user_message', { entry_id: 'e1', message: { role: 'user', content: '你好' } }, 1)
+      bus.send('assistant_message', { entry_id: 'e2', message: { role: 'assistant', content: '在' } }, 2)
       bus.send('run_finished', {}, 9)
     })
     expect(result.current.phase).toBe('settling')
     expect(onSettled).toHaveBeenCalledOnce()
 
     act(() => {
-      result.current.reset()
+      result.current.settle()
     })
     expect(result.current.phase).toBe('idle')
-    expect(result.current.assistantText).toBe('')
+    expect(result.current.approvals).toEqual([])
+    // 收尾不清段落：清了就等于「过程一个样、最后另起一个样」
+    expect(texts(result.current.items, 'assistant')).toEqual(['在'])
+    expect(result.current.items.map((item) => item.kind)).toEqual(['user', 'assistant'])
   })
 
   it('发送失败：phase=error 且给出后端信封文案', async () => {

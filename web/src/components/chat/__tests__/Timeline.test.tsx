@@ -3,141 +3,150 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { Entry } from '../../../api/types'
+import type { TimelineItem } from '../../../state/timeline'
+import { itemsFromEntries } from '../../../state/timeline'
 import { Timeline } from '../Timeline'
 
-function entry(seq: number, message: Record<string, unknown>): Entry {
-  return { entry_id: `e${seq}`, parent_id: null, seq, timestamp: 0, type: 'message', message }
+function entry(seq: number, message: Record<string, unknown>, type = 'message'): Entry {
+  return { entry_id: `e${seq}`, parent_id: null, seq, timestamp: seq, type, message }
+}
+
+function toolCall(id: string, name: string, args: Record<string, unknown>) {
+  return { id, type: 'function', function: { name, arguments: JSON.stringify(args) } }
 }
 
 afterEach(cleanup)
 
-describe('Timeline（durable 条目 → 冻结组件）', () => {
-  it('user → 气泡；assistant 纯文本 → 衬线回复', () => {
+describe('Timeline（段落 → 对话列）', () => {
+  it('用户气泡 + 衬线正文；一轮里只有第一段正文带标识行', () => {
     render(
       <Timeline
-        entries={[
+        items={itemsFromEntries([
           entry(1, { role: 'user', content: '跑一下' }),
-          entry(4, { role: 'assistant', content: '做完了' }),
-        ]}
+          entry(2, { role: 'assistant', content: '先跑。' }),
+          entry(3, { role: 'assistant', content: '跑完了。' }),
+        ])}
       />,
     )
 
     expect(screen.getByText('跑一下')).toBeTruthy()
-    expect(screen.getByText('做完了')).toBeTruthy()
+    expect(screen.getByText('先跑。')).toBeTruthy()
+    expect(screen.getByText('跑完了。')).toBeTruthy()
+    expect(screen.getAllByText('Avid')).toHaveLength(1)
   })
 
-  it('单条工具调用 → 折叠行：标题 + 结果首行预览 + 成功勾，不渲染组头', () => {
+  it('工具行是「动作 + 目标」，连续调用不再聚成「N 个工具」', () => {
     render(
       <Timeline
-        entries={[
+        workspaceRoot="/w"
+        items={itemsFromEntries([
           entry(1, { role: 'user', content: '跑一下' }),
           entry(2, {
             role: 'assistant',
-            content: '',
-            tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'bash', arguments: '{"command": "echo hi"}' } }],
+            content: '先查一眼。',
+            tool_calls: [
+              toolCall('c1', 'read_file', { path: '/w/tests/a.py' }),
+              toolCall('c2', 'bash', { command: 'uv run pytest -q' }),
+            ],
           }),
-          entry(3, { role: 'tool', tool_call_id: 'call_1', content: 'bash ok' }),
-        ]}
+          entry(3, { role: 'tool', tool_call_id: 'c1', content: 'print(1)' }),
+          entry(4, { role: 'tool', tool_call_id: 'c2', content: '271 passed' }),
+        ])}
       />,
     )
 
-    expect(screen.getByText('bash')).toBeTruthy()
-    expect(screen.getByText('bash ok')).toBeTruthy()
-    expect(screen.getByLabelText('成功')).toBeTruthy()
+    expect(screen.getByText('读取')).toBeTruthy()
+    expect(screen.getByText('tests/a.py')).toBeTruthy()
+    expect(screen.getByText('执行')).toBeTruthy()
+    expect(screen.getByText('uv run pytest -q')).toBeTruthy()
     expect(screen.queryByText(/个工具/)).toBeNull()
   })
 
-  it('连续多条工具调用 → 聚成「N 个工具」组，组头可开关整组', () => {
+  it('工具行的状态与结果：失败叉、运行中呼吸点；结果在展开态', () => {
     render(
       <Timeline
-        entries={[
+        items={itemsFromEntries([
           entry(2, {
             role: 'assistant',
             content: '',
-            tool_calls: [
-              { id: 'c1', type: 'function', function: { name: 'bash', arguments: '{"command":"echo one"}' } },
-              { id: 'c2', type: 'function', function: { name: 'bash', arguments: '{"command":"echo two"}' } },
-            ],
-          }),
-          entry(3, { role: 'tool', tool_call_id: 'c1', content: 'one' }),
-          entry(4, { role: 'tool', tool_call_id: 'c2', content: 'two' }),
-        ]}
-      />,
-    )
-
-    // 默认折叠：只显示组头，卡片要点开组头才出现
-    expect(screen.getByText('2 个工具')).toBeTruthy()
-    expect(screen.queryByText('one')).toBeNull()
-
-    fireEvent.click(screen.getByRole('button', { name: /2 个工具/ }))
-    expect(screen.getByText('one')).toBeTruthy()
-    expect(screen.getByText('two')).toBeTruthy()
-
-    fireEvent.click(screen.getByRole('button', { name: /2 个工具/ }))
-    expect(screen.queryByText('one')).toBeNull()
-  })
-
-  it('失败结果（错误：前缀）标失败叉；中断批次标运行中并显示参数', () => {
-    render(
-      <Timeline
-        entries={[
-          entry(2, {
-            role: 'assistant',
-            content: '',
-            tool_calls: [
-              { id: 'c1', type: 'function', function: { name: 'bash', arguments: '{"command":"boom"}' } },
-              { id: 'c2', type: 'function', function: { name: 'bash', arguments: '{"command":"echo hi"}' } },
-            ],
+            tool_calls: [toolCall('c1', 'bash', { command: 'boom' }), toolCall('c2', 'bash', { command: 'never' })],
           }),
           entry(3, { role: 'tool', tool_call_id: 'c1', content: '错误：命令被拒绝' }),
-        ]}
+        ])}
       />,
     )
 
-    // 组默认折叠：先点开组头，再断言卡片的失败/运行中状态与参数预览
-    fireEvent.click(screen.getByRole('button', { name: /2 个工具/ }))
     expect(screen.getByLabelText('失败')).toBeTruthy()
     expect(screen.getByLabelText('运行中')).toBeTruthy()
-    expect(screen.getByText('{"command":"echo hi"}')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: /boom/ }))
+    expect(screen.getByText('错误：命令被拒绝')).toBeTruthy()
   })
 
-  it('notice 条目不进对话视图', () => {
+  it('思考段折成一行并带持续时长（live-only 段的形态）', () => {
+    const items: TimelineItem[] = [
+      { kind: 'reasoning', text: '先想想', startedAt: 1000, endedAt: 4200, streaming: false },
+    ]
+    render(<Timeline items={items} />)
+
+    expect(screen.getByText('思考 · 3.2s')).toBeTruthy()
+  })
+
+  it('subagent 卡：折叠行给任务名，展开后按任务分组列出子步骤', () => {
+    const items: TimelineItem[] = [
+      {
+        kind: 'tool',
+        callId: 'sub',
+        name: 'subagent',
+        args: JSON.stringify({ tasks: [{ description: '前端时间线', prompt: '...' }] }),
+        result: '子任务都回来了',
+        status: 'running',
+        durationMs: null,
+        steps: [
+          { task: '前端时间线', callId: 'k1', name: 'edit_file', args: '{"path":"/w/a.tsx"}', status: 'ok' },
+          { task: '前端时间线', callId: 'k2', name: 'bash', args: '{"command":"pnpm verify"}', status: 'running' },
+        ],
+      },
+    ]
+    render(<Timeline items={items} workspaceRoot="/w" />)
+
+    expect(screen.getByText('子智能体')).toBeTruthy()
+    expect(screen.getByText('前端时间线')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: /子智能体/ }))
+    expect(screen.getByText('编辑')).toBeTruthy()
+    expect(screen.getByText('a.tsx')).toBeTruthy()
+    expect(screen.getByText('pnpm verify')).toBeTruthy()
+    expect(screen.getByText('子任务都回来了')).toBeTruthy()
+  })
+
+  it('notice 条目不进时间线', () => {
     render(
       <Timeline
-        entries={[
+        items={itemsFromEntries([
           entry(1, { role: 'user', content: '在吗' }),
-          { entry_id: 'n1', parent_id: null, seq: 2, timestamp: 0, type: 'notice', message: { role: 'user', content: '[提醒] 连续三轮未更新清单' } },
-        ]}
+          entry(2, { role: 'user', content: '[提醒] 连续三轮未更新清单' }, 'notice'),
+        ])}
       />,
     )
 
     expect(screen.getByText('在吗')).toBeTruthy()
     expect(screen.queryByText(/提醒/)).toBeNull()
   })
-})
 
-describe('Timeline · 消息动作行（阶段 14）', () => {
-  const entries = [
-    entry(1, { role: 'user', content: '帮我读一下 pyproject.toml' }),
-    entry(2, { role: 'assistant', content: '项目名是 avid。' }),
-  ]
-
-  it('助手消息底部有复制与分支；用户消息只有复制', () => {
+  it('流式正文带光标；只有已落库的助手段给「分支」', () => {
     const onBranch = vi.fn()
-    render(<Timeline entries={entries} onBranch={onBranch} />)
+    const items: TimelineItem[] = [
+      { kind: 'user', entryId: null, text: '帮我读一下 pyproject.toml' },
+      { kind: 'assistant', entryId: 'e2', text: '项目名是 avid。', streaming: false },
+      { kind: 'assistant', entryId: null, text: '正在写下一段', streaming: true },
+    ]
+    render(<Timeline items={items} onBranch={onBranch} />)
 
-    // 两条消息各一个动作行；分支按钮只有一个（助手那条）
-    expect(screen.getAllByRole('button', { name: '复制' })).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: '复制' })).toHaveLength(3)
     expect(screen.getAllByRole('button', { name: '分支' })).toHaveLength(1)
 
     fireEvent.click(screen.getByRole('button', { name: '分支' }))
     expect(onBranch).toHaveBeenCalledWith('e2')
-  })
-
-  it('没给 onBranch 时一条分支按钮都没有（只读呈现）', () => {
-    render(<Timeline entries={entries} />)
-
-    expect(screen.queryByRole('button', { name: '分支' })).toBeNull()
-    expect(screen.getAllByRole('button', { name: '复制' })).toHaveLength(2)
   })
 })

@@ -1,5 +1,5 @@
 /**
- * 与 `src/avid/runtime/events.py` 对齐的事件联合类型。
+ * 与 `avid/agent/events.py` 对齐的事件联合类型。
  *
  * 这个文件是前端侧事件名的**单点**：`tests/test_event_contract.py` 会解析
  * EVENTS:BEGIN / EVENTS:END 之间的成员集合，与内核的 EVENT_TYPES 做集合相等断言。
@@ -143,7 +143,8 @@ export interface EventData {
   /**
    * 子 agent 标记（阶段 30c）：这条事件来自 subagent 的子运行。
    * `task` 是子任务描述、`index` 是批内序号；run_status 同样可能带它——
-   * 那种状态不改父运行的轮次/用量显示，工具卡事件由时间线折进 subagent 卡。
+   * 那种状态不改父运行的轮次/用量显示。带这个标记的工具事件由 `state/timeline.ts`
+   * 折进对应 subagent 卡的子步骤（live-only：子运行不落库，刷新后只剩那张卡与结果）。
    */
   subagent?: { task: string; index: number }
 }

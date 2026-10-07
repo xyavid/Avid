@@ -35,6 +35,16 @@ describe('思考块', () => {
     expect(screen.queryByText(/想完了/)).toBeNull()
   })
 
+  it('收尾后折叠行给出持续时长（首末增量的时间差）', () => {
+    render(<ReasoningBlock text="想了三秒" streaming={false} durationMs={3200} />)
+
+    expect(screen.getByText('思考 · 3.2s')).toBeTruthy()
+    // 没有读数时只说「完成」，不编一个时长
+    cleanup()
+    render(<ReasoningBlock text="想了三秒" streaming={false} />)
+    expect(screen.getByText('思考完成')).toBeTruthy()
+  })
+
   it('收尾后仍可点开回看', () => {
     render(<ReasoningBlock text="想完了" streaming={false} />)
 

@@ -267,15 +267,29 @@ print("hi")
       )}
 
       {show('toolcard') && (
-        <Section id="toolcard" title="工具卡（折叠行 ↔ 展开卡；连续调用聚组）">
+        <Section id="toolcard" title="工具卡（折叠行 ↔ 展开卡；动作 + 目标 + 耗时）">
           <div className="flex flex-col gap-a8">
-            <ToolCard icon="terminal" title="bash" preview="uv run pytest -q" status="ok">
+            <ToolCard icon="terminal" verb="执行" target="uv run pytest -q" status="ok" durationMs={8400}>
               uv run pytest -q
             </ToolCard>
-            <ToolCard icon="file-frame" title="读取 styles.css" badge="9 档间距" defaultExpanded>
+            <ToolCard icon="file-frame" verb="读取" target="styles/tokens.css" status="ok" durationMs={12} defaultExpanded>
               --space-2 … --space-40
               <br />
               --duration-instant / fast / slow
+            </ToolCard>
+            <ToolCard
+              icon="git-branch"
+              verb="子智能体"
+              target="2 个子任务"
+              status="running"
+              defaultExpanded
+              steps={[
+                { task: '前端时间线', callId: 's1', name: 'edit_file', args: '{"path":"web/src/components/chat/Timeline.tsx"}', status: 'ok' },
+                { task: '前端时间线', callId: 's2', name: 'bash', args: '{"command":"pnpm -C web run verify"}', status: 'running' },
+                { task: '内核核对', callId: 's3', name: 'read_file', args: '{"path":"avid/agent/events.py"}', status: 'ok' },
+              ]}
+            >
+              2 个 subagent 已并行运行
             </ToolCard>
           </div>
         </Section>

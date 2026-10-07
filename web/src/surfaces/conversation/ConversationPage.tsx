@@ -1,10 +1,13 @@
 /**
- * 对话表面（阶段 4）：用冻结组件组装完整第一屏，接真后端只读数据
- * （meta / sessions / entries）。发送与流式在阶段 5 接线。
+ * 对话表面：会话历史与本次运行的段落在这里汇成**一条时间线**。
  *
- * 布局职责（报告 §6）：对话列 ≤720px 居中、输入列略宽（chat-input），
- * 由本表面自己排——AppShell 只提供三栏骨架与滚动边界。
- * 数据分页：desc 取最近 50 条后本地反转展示；「加载更早」留阶段 5。
+ * 显示的是 `mergeItems(history, run)`：历史段落来自会话条目（权威回拉的产物），
+ * 运行段落来自事件流（`useRunStream`）。两条来源同形，所以过程中逐段追加、
+ * 收尾原样留着——收尾只回拉用量与会话列表，不重建条目（重建会让段落换位置，
+ * 那就是「最后才整体呈现」的病根）。历史的重建只发生在首屏、切会话、切分支。
+ *
+ * 布局职责：对话列 ≤720px 居中、输入列略宽（chat-input），由本表面自己排——
+ * AppShell 只提供三栏骨架与滚动边界。数据分页：desc 取最近 50 条后本地反转；
  * truncated_tail（上次运行中断）在流顶给一条提示——派生自投影，不新增字段。
  */
 
@@ -26,14 +29,12 @@ import {
   pickFolder,
   renameSession,
 } from '../../api/client'
-import type { Entry, Meta, SessionSummary, UsageReport, WorkspaceSummary } from '../../api/types'
+import type { Meta, SessionSummary, UsageReport, WorkspaceSummary } from '../../api/types'
 import { ApprovalBar } from '../../components/chat/ApprovalBar'
-import { AssistantMessage } from '../../components/chat/AssistantMessage'
 import { Composer } from '../../components/chat/Composer'
-import { ReasoningBlock } from '../../components/chat/ReasoningBlock'
-import { Timeline, toolIcon, toolPreview } from '../../components/chat/Timeline'
-import { ToolCard } from '../../components/chat/ToolCard'
-import { UserBubble } from '../../components/chat/UserBubble'
+import { Timeline } from '../../components/chat/Timeline'
+import type { TimelineItem } from '../../state/timeline'
+import { itemsFromEntries, mergeItems, timelineSignature } from '../../state/timeline'
 import { useRunStream } from '../../state/useRunStream'
 import { useDock } from '../../state/dock'
 import { Dock } from '../../components/dock/Dock'
@@ -75,7 +76,9 @@ export function ConversationPage() {
   const [meta, setMeta] = useState<Meta | null>(null)
   const [sessions, setSessions] = useState<SessionSummary[] | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [entries, setEntries] = useState<Entry[] | null>(null)
+  // 会话历史段落（权威回拉的产物）：只在首屏、切会话、切分支时重建——运行结束后
+  // 不重建，时间线于是不会在收尾那一刻重排（这是本次改动要治的病）。
+  const [history, setHistory] = useState<TimelineItem[] | null>(null)
   // 当前查看的分支：分叉后切到新分支，之后的发送也落在它上面（「回到主线」退回去）。
   const [branch, setBranch] = useState('main')
   const [branchHint, setBranchHint] = useState<string | null>(null)
@@ -106,9 +109,8 @@ export function ConversationPage() {
   // 会话动作（新建 / 重命名 / 删除）：在飞时禁用新建，结果或失败都落一行提示。
   const [sessionsBusy, setSessionsBusy] = useState(false)
   const [sessionsHint, setSessionsHint] = useState<string | null>(null)
-  // 活运行：一次运行的发送/订阅/终态回拉。liveSession 标记活事件属于哪个会话
-  // （切走会话时活区块不跟过去）；attachedRunRef 防重复附着同一运行。
-  const [liveSession, setLiveSession] = useState<string | null>(null)
+  // 活运行：一次运行的发送/订阅/终态回拉。它自己的段落属于哪个会话由 hook 记着
+  // （live.attachedSession）——切走会话时那些段落不跟过去；attachedRunRef 防重复附着。
   // `?settings=1` 是开发期钉子（截图/联调直达设置界面），与 ?gallery=1 同性质
   const [settingsOpen, setSettingsOpen] = useState(
     () => new URLSearchParams(window.location.search).has('settings'),
@@ -125,14 +127,11 @@ export function ConversationPage() {
   settledRef.current = async () => {
     const id = selectedIdRef.current
     if (id) {
+      // 只回拉用量：条目不再重读——本次运行的段落已经在时间线上（事件流建的），
+      // 重读会让它们换个位置出现，那就是跳变。历史的重建留给切会话/刷新。
       try {
         const viewed = branchRef.current
-        const [page, bl] = await Promise.all([
-          listEntries(id, { branch: viewed, limit: 50 }),
-          listBranches(id),
-        ])
-        setEntries([...page.entries].reverse())
-        setEarlier({ hasMore: page.has_more, cursor: page.next_cursor })
+        const bl = await listBranches(id)
         const hit = bl.branches.find((b) => b.name === viewed) ?? bl.branches.find((b) => b.is_default)
         setUsage(hit?.usage ?? null)
       } catch {
@@ -145,20 +144,17 @@ export function ConversationPage() {
     } catch {
       // 列表刷新失败不阻塞收尾
     }
-    live.reset()
+    live.settle()
   }
 
-  // 贴底跟随的依据：条目数与活区块的内容量。放在 live 之后（dep 要读它）。
-  const liveHereForScroll =
-    liveSession === selectedId &&
-    (live.phase === 'starting' || live.phase === 'running' || live.phase === 'settling')
+  // 时间线 = 会话历史 + 本次运行的段落。运行段落只属于它自己的会话：
+  // 切走会话时只显示目标会话的历史，切回来再并（mergeItems 按 entry_id 去重）。
+  const runHere = live.attachedSession === selectedId
+  const shown: TimelineItem[] =
+    history === null ? [] : runHere ? mergeItems(history, live.items) : history
   const dock = useDock()
   const scroll = useConversationScroll(
-    `${entries?.length ?? -1}|${liveHereForScroll ? live.assistantText.length : 0}|${
-      liveHereForScroll
-        ? live.segments.reduce((n, s) => n + (s.kind === 'reasoning' ? s.text.length : 1), 0)
-        : 0
-    }|${liveHereForScroll ? (live.userText?.length ?? 0) : 0}`,
+    history === null ? 'loading' : timelineSignature(shown),
     holdFollowRef,
   )
 
@@ -189,17 +185,17 @@ export function ConversationPage() {
   useEffect(() => {
     if (!selectedId) return
     let alive = true
-    setEntries(null)
+    setHistory(null)
     // 用量快照与条目分属两个端点；快照失败不该连累对话流，静默回退到「—」。
     listEntries(selectedId, { branch, limit: 50 })
       .then((page) => {
         if (!alive) return
-        setEntries([...page.entries].reverse())
+        setHistory(itemsFromEntries([...page.entries].reverse()))
         setEarlier({ hasMore: page.has_more, cursor: page.next_cursor })
       })
       .catch((e: unknown) => {
         if (alive) {
-          setEntries([])
+          setHistory([])
           setError(e instanceof ApiError ? e.message : String(e))
         }
       })
@@ -255,7 +251,7 @@ export function ConversationPage() {
       const el = scroll.ref.current
       anchorRef.current = el ? { top: el.scrollTop, height: el.scrollHeight } : null
       holdFollowRef.current = true
-      setEntries((cur) => [...[...page.entries].reverse(), ...(cur ?? [])])
+      setHistory((cur) => [...itemsFromEntries([...page.entries].reverse()), ...(cur ?? [])])
       setEarlier({ hasMore: page.has_more, cursor: page.next_cursor })
     } catch {
       // 追加失败不打断对话视图；按钮保持可点，用户可重试
@@ -294,12 +290,11 @@ export function ConversationPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 只随项目切换与列表刷新而调整
   }, [activeWorkspaceId, sessions])
 
-  // 选中会话有在跑的运行（刷新 / 切回）：附着到它的流，durable 重放重建视图。
+  // 选中会话有在跑的运行（刷新 / 切回）：附着到它的流，durable 重放重建运行段落。
   useEffect(() => {
     const active = selected?.active_run_id ?? null
     if (!active || live.phase !== 'idle' || attachedRunRef.current === active) return
     attachedRunRef.current = active
-    setLiveSession(selected?.id ?? null)
     live.attach(active)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 只随会话的活动运行变化而附着
   }, [selected?.active_run_id, live.phase])
@@ -423,8 +418,8 @@ export function ConversationPage() {
   }
 
   const liveActive = live.phase === 'starting' || live.phase === 'running' || live.phase === 'settling'
-  const liveHere = liveActive && liveSession === selectedId
-  const displayError = error ?? (live.phase === 'error' && liveSession === selectedId ? live.error : null)
+  const liveHere = liveActive && runHere
+  const displayError = error ?? (live.phase === 'error' && runHere ? live.error : null)
 
   let body = (
     <Welcome
@@ -440,16 +435,16 @@ export function ConversationPage() {
   )
   if (displayError) {
     body = <p className="px-a8 pt-a8 font-ui text-ui text-danger">{displayError}</p>
-  } else if (selectedId && entries === null) {
+  } else if (selectedId && history === null) {
     body = <p className="px-a8 font-ui text-hint text-ink-muted">加载中…</p>
   } else if (selectedId) {
-    const hasEntries = entries !== null && entries.length > 0
+    const hasItems = shown.length > 0
     body = (
       <>
         {selected?.truncated_tail && (
           <p className="mb-a16 text-center font-ui text-hint text-ink-muted">上次运行在此中断</p>
         )}
-        {earlier.hasMore && hasEntries && (
+        {earlier.hasMore && hasItems && (
           <div className="mb-a8 flex justify-center">
             <button
               type="button"
@@ -461,39 +456,16 @@ export function ConversationPage() {
             </button>
           </div>
         )}
-        {hasEntries && <Timeline entries={entries} onBranch={(id) => void branchFrom(id)} />}
-        {liveHere && (
-          <div className="mt-a16 flex flex-col gap-a16">
-            {live.userText && <UserBubble>{live.userText}</UserBubble>}
-            {/* 思考与工具按事件流先后交错（ZCode 式时间线）：思考是过程、
-                工具是动作、正文是结论（思考只在流里存在，不落盘）。 */}
-            {live.segments.map((seg, i) =>
-              seg.kind === 'tool' ? (
-                <ToolCard
-                  key={seg.callId}
-                  icon={toolIcon(seg.tool)}
-                  title={seg.tool}
-                  preview={toolPreview(seg.arguments, seg.result)}
-                  status={seg.status === 'denied' ? 'failed' : seg.status}
-                >
-                  {seg.result !== null && (
-                    <span className="line-clamp-6 block whitespace-pre-wrap">{seg.result}</span>
-                  )}
-                </ToolCard>
-              ) : (
-                <ReasoningBlock
-                  key={`reasoning-${i}`}
-                  text={seg.text}
-                  streaming={liveActive && i === live.segments.length - 1}
-                />
-              ),
-            )}
-            {(live.assistantText || (!hasEntries && live.segments.length === 0)) && (
-              <AssistantMessage streaming>{live.assistantText}</AssistantMessage>
-            )}
-          </div>
+        {/* 一条时间线：历史与本次运行的段落同形，过程与收尾共用它——
+            收尾不再换渲染器，也不重排（这是「逐段出现」的另一半）。 */}
+        {hasItems && (
+          <Timeline
+            items={shown}
+            workspaceRoot={selected?.workspace?.root ?? null}
+            onBranch={(id) => void branchFrom(id)}
+          />
         )}
-        {!hasEntries && !liveHere && <Welcome detail="这个会话还没有对话内容" />}
+        {!hasItems && !liveHere && <Welcome detail="这个会话还没有对话内容" />}
       </>
     )
   }
@@ -578,7 +550,7 @@ export function ConversationPage() {
               )}
             </div>
           )}
-          {live.approvals.length > 0 && liveSession === selectedId && (
+          {live.approvals.length > 0 && runHere && (
             <div className="px-a16 pb-a8">
               <ApprovalBar
                 approvals={live.approvals}
@@ -596,10 +568,7 @@ export function ConversationPage() {
             onChangeModel={setRunModel}
             effectiveModel={meta?.capabilities.model ?? null}
             byokModels={meta?.capabilities.models ?? []}
-            onSend={(text) => {
-              setLiveSession(selectedId)
-              void live.send(text, full, runModel, branch)
-            }}
+            onSend={(text) => void live.send(text, full, runModel, branch)}
             onStop={() => void live.stop()}
           />
         </div>
@@ -612,8 +581,8 @@ export function ConversationPage() {
         onClose={dock.close}
         usage={usage}
         phase={liveHere ? live.phase : null}
-        tools={liveHere ? live.tools : []}
-        approvals={liveHere ? live.approvals : []}
+        tools={runHere ? live.tools : []}
+        approvals={runHere ? live.approvals : []}
         workspaceRoot={selected?.workspace?.root ?? null}
         onDecide={(id, decision) => void live.decide(id, decision)}
       />

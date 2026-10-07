@@ -65,7 +65,7 @@ function StatusRow({ label, value, accent = false }: { label: string; value: str
 
 function ProcessesPanel({ phase, tools, approvals }: { phase: RunPhase | null; tools: LiveTool[]; approvals: LiveApproval[] }) {
   const running = tools.filter((t) => t.status === 'running').length
-  const failed = tools.filter((t) => t.status === 'failed' || t.status === 'denied').length
+  const failed = tools.filter((t) => t.status === 'failed').length
   return (
     <div>
       <StatusRow label="进程" value={phase === null ? '空闲' : PHASE_LABEL[phase]} accent={phase === 'running'} />
@@ -84,7 +84,7 @@ function ProcessesPanel({ phase, tools, approvals }: { phase: RunPhase | null; t
                   'h-[6px] w-[6px] shrink-0 rounded-full',
                   t.status === 'running' && 'bg-accent',
                   t.status === 'ok' && 'bg-ink-muted',
-                  (t.status === 'failed' || t.status === 'denied') && 'bg-danger',
+                  t.status === 'failed' && 'bg-danger',
                 )}
               />
               <span className="min-w-0 truncate">{t.tool}</span>
