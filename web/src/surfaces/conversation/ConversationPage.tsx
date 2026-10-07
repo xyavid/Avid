@@ -31,7 +31,7 @@ import { ApprovalBar } from '../../components/chat/ApprovalBar'
 import { AssistantMessage } from '../../components/chat/AssistantMessage'
 import { Composer } from '../../components/chat/Composer'
 import { ReasoningBlock } from '../../components/chat/ReasoningBlock'
-import { Timeline, toolIcon } from '../../components/chat/Timeline'
+import { Timeline, toolIcon, toolPreview } from '../../components/chat/Timeline'
 import { ToolCard } from '../../components/chat/ToolCard'
 import { UserBubble } from '../../components/chat/UserBubble'
 import { useRunStream } from '../../state/useRunStream'
@@ -154,8 +154,10 @@ export function ConversationPage() {
   const dock = useDock()
   const scroll = useConversationScroll(
     `${entries?.length ?? -1}|${liveHereForScroll ? live.assistantText.length : 0}|${
-      liveHereForScroll ? live.reasoning.length : 0
-    }|${liveHereForScroll ? live.tools.length : 0}|${liveHereForScroll ? (live.userText?.length ?? 0) : 0}`,
+      liveHereForScroll
+        ? live.segments.reduce((n, s) => n + (s.kind === 'reasoning' ? s.text.length : 1), 0)
+        : 0
+    }|${liveHereForScroll ? (live.userText?.length ?? 0) : 0}`,
     holdFollowRef,
   )
 
@@ -467,17 +469,30 @@ export function ConversationPage() {
         {liveHere && (
           <div className="mt-a16 flex flex-col gap-a16">
             {live.userText && <UserBubble>{live.userText}</UserBubble>}
-            {live.tools.map((t) => (
-              <ToolCard
-                key={t.callId}
-                icon={toolIcon(t.tool)}
-                title={t.tool}
-                status={t.status === 'denied' ? 'failed' : t.status}
-              />
-            ))}
-            {/* 思考块在正文之前：它是过程，正文是结论（思考只在流里存在，不落盘） */}
-            <ReasoningBlock text={live.reasoning} streaming={liveActive} />
-            {(live.assistantText || (!hasEntries && live.tools.length === 0)) && (
+            {/* 思考与工具按事件流先后交错（ZCode 式时间线）：思考是过程、
+                工具是动作、正文是结论（思考只在流里存在，不落盘）。 */}
+            {live.segments.map((seg, i) =>
+              seg.kind === 'tool' ? (
+                <ToolCard
+                  key={seg.callId}
+                  icon={toolIcon(seg.tool)}
+                  title={seg.tool}
+                  preview={toolPreview(seg.arguments, seg.result)}
+                  status={seg.status === 'denied' ? 'failed' : seg.status}
+                >
+                  {seg.result !== null && (
+                    <span className="line-clamp-6 block whitespace-pre-wrap">{seg.result}</span>
+                  )}
+                </ToolCard>
+              ) : (
+                <ReasoningBlock
+                  key={`reasoning-${i}`}
+                  text={seg.text}
+                  streaming={liveActive && i === live.segments.length - 1}
+                />
+              ),
+            )}
+            {(live.assistantText || (!hasEntries && live.segments.length === 0)) && (
               <AssistantMessage streaming>{live.assistantText}</AssistantMessage>
             )}
           </div>

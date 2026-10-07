@@ -92,7 +92,7 @@ describe('useRunStream（发送 → 订阅 → 活事件 → 终态回拉）', (
     expect(startRun).toHaveBeenLastCalledWith('s1', { prompt: '在主线上问', permission: 'manual' })
   })
 
-  it('reasoning_delta 单独累积：思考不进正文，正文也不进思考', async () => {
+  it('思考与工具按事件流顺序交错成段，相邻思考合并、思考不进正文', async () => {
     const { result } = renderHook(() => useRunStream('s1', () => {}))
     await act(async () => {
       await result.current.send('跑一下', 'manual')
@@ -102,13 +102,22 @@ describe('useRunStream（发送 → 订阅 → 活事件 → 终态回拉）', (
     act(() => {
       send('reasoning_delta', { text: '先看 ' })
       send('reasoning_delta', { text: '五层状态' })
-      send('assistant_delta', { text: '结论是' })
+      send('tool_call_started', { tool: 'bash', tool_call_id: 'c1', arguments: { command: 'ls' } }, 2)
       send('reasoning_delta', { text: '…再想想' })
-      send('assistant_delta', { text: '这样' })
+      send('assistant_delta', { text: '结论是这样' })
+      send('tool_result_message', { message: { role: 'tool', tool_call_id: 'c1', content: 'total 0' } }, 3)
     })
 
-    expect(result.current.reasoning).toBe('先看 五层状态…再想想')
+    expect(result.current.segments).toEqual([
+      { kind: 'reasoning', text: '先看 五层状态' },
+      { kind: 'tool', callId: 'c1', tool: 'bash', status: 'running', arguments: '{"command":"ls"}', result: 'total 0' },
+      { kind: 'reasoning', text: '…再想想' },
+    ])
     expect(result.current.assistantText).toBe('结论是这样')
+    // Dock 进程面板的扁平表随段派生
+    expect(result.current.tools).toEqual([
+      { callId: 'c1', tool: 'bash', status: 'running', arguments: '{"command":"ls"}', result: 'total 0' },
+    ])
   })
 
   it('delta 合帧：同一帧内多次增量一次刷出；assistant_message 作废未刷的增量', async () => {
@@ -148,12 +157,12 @@ describe('useRunStream（发送 → 订阅 → 活事件 → 终态回拉）', (
       await result.current.send('第一轮', 'manual')
     })
     act(() => emitter().send('reasoning_delta', { text: '上一轮的思考' }))
-    expect(result.current.reasoning).toBe('上一轮的思考')
+    expect(result.current.segments).toEqual([{ kind: 'reasoning', text: '上一轮的思考' }])
 
     await act(async () => {
       await result.current.send('第二轮', 'manual')
     })
-    expect(result.current.reasoning).toBe('')
+    expect(result.current.segments).toEqual([])
   })
 
   it('活事件：delta 累积、工具行登记与状态迁移、审批入列', async () => {
@@ -168,13 +177,15 @@ describe('useRunStream（发送 → 订阅 → 活事件 → 终态回拉）', (
       bus.send('user_message', { entry_id: 'e1', message: { role: 'user', content: '你好' } }, 1)
       bus.send('assistant_delta', { text: '你好' })
       bus.send('assistant_delta', { text: '呀' })
-      bus.send('tool_call_started', { tool: 'bash', tool_call_id: 'c1', arguments: '{}' }, 2)
+      bus.send('tool_call_started', { tool: 'bash', tool_call_id: 'c1', arguments: {} }, 2)
       bus.send('tool_call_finished', { tool: 'bash', tool_call_id: 'c1', status: 'ok' }, 3)
       bus.send('approval_requested', { approval_id: 'a1', tool: 'bash', arguments: '{}', reason: '越界' }, 4)
     })
 
     expect(result.current.assistantText).toBe('你好呀')
-    expect(result.current.tools).toEqual([{ callId: 'c1', tool: 'bash', status: 'ok' }])
+    expect(result.current.tools).toEqual([
+      { callId: 'c1', tool: 'bash', status: 'ok', arguments: '{}', result: null },
+    ])
     expect(result.current.approvals).toHaveLength(1)
     expect(result.current.phase).toBe('running')
 

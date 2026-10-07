@@ -22,7 +22,23 @@ import type { PermissionMode } from '../api/types'
 
 export type RunPhase = 'idle' | 'starting' | 'running' | 'settling' | 'error'
 
-export type LiveTool = { callId: string; tool: string; status: 'running' | 'ok' | 'failed' | 'denied' }
+export type LiveTool = {
+  callId: string
+  tool: string
+  status: 'running' | 'ok' | 'failed' | 'denied'
+  /** 调用参数（JSON 串）——活卡片预览用，来自 tool_call_started。 */
+  arguments: string
+  /** 工具结果（tool_result_message 落地后填入）；null = 结果未到。 */
+  result: string | null
+}
+
+/**
+ * 活区块的有序段：思考与工具按事件流的先后交错（ZCode 式时间线），不再
+ * 「所有工具一行 + 一大块思考」。相邻思考段合并；工具段逐卡独立。
+ */
+export type LiveSegment =
+  | { kind: 'reasoning'; text: string }
+  | ({ kind: 'tool'; callId: string; tool: string } & Omit<LiveTool, 'callId' | 'tool'>)
 
 export type LiveApproval = { approvalId: string; tool: string; arguments: string; reason: string }
 
@@ -35,8 +51,7 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
   const [runId, setRunId] = useState<string | null>(null)
   const [userText, setUserText] = useState<string | null>(null)
   const [assistantText, setAssistantText] = useState('')
-  const [reasoning, setReasoning] = useState('')
-  const [tools, setTools] = useState<LiveTool[]>([])
+  const [segments, setSegments] = useState<LiveSegment[]>([])
   const [approvals, setApprovals] = useState<LiveApproval[]>([])
   const [error, setError] = useState<string | null>(null)
 
@@ -54,7 +69,6 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
   const frameHandleRef = useRef<number | null>(null)
   const fallbackTimerRef = useRef<number | null>(null)
   const pendingAssistantRef = useRef('')
-  const pendingReasoningRef = useRef('')
   const flushDeltas = useCallback(() => {
     pendingFrameRef.current = false
     if (fallbackTimerRef.current !== null) {
@@ -65,11 +79,6 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
       const text = pendingAssistantRef.current
       pendingAssistantRef.current = ''
       setAssistantText((cur) => cur + text)
-    }
-    if (pendingReasoningRef.current) {
-      const text = pendingReasoningRef.current
-      pendingReasoningRef.current = ''
-      setReasoning((cur) => cur + text)
     }
   }, [])
   const scheduleDeltaFlush = useCallback(() => {
@@ -103,7 +112,6 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
       fallbackTimerRef.current = null
     }
     pendingAssistantRef.current = ''
-    pendingReasoningRef.current = ''
   }, [])
   useEffect(() => () => discardPendingDeltas(), [discardPendingDeltas])
 
@@ -116,8 +124,7 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
     setRunId(null)
     setUserText(null)
     setAssistantText('')
-    setReasoning('')
-    setTools([])
+    setSegments([])
     setApprovals([])
     setError(null)
     setPhase('idle')
@@ -145,23 +152,51 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
         }
         case 'tool_call_started': {
           const callId = String(data.tool_call_id ?? '')
-          setTools((ts) =>
-            ts.some((t) => t.callId === callId)
-              ? ts
-              : [...ts, { callId, tool: String(data.tool ?? ''), status: 'running' as const }],
+          setSegments((segs) =>
+            segs.some((s) => s.kind === 'tool' && s.callId === callId)
+              ? segs
+              : [
+                  ...segs,
+                  {
+                    kind: 'tool' as const,
+                    callId,
+                    tool: String(data.tool ?? ''),
+                    status: 'running' as const,
+                    arguments: JSON.stringify(data.arguments ?? {}),
+                    result: null,
+                  },
+                ],
           )
           break
         }
         case 'tool_call_finished': {
           const callId = String(data.tool_call_id ?? '')
-          setTools((ts) =>
-            ts.map((t) => (t.callId === callId ? { ...t, status: data.status === 'ok' ? ('ok' as const) : ('failed' as const) } : t)),
+          setSegments((segs) =>
+            segs.map((s) =>
+              s.kind === 'tool' && s.callId === callId
+                ? { ...s, status: data.status === 'ok' ? ('ok' as const) : ('failed' as const) }
+                : s,
+            ),
           )
           break
         }
         case 'tool_call_denied': {
           const callId = String(data.tool_call_id ?? '')
-          setTools((ts) => ts.map((t) => (t.callId === callId ? { ...t, status: 'denied' as const } : t)))
+          setSegments((segs) =>
+            segs.map((s) => (s.kind === 'tool' && s.callId === callId ? { ...s, status: 'denied' as const } : s)),
+          )
+          break
+        }
+        case 'tool_result_message': {
+          // 结果以 durable 消息事件落地（重放也会出现）：按 callId 归位到工具段。
+          const msg = data.message as { tool_call_id?: unknown; content?: unknown } | undefined
+          if (!msg || typeof msg.tool_call_id !== 'string') break
+          const callId = msg.tool_call_id
+          const content =
+            typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content ?? '')
+          setSegments((segs) =>
+            segs.map((s) => (s.kind === 'tool' && s.callId === callId ? { ...s, result: content } : s)),
+          )
           break
         }
         case 'assistant_delta': {
@@ -172,10 +207,18 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
           break
         }
         case 'reasoning_delta': {
-          // 思考与正文分开累积：它们在同一次运行里交替到达，混在一起会串行
-          if (typeof data.text === 'string') {
-            pendingReasoningRef.current += data.text
-            scheduleDeltaFlush()
+          // 思考即时写段（不进合帧）：合帧按帧落 state，帧的时机会让「先思考后
+          // 调工具」的段落错序。ReasoningBlock 是纯文本渲染，逐 delta 更新便宜；
+          // 需要合帧的是走 Markdown 的 assistant 增量。相邻思考段合并为一块。
+          if (typeof data.text === 'string' && data.text) {
+            const text = data.text
+            setSegments((segs) => {
+              const last = segs.at(-1)
+              if (last !== undefined && last.kind === 'reasoning') {
+                return [...segs.slice(0, -1), { kind: 'reasoning' as const, text: last.text + text }]
+              }
+              return [...segs, { kind: 'reasoning' as const, text }]
+            })
           }
           break
         }
@@ -260,8 +303,7 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
       discardPendingDeltas()
       setUserText(prompt)
       setAssistantText('')
-      setReasoning('')
-      setTools([])
+      setSegments([])
       setApprovals([])
       try {
         const created = await startRun(sessionId, {
@@ -309,12 +351,19 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
     [],
   )
 
+  // Dock 进程面板用的扁平工具表：从有序段派生，状态与结果随段实时更新。
+  const tools: LiveTool[] = segments.flatMap((s) =>
+    s.kind === 'tool'
+      ? [{ callId: s.callId, tool: s.tool, status: s.status, arguments: s.arguments, result: s.result }]
+      : [],
+  )
+
   return {
     phase,
     runId,
     userText,
     assistantText,
-    reasoning,
+    segments,
     tools,
     approvals,
     error,

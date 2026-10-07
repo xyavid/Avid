@@ -57,14 +57,19 @@ function statusOf(call: ToolCall): ToolStatus {
   return failed ? 'failed' : 'ok'
 }
 
-/** 折叠行预览：有结果取首行；无结果取参数压缩串（单行 JSON）。 */
-function previewOf(call: ToolCall): string {
-  if (call.result !== null) return call.result.split('\n')[0] ?? ''
+/** 折叠行预览：有结果取首行；无结果取参数压缩串（单行 JSON）。
+    活区块的实时工具卡也用它（tool_result_message 落地前后同样两态）。 */
+export function toolPreview(args: string, result: string | null): string {
+  if (result !== null) return result.split('\n')[0] ?? ''
   try {
-    return JSON.stringify(JSON.parse(call.args))
+    return JSON.stringify(JSON.parse(args))
   } catch {
-    return call.args
+    return args
   }
+}
+
+function previewOf(call: ToolCall): string {
+  return toolPreview(call.args, call.result)
 }
 
 function asItems(entries: Entry[]): Item[] {

@@ -16,8 +16,8 @@ const usage: UsageReport = {
 }
 
 const runningTools: LiveTool[] = [
-  { callId: 'c1', tool: 'bash', status: 'running' },
-  { callId: 'c2', tool: 'read_file', status: 'ok' },
+  { callId: 'c1', tool: 'bash', status: 'running', arguments: '{}', result: null },
+  { callId: 'c2', tool: 'read_file', status: 'ok', arguments: '{}', result: 'ok' },
 ]
 
 function renderDock(overrides: {
