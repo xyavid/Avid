@@ -140,10 +140,13 @@ async def terminal_socket(websocket: WebSocket, root: str = "", cols: int = 80, 
             except ValueError:
                 continue
             kind = frame.get("type")
-            if kind == "in" and isinstance(frame.get("data"), str):
-                os.write(master_fd, frame["data"].encode("utf-8"))
-            elif kind == "resize":
-                _set_size(master_fd, _clamp(frame.get("rows"), 24), _clamp(frame.get("cols"), 80))
+            # 对已死 PTY 的写与 resize 会 OSError——shell 自己退了（exit），按正常
+            # 断开收尾；不让它从协程逃逸成 ASGI 未处理异常。
+            with contextlib.suppress(OSError):
+                if kind == "in" and isinstance(frame.get("data"), str):
+                    os.write(master_fd, frame["data"].encode("utf-8"))
+                elif kind == "resize":
+                    _set_size(master_fd, _clamp(frame.get("rows"), 24), _clamp(frame.get("cols"), 80))
     except WebSocketDisconnect:
         pass
     finally:
