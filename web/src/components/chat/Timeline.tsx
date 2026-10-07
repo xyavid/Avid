@@ -41,7 +41,7 @@ export function Timeline({ items, workspaceRoot = null, onBranch }: TimelineProp
     if (item.kind === 'user') {
       headPending = true
       nodes.push(
-        <div key={key} className="group">
+        <div key={key} className="group" data-item="user" data-entry={item.entryId ?? undefined}>
           <UserBubble>{item.text}</UserBubble>
           <MessageActions text={item.text} className="justify-end" />
         </div>,
@@ -53,7 +53,7 @@ export function Timeline({ items, workspaceRoot = null, onBranch }: TimelineProp
       const showHead = headPending
       headPending = false
       nodes.push(
-        <div key={key} className="group">
+        <div key={key} className="group" data-item="assistant" data-entry={item.entryId ?? undefined}>
           <AssistantMessage streaming={item.streaming} showHead={showHead}>
             {item.text}
           </AssistantMessage>
@@ -65,35 +65,42 @@ export function Timeline({ items, workspaceRoot = null, onBranch }: TimelineProp
 
     if (item.kind === 'reasoning') {
       nodes.push(
-        <ReasoningBlock
-          key={key}
-          text={item.text}
-          streaming={item.streaming}
-          durationMs={item.endedAt - item.startedAt}
-        />,
+        <div key={key} data-item="reasoning">
+          <ReasoningBlock
+            text={item.text}
+            streaming={item.streaming}
+            durationMs={item.endedAt - item.startedAt}
+          />
+        </div>,
       )
       return
     }
 
     const label = toolLabel(item.name, item.args, workspaceRoot)
     nodes.push(
-      <ToolCard
-        key={key}
-        className={tight ? '-mt-a8' : undefined}
-        icon={label.icon}
-        verb={label.verb}
-        target={label.target}
-        status={item.status}
-        durationMs={item.durationMs}
-        steps={item.steps}
-        workspaceRoot={workspaceRoot}
-      >
-        <span className="line-clamp-6 block whitespace-pre-wrap">{item.result ?? item.args}</span>
-      </ToolCard>,
+      // data-* 是给端到端脚本读时间线用的：段落的种类与身份写在 DOM 上，
+      // 脚本不必猜 class 名（改样式不会让验收脚本静默失效）。
+      <div key={key} data-item="tool" data-call={item.callId} className={tight ? '-mt-a8' : undefined}>
+        <ToolCard
+          icon={label.icon}
+          verb={label.verb}
+          target={label.target}
+          status={item.status}
+          durationMs={item.durationMs}
+          steps={item.steps}
+          workspaceRoot={workspaceRoot}
+        >
+          <span className="line-clamp-6 block whitespace-pre-wrap">{item.result ?? item.args}</span>
+        </ToolCard>
+      </div>,
     )
   })
 
-  return <div className="flex flex-col gap-a16">{nodes}</div>
+  return (
+    <div className="flex flex-col gap-a16" data-testid="timeline">
+      {nodes}
+    </div>
+  )
 }
 
 function branchHandler(entryId: string | null, onBranch?: (entryId: string) => void): (() => void) | undefined {
