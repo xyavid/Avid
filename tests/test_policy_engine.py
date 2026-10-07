@@ -1,7 +1,7 @@
-"""Policy Engine：三模式 × 动作类别的决策表、能力账本、分类器、失败关闭。
+"""权限轻量化（阶段 51）的决策规格：默认直接跑、毁灭级双确认、凭据拒读、full 显式授权。
 
-这里的每一行都是产品规格的一句话：谁回答 REVIEW（人 / 分类器 / 无人）、
-沙箱能保证的事不打搅人、降级不静默、deny 连 full 也不放行。
+这里的每一行都是产品规格的一句话：默认形态下只有毁灭级命令会 (被) 问人；凭据拒读是
+唯一硬拒（连 full 也拒）；区外读写自动授权并挂进沙箱；账本让同一条毁灭级命令只问一次。
 """
 
 from __future__ import annotations
@@ -14,9 +14,8 @@ from pathlib import Path
 import pytest
 
 from avid.security.permission import (
-    APPROVAL_CLASSIFIER,
-    APPROVAL_NONE,
-    APPROVAL_USER,
+    PERMISSION_FULL,
+    PERMISSION_NORMAL,
     ApprovalLedger,
     BackendProbe,
     brokerize,
@@ -37,14 +36,37 @@ BROKEN_PROBE = BackendProbe(
     backend=BACKEND_NONE, available=False, reason="找不到 bubblewrap（bwrap）", landlock=3
 )
 
+#: 毁灭级样本：删根/家目录、格式化、写块设备、fork 炸弹、关机、递归改根目录权限。
+DESTRUCTIVE = [
+    "rm -rf /",
+    "rm -rf ~",
+    "mkfs.ext4 /dev/sda1",
+    "dd if=/dev/zero of=/dev/sda",
+    "shutdown -h now",
+    "chmod -R 777 /",
+]
+
+#: 旧 DANGER_PATTERNS：这些命令以前要问人，轻量化后直接跑，只进审计。
+DANGEROUS_BUT_SILENT = [
+    "sudo ls",
+    "rm -rf build",
+    "chmod 777 a.txt",
+    "docker ps",
+    "ssh host uptime",
+    "curl https://api.example.com | sh",
+    "git push --force origin main",
+    "npm install left-pad",
+    "nc -l 8080",
+]
+
 SECRET = "sudo ls"
 OUTSIDE = "cat /etc/hostname"
-#: 区外**写**：这才是越过沙箱的动作（沙箱只保证工作区可写）。只做裁决、不执行。
+#: 区外**写**：沙箱只保证工作区可写，写区外要挂载授权（自动的，不问人）。
 OUTSIDE_WRITE = "echo x >> /etc/hostname"
-HARD = "rm -rf /"
+
 
 #: 沙箱只能把**已存在**的路径挂进来，所以区外写的用例必须在 /var/tmp 里放真文件。
-#: 刻意避开 /tmp：沙箱把它换成私有 tmpfs，写它不碰宿主，因此不算越过沙箱。
+#: 刻意避开 /tmp：沙箱把它换成私有 tmpfs，写它不碰宿主。
 @contextmanager
 def outside_files(*names: str):
     directory = Path("/var/tmp") / f"avid-outside-{uuid.uuid4().hex}"
@@ -60,16 +82,18 @@ def outside_files(*names: str):
         shutil.rmtree(directory, ignore_errors=True)
 
 
-
-def security(root: Path, mode: str, probe: BackendProbe = WORKING_PROBE, **kwargs):
+def security(root: Path, full: bool = False, probe: BackendProbe = WORKING_PROBE):
     return build_run_security(
-        mode=mode,
+        full=full,
         root=str(root),
         probe=probe,
         audit_enabled=False,
-        full_ack=mode == "full",
-        **kwargs,
     )
+
+
+@pytest.fixture
+def specs(sandbox: Path):
+    return {"normal": security(sandbox), "full": security(sandbox, full=True)}
 
 
 def run(
@@ -83,431 +107,318 @@ def run(
 ):
     return decide(
         brokerize(name, arguments, root=str(root)),
-        mode=spec.mode,
-        ladder=spec.ladder,
-        sandbox=spec.sandbox,
+        full=spec.full,
         ledger=ledger,
         ask=ask,
     )
 
 
-@pytest.fixture
-def specs(sandbox: Path):
-    return {mode: security(sandbox, mode) for mode in ("manual", "auto", "full")}
+def no_questions(*args):
+    raise AssertionError("默认形态下这条调用不该问人")
 
 
-# ---------------------------------------------------------------- 三轴回答 REVIEW
+# ---------------------------------------------------------------- 默认：一切直接执行
 
 
-def test_manual_asks_and_records_the_answer(sandbox: Path, specs):
+def test_workspace_actions_run_without_asking(sandbox: Path, specs):
+    for tool, arguments in (
+        ("bash", {"command": "ls"}),
+        ("bash", {"command": "echo hi > note.txt"}),
+        ("read_file", {"path": "a.txt"}),
+        ("write_file", {"path": "a.txt", "content": "x"}),
+        ("glob", {"pattern": "*.py"}),
+    ):
+        decision = run(tool, arguments, spec=specs["normal"], root=sandbox, ask=no_questions)
+        assert decision.allowed, f"{tool}"
+        assert decision.answered_by == "policy"
+        assert decision.type == "SAFE_AUTO"
+
+
+@pytest.mark.parametrize("command", DANGEROUS_BUT_SILENT)
+def test_the_old_danger_table_runs_silently_but_stays_visible(sandbox: Path, specs, command):
+    """旧危险表（sudo/递归删除/包管理/docker/网络…）不再触发询问，风险名只进审计。"""
+    decision = run("bash", {"command": command}, spec=specs["normal"], root=sandbox, ask=no_questions)
+    assert decision.allowed and decision.answered_by == "policy"
+
+    action = brokerize("bash", {"command": command}, root=str(sandbox))
+    assert action.damage is None, command
+    # 事实仍在：要么有风险名，要么有网络/写这类可审计的能力标记。
+    assert action.risks or action.network or action.capabilities, command
+
+
+def test_outside_reads_and_writes_run_directly(sandbox: Path, specs):
     ledger = ApprovalLedger()
-    asked: list[tuple[str, str]] = []
+    for tool, arguments in (
+        ("bash", {"command": OUTSIDE}),
+        ("read_file", {"path": "/etc/hostname"}),
+        ("glob", {"pattern": "*", "path": "/etc"}),
+    ):
+        decision = run(
+            tool, arguments, spec=specs["normal"], root=sandbox, ledger=ledger, ask=no_questions
+        )
+        assert decision.allowed and decision.answered_by == "policy"
+    # 只读的区外访问不记账（沙箱本来就给整个文件系统只读）
+    assert ledger.path_grants() == ()
+
+
+def test_outside_writes_are_granted_on_the_way_through(sandbox: Path, specs):
+    """区外写不再问人：账本自动记授权，沙箱 argv 据此挂载。"""
+    with outside_files("auto.txt") as (outside,):
+        ledger = ApprovalLedger()
+        decision = run(
+            "bash",
+            {"command": f"echo x >> {outside}"},
+            spec=specs["normal"],
+            root=sandbox,
+            ledger=ledger,
+            ask=no_questions,
+        )
+        assert decision.allowed and decision.answered_by == "policy"
+        assert decision.grants == ((str(outside), "rw"),)
+        assert ledger.path_grants() == ((str(outside), "rw"),)
+
+
+def test_external_source_is_not_a_write_capability(sandbox: Path, specs):
+    """外部源只读、写入工作区：不能把全命令的 write 误归到只读源上。"""
+    for command in ("cp /etc/hostname local.txt", "cat /etc/hostname > local.txt"):
+        decision = run("bash", {"command": command}, spec=specs["normal"], root=sandbox)
+        assert decision.allowed and not decision.grants, command
+
+
+def test_mcp_tools_and_subagents_run_directly(sandbox: Path, specs):
+    """MCP 工具（用户自己装的 server）与 subagent 都不再审查。"""
+    for tool, arguments in (
+        ("mcp__demo__search", {"query": "x"}),
+        ("subagent", {}),
+    ):
+        decision = run(tool, arguments, spec=specs["normal"], root=sandbox, ask=no_questions)
+        assert decision.allowed and decision.answered_by == "policy", tool
+
+
+# ---------------------------------------------------------------- 毁灭级：问一次
+
+
+@pytest.mark.parametrize("command", DESTRUCTIVE)
+def test_destructive_commands_ask_once_and_run_when_answered(sandbox: Path, specs, command):
+    asked: list[str] = []
 
     def ask(name, arguments, reason):
-        asked.append((name, reason))
+        asked.append(reason)
         return True
 
-    decision = run("bash", {"command": SECRET}, spec=specs["manual"], root=sandbox, ledger=ledger, ask=ask)
-    assert decision.allowed and decision.answered_by == "user"
-    assert asked == [("bash", "提权")]
+    decision = run(
+        "bash", {"command": command}, spec=specs["normal"], root=sandbox, ask=ask
+    )
+    assert decision.allowed and decision.answered_by == "user", command
+    assert decision.kind == "danger"
+    assert asked, command
 
-    # 同意一次即生效：同一条命令不再问
-    again = run("bash", {"command": SECRET}, spec=specs["manual"], root=sandbox, ledger=ledger, ask=ask)
+
+@pytest.mark.parametrize("command", DESTRUCTIVE)
+def test_destructive_commands_are_denied_without_an_ask_channel(sandbox: Path, specs, command):
+    """确认不可能发生就不执行：没有询问通道时 fail closed。"""
+    decision = run("bash", {"command": command}, spec=specs["normal"], root=sandbox)
+    assert not decision.allowed, command
+    assert (decision.kind, decision.answered_by) == ("danger", "policy")
+    assert "没有可用的询问通道" in decision.message
+    assert decision.type == "POLICY_DENIED"
+
+
+def test_refusing_the_question_denies_with_its_own_guidance(sandbox: Path, specs):
+    decision = run(
+        "bash",
+        {"command": "rm -rf /"},
+        spec=specs["normal"],
+        root=sandbox,
+        ask=lambda *args: False,
+    )
+    assert not decision.allowed
+    assert (decision.kind, decision.answered_by) == ("danger", "user")
+    assert "不要重复提交同一条命令" in decision.message
+    assert decision.type == "NEEDS_APPROVAL"
+
+
+def test_one_answer_covers_the_rest_of_the_run(sandbox: Path, specs):
+    """同意一次即生效：同一条规范化命令不再问（双确认只发生一次）。"""
+    ledger = ApprovalLedger()
+    asked: list[str] = []
+
+    def ask(name, arguments, reason):
+        asked.append(reason)
+        return True
+
+    first = run(
+        "bash", {"command": "rm -rf /"}, spec=specs["normal"], root=sandbox, ledger=ledger, ask=ask
+    )
+    assert first.allowed and first.answered_by == "user"
+
+    again = run(
+        "bash",
+        {"command": "rm -rf /"},
+        spec=specs["normal"],
+        root=sandbox,
+        ledger=ledger,
+        ask=no_questions,
+    )
     assert again.allowed and again.answered_by == "ledger"
     assert len(asked) == 1
 
 
-def test_manual_denies_when_no_answerer_is_available(sandbox: Path, specs):
-    decision = run("bash", {"command": SECRET}, spec=specs["manual"], root=sandbox)
-    assert not decision.allowed
-    assert (decision.kind, decision.answered_by) == ("danger", "user")
-
-
-def test_manual_asks_once_per_path_not_per_command(sandbox: Path, specs):
-    """越过沙箱的写按**路径**记账：批准 `a` 不表示批准 `b`。"""
-    with outside_files("a.txt", "b.txt") as (first, second):
-        ledger = ApprovalLedger()
-        asked: list[str] = []
-
-        def ask(name, arguments, reason):
-            asked.append(reason)
-            return True
-
-        command = f"echo x >> {first}"
-        accepted = run(
-            "bash", {"command": command}, spec=specs["manual"], root=sandbox, ledger=ledger, ask=ask
-        )
-        assert accepted.allowed and accepted.grants == ((str(first), "rw"),)
-        assert len(asked) == 1
-
-        # 同一条命令再来一次：账本命中，不再问
-        again = run(
-            "bash", {"command": command}, spec=specs["manual"], root=sandbox, ledger=ledger, ask=ask
-        )
-        assert again.allowed and again.answered_by == "ledger"
-        assert len(asked) == 1
-
-        # 换一个区外目标：重新问
-        other = run(
-            "bash",
-            {"command": f"echo x >> {second}"},
-            spec=specs["manual"],
-            root=sandbox,
-            ledger=ledger,
-            ask=ask,
-        )
-        assert other.allowed and len(asked) == 2
-
-
-
-def test_auto_asks_the_user_when_one_is_reachable(sandbox: Path, specs):
-    """auto 的 REVIEW 交人：有人答就由人定，账本记一次——「判不准即拒」的旧口径已废。"""
+def test_different_destructive_commands_ask_separately(sandbox: Path, specs):
     ledger = ApprovalLedger()
-    asked: list[str] = []
-
-    decision = run(
+    run(
         "bash",
-        {"command": SECRET},
-        spec=specs["auto"],
+        {"command": "rm -rf /"},
+        spec=specs["normal"],
         root=sandbox,
         ledger=ledger,
-        ask=lambda name, arguments, reason: asked.append(reason) or True,
+        ask=lambda *args: True,
     )
-    assert decision.allowed and decision.answered_by == "user"
-    assert asked == ["提权"]
-    assert specs["auto"].approval == APPROVAL_CLASSIFIER
-
-    # 同意一次即生效：同一条命令不再问
-    again = run("bash", {"command": SECRET}, spec=specs["auto"], root=sandbox, ledger=ledger)
-    assert again.allowed and again.answered_by == "ledger"
-
-
-def test_auto_denies_when_nobody_can_answer(sandbox: Path, specs):
-    """无人可问才 fail closed——这是 auto 与 manual 的唯一判别差异。"""
-    decision = run("bash", {"command": SECRET}, spec=specs["auto"], root=sandbox)
-    assert not decision.allowed
-    assert (decision.kind, decision.answered_by) == ("danger", "classifier")
-    assert "没有可用的询问通道" in decision.message
+    other = run(
+        "bash",
+        {"command": "shutdown -h now"},
+        spec=specs["normal"],
+        root=sandbox,
+        ledger=ledger,
+        ask=lambda *args: False,
+    )
+    assert not other.allowed
 
 
-def test_full_allows_without_asking_but_records_it(sandbox: Path, specs):
-    decision = run("bash", {"command": SECRET}, spec=specs["full"], root=sandbox)
-    assert decision.allowed and decision.answered_by == "none"
-    assert specs["full"].approval == APPROVAL_NONE
+def test_full_skips_the_question_entirely(sandbox: Path, specs):
+    decision = run(
+        "bash", {"command": "rm -rf /"}, spec=specs["full"], root=sandbox, ask=no_questions
+    )
+    assert decision.allowed and decision.answered_by == "full"
+    assert specs["full"].permission_mode == PERMISSION_FULL
 
 
 def test_decision_exposes_structured_command_result_types(sandbox: Path, specs):
     """机器调用方不能只靠 bool 区分策略拒绝与需要授权。"""
-    safe = run("bash", {"command": "ls"}, spec=specs["manual"], root=sandbox)
+    safe = run("bash", {"command": "ls"}, spec=specs["normal"], root=sandbox)
     assert safe.type == "SAFE_AUTO"
 
-    policy = run("read_file", {"path": "/etc/shadow"}, spec=specs["manual"], root=sandbox)
+    policy = run("read_file", {"path": "/etc/shadow"}, spec=specs["normal"], root=sandbox)
     assert policy.type == "POLICY_DENIED"
 
-    approval = run("bash", {"command": "sudo ls"}, spec=specs["manual"], root=sandbox)
-    assert approval.type == "NEEDS_APPROVAL"
-
-    classifier = run("bash", {"command": "sudo ls"}, spec=specs["auto"], root=sandbox)
-    assert classifier.type == "POLICY_DENIED"
-
-
-def test_unmountable_outside_target_is_sandbox_denied(sandbox: Path, specs):
-    missing = Path("/var/tmp") / f"avid-missing-{sandbox.name}.txt"
-    decision = run("bash", {"command": f"echo hi > {missing}"}, spec=specs["manual"], root=sandbox, ask=lambda *a: True)
-    assert decision.type == "SANDBOX_DENIED"
-    assert decision.operation == "filesystem_write"
-    assert decision.target == str(missing)
-
-
-def test_network_listen_reports_separate_operation(sandbox: Path, specs):
-    decision = run("bash", {"command": "nc -l 8080"}, spec=specs["auto"], root=sandbox)
-    assert (decision.type, decision.operation) == ("SANDBOX_DENIED", "network_listen")
-
-
-def test_restricted_network_is_a_sandbox_denial_not_a_command_failure(sandbox: Path, specs):
-    decision = run("bash", {"command": "curl https://api.example.com"}, spec=specs["manual"], root=sandbox)
-    assert decision.type == "SANDBOX_DENIED"
-    assert decision.code == "SANDBOX_NETWORK_DENIED"
-    assert decision.operation == "network_connect"
-    assert decision.target == "api.example.com"
-
-    full = run("bash", {"command": "curl https://api.example.com"}, spec=specs["full"], root=sandbox)
-    assert full.allowed
-
-
-
-@pytest.mark.parametrize("command", [
-    "rm a.txt", "git commit -m message", "git restore a.txt", "git reset HEAD~1",
-    "find . -exec touch x \\;", "python -c 'print(1)'",
-])
-def test_risky_argv_never_becomes_safe_auto(sandbox: Path, specs, command):
-    manual = run("bash", {"command": command}, spec=specs["manual"], root=sandbox)
-    assert manual.type == "NEEDS_APPROVAL"
-    auto = run("bash", {"command": command}, spec=specs["auto"], root=sandbox)
-    assert auto.type == "POLICY_DENIED"
-
-
-#: 三轴各自的出口在这一张表里一览：同一件事在 manual 是"问不到就拒"、auto 是"分类器
-#: 判死"、full 是"没人拦"，而 deny 那一档三种模式逐字相同。
-TABLE = [
-    # (说明, 工具, 参数, manual, auto, full)
-    ("硬拒绝", "bash", {"command": HARD}, ("deny", "hard"), ("deny", "hard"), ("deny", "hard")),
-    (
-        "ADMIN 凭据",
-        "read_file",
-        {"path": "/etc/shadow"},
-        ("deny", "credential"),
-        ("deny", "credential"),
-        ("deny", "credential"),
-    ),
-    (
-        "PROJECT deny",
-        "write_file",
-        {"path": ".git/hooks/pre-commit", "content": "x"},
-        ("deny", "rule"),
-        ("deny", "rule"),
-        ("deny", "rule"),
-    ),
-    # 放行的行也保留 kind：它记的是"**因为什么**被审过"，审计与事件都要这个信息。
-    ("区外只读（沙箱已保证）", "bash", {"command": OUTSIDE}, ("allow", ""), ("allow", ""), ("allow", "")),
-    ("越过沙箱（写区外）", "bash", {"command": OUTSIDE_WRITE}, ("deny", "outside"), ("deny", "outside"), ("allow", "outside")),
-
-    ("危险", "bash", {"command": SECRET}, ("deny", "danger"), ("deny", "danger"), ("allow", "danger")),
-    ("成本", "subagent", {}, ("deny", "cost"), ("allow", "cost"), ("allow", "cost")),
-    ("区内只读", "read_file", {"path": "a.txt"}, ("allow", ""), ("allow", ""), ("allow", "")),
-    ("区内常规命令", "bash", {"command": "ls"}, ("allow", ""), ("allow", ""), ("allow", "")),
-]
-
-
-@pytest.mark.parametrize(
-    ("label", "tool", "arguments", "manual", "auto", "full"),
-    TABLE,
-    ids=[row[0] for row in TABLE],
-)
-def test_decision_table(sandbox: Path, specs, label, tool, arguments, manual, auto, full):
-    expected = {"manual": manual, "auto": auto, "full": full}
-    for mode, want in expected.items():
-        decision = run(tool, arguments, spec=specs[mode], root=sandbox)
-        assert (decision.verdict, decision.kind) == want, f"{label} / {mode}"
-
-
-#: REVIEW 的四类理由。manual 下它们会变成一次询问；auto 下由分类器判；full 直接放行。
-REVIEW_TABLE = [
-    ("越过沙箱（写区外）", "bash", {"command": OUTSIDE_WRITE}, "outside"),
-
-    ("危险", "bash", {"command": SECRET}, "danger"),
-    ("成本", "subagent", {}, "cost"),
-    ("ask 规则", "read_file", {"path": ".env"}, "rule"),
-]
-
-
-@pytest.mark.parametrize(
-    ("label", "tool", "arguments", "kind"), REVIEW_TABLE, ids=[row[0] for row in REVIEW_TABLE]
-)
-def test_manual_review_becomes_a_prompt(sandbox: Path, specs, label, tool, arguments, kind):
-    """REVIEW 在 manual 下真的问人，并且**理由分类原样保留**（事件与审计都要它）。"""
-    asked: list[str] = []
-    decision = run(
-        tool,
-        arguments,
-        spec=specs["manual"],
-        root=sandbox,
-        ledger=ApprovalLedger(),
-        ask=lambda name, arguments, reason: asked.append(reason) or True,
+    refused = run(
+        "bash", {"command": "rm -rf /"}, spec=specs["normal"], root=sandbox, ask=lambda *a: False
     )
-    assert decision.allowed and decision.answered_by == "user"
-    assert decision.kind == kind
-    assert asked, f"{label} 没有发起询问"
+    assert refused.type == "NEEDS_APPROVAL"
 
 
-@pytest.mark.parametrize(
-    ("label", "tool", "arguments", "kind"), REVIEW_TABLE, ids=[row[0] for row in REVIEW_TABLE]
-)
-def test_auto_review_reaches_the_user(sandbox: Path, specs, label, tool, arguments, kind):
-    """auto 把同一批 REVIEW 交给用户：有人可问就问（kind 原样保留），无人可问才拒。
-
-    「成本」是例外：subagent 的成本档不是安全审查，auto 仍由分类器直接放行。
-    """
-    if kind == "cost":
-        decision = run(tool, arguments, spec=specs["auto"], root=sandbox, ledger=ApprovalLedger())
-        assert decision.allowed and decision.answered_by in {"classifier", "policy"}
-        return
-
-    asked: list[str] = []
-    allowed = run(
-        tool,
-        arguments,
-        spec=specs["auto"],
-        root=sandbox,
-        ledger=ApprovalLedger(),
-        ask=lambda name, arguments, reason: asked.append(reason) or True,
+def test_messages_say_what_the_model_should_do_next(sandbox: Path, specs):
+    credential = run("read_file", {"path": "/etc/shadow"}, spec=specs["normal"], root=sandbox)
+    unanswered = run("bash", {"command": "rm -rf /"}, spec=specs["normal"], root=sandbox)
+    refused = run(
+        "bash", {"command": "rm -rf /"}, spec=specs["normal"], root=sandbox, ask=lambda *a: False
     )
-    assert allowed.allowed and allowed.answered_by == "user", label
-    assert allowed.kind == kind
-    assert asked, f"{label} 没有发起询问"
 
-    # 干净账本 + 无应答者：分类器交不出去，按同一 kind 拒绝
-    refused = run(tool, arguments, spec=specs["auto"], root=sandbox, ledger=ApprovalLedger())
-    assert not refused.allowed and refused.kind == kind
+    assert "任何确认都无效" in credential.message
+    assert "没有可用的询问通道" in unanswered.message
+    assert "不要重复提交同一条命令" in refused.message
+    assert len({credential.message, unanswered.message, refused.message}) == 3
 
 
-@pytest.mark.parametrize(
-    ("label", "tool", "arguments", "kind"), REVIEW_TABLE, ids=[row[0] for row in REVIEW_TABLE]
-)
-def test_full_allows_the_same_review_silently(sandbox: Path, specs, label, tool, arguments, kind):
-    decision = run(tool, arguments, spec=specs["full"], root=sandbox, ledger=ApprovalLedger())
-    assert decision.allowed and decision.answered_by == "none"
+# ---------------------------------------------------------------- 凭据拒读：唯一硬拒
 
 
-def test_workspace_actions_never_reach_review(sandbox: Path, specs):
-    """manual 与 auto 的沙箱相同 → 同一批"区内常规动作"在三模式下都直接放行。
+def test_credentials_are_refused_in_every_shape(sandbox: Path, specs):
+    """凭据进上下文不可撤回：ask 答应、账本预先批准、full 都不放行。"""
+    ledger = ApprovalLedger()
+    ledger.remember(("path", "/etc/shadow", "ro"))
 
-    这条是"沙箱让免问变安全"的机械证据：如果有人把 approval 与 sandbox 耦合成
-    "manual 什么都问"，它会在 auto 那一列失败。
-    """
-    for mode in ("manual", "auto"):
+    for spec in specs.values():
         for tool, arguments in (
-            ("bash", {"command": "ls"}),
-            ("read_file", {"path": "a.txt"}),
-            ("glob", {"pattern": "*.py"}),
+            ("read_file", {"path": "/etc/shadow"}),
+            ("bash", {"command": "cat /etc/shadow"}),
         ):
-            decision = run(tool, arguments, spec=specs[mode], root=sandbox)
-            assert decision.allowed, f"{tool} / {mode}"
-            assert decision.answered_by == "policy"
+            decision = run(
+                tool,
+                arguments,
+                spec=spec,
+                root=sandbox,
+                ledger=ledger,
+                ask=lambda *args: True,
+            )
+            assert not decision.allowed, f"{tool} / {spec.permission_mode}"
+            assert decision.kind == "credential"
+            assert "受保护的宿主资源" in decision.message
 
 
-def test_ask_rules_are_review_in_every_mode(sandbox: Path, specs):
-    """``.env`` 是 ask 档：manual 问、auto 拒、full 放行（连 full 也走同一条事实）。"""
-    arguments = {"path": ".env"}
-
-    manual = run("read_file", arguments, spec=specs["manual"], root=sandbox, ask=lambda *a: False)
-    assert (manual.verdict, manual.kind) == ("deny", "rule")
-
-    auto = run("read_file", arguments, spec=specs["auto"], root=sandbox)
-    assert (auto.verdict, auto.kind, auto.answered_by) == ("deny", "rule", "classifier")
-
-    full = run("read_file", arguments, spec=specs["full"], root=sandbox)
-    assert full.allowed
+@pytest.mark.parametrize(
+    "path",
+    ["~/.ssh/id_rsa", "~/.aws/credentials", "~/.gnupg/secring.gpg", "/etc/sudoers", "/root/.bashrc", "key.pem"],
+)
+def test_credential_paths_cover_host_secrets(sandbox: Path, specs, path):
+    decision = run("read_file", {"path": path}, spec=specs["normal"], root=sandbox)
+    assert not decision.allowed, path
+    assert decision.kind == "credential"
 
 
-def test_full_never_bypasses_the_ladder(sandbox: Path, specs):
-    """产品口径：full 是"没有沙箱与人"，不是"没有规则"。"""
-    for tool, arguments in (
-        ("read_file", {"path": "/etc/shadow"}),
-        ("write_file", {"path": ".git/hooks/pre-commit", "content": "x"}),
-    ):
-        decision = run(tool, arguments, spec=specs["full"], root=sandbox)
-        assert decision.verdict == "deny"
-        assert decision.answered_by == ""
+def test_file_tools_allow_outside_paths_but_refuse_credentials(sandbox: Path, specs):
+    """文件工具的闸门只剩凭据拒读；区外写不再需要授权。"""
+    from avid.agent.state import RunState
+    from avid.agent.tools.files import write_file
+
+    with outside_files("tool-write.txt") as (outside,):
+        state = RunState.for_run(security=security(sandbox), workspace_root=str(sandbox))
+        written = write_file({"path": str(outside), "content": "x"}, state=state)
+        assert "拒绝访问" not in written
+        assert outside.read_text() == "x"
+
+    state = RunState.for_run(security=security(sandbox), workspace_root=str(sandbox))
+    refused = write_file({"path": "~/.ssh/authorized_keys", "content": "x"}, state=state)
+    assert "受保护的宿主资源" in refused
 
 
-# ---------------------------------------------------------------- 降级（不静默）
+# ---------------------------------------------------------------- 沙箱与规格
 
 
-def test_degraded_sandbox_pushes_managed_tools_back_to_review(sandbox: Path):
-    manual = security(sandbox, "manual", probe=BROKEN_PROBE)
+def test_normal_runs_inside_the_workspace_sandbox(sandbox: Path, specs):
+    normal = specs["normal"]
+    assert normal.sandbox.enforced
+    assert normal.permission_mode == PERMISSION_NORMAL
+    assert normal.summary()["permission"] == "normal"
 
-    asked = []
-    decision = run(
+
+def test_full_disables_the_sandbox(sandbox: Path, specs):
+    full = specs["full"]
+    assert not full.sandbox.enforced
+    assert full.sandbox.policy == "disabled"
+    assert full.summary()["permission"] == "full"
+
+
+def test_degraded_sandbox_does_not_ask(sandbox: Path):
+    """沙箱是纵深不是门槛：后端不可用也不把命令推回给人（毁灭级照旧问）。"""
+    degraded = security(sandbox, probe=BROKEN_PROBE)
+
+    listed = run("bash", {"command": "ls"}, spec=degraded, root=sandbox, ask=no_questions)
+    assert listed.allowed and listed.answered_by == "policy"
+
+    with outside_files("degraded.txt") as (outside,):
+        written = run(
+            "bash",
+            {"command": f"echo x >> {outside}"},
+            spec=degraded,
+            root=sandbox,
+            ask=no_questions,
+        )
+        assert written.allowed
+
+    asked: list[str] = []
+    destructive = run(
         "bash",
-        {"command": "ls"},
-        spec=manual,
+        {"command": "rm -rf /"},
+        spec=degraded,
         root=sandbox,
         ask=lambda name, arguments, reason: asked.append(reason) or True,
     )
-    assert (decision.verdict, decision.kind) == ("allow", "degraded")
-    assert asked and "沙箱不可用" in asked[0]
-
-    # 区内只读不因为"没有沙箱"而多问一句（它的保证来自路径校验，不来自沙箱）
-    assert run("read_file", {"path": "a.txt"}, spec=manual, root=sandbox).allowed
-
-
-def test_auto_degraded_runs_proven_read_only_and_workspace_writes(sandbox: Path):
-    """无沙箱平台的 auto 新阶梯：证明得了「只读」或「只写工作区」就裸跑。"""
-    auto = security(sandbox, "auto", probe=BROKEN_PROBE)
-
-    listed = run("bash", {"command": "ls"}, spec=auto, root=sandbox)
-    assert listed.allowed and listed.answered_by == "classifier"
-
-    written = run("bash", {"command": "echo hi > note.txt"}, spec=auto, root=sandbox)
-    assert written.allowed and written.answered_by == "classifier"
-
-
-def test_auto_degraded_asks_for_the_unproven(sandbox: Path):
-    """证明不了的命令：有人可问就问，无人可问才拒——删除属于此类（不可逆）。"""
-    auto = security(sandbox, "auto", probe=BROKEN_PROBE)
-
-    assert not run("bash", {"command": "rm a.txt"}, spec=auto, root=sandbox).allowed
-    assert not run("bash", {"command": "python -c 'print(1)'"}, spec=auto, root=sandbox).allowed
-
-    asked = run(
-        "bash",
-        {"command": "rm a.txt"},
-        spec=auto,
-        root=sandbox,
-        ledger=ApprovalLedger(),
-        ask=lambda name, arguments, reason: True,
-    )
-    assert asked.allowed and asked.answered_by == "user"
-
-
-def test_auto_degraded_network_becomes_a_review(sandbox: Path):
-    """沙箱缺席时网络出口由人把守：问人而非物理拒绝（物理拒绝只在沙箱强制时成立）。"""
-    manual = security(sandbox, "manual", probe=BROKEN_PROBE)
-    auto = security(sandbox, "auto", probe=BROKEN_PROBE)
-    command = {"command": "curl https://api.example.com"}
-
-    asked = run("bash", command, spec=manual, root=sandbox, ask=lambda name, arguments, reason: True)
-    assert (asked.verdict, asked.kind) == ("allow", "net_ask")
-
-    assert not run("bash", command, spec=auto, root=sandbox).allowed
-    auto_allowed = run(
-        "bash", command, spec=auto, root=sandbox, ledger=ApprovalLedger(), ask=lambda *a: True
-    )
-    assert auto_allowed.allowed and auto_allowed.answered_by == "user"
-
-
-def test_variable_targets_stay_unproven(sandbox: Path):
-    """$VAR 的落点证明不了（可能指向任何地方）：含 $ 的命令不进 proven 档。"""
-    auto = security(sandbox, "auto", probe=BROKEN_PROBE)
-    decision = run("bash", {"command": "echo hi > $HOME/notes"}, spec=auto, root=sandbox)
-    assert not decision.allowed
-
-
-def test_powershell_commands_walk_the_same_ladder(sandbox: Path):
-    """Windows 上 bash 工具跑 PowerShell：PS 动词表让它与 POSIX 同一套阶梯。"""
-    auto = security(sandbox, "auto", probe=BROKEN_PROBE)
-
-    assert run("bash", {"command": "Get-ChildItem"}, spec=auto, root=sandbox).allowed
-    assert run("bash", {"command": "Get-Content .\\a.txt"}, spec=auto, root=sandbox).allowed
-    assert run("bash", {"command": "Set-Location"}, spec=auto, root=sandbox).allowed
-
-    # 网络类交人：无人可问 → 拒（与 curl 同口径）
-    net = run(
-        "bash", {"command": "Invoke-WebRequest https://api.example.com"}, spec=auto, root=sandbox
-    )
-    assert not net.allowed
-
-    # 递归删除进危险档：有人可问就问，而不是判死
-    asked = run(
-        "bash",
-        {"command": "Remove-Item -Recurse build"},
-        spec=auto,
-        root=sandbox,
-        ledger=ApprovalLedger(),
-        ask=lambda name, arguments, reason: True,
-    )
-    assert asked.allowed and asked.answered_by == "user"
-
-
-def test_full_ignores_degradation(sandbox: Path):
-    """full 本来就不要沙箱，所以"沙箱不可用"对它不是降级。"""
-    full = security(sandbox, "full", probe=BROKEN_PROBE)
-    assert run("bash", {"command": "ls"}, spec=full, root=sandbox).allowed
+    assert destructive.allowed and asked
 
 
 def test_degraded_state_is_visible_in_the_spec(sandbox: Path):
-    spec = security(sandbox, "manual", probe=BROKEN_PROBE)
+    spec = security(sandbox, probe=BROKEN_PROBE)
     summary = spec.summary()
     assert summary["sandbox_state"]["degraded"] is True
     assert summary["sandbox_state"]["enforced"] is False
@@ -517,327 +428,143 @@ def test_degraded_state_is_visible_in_the_spec(sandbox: Path):
 # ---------------------------------------------------------------- 能力账本
 
 
-def test_reading_outside_the_workspace_stays_inside_the_sandbox(sandbox: Path, specs):
-    """沙箱以 ``--ro-bind / /`` 提供整个文件系统的只读访问：读区外是**已有能力**。
-
-    边界不在"工作区"，而在"沙箱保证不了什么"：Codex 的 ``workspace-write``
-    （"permits reading files, editing files in cwd and writable_roots"）与
-    Claude Code 沙箱的 read / write 分层都是这个口径。
-    """
-    for mode in ("manual", "auto", "full"):
-        for tool, arguments in (
-            ("bash", {"command": OUTSIDE}),
-            ("read_file", {"path": "/etc/hostname"}),
-            ("glob", {"pattern": "*", "path": "/etc"}),
-        ):
-            decision = run(tool, arguments, spec=specs[mode], root=sandbox)
-            assert decision.allowed, f"{tool} / {mode}"
-            assert decision.answered_by == "policy"
-            assert decision.type == "SAFE_AUTO"
-
-
-def test_tmp_is_inside_the_sandbox_for_bash_but_not_for_file_tools(sandbox: Path, specs):
-    """``bash`` 跑在沙箱里，宿主 /tmp 已被换成私有 tmpfs：写它碰不到宿主，不必问。
-    文件工具在 agent 进程里跑，它的 /tmp 写会落到宿主，因此仍要授权。"""
-    from avid.agent.state import RunState
-    from avid.agent.tools.files import write_file
-
-    decision = run("bash", {"command": "echo x > /tmp/avid-probe.txt"}, spec=specs["manual"], root=sandbox)
-    assert decision.verdict == "allow" and decision.kind == ""
-
-    state = RunState.for_run(security=specs["manual"], workspace_root=str(sandbox))
-    assert "拒绝访问" in write_file({"path": "/tmp/avid-file-probe.txt", "content": "x"}, state=state)
+def test_the_ledger_keys_destructive_commands_by_normalized_text(sandbox: Path, specs):
+    ledger = ApprovalLedger()
+    run(
+        "bash",
+        {"command": "rm   -rf   /"},
+        spec=specs["normal"],
+        root=sandbox,
+        ledger=ledger,
+        ask=lambda *args: True,
+    )
+    # 规范化之后同一条命令再次到来时命中账本
+    again = run(
+        "bash",
+        {"command": "rm -rf /"},
+        spec=specs["normal"],
+        root=sandbox,
+        ledger=ledger,
+        ask=no_questions,
+    )
+    assert again.answered_by == "ledger"
 
 
-def test_outside_source_is_not_a_write_capability(sandbox: Path, specs):
-    """外部源只读、写入工作区：不能把全命令的 write 误归到只读源上。"""
-    for command in ("cp /etc/hostname local.txt", "cat /etc/hostname > local.txt"):
-        decision = run("bash", {"command": command}, spec=specs["manual"], root=sandbox)
-        assert decision.allowed and not decision.grants, command
-
-
-def test_approval_mounts_only_the_outside_write_destination(sandbox: Path, specs):
-    """批准外部目标写入时，不能顺带把命令中的外部只读源挂成可写。"""
-    with outside_files("source.txt", "destination.txt") as (source, destination):
-        ledger = ApprovalLedger()
-        decision = run(
-            "bash",
-            {"command": f"cp {source} {destination}"},
-            spec=specs["manual"], root=sandbox, ledger=ledger, ask=lambda *args: True,
-        )
-        assert decision.grants == ((str(destination), "rw"),)
-        assert ledger.path_grants() == ((str(destination), "rw"),)
-
-
-
-    """只读授予不能给文件工具写权限：越出沙箱的写必须按 rw 口径批准。"""
-    from avid.agent.state import RunState
-    from avid.agent.tools.files import write_file
-
-    with outside_files("write.txt") as (outside,):
-        state = RunState.for_run(security=specs["manual"], workspace_root=str(sandbox))
-        state.ledger.remember(("path", str(outside), "ro"))
-        assert "拒绝访问" in write_file({"path": str(outside), "content": "x"}, state=state)
-        assert outside.read_text() == "outside\n"
-
-
-def test_grants_do_not_authorize_other_targets_or_upgrade_read_to_write(sandbox: Path, specs):
-    """一个目标一次授权：只读授予不给写，多目标命令要**每个**目标都获准。"""
-    with outside_files("a.txt", "b.txt") as (first, second):
-        ledger = ApprovalLedger()
-        ledger.remember(("path", str(first), "ro"))
-        write_one = run(
-            "bash", {"command": f"echo x >> {first}"}, spec=specs["manual"], root=sandbox, ledger=ledger
-        )
-        assert write_one.type == "NEEDS_APPROVAL"
-
-        run(
-            "bash",
-            {"command": f"echo x >> {first}"},
-            spec=specs["manual"],
-            root=sandbox,
-            ledger=ledger,
-            ask=lambda *a: True,
-        )
-        multi = run(
-            "bash",
-            {"command": f"echo x >> {first} >> {second}"},
-            spec=specs["manual"],
-            root=sandbox,
-            ledger=ledger,
-        )
-        assert multi.type == "NEEDS_APPROVAL"
-
-
-def test_ledger_records_path_capabilities_with_access(sandbox: Path, specs):
-    """区外**读**不写账本（沙箱已保证），只有越出沙箱的**写**才记能力。"""
-    with outside_files("granted.txt") as (path,):
-        ledger = ApprovalLedger()
-        run("read_file", {"path": str(path)}, spec=specs["manual"], root=sandbox, ledger=ledger)
-        assert ledger.path_grants() == ()
-
-        run(
-            "bash",
-            {"command": f"echo x >> {path}"},
-            spec=specs["manual"],
-            root=sandbox,
-            ledger=ledger,
-            ask=lambda *a: True,
-        )
-        assert ledger.path_grants() == ((str(path), "rw"),)
-        assert ledger.outside_allowed(str(path), "rw") is True
-        assert ledger.outside_allowed(str(path), "ro") is True
-        assert ledger.outside_allowed("/etc/shadow", "rw") is False
-
-
-
-def test_write_grants_are_rw_and_win_over_ro(sandbox: Path, specs):
+def test_path_grants_are_rw_and_win_over_ro(sandbox: Path, specs):
     ledger = ApprovalLedger()
     ledger.remember(("path", "/tmp/out.txt", "ro"))
     ledger.remember(("path", "/tmp/out.txt", "rw"))
     assert ledger.path_grants() == (("/tmp/out.txt", "rw"),)
 
 
-def test_capability_lookup_ignores_the_access_suffix(sandbox: Path):
-    ledger = ApprovalLedger()
-    ledger.remember(("path", "/etc/hosts", "ro"))
-    assert ledger.has_capability("path", "/etc/hosts") is True
-    assert ledger.has_capability("path", "/etc/HOSTS") is False
-    assert ledger.has_capability("command", "/etc/hosts") is False
-
-
-def test_ledger_keys_are_capability_types(sandbox: Path, specs):
-    """原则⑦：升级是授予能力（命令 / 路径 / 工具），不是"关沙箱"。"""
-    ledger = ApprovalLedger()
-    run("bash", {"command": SECRET}, spec=specs["manual"], root=sandbox, ledger=ledger, ask=lambda *a: True)
-    run("subagent", {}, spec=specs["manual"], root=sandbox, ledger=ledger, ask=lambda *a: True)
-    assert ledger.has_capability("command", SECRET) is True
-    assert ledger.has_capability("tool", "subagent") is True
-    # 没有"关沙箱"这类能力：账本的键域就是能力域
-    assert ledger.has_capability("sandbox", "disabled") is False
-    assert len(ledger) == 2
-
-
-def test_a_grant_does_not_leak_across_capability_types(sandbox: Path, specs):
-    ledger = ApprovalLedger()
-    ask = lambda *a: True  # noqa: E731
-    run("bash", {"command": SECRET}, spec=specs["manual"], root=sandbox, ledger=ledger, ask=ask)
-    # 同意过 `sudo ls` 不等于同意别的危险命令
-    other = run(
-        "bash", {"command": "chmod 777 a.txt"}, spec=specs["manual"], root=sandbox, ledger=ledger
-    )
-    assert not other.allowed
-
-
-def test_hard_deny_is_identical_in_every_mode(sandbox: Path, specs):
-    for mode, spec in specs.items():
-        decision = run("bash", {"command": HARD}, spec=spec, root=sandbox, ask=lambda *a: True)
-        assert not decision.allowed, mode
-        assert decision.tier == "admin"
-
-
-def test_messages_say_what_the_model_should_do_next(sandbox: Path, specs):
-    hard = run("bash", {"command": HARD}, spec=specs["manual"], root=sandbox)
-    beyond = run("bash", {"command": OUTSIDE_WRITE}, spec=specs["manual"], root=sandbox)
-    danger = run("bash", {"command": SECRET}, spec=specs["manual"], root=sandbox)
-
-    assert "永久禁止" in hard.message
-    assert "不要重复尝试同一目标" in beyond.message
-    assert "不要重复提交同一条命令" in danger.message
-    assert len({hard.message, beyond.message, danger.message}) == 3
-
-
-def test_outside_reads_never_reach_approval(sandbox: Path, specs):
-    """读工作区之外是沙箱已有能力，所以任何一种模式下都不该打问号。"""
-    ledger = ApprovalLedger()
-
-    def ask(*args):
-        raise AssertionError("区外读不该触发审批")
-
-    for tool, arguments in (
-        ("bash", {"command": OUTSIDE}),
-        ("read_file", {"path": "/etc/hostname"}),
-    ):
-        decision = run(
-            tool, arguments, spec=specs["manual"], root=sandbox, ledger=ledger, ask=ask
-        )
-        assert decision.allowed and decision.answered_by == "policy"
-    assert ledger.path_grants() == ()
-
-
-
-def test_approval_answers_grant_rw_for_write_commands(sandbox: Path, specs):
-    with outside_files("rw-existing.txt") as (outside,):
+def test_every_allow_records_its_path_grants(sandbox: Path, specs):
+    """每一条允许都要记账：毁灭级放行的命令要写区外时，缺了挂载会在沙箱里撞上只读。"""
+    with outside_files("destructive.txt") as (outside,):
         ledger = ApprovalLedger()
         decision = run(
             "bash",
-            {"command": f"echo x > {outside}"},
-            spec=specs["manual"],
+            {"command": f"rm -rf {outside}"},
+            spec=specs["normal"],
             root=sandbox,
             ledger=ledger,
-            ask=lambda *a: True,
+            ask=lambda *args: True,
         )
         assert decision.allowed
-        assert decision.grants == ((str(outside), "rw"),)
-        assert specs["manual"].approval == APPROVAL_USER
+        assert ledger.path_grants() == ((str(outside), "rw"),)
+
+        full_ledger = ApprovalLedger()
+        run(
+            "bash",
+            {"command": f"rm -rf {outside}"},
+            spec=specs["full"],
+            root=sandbox,
+            ledger=full_ledger,
+        )
+        assert full_ledger.path_grants() == ((str(outside), "rw"),)
 
 
-# ---------------------------------------------------------------- 脚本块与 $ 精化（shell 适配二）
+def test_grants_only_mount_the_write_destination(sandbox: Path, specs):
+    """外部只读源不能顺带挂成可写：grants 只有写目标。"""
+    with outside_files("source.txt", "destination.txt") as (source, destination):
+        ledger = ApprovalLedger()
+        decision = run(
+            "bash",
+            {"command": f"cp {source} {destination}"},
+            spec=specs["normal"],
+            root=sandbox,
+            ledger=ledger,
+        )
+        assert decision.grants == ((str(destination), "rw"),)
+        assert ledger.path_grants() == ((str(destination), "rw"),)
+
+
+# ---------------------------------------------------------------- 分类回归（事实层）
 
 
 def test_script_blocks_propagate_state_capabilities(sandbox: Path):
     """块内写/删/网必须向整条命令传播：`ForEach-Object { Remove-Item $_ }` 不是只读。"""
-    auto = security(sandbox, "auto", probe=BROKEN_PROBE)
-    bypass = "Get-ChildItem | ForEach-Object { Remove-Item $_ }"
-
-    assert not run("bash", {"command": bypass}, spec=auto, root=sandbox).allowed
-    asked = run(
-        "bash",
-        {"command": bypass},
-        spec=auto,
-        root=sandbox,
-        ledger=ApprovalLedger(),
-        ask=lambda *a: True,
+    action = brokerize(
+        "bash", {"command": "Get-ChildItem | ForEach-Object { Remove-Item $_ }"}, root=str(sandbox)
     )
-    assert asked.allowed and asked.answered_by == "user"
+    assert "filesystem_delete" in action.capabilities
+    assert "删除文件" in action.risks
 
 
 def test_filter_blocks_stay_read_only(sandbox: Path):
-    """$_ 是管道变量不是写落点：PS 过滤块保持只读档，不受 $ 加固误伤。"""
-    auto = security(sandbox, "auto", probe=BROKEN_PROBE)
-    decision = run(
-        "bash",
-        {"command": "Get-Process | Where-Object {$_.CPU -gt 10}"},
-        spec=auto,
-        root=sandbox,
+    """$_ 是管道变量不是写落点：PS 过滤块保持只读档。"""
+    action = brokerize(
+        "bash", {"command": "Get-Process | Where-Object {$_.CPU -gt 10}"}, root=str(sandbox)
     )
-    assert decision.allowed and decision.answered_by == "classifier"
+    assert "filesystem_write" not in action.capabilities
+    assert "filesystem_delete" not in action.capabilities
 
 
 def test_braces_inside_quotes_are_not_script_blocks(sandbox: Path):
-    auto = security(sandbox, "auto", probe=BROKEN_PROBE)
-    decision = run("bash", {"command": "echo '{'"}, spec=auto, root=sandbox)
-    assert decision.allowed and decision.answered_by == "classifier"
+    action = brokerize("bash", {"command": "echo '{'"}, root=str(sandbox))
+    assert "filesystem_write" not in action.capabilities
 
 
 def test_reading_a_variable_is_still_read_only(sandbox: Path):
-    """$ 精化的另一面：纯读段落里的 $ 不降级（写落点证明不了才交人）。"""
-    auto = security(sandbox, "auto", probe=BROKEN_PROBE)
-    decision = run("bash", {"command": "echo $HOME"}, spec=auto, root=sandbox)
-    assert decision.allowed and decision.answered_by == "classifier"
-
-
-def test_sed_inplace_counts_as_a_write(sandbox: Path):
-    auto = security(sandbox, "auto", probe=BROKEN_PROBE)
-    inside = run("bash", {"command": "sed -i s/a/b/ a.txt"}, spec=auto, root=sandbox)
-    assert inside.allowed and inside.answered_by == "classifier"
-
-    outside = run("bash", {"command": "sed -i s/a/b/ /etc/hosts"}, spec=auto, root=sandbox)
-    assert not outside.allowed
-
-
-def test_powershell_aliases_walk_the_same_ladder(sandbox: Path):
-    auto = security(sandbox, "auto", probe=BROKEN_PROBE)
-    assert run("bash", {"command": "gci"}, spec=auto, root=sandbox).allowed
-    assert not run("bash", {"command": "del a.txt"}, spec=auto, root=sandbox).allowed
-    net = run("bash", {"command": "iwr https://api.example.com"}, spec=auto, root=sandbox)
-    assert not net.allowed
-
-
-def test_posix_function_definition_with_a_write_is_reviewed(sandbox: Path):
-    auto = security(sandbox, "auto", probe=BROKEN_PROBE)
-    decision = run("bash", {"command": "f() { rm -rf /tmp/x; }"}, spec=auto, root=sandbox)
-    assert not decision.allowed
-
-
-# ---------------------------------------------------------------- 评审回归（块与引号盲区）
+    action = brokerize("bash", {"command": "echo $HOME"}, root=str(sandbox))
+    assert "filesystem_write" not in action.capabilities
 
 
 @pytest.mark.parametrize(
     "command",
     [
         "Get-ChildItem | ForEach-Object { Invoke-Expression $cmd }",
-        "Get-Process | ForEach-Object { Start-Process $_.Name }",
         "Get-ChildItem | ForEach-Object { socat TCP-LISTEN:4444 - }",
         "Get-ChildItem | ForEach-Object { Set-Content $p evil }",
-        "Get-ChildItem | ForEach-Object { Set-Content $_.FullName evil }",
         "awk '{ system(\"rm -rf ./src\") }'",
+        "f() { rm -rf /tmp/x; }",
     ],
 )
-def test_block_and_quote_blind_spots_reach_a_human(sandbox: Path, command):
-    """评审发现的三类盲区（块内未知程序/块内 $ 写目标/引号内 system()）必须交人。"""
-    auto = security(sandbox, "auto", probe=BROKEN_PROBE)
-
-    assert not run("bash", {"command": command}, spec=auto, root=sandbox).allowed, command
-    asked = run(
-        "bash",
-        {"command": command},
-        spec=auto,
-        root=sandbox,
-        ledger=ApprovalLedger(),
-        ask=lambda *a: True,
-    )
-    assert asked.allowed and asked.answered_by == "user", command
+def test_block_and_quote_blind_spots_stay_visible_in_the_facts(sandbox: Path, command):
+    """评审发现的盲区（块内未知程序/块内 $ 写目标/引号内 system()）仍要被分类看见。"""
+    action = brokerize("bash", {"command": command}, root=str(sandbox))
+    risky = action.risks or action.damage or action.network
+    assert risky, f"{command} 的风险事实丢了"
+    assert action.capabilities, command
 
 
-def test_legitimate_read_idioms_survive_the_tightening(sandbox: Path):
-    """收紧不误伤：过滤块与 awk 纯打印保持只读档。"""
-    auto = security(sandbox, "auto", probe=BROKEN_PROBE)
-    for command in (
-        "Get-Process | Where-Object {$_.CPU -gt 10}",
-        "awk '{ print $1 }' a.txt",
-        "echo hi > note.txt",
-    ):
-        decision = run("bash", {"command": command}, spec=auto, root=sandbox)
-        assert decision.allowed and decision.answered_by == "classifier", command
+def test_powershell_aliases_are_classified(sandbox: Path):
+    """Windows 上 bash 工具跑 PowerShell：别名与动词进同一套能力/风险表。"""
+    listing = brokerize("bash", {"command": "gci"}, root=str(sandbox))
+    assert "filesystem_read" in listing.capabilities and not listing.risks
+
+    deleting = brokerize("bash", {"command": "del a.txt"}, root=str(sandbox))
+    assert "filesystem_delete" in deleting.capabilities
+    assert "删除文件" in deleting.risks
+
+    downloading = brokerize("bash", {"command": "iwr https://api.example.com"}, root=str(sandbox))
+    assert downloading.network and "network_connect" in downloading.capabilities
+
+    recursive = brokerize("bash", {"command": "Remove-Item -Recurse build"}, root=str(sandbox))
+    assert "filesystem_delete" in recursive.capabilities
 
 
 def test_windows_style_paths_are_scan_candidates(sandbox: Path):
-    """评审 Finding 2 的识别层修复：盘符/UNC/反斜杠相对路径都进目标扫描。
-
-    区外判定由宿主的 ntpath 解析（is_within），Linux 上无法端到端复现
-    「写 C:\\Users」，这里钉住识别层不漏 token。
-    """
+    """盘符/UNC/反斜杠相对路径都进目标扫描（区外判定由宿主 ntpath 解析）。"""
     from avid.agent.tools.workspace import _candidate
 
     base = Path(sandbox)

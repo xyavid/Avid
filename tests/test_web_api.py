@@ -488,15 +488,22 @@ def test_meta_matches_kernel_and_features_match_endpoints(bundle):
         listed = client.get("/api/workspaces")
         assert listed.status_code == 200
         assert listed.json()["workspaces"]
-    if FEATURES["permission_modes"]:
-        # 权限模式是**参数型**特性，没有新端点可断言；用"非法值被拒"证明它真的生效
-        # （声明了却没人读，就会连非法值都照收）。
+    if FEATURES["danger_confirm"]:
+        # 毁灭级确认是**行为型**特性，没有新端点：机制是审批（只有毁灭级命令才产生
+        # 审批请求）。声明了就必须真的在服务它——审批端点存在（未知 run 是 404）。
+        assert client.get("/api/runs/run_x/approvals").status_code == 404
+    if FEATURES["full_access"]:
+        # full 是**参数型**特性：模式入口已删——旧的 permission 字段被 extra="forbid"
+        # 拒收；完全访问只能由 full_access_ack 授予（类型错误的值同样被拒）。
         session = create_session(client).json()
+        runs_url = f"/api/sessions/{session['id']}/runs"
         rejected = client.post(
-            f"/api/sessions/{session['id']}/runs",
+            runs_url,
             json={"prompt": "x", "permission": "yolo"},
         )
         assert rejected.status_code == 422
+        wrong_type = client.post(runs_url, json={"prompt": "x", "full_access_ack": 5})
+        assert wrong_type.status_code == 422
 
 
 def test_health(bundle):

@@ -1,8 +1,9 @@
-"""工作区的 HTTP 面：候选列表、登记、建会话时的必选归属、运行级权限模式。
+"""工作区的 HTTP 面：候选列表、登记、建会话时的必选归属、运行级完全访问凭据。
 
 这一组用例覆盖阶段 18 的 Web 侧验收：**归属可查询**（会话列表带 workspace）、
 **新建必须先选**（多工作区模式下缺 workspace 是 400）、**归属可持久化**
 （会话落在该工作区的 .avid/sessions 下、header 里带着 workspaceId）。
+阶段 51 后权限只有一个运行级取值：默认 normal，`full_access_ack` 是完全访问凭据。
 """
 
 from __future__ import annotations
@@ -104,13 +105,12 @@ def test_register_then_create_a_session_in_that_workspace(client, sandbox, tmp_p
     project = tmp_path.parent / f"proj-{tmp_path.name}"
     project.mkdir()
 
-    created = client.post(
-        "/api/workspaces", json={"path": str(project), "name": "项目", "permission": "manual"}
-    )
+    created = client.post("/api/workspaces", json={"path": str(project), "name": "项目"})
     assert created.status_code == 201, created.text
     workspace = created.json()
     assert workspace["name"] == "项目"
-    assert workspace["default_permission"] == "manual"
+    # 工作区不再携带默认权限：注册载荷带上它是 422，回显里也没有这个键。
+    assert "default_permission" not in workspace
 
     listed = client.get("/api/workspaces").json()["workspaces"]
     # 进程自己绑定的工作地点也在候选里（is_default），所以断言"包含"而不是"只有它"。
@@ -216,34 +216,31 @@ def test_sessions_from_two_workspaces_are_listed_together(client, tmp_path):
     assert len(listed) == 2
 
 
-def test_run_records_the_workspace_and_permission(client, tmp_path, sandbox):
+def test_run_records_the_workspace_and_full_permission(client, tmp_path, sandbox):
     project = tmp_path.parent / f"run-{tmp_path.name}"
     project.mkdir()
-    ws = client.post(
-        "/api/workspaces", json={"path": str(project), "permission": "manual"}
-    ).json()
+    ws = client.post("/api/workspaces", json={"path": str(project)}).json()
     session = client.post("/api/sessions", json={"workspace": ws["id"]}).json()
 
+    # full_access_ack 是完全访问的授予凭据（前端两步确认后才带它）。
     started = client.post(
         f"/api/sessions/{session['id']}/runs",
-        json={"prompt": "问题", "permission": "auto", "auto_approve": True},
+        json={"prompt": "问题", "auto_approve": True, "full_access_ack": True},
     )
     assert started.status_code == 201, started.text
     run_id = started.json()["run_id"]
 
-    # run_started 带上归属与模式：刷新页面后重建界面靠它（不能只存在内存里）。
+    # run_started 带上归属与权限：刷新页面后重建界面靠它（不能只存在内存里）。
     stream = client.get(f"/api/runs/{run_id}/events").text
     assert '"workspace"' in stream
     assert ws["id"] in stream
-    assert '"permission"' in stream and "auto" in stream
+    assert '"permission": "full"' in stream
 
 
-def test_run_permission_defaults_to_the_workspace_default(client, tmp_path, sandbox):
+def test_run_permission_defaults_to_normal(client, tmp_path, sandbox):
     project = tmp_path.parent / f"default-{tmp_path.name}"
     project.mkdir()
-    ws = client.post(
-        "/api/workspaces", json={"path": str(project), "permission": "manual"}
-    ).json()
+    ws = client.post("/api/workspaces", json={"path": str(project)}).json()
     session = client.post("/api/sessions", json={"workspace": ws["id"]}).json()
 
     started = client.post(
@@ -252,22 +249,24 @@ def test_run_permission_defaults_to_the_workspace_default(client, tmp_path, sand
     )
     run_id = started.json()["run_id"]
 
+    # 没有工作区默认权限可继承：不给 ack 就是 normal。
     stream = client.get(f"/api/runs/{run_id}/events").text
-    assert '"permission": "manual"' in stream
+    assert '"permission": "normal"' in stream
 
 
-def test_run_rejects_an_unknown_permission(client, tmp_path):
+def test_run_rejects_a_permission_field(client, tmp_path):
+    """权限模式已删：请求里带 permission 一律 422（extra=forbid），值是什么都一样。"""
     project = tmp_path.parent / f"bad-{tmp_path.name}"
     project.mkdir()
     ws = client.post("/api/workspaces", json={"path": str(project)}).json()
     session = client.post("/api/sessions", json={"workspace": ws["id"]}).json()
 
-    response = client.post(
-        f"/api/sessions/{session['id']}/runs",
-        json={"prompt": "问题", "permission": "yolo"},
-    )
-
-    assert response.status_code == 422
+    for value in ("yolo", "normal", "auto"):
+        response = client.post(
+            f"/api/sessions/{session['id']}/runs",
+            json={"prompt": "问题", "permission": value},
+        )
+        assert response.status_code == 422, response.text
 
 
 def test_startup_writes_nothing_to_the_registry(tmp_path):
@@ -322,8 +321,8 @@ def test_explicit_registration_is_the_only_writer(tmp_path):
         services.close()
 
 
-def test_an_invalid_permission_does_not_register_the_workspace(client, tmp_path):
-    """非法模式在 schema 层就被拒，不能留下"先落盘、再 500"的副作用。
+def test_a_permission_field_is_rejected_without_registering_the_workspace(client, tmp_path):
+    """权限模式已删：注册载荷带 permission 在 schema 层就 422，不留"先落盘、再报错"的副作用。
 
     以前路由先 `require_new(path)` 写一次、再 `registry.add(..., permission=...)`
     写第二次：非法 permission 于是 500 + 工作区已登记 + 重试变 409（一次请求既没
@@ -332,24 +331,18 @@ def test_an_invalid_permission_does_not_register_the_workspace(client, tmp_path)
     target = tmp_path.parent / f"invalid-{tmp_path.name}"
     target.mkdir()
 
-    rejected = client.post(
-        "/api/workspaces", json={"path": str(target), "permission": "banana"}
-    )
-    assert rejected.status_code == 422, rejected.text
+    # 值是什么都一样：这个字段本身不存在（extra=forbid），manual/auto/full 一并被拒。
+    for value in ("banana", "manual", "auto", "full"):
+        rejected = client.post(
+            "/api/workspaces", json={"path": str(target), "permission": value}
+        )
+        assert rejected.status_code == 422, rejected.text
     listed = client.get("/api/workspaces").json()["workspaces"]
     assert all(item["root"] != str(target) for item in listed), "被拒的请求不该留下登记"
 
-    accepted = client.post(
-        "/api/workspaces", json={"path": str(target), "permission": "manual"}
-    )
+    accepted = client.post("/api/workspaces", json={"path": str(target)})
     assert accepted.status_code == 201, accepted.text
-    assert accepted.json()["default_permission"] == "manual"
-
-    # full 在**类型层**就不存在（`Literal["manual","auto"]`）：它不能成为持久默认值。
-    full = client.post(
-        "/api/workspaces", json={"path": str(target), "permission": "full"}
-    )
-    assert full.status_code == 422, full.text
+    assert "default_permission" not in accepted.json()
 
 
 # ---------------- 会话归属的定位成本（P2-6） ----------------

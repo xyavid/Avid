@@ -21,14 +21,9 @@ from .providers.client import LLMError, ask, chat_completion
 from .providers.config import Config, ConfigError
 from .providers.usage import Usage, hit_ratio
 from .security.permission import (
-    DEFAULT_MODE,
-    FULL_MODE,
-    MODE_LABELS,
-    MODES,
-    FullAccessError,
-    PolicyConfigError,
+    PERMISSION_FULL,
+    PERMISSION_NORMAL,
     RunSecurity,
-    full_grant_error,
 )
 from .services.workspace_registry import (
     Workspace,
@@ -81,11 +76,6 @@ def _resolve_workspace(selection: str | None) -> Workspace:
     return found if found is not None else bound_workspace(root)
 
 
-def _default_mode_choices() -> tuple[str, ...]:
-    """Returns the modes a workspace may persist as its default, which excludes full."""
-    return tuple(mode for mode in MODES if mode != FULL_MODE)
-
-
 def _start_mcp(state: RunState) -> None:
     """Starts this run's MCP servers, warning about failures instead of aborting the run."""
     manager = McpManager(state.workspace_root)
@@ -95,20 +85,21 @@ def _start_mcp(state: RunState) -> None:
 
 
 def _announce_security(security: RunSecurity | None) -> None:
-    """Prints the run's three security axes to stderr so a disabled sandbox is never invisible."""
+    """Prints the run's security posture to stderr so a disabled sandbox is never invisible."""
     if security is None:  # pragma: no cover - callers guarantee a non-None security object
         return
-    print(
-        f"[安全] {security.mode}（approval={security.approval}，"
-        f"network={security.network}）｜{security.sandbox.one_line()}",
-        file=sys.stderr,
+    label = (
+        f"{PERMISSION_FULL}（完全访问：跳过毁灭级确认、无沙箱）"
+        if security.full
+        else f"{PERMISSION_NORMAL}（默认：仅毁灭级命令双确认）"
     )
+    print(f"[安全] {label}｜{security.sandbox.one_line()}", file=sys.stderr)
     for note in security.summary()["notes"]:
         print(f"[安全] {note}", file=sys.stderr)
     if security.sandbox.degraded:
         print(
-            "⚠ 沙箱不可用：manual 下受管动作逐个问人；auto 下只读与工作区内写直接跑，"
-            "其余征询确认（无确认通道时拒绝）。装好 bubblewrap（bwrap）可获得内核级隔离。",
+            "⚠ 沙箱不可用：所有动作按默认形态直接执行（毁灭级仍双确认）。"
+            "装好 bubblewrap（bwrap）可获得内核级隔离。",
             file=sys.stderr,
         )
 
@@ -132,22 +123,10 @@ def build_parser() -> argparse.ArgumentParser:
         "非交互场景需显式指定",
     )
     parser.add_argument(
-        "--permission",
-        choices=MODES,
-        default=None,
-        metavar="{manual,auto,full}",
-        help="权限模式："
-        + "；".join(f"{mode}={MODE_LABELS[mode]}" for mode in MODES)
-        + "。缺省按「工作区默认权限」，工作区没设过就是 "
-        + DEFAULT_MODE
-        + "。模式固定三轴（approval/sandbox/network），--yes 只决定谁来回答",
-    )
-    parser.add_argument(
         "--allow-full-access",
         action="store_true",
         dest="allow_full_access",
-        help="full 模式的**显式授权**开关：必须与 --permission full 同时给出，"
-        "否则拒绝启动（full 会关掉沙箱与网络边界，不能靠一个词就生效）",
+        help="完全访问的**显式授权**开关：跳过毁灭级确认、关沙箱、不滤环境",
     )
     parser.add_argument(
         "--workspace",
@@ -198,12 +177,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.session_name and not (args.session or args.new_session):
         parser.error("--session-name 需要与 --session 或 --new-session 一起用")
 
-    problem = full_grant_error(
-        args.permission, acknowledged=args.allow_full_access, source="cli"
-    )
-    if problem is not None:
-        parser.error(problem)
-
     try:
         config = resolve_chat()
     except ConfigError as exc:
@@ -225,16 +198,11 @@ def main(argv: list[str] | None = None) -> int:
             target = _resolve_workspace(args.workspace)
             state = RunState.for_run(
                 auto_approve=args.yes,
-                permission_mode=args.permission or target.default_permission,
+                full=args.allow_full_access,
                 workspace_root=target.root,
-                full_ack=args.allow_full_access,
-                grant_source="cli",
             )
         except (WorkspaceNotFound, WorkspaceInvalid) as exc:
             print(f"工作区错误：{exc}", file=sys.stderr)
-            return 2
-        except (FullAccessError, PolicyConfigError) as exc:
-            print(f"安全配置错误：{exc}", file=sys.stderr)
             return 2
         _announce_security(state.security)
         _start_mcp(state)
@@ -301,7 +269,7 @@ def _run_session(args: argparse.Namespace, config, state: RunState | None = None
         print(f"工作区错误：{exc}", file=sys.stderr)
         return 2
     print(
-        f"工作区 {target.id}（{target.root}，默认权限 {target.default_permission}）",
+        f"工作区 {target.id}（{target.root}）",
         file=sys.stderr,
     )
     repo = JsonlSessionRepo(sessions_root(target), workspace=target.id)
@@ -332,10 +300,8 @@ def _run_session(args: argparse.Namespace, config, state: RunState | None = None
                 state=state
                 or RunState.for_run(
                     auto_approve=args.yes,
-                    permission_mode=args.permission or target.default_permission,
+                    full=args.allow_full_access,
                     workspace_root=target.root,
-                    full_ack=args.allow_full_access,
-                    grant_source="cli",
                 ),
                 on_message=recorder.on_message,
                 on_compaction=recorder.record_compaction,
@@ -373,9 +339,6 @@ def _interactive(args: argparse.Namespace, config) -> int:
         target = _resolve_workspace(args.workspace)
     except WorkspaceNotFound as exc:
         print(f"工作区错误：{exc}", file=sys.stderr)
-        return 2
-    except (FullAccessError, PolicyConfigError) as exc:
-        print(f"安全配置错误：{exc}", file=sys.stderr)
         return 2
 
     repo = JsonlSessionRepo(sessions_root(target), workspace=target.id)
@@ -417,7 +380,7 @@ def _interactive(args: argparse.Namespace, config) -> int:
         return 1
 
     print(
-        f"工作区 {target.id}（{target.root}，默认权限 {target.default_permission}）\n"
+        f"工作区 {target.id}（{target.root}）\n"
         f"会话 {session.metadata.id}{'（新建）' if created else '（续接）'}；"
         "输入问题回车发送，/compact 压缩，/rewind 回滚上一轮，/<技能名> 载入技能，Ctrl-D 退出",
         file=sys.stderr,
@@ -464,10 +427,8 @@ def _interactive(args: argparse.Namespace, config) -> int:
             # 普通输入：每轮一份新的 RunState（安全默认沿用旗标与工作区），MCP 随运行起停。
             state = RunState.for_run(
                 auto_approve=args.yes,
-                permission_mode=args.permission or target.default_permission,
+                full=args.allow_full_access,
                 workspace_root=target.root,
-                full_ack=args.allow_full_access,
-                grant_source="cli",
             )
             state.checkpoint = checkpoint
             _start_mcp(state)
@@ -598,11 +559,6 @@ def build_workspace_parser() -> argparse.ArgumentParser:
     add = actions.add_parser("add", help="登记一个目录（同一个目录重复登记是幂等的）")
     add.add_argument("path", help="工作区目录")
     add.add_argument("--name", help="显示名（缺省用目录名）")
-    add.add_argument(
-        "--permission",
-        choices=_default_mode_choices(),
-        help="这个工作区的默认权限模式（full 不能作默认，见 --allow-full-access）",
-    )
 
     actions.add_parser("list", help="按最近使用列出已登记的工作区")
 
@@ -611,9 +567,6 @@ def build_workspace_parser() -> argparse.ArgumentParser:
     )
     remove.add_argument("workspace", help="工作区 id 或路径")
 
-    permission = actions.add_parser("permission", help="设置工作区的默认权限")
-    permission.add_argument("workspace", help="工作区 id 或路径")
-    permission.add_argument("mode", choices=_default_mode_choices())
     return parser
 
 
@@ -624,11 +577,11 @@ def _run_workspace(argv: list[str]) -> int:
     try:
         if args.action == "add":
             before = registry.find(args.path)
-            ws = registry.add(args.path, name=args.name, permission=args.permission)
+            ws = registry.add(args.path, name=args.name)
             if before is not None:
                 print(f"已登记过，未重复添加：{ws.id}\t{ws.root}\t{ws.name}")
             else:
-                print(f"{ws.id}\t{ws.root}\t{ws.name}\t{ws.default_permission}")
+                print(f"{ws.id}\t{ws.root}\t{ws.name}")
             return 0
 
         if args.action == "list":
@@ -638,22 +591,17 @@ def _run_workspace(argv: list[str]) -> int:
                 return 0
             for ws in items:
                 print(
-                    f"{ws.id}\t{ws.root}\t{ws.default_permission}\t{ws.name}"
+                    f"{ws.id}\t{ws.root}\t{ws.name}"
                     f"\t{_local_time(ws.last_used_at)}"
                 )
             return 0
 
-        if args.action == "remove":
-            ws = registry.remove(args.workspace)
-            print(
-                f"已从候选列表里摘掉 {ws.id}（{ws.root}）；"
-                "会话与磁盘数据都留着（它的会话在界面上归「未归属的会话」），"
-                "`avid workspace add` 同一个路径即可撤销"
-            )
-            return 0
-
-        ws = registry.set_permission(args.workspace, args.mode)
-        print(f"{ws.id}\t{ws.default_permission}")
+        ws = registry.remove(args.workspace)
+        print(
+            f"已从候选列表里摘掉 {ws.id}（{ws.root}）；"
+            "会话与磁盘数据都留着（它的会话在界面上归「未归属的会话」），"
+            "`avid workspace add` 同一个路径即可撤销"
+        )
         return 0
     except WorkspaceError as exc:
         print(f"工作区错误：{exc}", file=sys.stderr)

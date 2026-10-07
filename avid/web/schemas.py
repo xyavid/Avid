@@ -4,10 +4,9 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..agent.events import TOOL_CALL_DENIED, TOOL_CALL_FINISHED, RunEvent
-from ..security.permission import full_grant_error
 
 # Tool failures come back as text, so three prefixes separate business, argument and environment errors.
 _FAILED_PREFIXES = ("错误：", "参数错误：")
@@ -91,7 +90,6 @@ class WorkspaceRef(BaseModel):
     id: str | None = None
     root: str | None = None
     name: str | None = None
-    default_permission: str | None = None
 
 
 class WorkspaceOut(WorkspaceRef):
@@ -112,14 +110,13 @@ class PickFolderOut(BaseModel):
 
 
 class CreateWorkspaceIn(BaseModel):
-    """Registration payload: a directory plus the default permission mode it may never set to full."""
+    """Registration payload: a directory plus an optional display name."""
 
     model_config = ConfigDict(extra="forbid")
 
     path: str = Field(max_length=MAX_PATH_CHARS)
     name: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
-    # An enum, so an invalid mode is a 422 instead of a file written before the failure surfaces.
-    permission: Literal["manual", "auto"] | None = None
+    # 阶段 51 之后没有权限模式可选；字段移除，注册只带 name。
 
 
 class CapabilityFlags(BaseModel):
@@ -343,7 +340,7 @@ class CreateBranchIn(BaseModel):
 
 
 class StartRunIn(BaseModel):
-    """Run request; full permission without the acknowledgement flag is rejected by validation."""
+    """Run request; full_access_ack=true 就是完全访问的授予凭据，没有别的模式可选。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -352,15 +349,7 @@ class StartRunIn(BaseModel):
     branch: str = Field(default="main", max_length=MAX_NAME_CHARS)
     # 本次运行的模型覆盖；缺省 = 按设置（.env + 界面覆盖层）解析。空串按缺省处理。
     model: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
-    permission: Literal["manual", "auto", "full"] | None = None
     full_access_ack: bool = False
-
-    @model_validator(mode="after")
-    def _full_needs_ack(self) -> "StartRunIn":
-        problem = full_grant_error(self.permission, acknowledged=self.full_access_ack, source="web")
-        if problem is not None:
-            raise ValueError(problem)
-        return self
 
 
 class RunCreatedOut(BaseModel):

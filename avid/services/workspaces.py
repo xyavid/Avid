@@ -149,32 +149,21 @@ class WorkspaceService:
                 return workspace
         return None
 
-    def register(
-        self, path: str, *, name: str | None = None, permission: str | None = None
-    ) -> tuple[Workspace, bool]:
+    def register(self, path: str, *, name: str | None = None) -> tuple[Workspace, bool]:
         """Register a workspace and report whether it was newly created."""
         existing = self.find_known(path)
         if existing is not None:
             # Already listed, bound or registered: never add twice and never silently rename it.
             return existing, False
         try:
-            created = self.registry.add(path, name=name, permission=permission)
+            created = self.registry.add(path, name=name)
         except WorkspaceError as exc:
-            raise WorkspaceInvalid(str(exc)) from exc
-        except ValueError as exc:  # unknown permission mode
             raise WorkspaceInvalid(str(exc)) from exc
         return created, existing is None
 
-    def require_new(
-        self,
-        path: str,
-        *,
-        name: str | None = None,
-        permission: str | None = None,
-    ) -> Workspace:
+    def require_new(self, path: str, *, name: str | None = None) -> Workspace:
         """Strict registration that fails with the existing record when the workspace is known."""
-        # Name and permission are applied in one write, so an invalid mode leaves nothing behind.
-        workspace, created = self.register(path, name=name, permission=permission)
+        workspace, created = self.register(path, name=name)
         if not created:
             raise WorkspaceExists(
                 f"这个文件夹已经在工作区列表里：{workspace.name}（{workspace.root}）",

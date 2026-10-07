@@ -9,7 +9,6 @@ from collections.abc import Callable
 from typing import Any
 
 from ..security.permission import (
-    DEFAULT_MODE,
     always_allow,
     brokerize,
     decide,
@@ -124,22 +123,11 @@ class HookRegistry:
 DEFAULT_HOOKS = HookRegistry()
 
 
-def permission_facts(
-    name: str, arguments: dict[str, Any], root: str | None = None
-) -> tuple[str | None, str | None]:
-    """Return the first danger category and first outside path for a call, as a thin broker view."""
-    action = brokerize(name, arguments, root=root)
-    return action.danger, (action.outside[0] if action.outside else None)
-
-
 def permission_hook(context: dict[str, Any]) -> str | None:
     """PreToolUse gate: broker the call, decide it, audit the verdict and explain any denial."""
     name = context.get("tool", "")
     arguments = context.get("arguments") or {}
     security = context.get("security")
-    mode = security.mode if security is not None else (context.get("permission_mode") or DEFAULT_MODE)
-    ladder = security.ladder if security is not None else None
-    sandbox = security.sandbox if security is not None else None
     ledger = context.get("approval_ledger")
 
     action = brokerize(name, arguments, root=context.get("workspace_root"))
@@ -148,9 +136,7 @@ def permission_hook(context: dict[str, Any]) -> str | None:
 
     decision = decide(
         action,
-        mode=mode,
-        ladder=ladder,
-        sandbox=sandbox,
+        full=bool(security.full) if security is not None else False,
         ledger=ledger,
         ask=answerer,
     )
@@ -168,12 +154,9 @@ def permission_hook(context: dict[str, Any]) -> str | None:
             network=action.network or None,
             network_target=action.network_target if action.network else None,
             decision_type=decision.type,
-            code=decision.code or None,
-            operation=decision.operation or None,
-            target=decision.target or None,
             verdict=decision.verdict,
             decision_kind=decision.kind or None,
-            tier=decision.tier or None,
+            danger=action.damage or None,
             answered_by=decision.answered_by or None,
             key=list(decision.key) if decision.key else None,
             reason=decision.reason or None,
@@ -185,7 +168,6 @@ def permission_hook(context: dict[str, Any]) -> str | None:
     # Denials carry a per-category reason, because a generic message makes the model retry blindly.
     context["denied_kind"] = decision.kind
     context["denied_type"] = decision.type
-    context["denied_code"] = decision.code or None
     context["denied_reason"] = f"{name}：{decision.reason}"
     context["denied_content"] = decision.message
     return BLOCK

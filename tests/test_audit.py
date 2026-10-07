@@ -15,8 +15,8 @@ def log(directory: Path, *, clock=lambda: 1_700_000_000.0, **kwargs) -> AuditLog
         directory=directory,
         run_tag="tag1",
         run_id="run_1",
-        mode="auto",
-        axes={"approval": "classifier", "sandbox": "workspace", "network": "restricted"},
+        mode="normal",
+        axes={"full": False},
         sandbox={"backend": "bwrap", "enforced": True},
         clock=clock,
         **kwargs,
@@ -40,8 +40,8 @@ def test_each_write_is_one_appended_json_line(tmp_path):
     records = read(path)
     assert len(records) == 2
     assert records[0]["kind"] == "decision" and records[0]["tool"] == "bash"
-    assert records[0]["run"] == "run_1" and records[0]["mode"] == "auto"
-    assert records[0]["axes"]["sandbox"] == "workspace"
+    assert records[0]["run"] == "run_1" and records[0]["mode"] == "normal"
+    assert records[0]["axes"]["full"] is False
     assert records[0]["sandbox"]["enforced"] is True
     assert records[1]["decision_kind"] == "danger"
     assert entry.written == 2 and entry.failures == 0

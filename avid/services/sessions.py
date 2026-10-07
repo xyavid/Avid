@@ -114,10 +114,6 @@ class SessionService:
             "id": workspace_id,
             "root": owner.root if owner is not None else None,
             "name": owner.name if owner is not None else None,
-            # The UI preselects this mode because a session inherits its workspace default.
-            "default_permission": (
-                owner.default_permission if owner is not None else None
-            ),
         }
 
     def get(self, session_id: str) -> dict[str, Any]:

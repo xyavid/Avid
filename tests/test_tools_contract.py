@@ -47,11 +47,16 @@ def test_stateful_tools_are_exactly_the_handlers_that_take_state():
     assert set(STATEFUL_TOOLS) == takes_state
 
 
-def test_approval_rules_only_name_registered_tools():
-    """审批规则表不许出现已删除或拼错的工具名（静默失效的规则等于没有规则）。"""
-    from avid.security.permission import APPROVAL_RULES
+def test_security_side_tool_tables_only_name_registered_tools():
+    """安全层的工具名表不许出现已删除或拼错的工具名（静默失效的规则等于没有规则）。
 
-    assert set(APPROVAL_RULES) <= set(NAMES)
+    ``APPROVAL_RULES`` 随阶段 51 删除；剩下的工具名表是 ``PATH_TOOLS`` / ``WRITE_TOOLS``
+    （判定目标路径与读写类别），它们同样必须只列已注册的工具。
+    """
+    from avid.security.action import PATH_TOOLS, WRITE_TOOLS
+
+    assert set(PATH_TOOLS) <= set(NAMES)
+    assert set(WRITE_TOOLS) <= set(NAMES)
 
 
 def test_concurrency_tables_are_a_partition_of_the_registry():

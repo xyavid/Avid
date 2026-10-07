@@ -11,7 +11,6 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .command_parse import parse_shell
-from .modes import APPROVAL_NONE
 
 # Command-start anchor: line start or after ; & |, skipping wrapper commands and any path prefix.
 # Anchoring keeps a keyword used as an argument (`grep halt file`) from reading as a command, and a
@@ -20,7 +19,8 @@ _CMD_START = (
     r"(?:^|[;&|]\s*)(?:(?:sudo|command|env|nohup|xargs|time|nice)\s+)*(?:\S*/)?"
 )
 
-# Hard deny: unrecoverable system-level damage, refused in every mode and by every answer.
+# 毁灭级：不可恢复的系统级破坏。默认形态下它触发一次询问（二次确认在 UI 层），full 由
+# 显式授权跳过——它不再等于「任何模式都拒」的硬拒，唯一硬拒只剩凭据拒读。
 DENY_PATTERNS: tuple[tuple[str, str], ...] = (
     (
         _CMD_START + r"rm\b[^|;&]*\s(?:/\*?|~/?\*?|\$HOME/?\*?)(?:\s|;|&|$)",
@@ -115,64 +115,22 @@ SENSITIVE_SUFFIX = ".pem"
 # Commands are split on whitespace and shell metacharacters, then each token is tested as a path.
 _SENSITIVE_SPLIT = re.compile(r"[\s;|&()<>'\"]+")
 
-# Tools the sandbox cannot guarantee; when the sandbox is unavailable, manual mode asks about these.
-APPROVAL_RULES: dict[str, str] = {
-    "bash": "执行 shell 命令",
-    "write_file": "写入文件（已有内容会被覆盖）",
-    "edit_file": "修改文件内容",
-}
-
-# Cost rules (not security): the sandbox cannot bound how much a call costs, so manual asks once.
-COST_RULES: dict[str, str] = {
-    "subagent": "并行派发 subagent（会额外消耗多次模型调用）",
-}
-
 # File tools whose target is their path argument.
 PATH_TOOLS: frozenset[str] = frozenset({"read_file", "write_file", "edit_file", "glob"})
 
 # Write-class file tools; membership decides whether read or write rules are consulted.
 WRITE_TOOLS: frozenset[str] = frozenset({"write_file", "edit_file"})
 
-# Operation names shared with the rules ladder.
+# Operation names shared with the file tools' 只读/写 判定。
 OPERATION_READ = "read"
 OPERATION_WRITE = "write"
 
 # Risk marker for "a target lies outside the workspace"; it records position, not danger —
-# reading outside is already granted, and outside WRITES are ruled on by exceeds_sandbox.
+# 阶段 51 起区外读写都直接执行并自动挂载，这个标记只进审计与展示。
 OUTSIDE_RISK = "越界"
 
 # Capabilities that change state outside the sandbox; reading the host is already granted.
 WRITE_CAPABILITIES: frozenset[str] = frozenset({"filesystem_write", "filesystem_delete"})
-
-# Writable locations the sandbox provides (a private /tmp and /dev), so writing them stays inside.
-SANDBOX_WRITABLE_PREFIXES: tuple[str, ...] = ("/tmp", "/dev")
-
-
-def in_sandbox_writable(path: str) -> bool:
-    """Reports whether a path is one of the writable locations the sandbox itself provides."""
-    text = str(path)
-    return any(
-        text == prefix or text.startswith(prefix + "/") for prefix in SANDBOX_WRITABLE_PREFIXES
-    )
-
-
-def exceeds_sandbox(action: Action) -> tuple[str, str] | None:
-    """Returns ``(capability, target)`` when the call writes outside what the sandbox guarantees.
-
-    Reading anywhere is already granted, so only writes need approval.
-    """
-    # File tools run in the agent process, so a write to /tmp reaches the host and needs a grant.
-    if not action.outside_writes:
-        return None
-    writes = sorted(WRITE_CAPABILITIES & set(action.capabilities))
-    if not writes:
-        return None
-    for target in action.outside_writes:
-        # bash runs in the sandbox, where /tmp and /dev are the sandbox's own, not the host's.
-        if action.tool == "bash" and in_sandbox_writable(target):
-            continue
-        return writes[0], target
-    return None
 
 
 def _outside_write_targets(command: str, outside: tuple[str, ...], root: str | None) -> tuple[str, ...]:
@@ -437,9 +395,7 @@ class Action:
         return ("args", json.dumps(self.arguments, ensure_ascii=False, sort_keys=True, default=str))
 
 
-def brokerize(
-    name: str, arguments: Any, *, root: str | None = None, mode: str | None = None
-) -> Action:
+def brokerize(name: str, arguments: Any, *, root: str | None = None) -> Action:
     """Builds the ``Action`` for one tool call; the outside fact is recorded but not filtered."""
     args = arguments if isinstance(arguments, dict) else {}
     command = args.get("command") if isinstance(args.get("command"), str) else None
@@ -481,10 +437,6 @@ def brokerize(
     )
 
 
-def is_unrestricted(approval: str) -> bool:
-    """Reports whether the approval level lifts even the outside-workspace limit."""
-    return approval == APPROVAL_NONE
-
 
 # MCP tool names are built as mcp__<server>__<tool>; the gate must know that prefix because an
 # external tool's semantics cannot be classified statically, so its handling differs by design.
@@ -504,9 +456,7 @@ def mcp_server(name: str) -> str:
 
 
 __all__ = [
-    "APPROVAL_RULES",
-    "COST_RULES",
-    "DANGER_PATTERNS",
+            "DANGER_PATTERNS",
     "DENY_PATTERNS",
     "NETWORK_HINTS",
     "OPERATION_READ",
@@ -514,8 +464,7 @@ __all__ = [
     "OUTSIDE_RISK",
     "PATH_TOOLS",
     "MCP_TOOL_PREFIX",
-    "SANDBOX_WRITABLE_PREFIXES",
-    "SENSITIVE_ABSOLUTE",
+        "SENSITIVE_ABSOLUTE",
     "SENSITIVE_COMPONENTS",
     "SENSITIVE_SUFFIX",
     "WRITE_CAPABILITIES",
@@ -525,11 +474,8 @@ __all__ = [
     "command_key",
     "danger_categories",
     "danger_reason",
-    "exceeds_sandbox",
-    "hard_deny",
-    "in_sandbox_writable",
-    "is_mcp_tool",
-    "is_unrestricted",
+        "hard_deny",
+        "is_mcp_tool",
     "mcp_server",
     "normalize_command",
     "reaches_network",

@@ -27,7 +27,7 @@ def create_workspace(request: Request, body: CreateWorkspaceIn) -> dict:
     """Registers a workspace, reporting an existing one as a conflict carrying its id and name."""
     services = current_services(request)
     workspace = services.workspaces.require_new(
-        body.path, name=body.name, permission=body.permission
+        body.path, name=body.name
     )
     return services.workspaces.describe(workspace)
 

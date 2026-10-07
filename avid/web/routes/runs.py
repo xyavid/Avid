@@ -16,13 +16,12 @@ router = APIRouter()
     status_code=status.HTTP_201_CREATED,
 )
 def start_run(request: Request, session_id: str, body: StartRunIn) -> dict:
-    """Starts a run on the chosen branch and permission preset and returns before the work finishes."""
+    """Starts a run on the chosen branch and returns before the work finishes."""
     record = current_services(request).runs.start(
         session_id,
         body.prompt,
         auto_approve=body.auto_approve,
         branch=body.branch,
-        permission=body.permission,
         full_ack=body.full_access_ack,
         model=body.model,
     )

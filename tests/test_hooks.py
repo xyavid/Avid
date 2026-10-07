@@ -136,27 +136,25 @@ def test_default_hooks_are_registered_on_import():
 # ---------- 五个回调各自的行为 ----------
 
 
-def test_permission_hook_blocks_and_records_reason(clean):
-    """manual 下的危险命令：分类是 danger，理由里带工具名与类别。"""
+def test_permission_hook_does_not_question_dangerous_categories(clean):
+    """危险类别（sudo 等）不再问人：直接放行，风险名只进审计（阶段 51）。"""
+    asked = []
     context = {
         "tool": "bash",
         "arguments": {"command": "sudo ls"},
-        "ask": lambda name, arguments, reason: False,
+        "ask": lambda name, arguments, reason: asked.append((name, reason)) or False,
     }
 
-    assert permission_hook(context) == BLOCK
-    assert context["denied_kind"] == "danger"
-    assert context["denied_reason"] == "bash：提权"
-    assert "危险命令未获批准" in context["denied_content"]
+    assert permission_hook(context) is None
+    assert asked == [], "危险类别不经过询问通道，ask 不该被调用"
+    assert "denied_reason" not in context
 
 
 def test_permission_hook_lets_the_sandbox_cover_ordinary_commands(sandbox, clean):
-    """沙箱能保证的区内常规命令**不进审批**——否则 sandbox 与 approval 就退化成一件事。"""
+    """区内常规命令**不进审批**——沙箱能保证的事不重复打搅人。"""
     from avid.agent.state import RunState
 
-    state = RunState.for_run(
-        permission_mode="manual", workspace_root=str(sandbox), audit_enabled=False
-    )
+    state = RunState.for_run(workspace_root=str(sandbox), audit_enabled=False)
 
     def ask(*args):
         raise AssertionError("沙箱能保证的动作不该问人")
@@ -175,13 +173,13 @@ def test_permission_hook_lets_the_sandbox_cover_ordinary_commands(sandbox, clean
 
 
 def test_permission_hook_writes_the_audit_record(sandbox, clean, tmp_path, monkeypatch):
-    """放行也要留痕：审计记录里有三轴、目标、裁决与来源。"""
+    """放行也要留痕：审计记录里有裁决、来源与越界事实（三轴字段已随轻量化删除）。"""
     import json
 
     from avid.agent.state import RunState
 
     monkeypatch.setenv("AVID_AUDIT_DIR", str(tmp_path / "audit"))
-    state = RunState.for_run(permission_mode="auto", workspace_root=str(sandbox))
+    state = RunState.for_run(workspace_root=str(sandbox))
     context = {
         "tool": "bash",
         "arguments": {"command": "echo x >> /etc/hostname"},
@@ -190,7 +188,7 @@ def test_permission_hook_writes_the_audit_record(sandbox, clean, tmp_path, monke
         "workspace_root": str(sandbox),
     }
 
-    assert permission_hook(context) == BLOCK
+    assert permission_hook(context) is None  # 区外写不再问人，直接执行
 
     records = [
         json.loads(line)
@@ -201,14 +199,14 @@ def test_permission_hook_writes_the_audit_record(sandbox, clean, tmp_path, monke
     record = records[-1]
     assert record["kind"] == "decision"
     assert record["tool"] == "bash"
-    assert record["verdict"] == "deny" and record["decision_kind"] == "outside"
-    assert record["answered_by"] == "classifier"
-    assert record["axes"] == {
-        "approval": "classifier",
-        "sandbox": "workspace",
-        "network": "restricted",
-    }
+    assert record["verdict"] == "allow" and record["decision_type"] == "SAFE_AUTO"
+    assert record["answered_by"] == "policy"
+    assert record["mode"] == "normal" and record["axes"] == {"full": False}
+    assert "decision_kind" not in record and "danger" not in record
     assert "/etc/hostname" in record["outside"]
+    assert "越界" in record["risks"]
+    # 区外写自动授权并写进账本，沙箱按账本挂载
+    assert state.ledger.path_grants() == (("/etc/hostname", "rw"),)
 
 
 def test_permission_hook_allows_and_stays_quiet(clean):
@@ -219,32 +217,32 @@ def test_permission_hook_allows_and_stays_quiet(clean):
     assert "denied_content" not in context
 
 
-def test_permission_hook_reports_hard_deny_reason(clean):
+def test_permission_hook_refuses_destruction_without_an_ask_channel(clean):
     context = {"tool": "bash", "arguments": {"command": "rm -rf /"}}
 
     assert permission_hook(context) == BLOCK
-    assert context["denied_kind"] == "hard"
+    assert context["denied_kind"] == "danger"
     assert "删除根目录或家目录" in context["denied_reason"]
-    assert "永久禁止" in context["denied_content"]
+    assert "没有可用的询问通道" in context["denied_content"]
 
 
-def test_hard_deny_and_user_refusal_give_different_guidance(clean):
-    """两种拒绝必须让模型看到不同的话，否则它分不清"永远不许"和"这次不行"。"""
-    hard = {"tool": "bash", "arguments": {"command": "rm -rf /"}}
-    user = {
+def test_unanswered_and_refused_destruction_give_different_guidance(clean):
+    """两种拒绝必须让模型看到不同的话：无人可问 vs 用户拒绝（别再重复提交）。"""
+    unanswered = {"tool": "bash", "arguments": {"command": "rm -rf /"}}
+    refused = {
         "tool": "bash",
-        "arguments": {"command": "sudo ls"},
+        "arguments": {"command": "rm -rf /"},
         "ask": lambda name, arguments, reason: False,
     }
 
-    permission_hook(hard)
-    permission_hook(user)
+    permission_hook(unanswered)
+    permission_hook(refused)
 
-    assert hard["denied_kind"] == "hard"
-    assert user["denied_kind"] == "danger"
-    assert hard["denied_content"] != user["denied_content"]
-    assert "永久禁止" in hard["denied_content"]
-    assert "不要重复提交同一条命令" in user["denied_content"]
+    assert unanswered["denied_kind"] == "danger"
+    assert refused["denied_kind"] == "danger"
+    assert unanswered["denied_content"] != refused["denied_content"]
+    assert "没有可用的询问通道" in unanswered["denied_content"]
+    assert "不要重复提交同一条命令" in refused["denied_content"]
 
 
 def test_brief_redacts_credentials_and_truncates():
@@ -265,7 +263,7 @@ def test_brief_redacts_credentials_and_truncates():
 
 
 def test_permission_hook_routes_auto_approve_to_the_answerer(clean):
-    """``--yes`` 只换回答者：注入的 ask 不被调用，硬拒绝仍被拦住。"""
+    """``--yes`` 只换回答者：注入的 ask 不被调用，凭据硬拒仍然拦住。"""
     asked = []
     auto = {
         "tool": "bash",
@@ -274,13 +272,29 @@ def test_permission_hook_routes_auto_approve_to_the_answerer(clean):
         "ask": lambda *args: asked.append(args) or False,
     }
 
-    assert permission_hook(auto) is None
+    assert permission_hook(auto) is None  # 危险类别不经过任何询问
     assert asked == []
 
-    hard = {"tool": "bash", "arguments": {"command": "rm -rf /"}, "auto_approve": True}
+    # 毁灭级：本该问人，auto_approve 用 always_allow 替人回答
+    destruction = {
+        "tool": "bash",
+        "arguments": {"command": "rm -rf /"},
+        "auto_approve": True,
+        "ask": lambda *args: asked.append(args) or False,
+    }
 
-    assert permission_hook(hard) == BLOCK
-    assert hard["denied_kind"] == "hard"
+    assert permission_hook(destruction) is None
+    assert asked == []
+
+    # 凭据拒读是唯一硬拒，auto_approve 也无效
+    credential = {
+        "tool": "read_file",
+        "arguments": {"path": "~/.ssh/id_rsa"},
+        "auto_approve": True,
+    }
+
+    assert permission_hook(credential) == BLOCK
+    assert credential["denied_kind"] == "credential"
 
 
 def test_permission_hook_uses_the_injected_ask_without_the_run_flag(clean):
@@ -288,10 +302,10 @@ def test_permission_hook_uses_the_injected_ask_without_the_run_flag(clean):
     seen = []
     ask = lambda name, arguments, reason: seen.append((name, reason)) or True  # noqa: E731
 
-    context = {"tool": "bash", "arguments": {"command": "sudo ls"}, "ask": ask}
+    context = {"tool": "bash", "arguments": {"command": "rm -rf /"}, "ask": ask}
 
     assert permission_hook(context) is None
-    assert seen == [("bash", "提权")]
+    assert seen == [("bash", "删除根目录或家目录")]
 
 
 def test_log_hook_never_blocks(clean):

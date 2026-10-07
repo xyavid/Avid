@@ -833,7 +833,9 @@ def test_hard_deny_message_reaches_the_model(hook_registry):
 
     assert executed == []
     assert "Permission denied." in messages[2]["content"]
-    assert "永久禁止" in messages[2]["content"]
+    # 没有询问通道时的拒绝文案：告诉模型「由用户在交互界面确认后重试」，
+    # 而不是旧语义里的「永久禁止」——毁灭级不再等于永久黑名单。
+    assert "没有可用的询问通道" in messages[2]["content"]
 
 
 def test_hook_supplied_denied_content_is_used(hook_registry):
@@ -1045,9 +1047,17 @@ def test_load_skill_returns_the_full_text_as_tool_result(hook_registry, tmp_path
 
 
 def test_load_skill_is_not_in_the_permission_gate(hook_registry, tmp_path, monkeypatch):
-    from avid.security.permission import APPROVAL_RULES
+    """load_skill 不进权限闸门：不在路径/写入工具表里，裁决恒为自动放行。
 
-    assert "load_skill" not in APPROVAL_RULES
+    阶段 51 删除了 APPROVAL_RULES（按工具名审批的表），工具名到裁决的映射随之消失。
+    """
+    from avid.security.action import PATH_TOOLS, WRITE_TOOLS
+    from avid.security.permission import brokerize, decide
+
+    assert "load_skill" not in PATH_TOOLS | WRITE_TOOLS
+
+    decision = decide(brokerize("load_skill", {"name": "demo"}))
+    assert decision.allowed and decision.answered_by == "policy"
 
 
 def test_unknown_skill_returns_error_text_without_raising(hook_registry, tmp_path, monkeypatch):

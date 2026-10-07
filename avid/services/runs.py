@@ -42,7 +42,7 @@ from ..agent.tools.mcp import McpManager
 from ..providers.byok import resolve_chat
 from ..providers.client import LLMError, chat_completion, stream_completion
 from ..providers.config import ConfigError
-from ..security.permission import build_run_security, full_grant_error
+from ..security.permission import build_run_security
 from ..session import (
     DEFAULT_BRANCH,
     BranchScan,
@@ -55,7 +55,6 @@ from ..session import (
 )
 from .approvals import APPROVAL_TIMEOUT_SECONDS, ApprovalTable
 from .errors import (
-    InvalidRequest,
     RunBusy,
     RunFinished,
     RunNotFound,
@@ -245,21 +244,15 @@ class RunRegistry:
         auto_approve: bool = False,
         chat: Callable[..., Any] | None = None,
         branch: str = DEFAULT_BRANCH,
-        permission: str | None = None,
         full_ack: bool = False,
         model: str | None = None,
     ) -> RunRecord:
         """Register a run and start its thread; raises RunBusy or SessionNotFound."""
-        # The branch decides which chain the run appends to, and the permission argument
-        # defaults to what the owning workspace allows; full_ack is the second gate for full.
+        # The branch decides which chain the run appends to; full_ack 直接决定完全访问。
         found = self.workspaces.find_session(session_id)
         if found is None:
             raise SessionNotFound(f"没有这个会话：{session_id}")
         workspace, metadata = found
-        mode = permission or workspace.default_permission
-        problem = full_grant_error(mode, acknowledged=full_ack, source="web")
-        if problem is not None:
-            raise InvalidRequest(problem)
 
         # 会话内命令（内核单点解析）：/<技能名> 把全文当作用户输入（正常运行），
         # /compact 与未知命令走 _run 的命令分支（不调模型，直接以文本收尾）。
@@ -324,7 +317,6 @@ class RunRegistry:
                 auto_approve,
                 chat or self.chat,
                 branch,
-                mode,
                 full_ack,
             ),
             name=f"avid-run-{run_id}",
@@ -699,20 +691,17 @@ class RunRegistry:
         auto_approve: bool,
         chat: Callable[..., Any] | None,
         branch: str = DEFAULT_BRANCH,
-        permission: str | None = None,
         full_ack: bool = False,
     ) -> None:
         """Run thread; start already opened the session handle under the handle lock."""
-        # The three axes and the sandbox state go into run_started: a refresh rebuilds the view
+        # Permission shape and sandbox state go into run_started: a refresh rebuilds the view
         # from that event rather than from the in-memory record, so "was the sandbox off" stays
         # a visible fact.
         safety = build_run_security(
-            mode=permission or workspace.default_permission,
+            full=full_ack,
             root=workspace.root,
             run_tag=record.run_id,
             run_id=record.run_id,
-            full_ack=full_ack,
-            source="web",
         )
         state_spec = safety.summary()
         self.emit(
@@ -723,10 +712,7 @@ class RunRegistry:
             auto_approve=auto_approve,
             workspace=workspace.id,
             workspace_root=workspace.root,
-            permission=safety.mode,
-            approval=safety.approval,
-            sandbox=safety.sandbox_policy,
-            network=safety.network,
+            permission=safety.permission_mode,
             sandbox_state=safety.sandbox.summary(),
             sandbox_notes=state_spec["notes"],
         )
@@ -810,7 +796,7 @@ class RunRegistry:
                 auto_approve=auto_approve,
                 ask=record.approvals.request if record.approvals is not None else None,
                 observer=lambda event: self._observe(record, event),
-                permission_mode=permission or workspace.default_permission,
+                full=full_ack,
                 workspace_root=workspace.root,
                 # The very same spec as in run_started: the event and the enforcement agree.
                 security=safety,

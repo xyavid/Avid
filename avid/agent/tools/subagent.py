@@ -19,7 +19,6 @@ from typing import TYPE_CHECKING, Any
 from ...providers.byok import resolve_chat
 from ...providers.client import chat_completion
 from ...providers.config import Config
-from ...security.permission import DEFAULT_MODE
 from .registry import tool
 
 if TYPE_CHECKING:  # a runtime import would be circular (state.py imports this package)
@@ -58,7 +57,7 @@ def run_subagent(
     auto_approve: bool = False,
     chat: Callable[..., Any] = chat_completion,
     ask: Any = None,
-    permission_mode: str = DEFAULT_MODE,
+    permission_mode: str | None = None,
     ledger: Any = None,
     security: Any = None,
     workspace_root: str | None = None,

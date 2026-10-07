@@ -13,13 +13,6 @@ from typing import Any
 
 from ..agent.events import now_ms
 from ..security import userdirs
-from ..security.permission import (
-    DEFAULT_MODE,
-    FullAccessError,
-    full_grant_error,
-    migrate_mode,
-    validate_mode,
-)
 
 logger = logging.getLogger("avid.services.workspace_registry")
 
@@ -65,14 +58,17 @@ def derive_id(root: str | Path) -> str:
 
 @dataclass(frozen=True)
 class Workspace:
-    """A registered directory with its display name, timestamps and default permission mode."""
+    """A registered directory with its display name and timestamps.
+
+    阶段 51 起没有「工作区默认权限」：它是索引不是权威，权限只由每次运行的显式
+    参数决定。旧文件里的 default_permission 字段读时忽略、下次写入自然消失。
+    """
 
     id: str
     root: str
     name: str
     created_at: int
     last_used_at: int
-    default_permission: str = DEFAULT_MODE
     # Hidden entries are tombstones, never deletions: the id is a path digest, so the entry is the
     # only record tying the sessions under that path to a workspace.
     hidden: bool = False
@@ -84,17 +80,8 @@ class Workspace:
             "name": self.name,
             "created_at": self.created_at,
             "last_used_at": self.last_used_at,
-            "default_permission": self.default_permission,
             "hidden": self.hidden,
         }
-
-
-def _default_mode(permission: str) -> str:
-    """Validates a workspace default, refusing full because a persisted grant would be silent."""
-    problem = full_grant_error(permission, source="workspace_default")
-    if problem is not None:
-        raise WorkspaceError(problem)
-    return validate_mode(permission)
 
 
 def _parse(raw: Any) -> Workspace | None:
@@ -106,22 +93,12 @@ def _parse(raw: Any) -> Workspace | None:
         return None
     created = raw.get("created_at")
     used = raw.get("last_used_at")
-    mode = raw.get("default_permission", DEFAULT_MODE)
-    try:
-        permission, note = migrate_mode(mode)
-        if note:
-            # Report an upgraded security setting instead of rewriting it silently.
-            logger.warning("工作区 %s：%s", root, note)
-    except (ValueError, FullAccessError):
-        logger.warning("工作区 %s 的默认权限 %r 不认识，按默认处理", root, mode)
-        permission = DEFAULT_MODE
     return Workspace(
         id=str(raw.get("id") or derive_id(root)),
         root=str(Path(root).expanduser().resolve()),
         name=str(raw.get("name") or Path(root).name or _UNNAMED),
         created_at=int(created) if isinstance(created, int) else now_ms(),
         last_used_at=int(used) if isinstance(used, int) else now_ms(),
-        default_permission=permission,
         # A missing field means never removed, and a malformed value is read the same way.
         hidden=raw.get("hidden") is True,
     )
@@ -220,7 +197,6 @@ class WorkspaceRegistry:
         root: str | Path,
         *,
         name: str | None = None,
-        permission: str | None = None,
     ) -> Workspace:
         """Registers a directory, updating the existing entry when the derived id is already known."""
         path = Path(root).expanduser()
@@ -229,7 +205,6 @@ class WorkspaceRegistry:
         if not path.is_dir():
             raise WorkspaceError(f"不是目录：{path}")
         resolved = path.resolve()
-        mode = _default_mode(permission or DEFAULT_MODE)
 
         # Read through the raising path: never overwrite a file that may still hold good data.
         items = self._read()
@@ -240,9 +215,6 @@ class WorkspaceRegistry:
                     ws,
                     name=name or ws.name,
                     last_used_at=stamp,
-                    default_permission=(
-                        _default_mode(permission) if permission else ws.default_permission
-                    ),
                     # Re-registering the same directory undoes a removal by reusing the tombstone.
                     hidden=False,
                 )
@@ -256,18 +228,9 @@ class WorkspaceRegistry:
             name=name or resolved.name or _UNNAMED,
             created_at=stamp,
             last_used_at=stamp,
-            default_permission=mode,
         )
         self._write([*items, created])
         return created
-
-    def set_permission(self, selection: str, permission: str) -> Workspace:
-        mode = _default_mode(permission)
-        found = self.get(selection)
-        updated = self._update(found.id, default_permission=mode)
-        # get() proved the record exists, so the update cannot miss it.
-        assert updated is not None
-        return updated
 
     def remove(self, selection: str) -> Workspace:
         """Hides a workspace from candidate lists, keeping the entry and the sessions under its root."""
@@ -278,15 +241,6 @@ class WorkspaceRegistry:
                 items[index] = replace(ws, hidden=True)
         self._write(items)
         return replace(found, hidden=True)
-
-    def _update(self, workspace_id: str, **changes: Any) -> Workspace | None:
-        items = self._read()
-        for index, ws in enumerate(items):
-            if ws.id == workspace_id:
-                items[index] = replace(ws, **changes)
-                self._write(items)
-                return items[index]
-        return None
 
 
 def sessions_root(workspace: Workspace | str) -> Path:

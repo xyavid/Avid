@@ -11,12 +11,11 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from ..providers.usage import Usage, hit_ratio
 from ..security.permission import (
-    APPROVAL_NONE,
-    DEFAULT_MODE,
+    PERMISSION_FULL,
+    PERMISSION_NORMAL,
     ApprovalLedger,
     RunSecurity,
     build_run_security,
-    validate_mode,
 )
 from . import hooks as hooks_module
 from .events import RunObserver, event
@@ -67,17 +66,12 @@ class RunState:
     # Run-level switch that auto-answers approval prompts without widening what is questioned.
     auto_approve: bool = False
 
-    # One of the manual/auto/full presets; the default is strictest so no caller inherits more.
-    permission_mode: str = DEFAULT_MODE
+    # 记录口径两值：normal（默认直接跑）/ full（完全访问）。架构已无模式阶梯。
+    permission_mode: str = PERMISSION_NORMAL
 
-    # Run security spec (axes, deny ladder, sandbox, audit), the one place tools read it from;
+    # Run security spec (sandbox, audit), the one place tools read it from;
     # built in __post_init__ when the constructor was not given one.
     security: RunSecurity | None = None
-
-    # Explicit full-access credential from the CLI or Web wiring; without it the run will not start.
-    full_ack: bool = False
-    # Who supplied the full-access grant, recorded so the audit trail can name the origin.
-    grant_source: str = "cli"
 
     # "Approved once" ledger, one per run and in memory only; a subagent shares the parent's.
     ledger: ApprovalLedger = field(default_factory=ApprovalLedger)
@@ -160,14 +154,10 @@ class RunState:
         """Resolve the security spec once here, because tools read it from worker threads."""
         if self.security is None:
             self.security = build_run_security(
-                mode=validate_mode(self.permission_mode),
+                full=self.permission_mode == PERMISSION_FULL,
                 root=self.workspace_root,
                 run_tag=self.run_tag,
-                full_ack=self.full_ack,
-                source=self.grant_source,
             )
-        # security is authoritative and permission_mode is only its name, so both are kept in step.
-        self.permission_mode = self.security.mode
 
     @classmethod
     def for_run(
@@ -181,32 +171,32 @@ class RunState:
         workspace_root: str | None = None,
         hooks: "hooks_module.HookRegistry | None" = None,
         context_window: int | None = None,
+        full: bool = False,
         security: RunSecurity | None = None,
-        full_ack: bool = False,
-        grant_source: str = "cli",
         home: str | None = None,
         audit_dir: str | None = None,
         audit_enabled: bool = True,
     ) -> "RunState":
-        """Build a run state and rescan skills; a supplied security spec is reused as-is."""
-        name = validate_mode(permission_mode or DEFAULT_MODE)
-        built = security or build_run_security(
-            mode=name,
-            root=workspace_root,
-            home=home,
-            full_ack=full_ack,
-            source=grant_source,
-            audit_dir=audit_dir,
-            audit_enabled=audit_enabled,
-        )
+        """Build a run state and rescan skills; full 只由显式授权（full=True）产生。
+
+        A caller-supplied security spec is authoritative and reused as-is, so the enforcement
+        and the start event cannot disagree.
+        """
+        is_full = full or permission_mode == PERMISSION_FULL
         return cls(
             auto_approve=auto_approve,
             ask=ask,
             observer=observer,
-            permission_mode=built.mode,
-            security=built,
-            full_ack=full_ack,
-            grant_source=grant_source,
+            permission_mode=PERMISSION_FULL if is_full else PERMISSION_NORMAL,
+            security=security
+            if security is not None
+            else build_run_security(
+                full=is_full,
+                root=workspace_root,
+                home=home,
+                audit_dir=audit_dir,
+                audit_enabled=audit_enabled,
+            ),
             ledger=ledger if ledger is not None else ApprovalLedger(),
             workspace_root=workspace_root,
             context_window=context_window,
@@ -215,18 +205,12 @@ class RunState:
             hooks=hooks if hooks is not None else hooks_module.DEFAULT_HOOKS,
         )
 
-    def outside_allowed(self, path: object, access: str = "ro") -> bool:
-        """Report whether an outside path is already authorized; it never decides, only reads."""
-        if self.security is not None and self.security.approval == APPROVAL_NONE:
-            return True
-        return self.ledger.outside_allowed(path, access)
-
     def sandbox_grants(self) -> tuple[tuple[str, str], ...]:
         """Outside paths already granted for this run, as (path, ro/rw) pairs for the sandbox."""
         return self.ledger.path_grants()
 
     def security_summary(self) -> dict[str, Any]:
-        """Three-axis security snapshot carried into events and REST responses."""
+        """Security snapshot（permission + 沙箱）carried into events and REST responses."""
         if self.security is None:  # pragma: no cover - __post_init__ guarantees a value
             return {}
         return self.security.summary()

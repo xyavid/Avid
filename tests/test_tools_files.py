@@ -38,9 +38,14 @@ def test_read_file_accepts_absolute_path_inside_workspace(sandbox):
     assert read_file({"path": str(target)}) == "内容"
 
 
-def test_read_file_without_a_run_spec_refuses_escape(sandbox):
-    """没有 run 级安全规格就连 deny/ask 阶梯都查不了，失败方向只能是关闭。"""
-    assert "工作区外" in read_file({"path": "../outside.txt"})
+def test_read_file_without_a_run_spec_reads_outside(sandbox):
+    """阶段 51 起区外读不再需要授权：没有 run 规格也直接读，不再是「拒绝访问」。"""
+    outside = sandbox.parent / "outside-read.txt"
+    outside.write_text("外面\n", encoding="utf-8")
+    try:
+        assert read_file({"path": "../outside-read.txt"}) == "外面"
+    finally:
+        outside.unlink(missing_ok=True)
 
 
 def test_read_file_reads_outside_the_workspace_with_a_run_spec(sandbox):
@@ -49,11 +54,12 @@ def test_read_file_reads_outside_the_workspace_with_a_run_spec(sandbox):
 
     outside = sandbox.parent / "outside-read.txt"
     outside.write_text("外面\n", encoding="utf-8")
-    state = RunState.for_run(
-        permission_mode="manual", workspace_root=str(sandbox), audit_enabled=False
-    )
+    state = RunState.for_run(workspace_root=str(sandbox), audit_enabled=False)
 
-    assert read_file({"path": str(outside)}, state=state) == "外面"
+    try:
+        assert read_file({"path": str(outside)}, state=state) == "外面"
+    finally:
+        outside.unlink(missing_ok=True)
 
 
 def test_read_file_reports_missing_file(sandbox):
@@ -99,22 +105,26 @@ def test_write_file_overwrites_existing(sandbox):
     assert "已覆盖" in write_file({"path": "a.txt", "content": "新"})
 
 
-def test_write_file_refuses_escape(sandbox):
-    result = write_file({"path": "../x.txt", "content": "x"})
+def test_write_file_writes_outside_the_workspace(sandbox):
+    """区外写直接放行：工具层不再拦，沙箱按自动 grant 挂载（引擎记进账本）。"""
+    target = sandbox.parent / "x.txt"
+    try:
+        result = write_file({"path": "../x.txt", "content": "x"})
 
-    assert "工作区外" in result
-    assert not (sandbox.parent / "x.txt").exists()
+        assert "已新建" in result
+        assert target.read_text(encoding="utf-8") == "x"
+    finally:
+        target.unlink(missing_ok=True)
 
 
 def test_full_run_can_write_outside_workspace(sandbox):
-    """full 关闭沙箱后，区外写不应再被旧的工作区检查拦截。"""
+    """full 运行（完全访问）写区外；区外写已不再需要 full 才能进行。"""
     from avid.agent.state import RunState
 
     target = sandbox.parent / "outside-full-write.txt"
     state = RunState.for_run(
-        permission_mode="full",
+        full=True,
         workspace_root=str(sandbox),
-        full_ack=True,
         audit_enabled=False,
     )
     try:
@@ -123,6 +133,16 @@ def test_full_run_can_write_outside_workspace(sandbox):
         assert target.read_text(encoding="utf-8") == "full\n"
     finally:
         target.unlink(missing_ok=True)
+
+
+def test_write_file_still_refuses_protected_host_resources(sandbox):
+    """区外写放行不等于没有闸门：凭据路径是唯一硬拒，任何确认都无效。"""
+    protected = sandbox.parent / ".ssh" / "id_rsa"
+
+    result = write_file({"path": str(protected), "content": "x"})
+
+    assert "受保护的宿主资源" in result
+    assert not protected.exists()
 
 
 # ---------- edit_file ----------
@@ -186,9 +206,7 @@ class RecordingCheckpoint:
 def _state_with_checkpoint(sandbox, checkpoint):
     from avid.agent.state import RunState
 
-    state = RunState.for_run(
-        permission_mode="manual", workspace_root=str(sandbox), audit_enabled=False
-    )
+    state = RunState.for_run(workspace_root=str(sandbox), audit_enabled=False)
     state.checkpoint = checkpoint
     return state
 

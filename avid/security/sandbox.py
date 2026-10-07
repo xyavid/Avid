@@ -13,10 +13,14 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from .modes import NETWORK_RESTRICTED, SANDBOX_DISABLED, SANDBOX_WORKSPACE
 from .userdirs import avid_home
 
 logger = logging.getLogger("avid.security.sandbox")
+
+# 沙箱策略档位：workspace = 请求隔离（后端可用时 enforced）；disabled = full 显式关闭。
+SANDBOX_WORKSPACE = "workspace"
+SANDBOX_DISABLED = "disabled"
+SANDBOXES: tuple[str, ...] = (SANDBOX_WORKSPACE, SANDBOX_DISABLED)
 
 BACKEND_BWRAP = "bwrap"
 BACKEND_NONE = "none"
@@ -214,7 +218,6 @@ class SandboxSpec:
     """Sandbox specification for one run: whether it applies, what to mount, and the argv shape."""
 
     policy: str = SANDBOX_WORKSPACE
-    network: str = NETWORK_RESTRICTED
     root: str | None = None
     backend: str = BACKEND_NONE
     binary: str | None = None
@@ -247,7 +250,6 @@ class SandboxSpec:
         """Return the shape reported into the run's start event and the audit record."""
         return {
             "policy": self.policy,
-            "network": self.network,
             "backend": self.backend,
             "available": self.available,
             "enforced": self.enforced,
@@ -262,8 +264,7 @@ class SandboxSpec:
         if self.policy == SANDBOX_DISABLED:
             return "沙箱：已禁用（full）"
         if self.enforced:
-            net = "无出网" if self.network == NETWORK_RESTRICTED else "网络不限"
-            return f"沙箱：工作区（{self.backend}，{net}）"
+            return f"沙箱：工作区（{self.backend}，网络不限）"
         return f"沙箱：不可用（{self.reason or '未知原因'}）"
 
     # Execution
@@ -340,8 +341,7 @@ class SandboxSpec:
         # The workspace is bound read-write last, so it covers every earlier mount on that path.
         if workdir:
             argv += ["--bind", workdir, workdir]
-        if self.network == NETWORK_RESTRICTED:
-            argv += ["--unshare-net"]
+        # 网络不隔离（阶段 51 轻量化）：网络命令直接跑，不在沙箱里断网。
         # Unshare every namespace that could leak host state and start from an empty environment.
         argv += [
             "--unshare-pid",
@@ -426,7 +426,6 @@ def _empty_mask_file() -> Path | None:
 # Failing closed keeps a forgotten spec from silently granting unsandboxed execution.
 UNMANAGED = SandboxSpec(
     policy=SANDBOX_WORKSPACE,
-    network=NETWORK_RESTRICTED,
     available=False,
     reason="运行未提供沙箱规格",
 )
@@ -435,7 +434,6 @@ UNMANAGED = SandboxSpec(
 def build_spec(
     *,
     policy: str = SANDBOX_WORKSPACE,
-    network: str = NETWORK_RESTRICTED,
     root: str | None = None,
     home: str | Path | None = None,
     probe: BackendProbe | None = None,
@@ -446,7 +444,6 @@ def build_spec(
 
     # Typed Any because root and binary may be None; spreading **common otherwise misreports every field.
     common: dict[str, Any] = {
-        "network": network,
         "root": root,
         "backend": found.backend,
         "binary": found.binary,
@@ -478,16 +475,6 @@ def build_spec(
             policy=SANDBOX_WORKSPACE,
             available=False,
             reason=found.reason or "后端不可用",
-            mask_dirs=mask_dirs,
-            mask_files=mask_files,
-            notes=tuple(notes),
-            **common,
-        )
-    if network == NETWORK_RESTRICTED and not found.network_isolation:
-        return SandboxSpec(
-            policy=SANDBOX_WORKSPACE,
-            available=False,
-            reason="后端不能强制网络边界（network=restricted 无法满足）",
             mask_dirs=mask_dirs,
             mask_files=mask_files,
             notes=tuple(notes),

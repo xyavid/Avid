@@ -6,7 +6,6 @@ import json
 
 import pytest
 
-from avid.security.permission import MODE_MANUAL
 from avid.services.workspace_registry import (
     AVID_HOME_ENV,
     WorkspaceError,
@@ -56,12 +55,13 @@ def test_add_is_idempotent(registry, workspace_dir):
     assert len(registry.list()) == 1
 
 
-def test_add_updates_name_and_permission(registry, workspace_dir):
+def test_add_updates_the_name(registry, workspace_dir):
+    """登记只带名字：阶段 51 起工作区没有默认权限这种字段。"""
     registry.add(workspace_dir)
-    renamed = registry.add(workspace_dir, name="重构", permission=MODE_MANUAL)
+    renamed = registry.add(workspace_dir, name="重构")
 
     assert renamed.name == "重构"
-    assert renamed.default_permission == MODE_MANUAL
+    assert "default_permission" not in renamed.to_dict()
     assert len(registry.list()) == 1
 
 
@@ -73,11 +73,6 @@ def test_add_rejects_missing_and_non_directory(registry, tmp_path):
     file.write_text("x", encoding="utf-8")
     with pytest.raises(WorkspaceError):
         registry.add(file)
-
-
-def test_add_rejects_unknown_permission(registry, workspace_dir):
-    with pytest.raises(ValueError):
-        registry.add(workspace_dir, permission="yolo")
 
 
 def test_list_is_newest_used_first(registry, tmp_path):
@@ -101,7 +96,7 @@ def test_registry_only_changes_on_explicit_writes(registry, workspace_dir):
     """读路径不写盘：列一次、找一个、打开都别生成或改动文件。
 
     启动与日常使用都不写盘是阶段 18 的收尾裁决——"看一眼注册表"与"起过服务"
-    必须可区分。写入口只有 add / set_permission / remove。
+    必须可区分。写入口只有 add / remove。
     """
     registry.add(workspace_dir)
     before = registry.path.read_text(encoding="utf-8")
@@ -113,13 +108,38 @@ def test_registry_only_changes_on_explicit_writes(registry, workspace_dir):
     assert registry.path.read_text(encoding="utf-8") == before
 
 
-def test_set_permission(registry, workspace_dir):
-    registry.add(workspace_dir)
+def test_a_legacy_default_permission_field_is_ignored(registry, workspace_dir):
+    """旧注册表里的 default_permission 读时忽略、下次写入自然消失（阶段 51 没有默认权限）。"""
+    registry.path.parent.mkdir(parents=True, exist_ok=True)
+    registry.path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "workspaces": [
+                    {
+                        "id": derive_id(workspace_dir),
+                        "root": str(workspace_dir.resolve()),
+                        "name": "项目",
+                        "created_at": 1,
+                        "last_used_at": 1,
+                        "default_permission": "manual",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
 
-    updated = registry.set_permission(str(workspace_dir), MODE_MANUAL)
+    found = registry.find(str(workspace_dir))
 
-    assert updated.default_permission == MODE_MANUAL
-    assert registry.get(str(workspace_dir)).default_permission == MODE_MANUAL
+    assert found is not None and found.name == "项目"
+    assert "default_permission" not in found.to_dict()
+
+    registry.add(workspace_dir, name="改名")
+
+    payload = json.loads(registry.path.read_text(encoding="utf-8"))
+    assert payload["workspaces"][0]["name"] == "改名"
+    assert "default_permission" not in payload["workspaces"][0]
 
 
 def test_get_unknown_raises_with_a_usable_hint(registry):
@@ -175,13 +195,14 @@ def test_corrupt_registry_degrades_reads_but_refuses_writes(registry, workspace_
 
 
 def test_registry_file_shape(registry, workspace_dir):
-    registry.add(workspace_dir, name="项目", permission=MODE_MANUAL)
+    registry.add(workspace_dir, name="项目")
 
     payload = json.loads(registry.path.read_text(encoding="utf-8"))
 
     assert payload["version"] == 1
     assert payload["workspaces"][0]["name"] == "项目"
-    assert payload["workspaces"][0]["default_permission"] == MODE_MANUAL
+    # 权限不再随工作区落盘：运行级 permission 只由每次运行的显式参数决定。
+    assert "default_permission" not in payload["workspaces"][0]
     assert payload["workspaces"][0]["root"] == str(workspace_dir.resolve())
 
 

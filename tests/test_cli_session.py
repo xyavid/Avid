@@ -212,6 +212,8 @@ def test_delete_session_removes_the_file(sandbox, model, capsys):
     [
         ["--session", "a", "--new-session", "问"],
         ["--session-name", "名字", "--agent", "问"],
+        # --permission 已删（阶段 51）：权限模式不存在，完全访问只有 --allow-full-access。
+        ["--agent", "--permission", "auto", "问"],
     ],
 )
 def test_argument_errors_exit_2(sandbox, argv):
@@ -260,10 +262,10 @@ def test_session_list_shows_the_workspace_column(sandbox, model, capsys):
     assert row[3].startswith("w-")
 
 
-def test_permission_default_comes_from_the_workspace(sandbox, model, monkeypatch, capsys):
-    """运行级旗标 > 工作区默认权限 > manual：这里验中间那一档。"""
+def test_run_state_carries_the_workspace_and_the_default_permission(sandbox, model, monkeypatch, capsys):
+    """没有工作区默认权限、也没有 --permission：不给旗标就是 normal，沙箱照常启用。"""
     registry = cli.WorkspaceRegistry()
-    ws = registry.add(sandbox, permission="manual")
+    ws = registry.add(sandbox)
     seen = {}
 
     class FakeRun:
@@ -277,16 +279,18 @@ def test_permission_default_comes_from_the_workspace(sandbox, model, monkeypatch
 
     assert cli.main(["--agent", "--new-session", "问"]) == 0
 
-    # 模式与工作区根现在都装在那份运行级规格里（state.security）：少一处转发就是
-    # "界面说 manual、实际按别的模式跑"，所以断言读的是**真正传给循环的那份 state**。
-    assert seen.get("state").permission_mode == "manual"
-    assert seen.get("state").workspace_root == ws.root
-    assert seen.get("state").security.sandbox.enforced is True
+    # 权限与工作区根都装在那份运行级规格里（state.security）：少一处转发就是
+    # "界面说 normal、实际按别的形态跑"，所以断言读的是**真正传给循环的那份 state**。
+    state = seen.get("state")
+    assert state.permission_mode == "normal"
+    assert state.workspace_root == ws.root
+    assert state.security.full is False
+    assert state.security.sandbox.enforced is True
     capsys.readouterr()
 
 
-def test_run_flag_overrides_the_workspace_default(sandbox, model, monkeypatch, capsys):
-    cli.WorkspaceRegistry().add(sandbox, permission="manual")
+def test_allow_full_access_turns_on_full_permission(sandbox, model, monkeypatch, capsys):
+    """完全访问的唯一开关是 --allow-full-access：跳过毁灭级确认、关沙箱。"""
     seen = {}
 
     class FakeRun:
@@ -298,14 +302,16 @@ def test_run_flag_overrides_the_workspace_default(sandbox, model, monkeypatch, c
 
     monkeypatch.setattr(cli, "Run", FakeRun)
 
-    assert cli.main(["--agent", "--new-session", "--permission", "auto", "问"]) == 0
+    assert cli.main(["--agent", "--new-session", "--allow-full-access", "问"]) == 0
 
-    assert seen.get("state").permission_mode == "auto"
-    assert seen.get("state").security.approval == "classifier"
+    state = seen.get("state")
+    assert state.permission_mode == "full"
+    assert state.security.full is True
+    assert state.security.sandbox.policy == "disabled"
     capsys.readouterr()
 
 
-def test_workspace_subcommand_add_list_permission_remove(sandbox, capsys, tmp_path):
+def test_workspace_subcommand_add_list_remove(sandbox, capsys, tmp_path):
     other = tmp_path.parent / f"ws-{tmp_path.name}"
     other.mkdir()
 
@@ -317,12 +323,10 @@ def test_workspace_subcommand_add_list_permission_remove(sandbox, capsys, tmp_pa
     assert cli.main(["workspace", "list"]) == 0
     assert "另一个" in capsys.readouterr().out
 
-    assert cli.main(["workspace", "permission", added[0], "auto"]) == 0
-    assert capsys.readouterr().out.strip().split("\t")[1] == "auto"
-
-    # full 不能作默认值：CLI 在 argparse 就拒（choices 里没有它），注册表那层还有第二道。
-    with pytest.raises(SystemExit):
-        cli.main(["workspace", "permission", added[0], "full"])
+    # `workspace permission` 子命令已删（阶段 51）：argparse 直接拒。
+    with pytest.raises(SystemExit) as info:
+        cli.main(["workspace", "permission", added[0], "auto"])
+    assert info.value.code == 2
 
     assert cli.main(["workspace", "remove", added[0]]) == 0
     # 摘掉 = 立墓碑：候选里没有了，但会话与条目都留着（`add` 同一个路径即撤销）。

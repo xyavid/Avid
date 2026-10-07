@@ -238,16 +238,15 @@ def policy_imports(path: Path) -> tuple[set[str], set[str]]:
 
 # agent/ 允许 import security 的文件与各自用到的模块。这不是"豁免名单"，而是把边界
 # 写成会失败的断言：调度（loop/run）、装配（context/compaction）、工具协议（execution）、
-# 终止（stop）与 spec 必须零安全层运行时依赖；只有 state（持有 RunSecurity 实例）与
-# hooks（注册权限裁决默认回调）两条边。policy 拆包后压缩/提示词/待办/技能加载器都
-# 住在 agent 内部，不再跨层。注解里的 RunSecurity / ApprovalLedger 只许在 TYPE_CHECKING
-# 下出现。
+# 终止（stop）与 spec 必须零安全层运行时依赖；只有 state（持有 RunSecurity 实例）、
+# hooks（注册权限裁决默认回调）与 files（唯一硬拒：凭据拒读）三条边。阶段 51 删掉
+# 模式阶梯与审批规则表后，subagent 不再 import security（只透传 state.security 这个
+# 数据）。注解里的 RunSecurity / ApprovalLedger 只许在 TYPE_CHECKING 下出现。
 AGENT_SECURITY_EDGES: dict[str, set[str]] = {
     "avid/agent/state.py": {"security.permission"},
     "avid/agent/hooks.py": {"security.permission"},
-    # tools 取 security 的两个默认值常量（审批放行标记 / 权限模式缺省）
-    "avid/agent/tools/files.py": {"security.permission"},
-    "avid/agent/tools/subagent.py": {"security.permission"},
+    # files 只取凭据闸门（sensitive_reason），不再有模式/审批默认值
+    "avid/agent/tools/files.py": {"security.action"},
 }
 SECURITY_FREE_AGENT = (
     "avid/agent/transcript.py",
@@ -260,6 +259,7 @@ SECURITY_FREE_AGENT = (
     "avid/agent/todo.py",
     "avid/agent/prompt.py",
     "avid/agent/skills.py",
+    "avid/agent/tools/subagent.py",
 )
 
 

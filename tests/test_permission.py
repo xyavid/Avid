@@ -10,17 +10,14 @@ import time
 import pytest
 
 from avid.security import permission
-from avid.security.action import brokerize
-from avid.security.permission import (
-    APPROVAL_RULES,
-    COST_RULES,
-    auto_approve,
-    check_permission,
+from avid.security.action import (
+    brokerize,
     danger_reason,
     hard_deny,
     normalize_command,
     sensitive_reason,
 )
+from avid.security.permission import auto_approve, check_permission
 
 DENIED_COMMANDS = [
     "rm -rf /",
@@ -204,82 +201,82 @@ def test_nested_command_is_never_safe_auto(sandbox):
 
 
 
-def test_read_only_tools_are_not_managed():
-    assert "read_file" not in APPROVAL_RULES
-    assert "glob" not in APPROVAL_RULES
+# ---------- 回答者（轻量化后的默认形态） ----------
 
 
-def test_managed_tools_are_the_state_changing_ones():
-    assert set(APPROVAL_RULES) == {"bash", "write_file", "edit_file"}
-    assert set(COST_RULES) == {"subagent"}
-
-
-# ---------- 回答者（没有运行级规格时的失败关闭） ----------
-
-
-def test_without_a_sandbox_spec_the_gate_fails_closed():
-    """漏传 ``security`` 的调用方拿不到无沙箱的执行权（见 ``sandbox.UNMANAGED``）。"""
-    assert check_permission("bash", {"command": "ls"}) is False
-    assert check_permission("write_file", {"path": "a", "content": "b"}) is False
-    assert check_permission("subagent", {}) is False
-    # 区内读取本来就由路径校验保证，不因为"没有沙箱"而多问一次。
-    assert check_permission("read_file", {"path": "a.txt"}) is True
-
-
-def test_hard_deny_never_reaches_the_user():
+def test_ordinary_calls_skip_the_answerer():
     def ask(*args):
-        raise AssertionError("硬拒绝不应触发审批")
+        raise AssertionError("普通调用不该触发确认")
 
-    assert check_permission("bash", {"command": "rm -rf /"}, ask=ask) is False
-
-
-def test_approval_is_not_consulted_when_no_rule_matches():
-    def ask(*args):
-        raise AssertionError("未命中规则不应触发审批")
-
+    assert check_permission("bash", {"command": "ls"}, ask=ask) is True
+    assert check_permission("write_file", {"path": "a", "content": "b"}, ask=ask) is True
+    assert check_permission("subagent", {}, ask=ask) is True
     assert check_permission("read_file", {"path": "a.txt"}, ask=ask) is True
 
 
-def test_ask_user_accepts_y(monkeypatch):
-    monkeypatch.setattr("sys.stdin", io.StringIO("y\n"))
+def test_credential_refusals_skip_the_answerer():
+    def ask(*args):
+        raise AssertionError("凭据拒读不该触发确认")
 
-    assert permission.ask_user("bash", {"command": "ls"}, "执行 shell 命令") is True
+    assert check_permission("read_file", {"path": "~/.ssh/id_rsa"}, ask=ask) is False
+    assert check_permission("bash", {"command": "cat /etc/shadow"}, ask=ask) is False
+
+
+def test_destructive_commands_ask_and_fail_closed_without_a_channel():
+    asked: list[str] = []
+
+    def ask(name, arguments, reason):
+        asked.append(reason)
+        return True
+
+    assert check_permission("bash", {"command": "rm -rf /"}, ask=ask) is True
+    assert asked
+    # 没有询问通道（非交互路径没传 ask）→ 确认不可能发生，直接拒
+    assert check_permission("bash", {"command": "rm -rf /"}) is False
+
+
+def test_ask_user_needs_two_yes(monkeypatch):
+    """二次确认：第一次 yes 只推进到第二次询问，两次都 yes 才通过。"""
+    monkeypatch.setattr("sys.stdin", io.StringIO("y\ny\n"))
+
+    assert permission.ask_user("bash", {"command": "rm -rf /"}, "删除根目录或家目录") is True
+
+
+def test_ask_user_denies_when_the_second_answer_is_no(monkeypatch):
+    monkeypatch.setattr("sys.stdin", io.StringIO("y\nn\n"))
+
+    assert permission.ask_user("bash", {"command": "rm -rf /"}, "删除根目录或家目录") is False
 
 
 def test_ask_user_rejects_anything_but_yes(monkeypatch):
     monkeypatch.setattr("sys.stdin", io.StringIO("n\n"))
 
-    assert permission.ask_user("bash", {"command": "ls"}, "执行 shell 命令") is False
+    assert permission.ask_user("bash", {"command": "rm -rf /"}, "删除根目录或家目录") is False
 
 
 def test_ask_user_denies_on_eof(monkeypatch):
     monkeypatch.setattr("sys.stdin", io.StringIO(""))
 
-    assert permission.ask_user("bash", {"command": "ls"}, "执行 shell 命令") is False
+    assert permission.ask_user("bash", {"command": "rm -rf /"}, "删除根目录或家目录") is False
 
 
 # ---------- auto_approve（--yes） ----------
 
 
-def test_auto_approve_skips_approval_for_managed_tools():
+def test_auto_approve_answers_everything_ordinary():
     assert auto_approve("write_file", {"path": "a", "content": "b"}) is True
     assert auto_approve("edit_file", {"path": "a", "old_string": "b", "new_string": "c"}) is True
     assert auto_approve("bash", {"command": "ls"}) is True
 
 
-def test_auto_approve_still_honours_hard_deny():
-    assert auto_approve("bash", {"command": "rm -rf /"}) is False
+def test_auto_approve_answers_the_destructive_question():
+    """``--yes`` 只换回答者：毁灭级的询问被代答「是」，于是它照常执行。"""
+    assert auto_approve("bash", {"command": "rm -rf /"}) is True
 
 
-def test_auto_approve_still_honours_the_deny_ladder(sandbox):
-    """``--yes`` 只换回答者：deny 阶梯不因为"全答是"而放行。
-
-    注意区分两档：``.git/hooks`` 是 **deny**（谁都放不了），``.env`` 是 **ask**
-    （``--yes`` 可以代答）——后者不是这条用例要证明的东西。
-    """
-    hooks = str(sandbox / ".git/hooks/pre-commit")
-    assert auto_approve("write_file", {"path": hooks, "content": "x"}, root=str(sandbox)) is False
-    assert auto_approve("read_file", {"path": str(sandbox / ".env")}, root=str(sandbox)) is True
+def test_auto_approve_never_overrides_credential_refusal():
+    assert auto_approve("bash", {"command": "cat /etc/shadow"}) is False
+    assert auto_approve("read_file", {"path": "~/.aws/credentials"}) is False
 
 
 # ---------- 运行级 --yes ----------
@@ -311,7 +308,7 @@ def test_concurrent_approval_prompts_are_serialised(monkeypatch):
     threads = [
         threading.Thread(
             target=permission.ask_user,
-            args=("bash", {"command": "ls"}, "执行 shell 命令"),
+            args=("bash", {"command": "rm -rf /"}, "删除根目录或家目录"),
         )
         for _ in range(2)
     ]
@@ -320,4 +317,5 @@ def test_concurrent_approval_prompts_are_serialised(monkeypatch):
     for thread in threads:
         thread.join()
 
-    assert events == ["start", "end", "start", "end"]
+    # 每个 ask_user 连问两次（二次确认），两个线程的 4 次读入两两不穿插。
+    assert events == ["start", "end"] * 4

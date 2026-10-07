@@ -1,19 +1,16 @@
 """Implements the file tools: read, write, edit and glob.
 
-Failures come back as text so the loop continues; reads outside the workspace are allowed and
-writes need a ledger grant. Both write paths take a write-ahead checkpoint (agent/checkpoints)
-after validation and refuse to write when it fails.
-
+Failures come back as text so the loop continues; 阶段 51 之后区内区外都不再需要授权，
+唯一闸门是凭据拒读（action.sensitive_reason，唯一硬拒）。Both write paths take a
+write-ahead checkpoint (agent/checkpoints) after validation and refuse to write when it fails.
 """
-
-
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ...security.permission import APPROVAL_NONE
+from ...security.action import sensitive_reason
 from .registry import tool
 from .workspace import relative, resolve
 
@@ -31,42 +28,17 @@ def _root(state: "RunState | None") -> Path | None:
     return Path(raw) if raw else None
 
 
-def _grant(state: "RunState | None", operation: str = "read"):
-    """Returns a ro/rw grant query, or None without run state, so crossings always fail closed."""
-    if state is None:
-        return None
-    access = "rw" if operation == "write" else "ro"
-    return lambda path: state.outside_allowed(path, access)
+def _outside_ok(state: "RunState | None") -> bool:
+    """区外访问不再需要授权（轻量化）：恒真。保留一个函数只为让调用点的语义可读。"""
+    _ = state
+    return True
 
 
-def _read_outside_ok(state: "RunState | None") -> bool:
-    """Reports whether reads outside the workspace are allowed, which they are with a spec.
-
-    The security spec is still required, since it carries the deny ladder for protected paths.
-    """
-    return getattr(state, "security", None) is not None
-
-
-def _protected(state: "RunState | None", path: Path, operation: str) -> str | None:
-    """Returns refusal text when a path hits the ladder and this run holds no grant for it.
-
-    The gate decides and this is only the fallback, so a gate that never ran cannot allow.
-    """
-    security = getattr(state, "security", None)
-    if security is None:
-        return None
-    rule = security.ladder.verdict_for(str(path), (operation,))
-    if rule is None:
-        return None
-    if rule.verdict == "deny":
-        # The deny tier admits no mode and no approval, not even full.
-        return f"错误：{rule.reason}（{rule.tier} 策略禁止访问，任何批准都不能放行）"
-    # The ask tier is pre-authorized by full, or by an approval already recorded in the ledger.
-    if security.approval == APPROVAL_NONE:
-        return None
-    if state is not None and state.ledger.outside_allowed(str(path), "rw" if operation == "write" else "ro"):
-        return None
-    return f"错误：{rule.reason}（{rule.tier} 策略，需逐次批准）"
+def _protected(state: "RunState | None", path: Path) -> str | None:
+    """凭据拒读是文件工具唯一的闸门（唯一硬拒）；其余路径直接放行。"""
+    _ = state
+    reason = sensitive_reason(str(path))
+    return None if reason is None else f"错误：受保护的宿主资源（{reason}），任何确认都无效"
 
 
 def _snapshot_before_write(state: "RunState | None", path: Path) -> str | None:
@@ -152,11 +124,11 @@ def _read_window(handle: Any, offset: int, limit: int) -> tuple[list[str], bool]
 def read_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     """Returns the requested window of a text file, with a notice when it was truncated."""
     raw = str(args.get("path", ""))
-    path, error = resolve(raw, root=_root(state), outside_ok=_read_outside_ok(state))
+    path, error = resolve(raw, root=_root(state), outside_ok=_outside_ok(state))
     if error:
         return f"错误：{error}"
     assert path is not None  # resolve yields exactly one of a path or an error
-    blocked = _protected(state, path, "read")
+    blocked = _protected(state, path)
     if blocked:
         return blocked
     if not path.exists():
@@ -210,11 +182,11 @@ def read_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
 def write_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     """Writes a whole file, creating missing parents, and reports the new line count."""
     raw = str(args.get("path", ""))
-    path, error = resolve(raw, root=_root(state), outside_ok=_grant(state, "write"))
+    path, error = resolve(raw, root=_root(state), outside_ok=_outside_ok(state))
     if error:
         return f"错误：{error}"
     assert path is not None  # resolve yields exactly one of a path or an error
-    blocked = _protected(state, path, "write")
+    blocked = _protected(state, path)
     if blocked:
         return blocked
 
@@ -264,11 +236,11 @@ def write_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
 def edit_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     """Replaces one exactly-once occurrence of old_string, refusing anything ambiguous."""
     raw = str(args.get("path", ""))
-    path, error = resolve(raw, root=_root(state), outside_ok=_grant(state, "write"))
+    path, error = resolve(raw, root=_root(state), outside_ok=_outside_ok(state))
     if error:
         return f"错误：{error}"
     assert path is not None  # resolve yields exactly one of a path or an error
-    blocked = _protected(state, path, "write")
+    blocked = _protected(state, path)
     if blocked:
         return blocked
 
@@ -332,11 +304,11 @@ def glob_files(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
         return "错误：缺少参数 pattern"
 
     raw = str(args.get("path", ".") or ".")
-    root, error = resolve(raw, root=_root(state), outside_ok=_read_outside_ok(state))
+    root, error = resolve(raw, root=_root(state), outside_ok=_outside_ok(state))
     if error:
         return f"错误：{error}"
     assert root is not None  # resolve yields exactly one of a path or an error
-    blocked = _protected(state, root, "read")
+    blocked = _protected(state, root)
     if blocked:
         return blocked
     if not root.is_dir():

@@ -46,9 +46,8 @@ FEATURES: dict[str, int] = {
     "deltas": 1,
     "branches": 1,
     "workspaces": 1,
-    # The run endpoint accepts a permission mode: manual, auto or full.
-    "permission_modes": 1,
-    # Orthogonal permission axes, the four-level deny ladder and the sandbox.
+    # 权限体系轻量化（阶段 51）：默认直接跑，毁灭级命令双确认，无模式可选。
+    "danger_confirm": 1,
     "security_layers": 1,
     # Full access needs an explicit acknowledgement and is never the default.
     "full_access": 1,

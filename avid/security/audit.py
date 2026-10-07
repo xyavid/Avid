@@ -70,7 +70,8 @@ class AuditLog:
     run_tag: str = ""
     run_id: str = ""
     mode: str = ""
-    axes: Mapping[str, str] = field(default_factory=dict)
+    # Fact fields only: values are serialized as-is, so booleans (full) are allowed.
+    axes: Mapping[str, Any] = field(default_factory=dict)
     sandbox: Mapping[str, Any] = field(default_factory=dict)
     # Injected clock keeps record timestamps and the daily file rollover testable.
     clock: Callable[[], float] = time.time

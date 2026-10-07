@@ -1,4 +1,4 @@
-"""Pending-approval table: blocking approvals behind the network boundary, failing closed."""
+"""待决审批表：毁灭级命令挂起等待人类的裁决，无人作答按拒绝收场。"""
 
 from __future__ import annotations
 

@@ -6,7 +6,9 @@
 
 from __future__ import annotations
 
+import socket
 import subprocess
+import threading
 from pathlib import Path
 
 import pytest
@@ -78,7 +80,7 @@ def test_probing_actually_runs_a_sandbox(monkeypatch, tmp_path):
 
 
 def test_landlock_abi_is_reported_but_not_used_for_network():
-    """Landlock ABI 只上报：ABI 3 强制不了网络，而三个预设里的沙箱态都要网络边界。"""
+    """Landlock ABI 只上报：阶段 51 没有网络轴，ABI 也不参与任何分档。"""
     abi = landlock_abi()
     assert abi is None or abi >= 1
     if abi is not None:
@@ -103,21 +105,23 @@ def test_workspace_policy_without_a_root_is_degraded(tmp_path, home):
 
 def test_disabled_policy_is_not_degraded(tmp_path, home):
     """full 显式关沙箱：它不是"降级"，是一开始就不要这条边界。"""
-    spec = build_spec(policy="disabled", network="open", root=str(tmp_path), home=home, probe=WORKING)
+    spec = build_spec(policy="disabled", root=str(tmp_path), home=home, probe=WORKING)
     assert (spec.policy, spec.degraded, spec.enforced) == ("disabled", False, False)
     assert spec.one_line() == "沙箱：已禁用（full）"
 
 
-def test_a_backend_without_network_isolation_cannot_satisfy_restricted(tmp_path, home):
+def test_network_isolation_capability_no_longer_gates_the_policy(tmp_path, home):
+    """网络轴已删：探针报 network_isolation=False 也只是个上报字段，不降级工作区沙箱。"""
     spec = build_spec(
         policy="workspace",
-        network="restricted",
         root=str(tmp_path),
         home=home,
-        probe=BackendProbe(backend=BACKEND_BWRAP, available=True, network_isolation=False),
+        probe=BackendProbe(
+            backend=BACKEND_BWRAP, binary="/usr/bin/bwrap", available=True, network_isolation=False
+        ),
     )
-    assert spec.degraded is True
-    assert "网络边界" in (spec.reason or "")
+    assert spec.enforced is True and spec.degraded is False
+    assert "network" not in spec.summary()
 
 
 def test_unmanaged_spec_fails_closed():
@@ -130,7 +134,6 @@ def test_summary_shape_is_what_events_and_audit_carry(tmp_path, home):
     summary = spec.summary()
     assert set(summary) == {
         "policy",
-        "network",
         "backend",
         "available",
         "enforced",
@@ -149,7 +152,7 @@ def argv(spec: SandboxSpec, command: list[str], **kwargs) -> list[str]:
 
 
 def test_argv_prefix_is_a_noop_when_not_enforced(tmp_path, home):
-    spec = build_spec(policy="disabled", network="open", root=str(tmp_path), home=home, probe=WORKING)
+    spec = build_spec(policy="disabled", root=str(tmp_path), home=home, probe=WORKING)
     assert argv(spec, ["bash", "-c", "ls"]) == ["bash", "-c", "ls"]
 
 
@@ -158,7 +161,8 @@ def test_argv_mounts_system_read_only_and_workspace_writable(tmp_path, home):
     built = argv(spec, ["bash", "-c", "ls"])
     assert built[:3] == [str(spec.binary), "--ro-bind", "/"]
     assert "--bind" in built and str(tmp_path) in built
-    assert "--unshare-net" in built
+    # 网络恒开：工作区沙箱只隔离文件系统与进程视图，不再 unshare 网络命名空间。
+    assert "--unshare-net" not in built
     assert "--clearenv" in built
 
 
@@ -181,9 +185,9 @@ def test_empty_tmp_is_mounted_before_the_workspace_and_the_masks(tmp_path, home)
 
 
 def test_masks_come_after_grants_so_a_grant_cannot_unmask(tmp_path, home):
-    """批准一个父目录不能把它的掩蔽子目录掀开。
+    """区外授权不能把它的掩蔽子目录掀开。
 
-    顺序反了就会出现：用户批准读 `$HOME` → `--ro-bind $HOME $HOME` 盖住先前挂的
+    顺序反了就会出现：区外授权给了 `$HOME` → `--ro-bind $HOME $HOME` 盖住先前挂的
     `--tmpfs $HOME/.ssh` → `.ssh` 又看得见了。掩蔽是宿主策略，授予是本次运行的能力，
     冲突时掩蔽赢。
     """
@@ -238,7 +242,7 @@ def test_grants_are_mounted_and_masked_targets_are_refused(tmp_path, home):
 def test_grants_are_ignored_when_not_enforced(tmp_path, home):
     outside = tmp_path / "a.txt"
     outside.write_text("x", encoding="utf-8")
-    spec = build_spec(policy="disabled", network="open", root=str(tmp_path), home=home, probe=WORKING)
+    spec = build_spec(policy="disabled", root=str(tmp_path), home=home, probe=WORKING)
     assert argv(spec, ["bash", "-c", "ls"], grants=[(str(outside), "rw")]) == ["bash", "-c", "ls"]
 
 
@@ -286,15 +290,12 @@ def test_env_home_is_the_host_we_computed_the_masks_for(home, tmp_path):
 
 def test_child_env_full_inherits_and_degraded_scrubs(tmp_path, home):
     """full 显式信任整体继承（env=None，凭据可用）；降级走黑名单；强制走白名单。"""
-    full = build_spec(policy="disabled", network="open", root=str(tmp_path), home=home, probe=WORKING)
+    full = build_spec(policy="disabled", root=str(tmp_path), home=home, probe=WORKING)
     assert full.child_env({"PATH": "/usr/bin", "GITHUB_TOKEN": "x"}) is None
 
-    degraded = SandboxSpec(policy="workspace", network="restricted", available=False, reason="无后端")
+    degraded = SandboxSpec(policy="workspace", available=False, reason="无后端")
     scrubbed = degraded.child_env({"PATH": "/usr/bin", "SOME_API_KEY": "x", "SYSTEMROOT": r"C:\W"})
     assert scrubbed == {"PATH": "/usr/bin", "SYSTEMROOT": r"C:\W"}
-
-    enforced = build_spec(policy="workspace", root=str(tmp_path), home=home, probe=WORKING)
-    assert enforced.child_env({"PATH": "/usr/bin", "SOME_API_KEY": "x"}) == {"PATH": "/usr/bin", "HOME": str(home)}
 
     enforced = build_spec(policy="workspace", root=str(tmp_path), home=home, probe=WORKING)
     assert enforced.child_env({"PATH": "/usr/bin", "SOME_API_KEY": "x"}) == {"PATH": "/usr/bin", "HOME": str(home)}
@@ -356,9 +357,34 @@ def test_real_run_cannot_write_outside_the_workspace(real_spec, home, tmp_path):
         target.unlink(missing_ok=True)
 
 
-def test_real_run_has_no_network(real_spec):
-    done = _run(real_spec, "timeout 3 bash -c 'echo > /dev/tcp/1.1.1.1/80' 2>&1; echo rc=$?")
-    assert "Network is unreachable" in done.stdout + done.stderr
+def test_real_run_has_network(real_spec):
+    """网络恒开（阶段 51）：argv 里没有 --unshare-net，沙箱里的连接能到达宿主在听的端口。
+
+    用宿主自己开的回环监听来证明——不依赖外网，也不会有"外网刚好不通"的假红。
+    """
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    port = server.getsockname()[1]
+    accepted: list[bool] = []
+
+    def accept_one() -> None:
+        try:
+            connection, _ = server.accept()
+            accepted.append(True)
+            connection.close()
+        except OSError:  # 沙箱里没连过来：由下面的断言给出失败原因
+            pass
+
+    thread = threading.Thread(target=accept_one, daemon=True)
+    thread.start()
+    try:
+        done = _run(real_spec, f"timeout 3 bash -c 'echo > /dev/tcp/127.0.0.1/{port}'; echo rc=$?")
+        assert "rc=0" in done.stdout, done.stdout + done.stderr
+    finally:
+        server.close()
+    thread.join(timeout=3)
+    assert accepted, "沙箱里的连接没有到达宿主：网络被隔离了"
 
 
 def test_real_run_does_not_see_secret_environment_variables(real_spec, monkeypatch):
@@ -402,8 +428,7 @@ def test_scrubbed_env_drops_credential_shaped_names():
 
 
 def test_degraded_child_env_is_scrubbed_not_inherited():
-    from avid.security.modes import SANDBOX_WORKSPACE
-    from avid.security.sandbox import SandboxSpec
+    from avid.security.sandbox import SANDBOX_WORKSPACE, SandboxSpec
 
     spec = SandboxSpec(policy=SANDBOX_WORKSPACE, available=False, reason="无后端")
     kept = spec.child_env({"PATH": "/bin", "MY_SECRET_TOKEN": "x"})

@@ -1,4 +1,4 @@
-"""stdio MCP 客户端与它的权限闸门（阶段 30e）。
+"""stdio MCP 客户端与它的裁决路径（阶段 30e）。
 
 用一个**真的子进程**当假 server（tests/support/fake_mcp_server.py，同一份协议实现
 跑在两条测试里）：握手、列举、调用、isError、超时、进程清理都是真实的——stub 掉
@@ -139,14 +139,15 @@ def test_close_terminates_servers(workspace):
     assert manager.processes_alive() == 0
 
 
-# ---------------- 权限闸门 ----------------
+# ---------------- 裁决：阶段 51 起 MCP 直接执行，不再问人 ----------------
 
 
 def _action_args():
     return {"text": "hi"}
 
 
-def test_manual_mode_asks_once_per_tool_then_ledger_reuses(workspace):
+def test_mcp_tools_execute_without_asking_or_using_the_ledger(workspace):
+    """阶段 51：MCP 工具直接执行——不问人、不记账本、不因重复调用改变答案。"""
     write_config(workspace, CONFIG_OK)
     manager = McpManager(str(workspace))
     manager.start_all()
@@ -158,60 +159,48 @@ def test_manual_mode_asks_once_per_tool_then_ledger_reuses(workspace):
         asked.append(tool)
         return True
 
-    first = decide(
-        brokerize("mcp__demo__echo", _action_args()),
-        mode="manual",
-        ledger=ledger,
-        ask=ask,
-    )
-    second = decide(
-        brokerize("mcp__demo__echo", _action_args()),
-        mode="manual",
-        ledger=ledger,
-        ask=ask,
-    )
+    first = decide(brokerize("mcp__demo__echo", _action_args()), ledger=ledger, ask=ask)
+    second = decide(brokerize("mcp__demo__echo", _action_args()), ledger=ledger, ask=ask)
 
-    assert first.verdict == "allow" and first.answered_by == "user"
-    assert second.verdict == "allow" and second.answered_by == "ledger"
-    assert asked == ["mcp__demo__echo"]
+    assert first.verdict == "allow" and first.answered_by == "policy"
+    assert second.verdict == "allow" and second.answered_by == "policy"
+    assert asked == [], "MCP 工具不该经过询问通道"
+    assert len(ledger) == 0, "直接执行不产生账本条目"
     manager.close()
 
 
-def test_full_mode_allows_without_asking(workspace):
+def test_full_run_allows_mcp_without_asking(workspace):
     write_config(workspace, CONFIG_OK)
     manager = McpManager(str(workspace))
     manager.start_all()
 
     decision = decide(
         brokerize("mcp__demo__echo", _action_args()),
-        mode="full",
+        full=True,
         ledger=ApprovalLedger(),
-        ask=lambda *a: pytest.fail("full 不该问人"),
+        ask=lambda *a: pytest.fail("MCP 工具不该问人"),
     )
 
     assert decision.verdict == "allow"
+    assert decision.answered_by == "policy"
     manager.close()
 
 
-def test_auto_mode_hands_unreadable_mcp_tools_to_the_user(workspace):
-    """分类器看不见 MCP 工具的语义：auto 交人（有人可问），无人可问才拒。"""
+def test_mcp_tools_are_not_questioned_even_without_an_answerer(workspace):
+    """MCP 语义不可静态分类，但轻量化后也不问人：有人可问、无人可问都直接执行。"""
     write_config(workspace, CONFIG_OK)
     manager = McpManager(str(workspace))
     manager.start_all()
 
+    asked = []
     allowed = decide(
         brokerize("mcp__demo__echo", _action_args()),
-        mode="auto",
         ledger=ApprovalLedger(),
-        ask=lambda *a: True,
+        ask=lambda *a: asked.append(a) or True,
     )
-    assert allowed.allowed and allowed.answered_by == "user"
+    assert allowed.allowed and allowed.answered_by == "policy"
+    assert asked == []
 
-    refused = decide(
-        brokerize("mcp__demo__echo", _action_args()),
-        mode="auto",
-        ledger=ApprovalLedger(),
-    )
-    assert refused.verdict == "deny"
-    assert "mcp" in refused.reason.lower() or "MCP" in refused.reason
+    refused = decide(brokerize("mcp__demo__echo", _action_args()), ledger=ApprovalLedger())
+    assert refused.allowed and refused.answered_by == "policy"
     manager.close()
