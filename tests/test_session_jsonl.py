@@ -943,3 +943,28 @@ def test_a_failed_guard_open_does_not_leak_the_lock(tmp_path):
     # 锁必须已释放：同一会话立刻能再打开。
     session = repo.open(repo.list()[0])
     session.close()
+
+
+def test_a_symlinked_foreign_session_is_invisible_to_this_repo(tmp_path):
+    """归属守卫的位置判定用 resolve()：把别家会话用 symlink 塞进自家目录，
+    不会被 list 捡走、也无法经链接打开（评审 M3 回归）。"""
+    mine = JsonlSessionRepo(tmp_path / "mine", workspace="w-mine")
+    foreign_repo = JsonlSessionRepo(tmp_path / "elsewhere", workspace="w-other")
+    foreign_repo.create(id="secret").close()
+    foreign_meta = foreign_repo.list()[0]
+
+    (tmp_path / "mine").mkdir(exist_ok=True)
+    link = tmp_path / "mine" / "0link_secret.jsonl"
+    link.symlink_to(foreign_meta.path)
+    mine.close()
+    mine = JsonlSessionRepo(tmp_path / "mine", workspace="w-mine")
+
+    assert [m.id for m in mine.list()] == []
+
+    smuggled = replace(foreign_meta, path=link)
+    with pytest.raises(SessionStorageError):
+        mine.open(smuggled)
+    with pytest.raises(SessionStorageError):
+        mine.delete(smuggled)
+    mine.close()
+    foreign_repo.close()

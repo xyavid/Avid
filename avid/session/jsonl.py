@@ -740,7 +740,7 @@ class JsonlSessionRepo:
                 storage.header.workspace is not None
                 and self.workspace is not None
                 and storage.header.workspace != self.workspace
-                and path.parent != self.root
+                and path.resolve().parent != self.root.resolve()
             )
             if foreign:
                 raise SessionStorageError(
@@ -775,6 +775,10 @@ class JsonlSessionRepo:
             return []
         found: list[JsonlSessionMetadata] = []
         for path in sorted(self.root.glob(f"*{SUFFIX}")):
+            # 符号链接穿透守卫：真实落点不在本仓库目录里的文件不是自家的，
+            # 不列（否则别家工作区的会话会被自动捡进列表并经链接打开）。
+            if path.resolve().parent != self.root.resolve():
+                continue
             metadata = self._read_metadata(path)
             if metadata is not None:
                 found.append(metadata)
@@ -797,7 +801,7 @@ class JsonlSessionRepo:
             header.workspace is not None
             and self.workspace is not None
             and header.workspace != self.workspace
-            and path.parent != self.root
+            and path.resolve().parent != self.root.resolve()
         )
         if foreign:
             raise SessionStorageError(

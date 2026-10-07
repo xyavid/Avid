@@ -40,6 +40,9 @@ SECURITY_HEADERS: dict[str, str] = {
         "img-src 'self' data:; "
         "font-src 'self'; "
         "connect-src 'self'; "
+        # frame-src 放开 http/https：dock 的浏览器面板按用户输入内嵌任意站点。
+        # frame-ancestors 'none' 不变——它拦的是别人把我们嵌进去，方向相反。
+        "frame-src 'self' http: https:; "
         "object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
     ),
     "Referrer-Policy": "no-referrer",
@@ -140,8 +143,10 @@ def create_app(
         version=f"api-v{API_VERSION}",
         description="自建 agent 运行时（harness）的 Web API 与事件流",
     )
+    # 白名单挂上 state：WebSocket 端点（终端桥）做同样的信任校验要用同一份。
+    app.state.allowed_hosts = trusted_hosts(allowed_hosts)
     app.add_middleware(
-        TrustBoundaryMiddleware, allowed_hosts=trusted_hosts(allowed_hosts)
+        TrustBoundaryMiddleware, allowed_hosts=app.state.allowed_hosts
     )
     # A workspace root is only meaningful for self-assembly: given, the process is single-workspace.
     app.state.services = services or Services(workspace_root=workspace_root)

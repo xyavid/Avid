@@ -101,3 +101,24 @@ def test_terminal_closing_the_socket_kills_the_shell(client: TestClient, sandbox
     assert not marker_file.exists(), "断开连接后 sleep 进程组没有被收割"
     # 清理可能还在跑的 sleep（组被杀则它早死了；双保险）
     subprocess.run(["pkill", "-f", "sleep 30"], check=False)
+
+
+def test_terminal_survives_non_object_frames(client: TestClient, sandbox: Path):
+    """评审 L1：数字/字符串之类的坏帧跳过不杀连接，后续正常帧照常工作。"""
+    root = _register_workspace(client, sandbox)
+    with client.websocket_connect(f"/api/ws/terminal?root={root}&cols=80&rows=24") as ws:
+        for bad in ("5", "null", '"x"', "[1]"):
+            ws.send_text(bad)
+        ws.send_text(json.dumps({"type": "in", "data": "echo still-alive-$((7*6))\r"}))
+        assert "still-alive-42" in _read_until(ws, "still-alive-42")
+
+
+def test_terminal_rejects_cross_port_origin(client: TestClient, sandbox: Path):
+    """评审 M4：hostname 在白名单但端口与本服务不一致的本机页面，不许驱动 shell。"""
+    _register_workspace(client, sandbox)
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect(
+            f"/api/ws/terminal?root={sandbox}&cols=80&rows=24",
+            headers={"origin": "http://127.0.0.1:9999"},
+        ):
+            pass

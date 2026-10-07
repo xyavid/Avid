@@ -8,7 +8,7 @@
  * truncated_tail（上次运行中断）在流顶给一条提示——派生自投影，不新增字段。
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 
 import {
@@ -41,7 +41,7 @@ import { Button } from '../../ui/Button'
 import { IconButton } from '../../ui/IconButton'
 import { AvidMark } from '../../ui/Mark'
 import { Icon } from '../../ui/Icon'
-import { useConversationScroll, type ScrollAnchor } from '../../ui/useConversationScroll'
+import { useConversationScroll } from '../../ui/useConversationScroll'
 import { SettingsModal } from '../../components/settings/SettingsModal'
 import { ProjectCard } from '../../components/session/ProjectCard'
 import { SessionNav } from '../../components/session/SessionNav'
@@ -82,13 +82,16 @@ export function ConversationPage() {
   const [usage, setUsage] = useState<UsageReport | null>(null)
   const [error, setError] = useState<string | null>(null)
   // 「加载更早」：desc 首页只含最近 50 条，更早历史经 next_cursor 追加；
-  // anchorRef 记录追加前的视口位置，prepend 后把视口钉回同一条旧消息。
+  // anchor 记录追加前的视口位置，prepend 落地后在 layout effect 里把视口
+  // 钉回同一条旧消息——独立于跟随的 dep 效果，避免与流式合帧抢提交（评审 L7）。
   const [earlier, setEarlier] = useState<{ hasMore: boolean; cursor: number | null }>({
     hasMore: false,
     cursor: null,
   })
   const [loadingEarlier, setLoadingEarlier] = useState(false)
-  const anchorRef = useRef<ScrollAnchor | null>(null)
+  const [pendingAnchor, setPendingAnchor] = useState<{ top: number; height: number } | null>(null)
+  const holdFollowRef = useRef(false)
+  const anchorRef = useRef<{ top: number; height: number } | null>(null)
   // 权限「态势」：随选中会话回落到其工作区的默认权限，用户可在输入区改（下次发送生效）。
   const [permission, setPermission] = useState<PermissionMode>('manual')
   // 本次运行用的模型（输入区可选）：null = 跟随设置。粘住直到用户改回来——
@@ -153,7 +156,7 @@ export function ConversationPage() {
     `${entries?.length ?? -1}|${liveHereForScroll ? live.assistantText.length : 0}|${
       liveHereForScroll ? live.reasoning.length : 0
     }|${liveHereForScroll ? live.tools.length : 0}|${liveHereForScroll ? (live.userText?.length ?? 0) : 0}`,
-    anchorRef,
+    holdFollowRef,
   )
 
   useEffect(() => {
@@ -219,6 +222,11 @@ export function ConversationPage() {
     setBranchHint(null)
   }, [selectedId])
 
+  // 切会话把贴底状态拨回默认：上一会话停在顶部时，下一会话也要照常落底（评审 L6）。
+  useEffect(() => {
+    scroll.reset()
+  }, [selectedId])
+
   /**
    * 从某条消息分叉：建分支 → 切到它。不切的话这个按钮就是个死按钮
    * （前端没有分支选择器），所以顺带给一条「回到主线」的退路。
@@ -243,14 +251,27 @@ export function ConversationPage() {
       const page = await listEntries(selectedId, { branch, limit: 50, cursorSeq: earlier.cursor })
       const el = scroll.ref.current
       anchorRef.current = el ? { top: el.scrollTop, height: el.scrollHeight } : null
+      holdFollowRef.current = true
       setEntries((cur) => [...[...page.entries].reverse(), ...(cur ?? [])])
       setEarlier({ hasMore: page.has_more, cursor: page.next_cursor })
     } catch {
       // 追加失败不打断对话视图；按钮保持可点，用户可重试
+      holdFollowRef.current = false
+      anchorRef.current = null
     } finally {
       setLoadingEarlier(false)
     }
   }
+
+  // prepend 落地后按锚点差值回滚视口（layout：在浏览器绘制前完成，不闪）。
+  useLayoutEffect(() => {
+    if (pendingAnchor === null) return
+    const el = scroll.ref.current
+    if (el !== null) el.scrollTop = pendingAnchor.top + (el.scrollHeight - pendingAnchor.height)
+    setPendingAnchor(null)
+    holdFollowRef.current = false
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只随锚点触发
+  }, [pendingAnchor])
 
   useEffect(() => {
     setPermission(selected?.workspace?.default_permission ?? 'manual')

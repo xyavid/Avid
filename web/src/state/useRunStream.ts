@@ -48,11 +48,19 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
   // Markdown 的重解析随之合帧（它是按文本记忆化的，state 不变就不重算）。
   // 哨兵用独立布尔而非帧句柄：句柄赋值发生在 rAF 注册之后，同步执行的
   // 测试桩会把「已消费」的句柄覆盖回非空，卡死后续所有增量。
+  // 后台标签页 rAF 停发，另挂 1s 定时器兜底：增量最迟一秒落 state，
+  // 不丢不重，也不会在隐藏页里无界积压（评审 L5）。
   const pendingFrameRef = useRef(false)
   const frameHandleRef = useRef<number | null>(null)
+  const fallbackTimerRef = useRef<number | null>(null)
   const pendingAssistantRef = useRef('')
   const pendingReasoningRef = useRef('')
   const flushDeltas = useCallback(() => {
+    pendingFrameRef.current = false
+    if (fallbackTimerRef.current !== null) {
+      window.clearTimeout(fallbackTimerRef.current)
+      fallbackTimerRef.current = null
+    }
     if (pendingAssistantRef.current) {
       const text = pendingAssistantRef.current
       pendingAssistantRef.current = ''
@@ -67,11 +75,20 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
   const scheduleDeltaFlush = useCallback(() => {
     if (pendingFrameRef.current) return
     pendingFrameRef.current = true
-    frameHandleRef.current = requestAnimationFrame(() => {
+    const flush = () => {
       pendingFrameRef.current = false
-      frameHandleRef.current = null
+      if (frameHandleRef.current !== null) {
+        cancelAnimationFrame(frameHandleRef.current)
+        frameHandleRef.current = null
+      }
+      if (fallbackTimerRef.current !== null) {
+        window.clearTimeout(fallbackTimerRef.current)
+        fallbackTimerRef.current = null
+      }
       flushDeltas()
-    })
+    }
+    frameHandleRef.current = requestAnimationFrame(flush)
+    fallbackTimerRef.current = window.setTimeout(flush, 1000)
   }, [flushDeltas])
   // 最终消息/重置取代 delta 累积：未刷帧的增量必须作废，否则终态文本后面
   // 会再接一截旧增量。
@@ -80,6 +97,10 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
     if (frameHandleRef.current !== null) {
       cancelAnimationFrame(frameHandleRef.current)
       frameHandleRef.current = null
+    }
+    if (fallbackTimerRef.current !== null) {
+      window.clearTimeout(fallbackTimerRef.current)
+      fallbackTimerRef.current = null
     }
     pendingAssistantRef.current = ''
     pendingReasoningRef.current = ''
