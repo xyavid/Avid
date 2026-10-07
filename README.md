@@ -65,19 +65,23 @@ uv run --env-file .env avid "用一句话说明你是谁"
 uv run --env-file .env avid --agent "读 pyproject.toml，告诉我项目名"
 ```
 
-工具执行前过一道四层裁决（硬拒绝 → 危险命令 → 越界 → 常规规则），配合三档权限模式
-（`--permission manual|auto|full`，决策事实见 `avid/security/modes.py` 与 `engine.py` 注释）：
+工具执行前过一道轻量裁决（阶段 51，决策事实见 `avid/security/engine.py` 与
+`permission.py` 的注释）：
 
-- **硬拒绝**（`rm -rf /` 这类灾难命令）三种模式一律不执行；
-- **manual**：沙箱内免问；危险命令、越界写与降级后的受管动作逐个问人；
-- **auto**：只读与工作区内写自动放行；网络出口（curl/ssh/git push 等）、越界写、
-  危险命令与证明不了的命令征询用户，没有询问通道时拒绝；
-- **full**（须显式授权）：不问、不套沙箱、不限网络；硬拒绝与策略 deny 仍然生效。
+- **默认**：一切直接执行——sudo、docker、网络命令、工作区外的读写都不再询问；
+  只有**毁灭级命令**（`rm -rf /`、`mkfs`、写块设备、fork 炸弹、关机重启、
+  `chmod -R /`）触发确认，终端里**连问两次**（Web 是审批卡两步）。
+- **凭据拒读**：`~/.ssh`、`~/.aws`、`/etc/shadow`、`*.pem` 这类宿主凭据在任何形态下
+  都拒（凭据进上下文不可撤回）——它是唯一硬拒，连完全访问也不放行。
+- **完全访问**（`--allow-full-access`；Web 用 `full_access_ack`）：连毁灭级确认也跳过、
+  关沙箱、不滤环境变量。没有「工作区默认权限」这类持久设置：授权只属于某一次运行。
 
-沙箱按平台取最强可用机制：Linux 用 bubblewrap（bwrap）做内核隔离；Windows/macOS
-没有可用后端时不上锁，靠命令分类 + 审批兜底（Windows 上 `bash` 工具经 PowerShell
-运行）。提示写在 stderr；非交互场景加 `--yes` 跳过询问（**硬拒绝仍然生效**）。
-`subagent` 的审批由父运行前传（子 agent 在别的线程跑），账本共用一本。
+区外写不再问人，而是自动记账并把目标挂进沙箱（bwrap 只挂已存在的路径）。沙箱按平台取
+最强可用机制：Linux 用 bubblewrap（bwrap）做内核级隔离（网络不隔离，网络命令直接跑）；
+Windows/macOS 没有可用后端时不上锁，靠毁灭级确认与事后审计兜底（Windows 上 `bash`
+工具经 PowerShell 运行）。提示写在 stderr；非交互场景加 `--yes` 代答毁灭级确认
+（**凭据拒读仍然生效**）。`subagent` 的确认由父运行前传（子 agent 在别的线程跑），
+账本共用一本：同一条毁灭级命令答过一次，本轮不再问。
 
 stdout 打印模型回复，stderr 打印逐轮 trace 与 token 用量。
 

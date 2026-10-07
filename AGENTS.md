@@ -10,7 +10,7 @@ Avid 是一个自建的 agent 运行时（harness）：模型调用、工具执�
 - **目标**：改动任一模块（模型 / 工具 / 上下文策略）不需要动其它部分。
 - **验收基准**：参考场景 **R**（读取本地文件 + 计算）——首个工具从它长出来。
 - **技术栈**：内核 Python 3.12，`uv` 管理依赖，运行期依赖只有 `httpx`；前端在 `web/`（React 18 + Vite + pnpm + TypeScript）。
-- **现状**：模型调用 → 循环 → 8 个内置工具 + stdio MCP → 权限三轴预设（四级 deny 阶梯 + 跨平台沙箱/审批阶梯 + 审计）→ hook 四事件 → 技能 → 上下文压缩 → 会话持久化 → 本地 Web 服务，端到端可用；浏览器界面随阶段 33 重建（纸本视觉对话界面 + 会话/工作区管理 + 设置）。
+- **现状**：模型调用 → 循环 → 8 个内置工具 + stdio MCP → 权限轻量化（毁灭级命令双确认 + 凭据拒读 + 跨平台沙箱 + 审计）→ hook 四事件 → 技能 → 上下文压缩 → 会话持久化 → 本地 Web 服务，端到端可用；浏览器界面随阶段 33 重建（纸本视觉对话界面 + 会话/工作区管理 + 设置）。
 - **阶段 35 重置**：包平铺到仓库根（`avid/`，无 src 层）；评测仪器（benchmarks）整体删除，评测另立阶段；docs 体系撤除，**代码与模块注释是唯一现状**。
 
 **仓库现状问谁**：不问文档，问代码——每个模块的职责、边界与不变量写在模块 docstring 与注释里；跨包边界由 `tests/test_web_boundaries.py` 的门禁（A1–A13）钉住，前端契约由 `test_wire_contract.py` / `test_event_contract.py` 双侧钉住。
@@ -49,7 +49,7 @@ Web  POST /api/sessions/{id}/runs ─┴─► svc/runs.RunRegistry（线程 + �
                            ├ ContextManager(context).compose()  装配 SYSTEM / tail 块，编排压缩
                            ├ chat() → Turn             正文 + tool_calls
                            └ execution.execute_batch()
-                                ├ security/action 归一化 → security/engine 裁决（deny > ask > allow）
+                                ├ security/action 归一化 → security/engine 裁决（默认放行；毁灭级问一次）
                                 ├ security/sandbox 按能力账本组装 bwrap argv
                                 └ 工具 handler（agent/tools/*，含 MCP 包装）
        on_message ─► SessionRecorder ─► <工作区>/.avid/sessions/*.jsonl（durable 真相）
@@ -67,7 +67,7 @@ Web  POST /api/sessions/{id}/runs ─┴─► svc/runs.RunRegistry（线程 + �
 |---|---|---|
 | Agent 核心 | `agent/`：`run`（唯一循环）、`spec` 运行输入收口、`state.RunState` 全部可变状态、`context` 上下文装配（CONTEXT_MAP 声明表）、`compaction` 压缩通路（保留最近 N 轮 + 摘要）、`stop` 终止路径（StopReason）、`execution` 工具协议、`transcript` 消息唯一所有者、`events` 事件名单点、`hooks` 默认回调、`todo`/`prompt`/`skills` | 一次运行的生命周期与上下文策略 |
 | 模型适配 | `providers/`：`{openai_compat,anthropic,responses}` 实现 + `__init__` 注册表、`transport` 退避重试、`protocol` 共享词表、`client`、`usage` 四家 usage 归一、`byok` 模型配置、`verify` 连通校验 | 换模型只动这一层 |
-| 安全 | `security/`：`action` 归一化与风险分类、`engine`（deny > ask > allow）、`rules` 四级阶梯、`modes` 三轴预设、`sandbox` bwrap、`audit`、`permission` 唯一装配点、`userdirs` | 阈值、规则与文案的高频变化集中地 |
+| 安全 | `security/`：`action` 归一化与风险分类、`engine`（默认直接跑；毁灭级问一次；凭据硬拒；full 跳过询问）、`sandbox` bwrap、`audit`、`permission` 唯一装配点、`userdirs` | 毁灭级名单、阈值与文案的高频变化集中地 |
 | 会话 | `session/`：条目树 + 值 + 分支 + 变更线，`memory` 与 `jsonl` 两后端共用一套一致性用例，`recorder` 是唯一写入者 | 磁盘上的会话真相 |
 | 应用服务 | `services/`：`runs` 运行注册表与重放缓冲、`approvals` 待决表、`sessions` 读视图、`workspaces`、`workspace_registry`、`picker` | 内核的第二个调用方 |
 | 传输适配 | `web/`：FastAPI 路由 + pydantic DTO + SSE 编帧 + 静态资源 | 线格式的唯一所有者 |
@@ -92,7 +92,7 @@ Web  POST /api/sessions/{id}/runs ─┴─► svc/runs.RunRegistry（线程 + �
 | 新增会话内命令 | `agent/commands.py` 的 COMMANDS 加名字 + 执行分支（CLI 与 Web 自动继承解析）|
 | 新增模型协议 | `providers/` 加一个实现模块 + `__init__.py` 的 PROVIDERS 一条表项，对循环返回**同形** `Turn` |
 | 新增一类上下文 | `ContextManager.register_source(kind, fn)` 一行（`agent/context.py`） |
-| 调权限阈值 / 规则 / 文案 | `security/`；压缩阈值在 `agent/compaction.py` |
+| 调毁灭级名单 / 权限阈值 / 文案 | `security/`（名单在 `action.DENY_PATTERNS`，决策在 `engine.py`）；压缩阈值在 `agent/compaction.py` |
 | 加一个事件 | `agent/events.py`（唯一单点）；同时在 `web/src/events/types.ts` 的 EVENTS 块里加同名成员——`tests/test_event_contract.py` 拦住两侧漂移 |
 | 加一个界面 | `web/src/surfaces/` 加页面并在 `app/App.tsx` 挂路由；颜色 / 字号 / 圆角只取 `styles/tokens.css` 的 token，不写散档 |
 
