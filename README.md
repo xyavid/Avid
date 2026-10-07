@@ -32,25 +32,34 @@ Anthropic / Ollama）+ 接口地址 + 密钥引用 + 模型与能力声明；cha
 - 「按运行换模型」的候选自动带上 BYOK 模型（`providerId/modelId`）。
 
 也可以直接手编 `~/.avid/models.json`（providers + bindings，结构见
-`avid/ai/byok.py` 模块注释）；写坏了会报可执行的修复文案，绝不静默回落。
+`avid/providers/byok.py` 模块注释）；写坏了会报可执行的修复文案，绝不静默回落。
 
-### 环境变量（只剩旁路凭据与运行期开关）
+### 环境变量（全部可选，日常运行不需要）
 
-```bash
-cp .env.example .env   # 按需填入；模型连接不在这里配
-```
+模型连接**不在环境变量里**配。剩下的都是运行期开关，按需 `export` 即可（想让
+它们跟着仓库走，就 `cp .env.example .env` 填好，再给 `uv run` 加 `--env-file .env`）：
 
 | 变量 | 必填 | 说明 |
 |---|---|---|
 | `AVID_MAX_PARALLEL_TOOL_CALLS` | 否 | 一步内并行工具调用上限，默认 10，硬上限 32 |
 | `AVID_MODEL_INFO` | 否 | 设 `off` 关闭「向 provider 问模型窗口」的探测 |
+| `AVID_HOME` | 否 | 用户级目录（会话注册表、审计）改到别处，默认 `~/.avid` |
+| `AVID_AUDIT_DIR` | 否 | 审计 JSONL 单独落一个目录 |
+| `AVID_SANDBOX_BIN` | 否 | 换一个 bwrap 可执行文件（诊断/打包用） |
+| `AVID_ALLOWED_HOSTS` | 否 | Web 服务额外信任的主机名（LAN 部署） |
 
 ## 运行
 
-交互会话（推荐；默认续接最近会话）：
+先把它装成一条命令（推荐；装完在任何目录直接敲 `avid`，改代码立即生效）：
 
 ```bash
-uv run --env-file .env avid
+uv tool install --editable ".[web]"   # 内核 + Web 依赖；只跑 CLI 可去掉 [web]
+```
+
+交互会话（默认续接最近会话）：
+
+```bash
+avid
 # avid> 读 pyproject.toml，告诉我项目名
 # avid> /compact          ← 压缩当前会话历史（保留最近轮，更早部分摘要化）
 # avid> /rewind           ← 回滚最近一次用户输入（对话指针回移，文件恢复到该点）
@@ -61,9 +70,15 @@ uv run --env-file .env avid
 单轮问答（带问题即单轮，不进入交互）：
 
 ```bash
-uv run --env-file .env avid "用一句话说明你是谁"
-uv run --env-file .env avid --agent "读 pyproject.toml，告诉我项目名"
+avid "用一句话说明你是谁"
+avid --agent "读 pyproject.toml，告诉我项目名"
 ```
+
+不想装成命令时，等价写法是 `uv run --directory <仓库> avid …`；已经在仓库目录里就是
+`uv run avid …`。改过依赖（pyproject）后重跑一次上面的 `uv tool install` 即可。
+
+**不需要 `.env`**：模型走 BYOK 文件（`~/.avid/models.json` + `secrets.json`），
+环境变量只有可选开关（见上一节）。没配模型时启动会直接告诉你「还没有模型配置」。
 
 工具执行前过一道轻量裁决（阶段 51，决策事实见 `avid/security/engine.py` 与
 `permission.py` 的注释）：
@@ -90,9 +105,12 @@ stdout 打印模型回复，stderr 打印逐轮 trace 与 token 用量。
 ```bash
 uv sync --extra web                              # 装 Web 依赖（FastAPI/uvicorn）
 pnpm -C web install && pnpm -C web run copy:dist # 前端产物交付到 avid/web/static/
-uv run --env-file .env avid web --port 8765      # API + SSE + 静态资源
+avid web --port 8765                             # API + SSE + 静态资源
 # → http://127.0.0.1:8765
 ```
+
+（没装成命令就用 `uv run --directory <仓库> avid web --port 8765`；`avid web` 只在
+`uv sync --extra web` 之后可用，缺 FastAPI 时会提示装 `web` extra。）
 
 浏览器界面（阶段 33 重建）：纸本视觉的对话页——时间线（思考块 / 工具卡 / 消息动作行 /
 用量卡）、发送与流式、会话管理（新建 / 重命名 / 删除）、工作区分组与选择、权限与按运行的

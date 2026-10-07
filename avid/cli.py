@@ -119,7 +119,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--yes",
         action="store_true",
-        help="替所有审批请求答「是」（硬拒绝与安全策略仍然生效，沙箱也仍然生效），"
+        help="替毁灭级确认答「是」（凭据拒读仍然生效，沙箱也仍然生效），"
         "非交互场景需显式指定",
     )
     parser.add_argument(

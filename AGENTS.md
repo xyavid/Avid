@@ -19,8 +19,9 @@ Avid 是一个自建的 agent 运行时（harness）：模型调用、工具执�
 
 ```bash
 uv sync && uv sync --extra web   # 内核依赖 / 追加 Web 依赖（fastapi·uvicorn·pydantic）
-uv run --env-file .env avid --agent "读 pyproject.toml，告诉我项目名"
-uv run --env-file .env avid web --port 8765
+uv tool install --editable ".[web]"   # 装成命令：任何目录直接敲 `avid`（改代码立即生效）
+avid --agent "读 pyproject.toml，告诉我项目名"
+avid web --port 8765
 
 uv run pytest                    # stress 门禁默认不跑（见 pyproject 的 addopts）
 uv run pytest -m stress          # 复杂度与长会话门禁
@@ -33,9 +34,10 @@ pnpm -C web run copy:dist         # 构建产物交付到 avid/web/static/（avi
 
 **模型连接只认 BYOK 配置**：`~/.avid/models.json` + 0600 的
 `~/.avid/secrets.json`，由界面「设置 → 模型」或手编文件维护（结构见
-`avid/ai/byok.py` 模块注释）；未配置时运行报「还没有模型配置」。`.env`
-（`--env-file`）只承载运行期开关。安装、配置项与
-CLI 全量参数见 `README.md`。
+`avid/providers/byok.py` 模块注释）；未配置时运行报「还没有模型配置」。`.env`
+是可选的：它只承载运行期开关，日常运行不需要（命令装法是
+`uv tool install --editable ".[web]"`，之后任何目录直接敲 `avid`）。
+安装、配置项与 CLI 全量参数见 `README.md`。
 
 ### 1.2 数据流
 
