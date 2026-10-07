@@ -73,13 +73,15 @@ describe('右侧 dock（阶段 48）', () => {
     expect(screen.getByText('没有正在运行的进程')).toBeTruthy()
   })
 
-  it('审查面板：待决审批复用审批条，允许/拒绝直达 onDecide；空态给文案', () => {
+  it('审查面板：待决审批复用审批条（两步确认），拒绝直达 onDecide；空态给文案', () => {
     const onDecide = vi.fn()
-    const approvals = [{ approvalId: 'a1', tool: 'bash', arguments: '{}', reason: '越界' }]
+    const approvals = [{ approvalId: 'a1', tool: 'bash', arguments: '{}', reason: '递归删除根目录' }]
     const { rerender } = renderDock({ active: 'review', approvals, onDecide })
 
     expect(screen.getByText(/bash/)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /允许/ }))
+    expect(onDecide).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '确认执行' }))
     expect(onDecide).toHaveBeenCalledWith('a1', 'allow')
 
     rerender(

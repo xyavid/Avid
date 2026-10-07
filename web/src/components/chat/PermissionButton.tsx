@@ -1,34 +1,40 @@
 /**
- * 权限按钮（输入区左侧的「态势」胶囊）：chip 反映当前权限模式（图标 + 文案
- * + 危险态着色），点击弹出卡片改模式。三态各有自己的图标：
- *   manual 手动 = user-check（人来裁决）；auto 自动 = shield-check（沙箱内）；
- *   full 完全 = alert-circle（关闭边界）。
- * full 走后端「三重锁」的界面侧：不能点一下就开——先出确认块，显式「确认开启」
- * 才回调（POST 时还要带 full_access_ack，见 StartRunInput）。
- * 当前模式由表面按选中会话的工作区默认权限初始化——按钮反映的是**实际态势**。
+ * 权限按钮（输入区左侧的「态势」胶囊）：chip 反映**这次运行是否完全访问**，
+ * 点击弹出两态卡片——默认（毁灭级命令会问你一次）/ 完全访问（跳过确认、关沙箱）。
+ * 完全访问不能点一下就开：先出确认块，显式「确认开启」才回调；降级回默认不设
+ * 确认（收回授权是安全方向）。发送时 hook 按这个布尔附 full_access_ack
+ * （见 StartRunInput）——界面只表达意图，服务端仍按显式凭据授权。
  */
 
 import { useEffect, useState } from 'react'
 
 import type { IconName } from '../../ui/Icon'
-import type { PermissionMode } from '../../api/types'
 import { cx } from '../../ui/cx'
 import { Icon } from '../../ui/Icon'
 
-const MODES: Record<PermissionMode, { label: string; icon: IconName; desc: string }> = {
-  manual: { label: '手动', icon: 'user-check', desc: '危险操作逐个问你' },
-  auto: { label: '自动', icon: 'shield-check', desc: '分类器裁决，沙箱内执行' },
-  full: { label: '完全', icon: 'alert-circle', desc: '关闭沙箱与网络边界' },
+const DEFAULT_META: { label: string; icon: IconName; desc: string } = {
+  label: '默认',
+  icon: 'user-check',
+  desc: '毁灭级命令会问你一次',
 }
 
-const MODE_ORDER: PermissionMode[] = ['manual', 'auto', 'full']
+const FULL_META: { label: string; icon: IconName; desc: string } = {
+  label: '完全访问',
+  icon: 'alert-circle',
+  desc: '跳过确认、关沙箱',
+}
+
+const OPTIONS: { full: boolean; meta: typeof DEFAULT_META }[] = [
+  { full: false, meta: DEFAULT_META },
+  { full: true, meta: FULL_META },
+]
 
 export type PermissionButtonProps = {
-  mode: PermissionMode
-  onChange: (mode: PermissionMode) => void
+  full: boolean
+  onToggleFull: (full: boolean) => void
 }
 
-export function PermissionButton({ mode, onChange }: PermissionButtonProps) {
+export function PermissionButton({ full, onToggleFull }: PermissionButtonProps) {
   const [open, setOpen] = useState(false)
   const [confirmingFull, setConfirmingFull] = useState(false)
 
@@ -37,22 +43,23 @@ export function PermissionButton({ mode, onChange }: PermissionButtonProps) {
   }, [open])
 
   const close = () => setOpen(false)
+  const current = full ? FULL_META : DEFAULT_META
 
-  const pick = (m: PermissionMode) => {
-    if (m === mode) {
+  const pick = (next: boolean) => {
+    if (next === full) {
       close()
       return
     }
-    if (m === 'full') {
+    if (next) {
       setConfirmingFull(true)
       return
     }
-    onChange(m)
+    onToggleFull(false)
     close()
   }
 
   const confirmFull = () => {
-    onChange('full')
+    onToggleFull(true)
     close()
   }
 
@@ -65,12 +72,12 @@ export function PermissionButton({ mode, onChange }: PermissionButtonProps) {
         onClick={() => setOpen((v) => !v)}
         className={cx(
           'inline-flex h-[26px] items-center gap-[5px] rounded-sm border-hairline px-a8 font-ui text-hint font-medium transition-colors duration-fast ease-out hover:bg-overlay-light',
-          mode === 'full' ? 'border-transparent bg-danger/[0.08] text-danger' : 'border-hair text-ink-light',
+          full ? 'border-transparent bg-danger/[0.08] text-danger' : 'border-hair text-ink-light',
         )}
       >
-        <Icon name={MODES[mode].icon} size={12} />
-        <span>{MODES[mode].label}</span>
-        <span className="sr-only">权限模式</span>
+        <Icon name={current.icon} size={12} />
+        <span>{current.label}</span>
+        <span className="sr-only">权限</span>
       </button>
 
       {open && (
@@ -78,18 +85,17 @@ export function PermissionButton({ mode, onChange }: PermissionButtonProps) {
           <div data-testid="popover-backdrop" className="fixed inset-0 z-10" onClick={close} aria-hidden />
           <div
             role="dialog"
-            aria-label="权限模式"
+            aria-label="权限"
             className="absolute bottom-full left-0 z-20 mb-a8 w-[300px] rounded-md border-hairline border-hair bg-card p-a8 shadow-soft"
             style={{ animation: 'hana-scale-in var(--duration-slow) var(--ease-out)' }}
           >
-            {MODE_ORDER.map((m) => {
-              const meta = MODES[m]
-              const selected = m === mode
+            {OPTIONS.map(({ full: value, meta }) => {
+              const selected = value === full
               return (
                 <button
-                  key={m}
+                  key={String(value)}
                   type="button"
-                  onClick={() => pick(m)}
+                  onClick={() => pick(value)}
                   className={cx(
                     'flex w-full items-start gap-a8 rounded-sm px-a8 py-a6 text-left transition-colors duration-fast ease-out',
                     selected ? 'bg-accent-light' : 'hover:bg-overlay-light',
@@ -119,7 +125,7 @@ export function PermissionButton({ mode, onChange }: PermissionButtonProps) {
                 style={{ animation: 'hana-fade-up var(--duration-fast) var(--ease-out)' }}
               >
                 <p className="font-ui text-hint leading-[1.6] text-danger">
-                  关闭沙箱与网络边界意味着工具可以无限制地执行与联网。仅在明确需要时开启。
+                  完全访问会跳过毁灭级确认、关闭沙箱且不过滤环境变量。仅在明确需要时开启。
                 </p>
                 <div className="mt-a8 flex items-center justify-end gap-a8">
                   <button

@@ -5,12 +5,13 @@
  * 选词回车是组词，不是提交——纸本中文界面的硬约束）。
  * 运行中（busy）输入保持可编辑（先写好下一条），只禁发送（钮变停止）；
  * 停止是协作式的，终态以事件为准。
- * 权限胶囊反映实际三态，发送时随 StartRunInput 提交（full 由 hook 附 ack）。
+ * 权限胶囊反映这次运行是否完全访问（默认 / 完全访问两态），发送时随
+ * StartRunInput 提交（full 由 hook 附 full_access_ack）。
  */
 
 import { useRef, useState } from 'react'
 
-import type { ModelCandidate, PermissionMode } from '../../api/types'
+import type { ModelCandidate } from '../../api/types'
 import { Icon, type IconName } from '../../ui/Icon'
 import { PermissionButton } from './PermissionButton'
 import { ModelButton } from './ModelButton'
@@ -25,8 +26,9 @@ function autogrow(el: HTMLTextAreaElement) {
 }
 
 export type ComposerProps = {
-  permission: PermissionMode
-  onChangePermission: (mode: PermissionMode) => void
+  /** 这次运行是否完全访问（默认 false = normal）。 */
+  full: boolean
+  onToggleFull: (full: boolean) => void
   /** 无选中会话等：整条输入路径不可用。 */
   disabled?: boolean
   /** 运行中：发送禁用（钮变停止），输入仍可编辑。 */
@@ -43,8 +45,8 @@ export type ComposerProps = {
 }
 
 export function Composer({
-  permission,
-  onChangePermission,
+  full,
+  onToggleFull,
   disabled = false,
   busy = false,
   onSend,
@@ -97,7 +99,7 @@ export function Composer({
         />
         <div className="mt-a8 flex items-center justify-between">
           <div className="flex items-center gap-a8">
-            <PermissionButton mode={permission} onChange={onChangePermission} />
+            <PermissionButton full={full} onToggleFull={onToggleFull} />
             {onChangeModel && (
               <ModelButton
                 model={model}

@@ -13,7 +13,7 @@ function session(id: string, name: string, workspaceId: string | null): SessionS
     storage_version: 1,
     parent_session_id: null,
     workspace: workspaceId
-      ? { id: workspaceId, root: `/ws/${workspaceId}`, name: workspaceId, default_permission: 'manual' }
+      ? { id: workspaceId, root: `/ws/${workspaceId}`, name: workspaceId }
       : null,
     message_count: 1,
     active_run_id: null,

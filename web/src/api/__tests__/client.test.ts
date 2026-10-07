@@ -94,7 +94,7 @@ describe('api/client（网络出口唯一层）', () => {
   })
 
   it('createWorkspace POST 带 JSON 载荷', async () => {
-    const created = { id: 'w1', root: '/tmp/x', name: null, created_at: 0, last_used_at: 0, default_permission: null, is_default: false }
+    const created = { id: 'w1', root: '/tmp/x', name: null, created_at: 0, last_used_at: 0, is_default: false }
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(201, created))
     vi.stubGlobal('fetch', fetchMock)
 

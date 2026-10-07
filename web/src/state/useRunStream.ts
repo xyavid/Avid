@@ -18,7 +18,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { cancelRun, decideApproval, getRun, startRun } from '../api/client'
 import { subscribeRun } from '../api/events'
-import type { PermissionMode } from '../api/types'
+import type { RunPermission } from '../events/types'
 
 export type RunPhase = 'idle' | 'starting' | 'running' | 'settling' | 'error'
 
@@ -54,6 +54,9 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
   const [segments, setSegments] = useState<LiveSegment[]>([])
   const [approvals, setApprovals] = useState<LiveApproval[]>([])
   const [error, setError] = useState<string | null>(null)
+  // 内核在 run_started 里记录的实际权限形态（normal/full）；null = 还没有这个事实。
+  // 附着到进行中的运行时它是重放来源——"这次运行是不是完全访问"不从意图反推。
+  const [runPermission, setRunPermission] = useState<RunPermission | null>(null)
 
   const runIdRef = useRef<string | null>(null)
   const subRef = useRef<{ abort: () => void } | null>(null)
@@ -127,6 +130,7 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
     setSegments([])
     setApprovals([])
     setError(null)
+    setRunPermission(null)
     setPhase('idle')
   }, [discardPendingDeltas])
 
@@ -134,6 +138,14 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
     (e: EventFrame) => {
       const data = (e.data ?? {}) as Record<string, unknown>
       switch (e.type) {
+        case 'run_started': {
+          // 两值口径：normal = 默认形态（毁灭级命令问一次）；full = 完全访问。
+          // 沙箱事实在 sandbox_state/sandbox_notes 里，界面暂不展示，只留权限这一条。
+          if (data.permission === 'normal' || data.permission === 'full') {
+            setRunPermission(data.permission)
+          }
+          break
+        }
         case 'user_message': {
           const msg = data.message as { content?: unknown } | undefined
           if (msg && typeof msg.content === 'string' && msg.content) {
@@ -296,7 +308,7 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
   )
 
   const send = useCallback(
-    async (prompt: string, permission: PermissionMode, model?: string | null, branch?: string) => {
+    async (prompt: string, full: boolean, model?: string | null, branch?: string) => {
       if (!sessionId) return
       setPhase('starting')
       setError(null)
@@ -305,15 +317,16 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
       setAssistantText('')
       setSegments([])
       setApprovals([])
+      setRunPermission(null)
       try {
         const created = await startRun(sessionId, {
           prompt,
-          permission,
           // 只在选了覆盖时才带 model：不带 = 服务端按设置解析（与旧行为逐字一致）
           ...(model ? { model } : {}),
           // 只在非主线时才带 branch：不带 = 服务端默认 main，载荷与旧行为逐字一致
           ...(branch && branch !== 'main' ? { branch } : {}),
-          ...(permission === 'full' ? { full_access_ack: true } : {}),
+          // 完全访问的唯一凭据；默认形态不带这个字段。
+          ...(full ? { full_access_ack: true } : {}),
         })
         runIdRef.current = created.run_id
         setRunId(created.run_id)
@@ -366,6 +379,7 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
     segments,
     tools,
     approvals,
+    runPermission,
     error,
     send,
     stop,

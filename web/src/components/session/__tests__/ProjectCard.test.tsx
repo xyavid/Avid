@@ -6,8 +6,8 @@ import type { WorkspaceSummary } from '../../../api/types'
 import { ProjectCard } from '../ProjectCard'
 
 const WORKSPACES: WorkspaceSummary[] = [
-  { id: 'w1', root: '/home/fishy/Avid', name: 'Avid', created_at: 0, last_used_at: 0, default_permission: 'manual', is_default: true },
-  { id: 'w2', root: '/home/fishy/other', name: 'Other', created_at: 0, last_used_at: 0, default_permission: 'auto', is_default: false },
+  { id: 'w1', root: '/home/fishy/Avid', name: 'Avid', created_at: 0, last_used_at: 0, is_default: true },
+  { id: 'w2', root: '/home/fishy/other', name: 'Other', created_at: 0, last_used_at: 0, is_default: false },
 ]
 
 afterEach(cleanup)

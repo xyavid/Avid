@@ -21,18 +21,6 @@ export interface Skill {
   description: string
 }
 
-/**
- * 三个用户模式（阶段 26）：每个是**三轴预设**，不是一道信任边界的三个刻度。
- *
- * `manual` = approval:user + sandbox:workspace + network:restricted
- * `auto`   = approval:classifier + 同样的沙箱与网络
- * `full`   = approval:none + sandbox:disabled + network:open（必须显式授权）
- *
- * 服务端 `StartRunIn.permission` 是 `Literal[...] | None`，非法值 422；
- * `full` 还需要 `full_access_ack: true`（见 `needsFullAck`）。
- */
-export type PermissionMode = 'manual' | 'auto' | 'full'
-
 /** 沙箱后端探测结果（`GET /api/meta` 的 `capabilities.sandbox`）。 */
 export interface SandboxState {
   backend: string
@@ -53,14 +41,14 @@ export interface WorkspaceRef {
   id: string | null
   root: string | null
   name: string | null
-  default_permission: PermissionMode | null
 }
 
 /**
  * `GET /api/workspaces` 的一项。
  *
- * `is_default` 只有单工作区模式才可能为 true；`name` 与 `default_permission` 在
- * pydantic DTO 里都是可空字段（`WorkspaceOut` 继承 `WorkspaceRef`），所以这里也按可空接。
+ * `is_default` 只有单工作区模式才可能为 true；`name` 在 pydantic DTO 里是可空字段
+ * （`WorkspaceOut` 继承 `WorkspaceRef`），所以这里也按可空接。
+ * 阶段 51 起工作区没有默认权限——权限只按运行给（见 `StartRunInput`）。
  */
 export interface WorkspaceSummary {
   id: string
@@ -68,7 +56,6 @@ export interface WorkspaceSummary {
   name: string | null
   created_at: number
   last_used_at: number
-  default_permission: PermissionMode | null
   is_default: boolean
 }
 
@@ -264,13 +251,12 @@ export interface StartRunInput {
   auto_approve?: boolean
   /** 这次运行接在哪条链尾上；缺省 = main。 */
   branch?: string
-  /** 这次运行的权限模式；缺省由服务端按会话所属工作区的默认权限回落。 */
-  permission?: PermissionMode
   /**
-   * `permission: 'full'` 的**显式授权凭据**。
+   * 完全访问的**显式授权凭据**（阶段 51 起是唯一开关，没有 permission 模式字段）。
    *
-   * 少了它服务端 422：关掉沙箱与网络边界这件事必须是一次有意识的动作，而不是
-   * 选择器上的第三项。由 `buildStartRunInput` 按模式统一填，调用点不必各自记得。
+   * `true` = 跳过毁灭级确认、关沙箱、不滤环境变量；缺省/`false` = 默认形态
+   * （只有毁灭级命令问一次）。服务端 `extra="forbid"`：旧字段随载荷带上会被
+   * 422 拒收，界面也没有第二个开关可填。
    */
   full_access_ack?: boolean
 }

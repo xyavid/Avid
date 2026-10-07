@@ -48,54 +48,74 @@ afterEach(() => {
 })
 
 describe('useRunStream（发送 → 订阅 → 活事件 → 终态回拉）', () => {
-  it('send：POST 带 prompt/permission；full 模式自动附 full_access_ack', async () => {
+  it('send：POST 只带 prompt 与非默认字段；完全访问时附 full_access_ack', async () => {
     const { result } = renderHook(() => useRunStream('s1', () => {}))
     await act(async () => {
-      await result.current.send('你好', 'manual')
+      await result.current.send('你好', false)
     })
-    expect(startRun).toHaveBeenCalledWith('s1', { prompt: '你好', permission: 'manual' })
+    expect(startRun).toHaveBeenCalledWith('s1', { prompt: '你好' })
     expect(subscribe).toHaveBeenCalledWith('r1', 0, expect.anything())
 
     await act(async () => {
-      await result.current.send('放开跑', 'full')
+      await result.current.send('放开跑', true)
     })
     expect(startRun).toHaveBeenLastCalledWith('s1', {
       prompt: '放开跑',
-      permission: 'full',
       full_access_ack: true,
     })
 
     // 选了模型才带 model；不选时载荷与旧行为逐字一致（服务端按设置解析）
     await act(async () => {
-      await result.current.send('换个模型', 'manual', 'deepseek-reasoner')
+      await result.current.send('换个模型', false, 'deepseek-reasoner')
     })
     expect(startRun).toHaveBeenLastCalledWith('s1', {
       prompt: '换个模型',
-      permission: 'manual',
       model: 'deepseek-reasoner',
     })
 
     await act(async () => {
-      await result.current.send('还是跟随设置', 'manual', null)
+      await result.current.send('还是跟随设置', false, null)
     })
-    expect(startRun).toHaveBeenLastCalledWith('s1', { prompt: '还是跟随设置', permission: 'manual' })
+    expect(startRun).toHaveBeenLastCalledWith('s1', { prompt: '还是跟随设置' })
 
     // 分叉之后：只有非 main 才带 branch（main 与旧行为逐字一致）
     await act(async () => {
-      await result.current.send('在分支上问', 'manual', null, 'b2')
+      await result.current.send('在分支上问', false, null, 'b2')
     })
-    expect(startRun).toHaveBeenLastCalledWith('s1', { prompt: '在分支上问', permission: 'manual', branch: 'b2' })
+    expect(startRun).toHaveBeenLastCalledWith('s1', { prompt: '在分支上问', branch: 'b2' })
 
     await act(async () => {
-      await result.current.send('在主线上问', 'manual', null, 'main')
+      await result.current.send('在主线上问', false, null, 'main')
     })
-    expect(startRun).toHaveBeenLastCalledWith('s1', { prompt: '在主线上问', permission: 'manual' })
+    expect(startRun).toHaveBeenLastCalledWith('s1', { prompt: '在主线上问' })
+  })
+
+  it('run_started 的两值权限口径落到 runPermission；沙箱事实不从这里反推', async () => {
+    const { result } = renderHook(() => useRunStream('s1', () => {}))
+    await act(async () => {
+      await result.current.send('放开跑', true)
+    })
+    const bus = emitter()
+
+    act(() => {
+      bus.send(
+        'run_started',
+        { permission: 'full', sandbox_state: { policy: 'disabled' }, sandbox_notes: [] },
+        1,
+      )
+    })
+    expect(result.current.runPermission).toBe('full')
+
+    act(() => {
+      bus.send('run_started', { permission: 'normal', sandbox_state: { policy: 'workspace' } }, 2)
+    })
+    expect(result.current.runPermission).toBe('normal')
   })
 
   it('思考与工具按事件流顺序交错成段，相邻思考合并、思考不进正文', async () => {
     const { result } = renderHook(() => useRunStream('s1', () => {}))
     await act(async () => {
-      await result.current.send('跑一下', 'manual')
+      await result.current.send('跑一下', false)
     })
     const { send } = emitter()
 
@@ -128,7 +148,7 @@ describe('useRunStream（发送 → 订阅 → 活事件 → 终态回拉）', (
     })
     const { result } = renderHook(() => useRunStream('s1', () => {}))
     await act(async () => {
-      await result.current.send('跑', 'manual')
+      await result.current.send('跑', false)
     })
     const bus = emitter()
 
@@ -154,13 +174,13 @@ describe('useRunStream（发送 → 订阅 → 活事件 → 终态回拉）', (
   it('新一次发送会清掉上一轮的思考（它只属于那一次运行）', async () => {
     const { result } = renderHook(() => useRunStream('s1', () => {}))
     await act(async () => {
-      await result.current.send('第一轮', 'manual')
+      await result.current.send('第一轮', false)
     })
     act(() => emitter().send('reasoning_delta', { text: '上一轮的思考' }))
     expect(result.current.segments).toEqual([{ kind: 'reasoning', text: '上一轮的思考' }])
 
     await act(async () => {
-      await result.current.send('第二轮', 'manual')
+      await result.current.send('第二轮', false)
     })
     expect(result.current.segments).toEqual([])
   })
@@ -169,7 +189,7 @@ describe('useRunStream（发送 → 订阅 → 活事件 → 终态回拉）', (
     const onSettled = vi.fn()
     const { result } = renderHook(() => useRunStream('s1', onSettled))
     await act(async () => {
-      await result.current.send('你好', 'auto')
+      await result.current.send('你好', false)
     })
     const bus = emitter()
 
@@ -179,7 +199,7 @@ describe('useRunStream（发送 → 订阅 → 活事件 → 终态回拉）', (
       bus.send('assistant_delta', { text: '呀' })
       bus.send('tool_call_started', { tool: 'bash', tool_call_id: 'c1', arguments: {} }, 2)
       bus.send('tool_call_finished', { tool: 'bash', tool_call_id: 'c1', status: 'ok' }, 3)
-      bus.send('approval_requested', { approval_id: 'a1', tool: 'bash', arguments: '{}', reason: '越界' }, 4)
+      bus.send('approval_requested', { approval_id: 'a1', tool: 'bash', arguments: '{}', reason: '递归删除根目录' }, 4)
     })
 
     expect(result.current.assistantText).toBe('你好呀')
@@ -199,7 +219,7 @@ describe('useRunStream（发送 → 订阅 → 活事件 → 终态回拉）', (
     const onSettled = vi.fn()
     const { result } = renderHook(() => useRunStream('s1', onSettled))
     await act(async () => {
-      await result.current.send('你好', 'manual')
+      await result.current.send('你好', false)
     })
     const bus = emitter()
 
@@ -220,7 +240,7 @@ describe('useRunStream（发送 → 订阅 → 活事件 → 终态回拉）', (
     startRun.mockRejectedValue(new Error('一个会话同时至多一个运行'))
     const { result } = renderHook(() => useRunStream('s1', () => {}))
     await act(async () => {
-      await result.current.send('你好', 'manual')
+      await result.current.send('你好', false)
     })
     expect(result.current.phase).toBe('error')
     expect(result.current.error).toContain('一个会话')
@@ -229,7 +249,7 @@ describe('useRunStream（发送 → 订阅 → 活事件 → 终态回拉）', (
   it('stop：调 cancelRun', async () => {
     const { result } = renderHook(() => useRunStream('s1', () => {}))
     await act(async () => {
-      await result.current.send('你好', 'manual')
+      await result.current.send('你好', false)
     })
     await act(async () => {
       await result.current.stop()
@@ -242,7 +262,7 @@ describe('useRunStream（发送 → 订阅 → 活事件 → 终态回拉）', (
     const onSettled = vi.fn()
     const { result } = renderHook(() => useRunStream('s1', onSettled))
     await act(async () => {
-      await result.current.send('你好', 'manual')
+      await result.current.send('你好', false)
     })
     const handlers = subscribe.mock.calls.at(-1)?.[2] as { onError: (e: Error) => void }
 

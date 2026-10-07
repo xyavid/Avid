@@ -11,8 +11,8 @@ function renderComposer(overrides?: { busy?: boolean; disabled?: boolean }) {
   const onStop = vi.fn()
   const view = render(
     <Composer
-      permission="manual"
-      onChangePermission={() => {}}
+      full={false}
+      onToggleFull={() => {}}
       onSend={onSend}
       onStop={onStop}
       {...overrides}
@@ -25,11 +25,11 @@ const input = () => screen.getByPlaceholderText(/说点什么…/) as HTMLTextAr
 
 describe('Composer（多行输入与发送/停止）', () => {
   it('发送/停止是带文字的按钮（不是只有图标），文字就是它的可访问名', () => {
-    const { rerender } = render(<Composer permission="manual" onChangePermission={() => {}} onSend={() => {}} onStop={() => {}} />)
+    const { rerender } = render(<Composer full={false} onToggleFull={() => {}} onSend={() => {}} onStop={() => {}} />)
 
     expect(screen.getByRole('button', { name: '发送' }).textContent).toContain('发送')
 
-    rerender(<Composer permission="manual" onChangePermission={() => {}} busy onSend={() => {}} onStop={() => {}} />)
+    rerender(<Composer full={false} onToggleFull={() => {}} busy onSend={() => {}} onStop={() => {}} />)
     expect(screen.getByRole('button', { name: '停止' }).textContent).toContain('停止')
   })
 
@@ -100,7 +100,7 @@ describe('Composer（多行输入与发送/停止）', () => {
   it('权限胶囊仍可交互（不受 busy/disabled 影响）', () => {
     renderComposer({ disabled: true })
 
-    fireEvent.click(screen.getByRole('button', { name: /权限模式/ }))
-    expect(screen.getByRole('dialog', { name: '权限模式' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /权限/ }))
+    expect(screen.getByRole('dialog', { name: '权限' })).toBeTruthy()
   })
 })

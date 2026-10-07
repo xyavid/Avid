@@ -154,7 +154,7 @@ export function pickFolder(): Promise<{ path: string | null }> {
   return request('/api/workspaces/pick', { method: 'POST' })
 }
 
-export type CreateWorkspaceInput = { path: string; name?: string; permission?: 'manual' | 'auto' }
+export type CreateWorkspaceInput = { path: string; name?: string }
 
 /** 注册工作区；已注册时后端 409 workspace_exists（detail 带既有 id/name/root）。 */
 export function createWorkspace(input: CreateWorkspaceInput): Promise<WorkspaceSummary> {
@@ -177,11 +177,9 @@ export function deleteWorkspace(id: string): Promise<void> {
 export type StartRunInput = {
   prompt: string
   /** 这次运行接在哪条链尾上；缺省 = main。 */  branch?: string
-  /** 权限模式；缺省由服务端按会话所属工作区的默认权限回落。 */
-  permission?: 'manual' | 'auto' | 'full'
   /** 本次运行的模型覆盖；缺省 = 按设置解析（.env + 界面覆盖层）。 */
   model?: string
-  /** permission: 'full' 的显式授权凭据——少了它服务端 422（full 三重锁）。 */
+  /** `true` = 完全访问（跳过毁灭级确认、关沙箱）；唯一的授权凭据，没有模式字段。 */
   full_access_ack?: boolean
 }
 

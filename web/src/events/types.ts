@@ -6,7 +6,13 @@
  * 加一个事件要同时改两侧，否则测试失败——这就是不上生成器时代的漂移检查。
  */
 
-import type { PermissionMode, SandboxState, UsageReport } from '../api/types'
+import type { SandboxState, UsageReport } from '../api/types'
+
+/**
+ * run_started 记录的两值权限口径（阶段 51）：normal = 默认形态（毁灭级命令问一次）；
+ * full = 完全访问（显式 full_access_ack 授权，跳过确认、关沙箱）。
+ */
+export type RunPermission = 'normal' | 'full'
 
 // EVENTS:BEGIN
 export type AvidEventType =
@@ -126,15 +132,12 @@ export interface EventData {
   text?: string
   code?: string
   after_seq?: number
-  // run_started 带归属与三轴（阶段 18/26）：刷新页面后重建界面靠它。
-  // `permission` 是模式名，`approval`/`sandbox`/`network` 是它展开的三轴——
-  // "这次运行关没关沙箱"必须是可读的事实，而不是从模式名反推的结论。
+  // run_started 带归属与两值权限口径（阶段 51）：刷新页面后重建界面靠它。
+  // `permission` 只表示"这次运行是不是完全访问"；沙箱的实际形态在
+  // `sandbox_state`/`sandbox_notes` 里——"这次运行关没关沙箱"必须是可读的事实。
   workspace?: string
   workspace_root?: string
-  permission?: PermissionMode
-  approval?: string
-  sandbox?: string
-  network?: string
+  permission?: RunPermission
   sandbox_state?: SandboxState
   sandbox_notes?: string[]
   /**

@@ -26,7 +26,7 @@ import {
   pickFolder,
   renameSession,
 } from '../../api/client'
-import type { Entry, Meta, PermissionMode, SessionSummary, UsageReport, WorkspaceSummary } from '../../api/types'
+import type { Entry, Meta, SessionSummary, UsageReport, WorkspaceSummary } from '../../api/types'
 import { ApprovalBar } from '../../components/chat/ApprovalBar'
 import { AssistantMessage } from '../../components/chat/AssistantMessage'
 import { Composer } from '../../components/chat/Composer'
@@ -92,8 +92,9 @@ export function ConversationPage() {
   const [pendingAnchor, setPendingAnchor] = useState<{ top: number; height: number } | null>(null)
   const holdFollowRef = useRef(false)
   const anchorRef = useRef<{ top: number; height: number } | null>(null)
-  // 权限「态势」：随选中会话回落到其工作区的默认权限，用户可在输入区改（下次发送生效）。
-  const [permission, setPermission] = useState<PermissionMode>('manual')
+  // 完全访问开关：默认 false（normal 形态）。开启即这次运行跳过毁灭级确认、关沙箱，
+  // 随 StartRunInput 的 full_access_ack 提交；粘住直到用户改回来。
+  const [full, setFull] = useState(false)
   // 本次运行用的模型（输入区可选）：null = 跟随设置。粘住直到用户改回来——
   // 试模型时通常要连着问几个问题，每条都重选一次很烦。
   const [runModel, setRunModel] = useState<string | null>(null)
@@ -274,11 +275,6 @@ export function ConversationPage() {
     holdFollowRef.current = false
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 只随锚点触发
   }, [pendingAnchor])
-
-  useEffect(() => {
-    setPermission(selected?.workspace?.default_permission ?? 'manual')
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在切换会话时回落默认值
-  }, [selected?.id])
 
   // 默认选择：选中会话归属的工作区，否则第一个候选；用户手动选过就不覆盖。
   useEffect(() => {
@@ -592,8 +588,8 @@ export function ConversationPage() {
             </div>
           )}
           <Composer
-            permission={permission}
-            onChangePermission={setPermission}
+            full={full}
+            onToggleFull={setFull}
             disabled={!selectedId}
             busy={liveHere}
             model={runModel}
@@ -602,7 +598,7 @@ export function ConversationPage() {
             byokModels={meta?.capabilities.models ?? []}
             onSend={(text) => {
               setLiveSession(selectedId)
-              void live.send(text, permission, runModel, branch)
+              void live.send(text, full, runModel, branch)
             }}
             onStop={() => void live.stop()}
           />
