@@ -8,12 +8,22 @@ from avid.agent.tools import SUB_HANDLERS, SUB_TOOLS, TOOLS
 from avid.agent.tools.subagent import (
     MAX_PARALLEL,
     SUB_SYSTEM,
+    TASK_FIELDS,
+    TASK_STOP_LINE,
     run_subagent,
     subagent,
+    task_brief,
 )
+from avid.agent.tools.validate import validate_arguments
 from avid.providers.config import Config
 
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
+
+SUBAGENT_PARAMETERS = next(
+    item["function"]["parameters"]
+    for item in TOOLS
+    if item["function"]["name"] == "subagent"
+)
 
 
 def run(payload, **kwargs):
@@ -21,8 +31,22 @@ def run(payload, **kwargs):
     return subagent(payload, state=RunState(), **kwargs)
 
 
-def task(description="干点活", prompt="把这件事做完"):
-    return {"description": description, "prompt": prompt}
+def task(
+    description="干点活",
+    objective="把这件事做完",
+    scope="整个仓库，但不要改文件",
+    context="父对话里已经确认的现象",
+    constraints="只读；不要提交",
+    deliverable="结论摘要：文件、根因、建议",
+):
+    return {
+        "description": description,
+        "objective": objective,
+        "scope": scope,
+        "context": context,
+        "constraints": constraints,
+        "deliverable": deliverable,
+    }
 
 
 # ---------- 工具集与递归防护 ----------
@@ -47,6 +71,21 @@ def test_subagent_has_no_turn_cap_of_its_own():
 def test_sub_system_asks_for_a_self_contained_summary():
     assert "摘要" in SUB_SYSTEM
     assert "不要反问" in SUB_SYSTEM
+    # 系统提示要说清用户消息是任务提示，五段骨架不是自由文本
+    assert "Deliverable" in SUB_SYSTEM
+
+
+def test_task_fields_are_the_six_fields_in_render_order():
+    """字段名即段名：顺序就是渲染顺序，schema 与校验都从这张表派生。"""
+    assert [key for key, _ in TASK_FIELDS] == [
+        "description",
+        "objective",
+        "scope",
+        "context",
+        "constraints",
+        "deliverable",
+    ]
+    assert all(hint.strip() for _, hint in TASK_FIELDS)
 
 
 # ---------- 参数校验 ----------
@@ -69,16 +108,32 @@ def test_rejects_too_many_tasks():
     assert f"收到 {MAX_PARALLEL + 1} 个" in result
 
 
-def test_rejects_missing_prompt():
-    result = run({"tasks": [{"description": "只有描述"}]})
+def test_rejects_a_task_missing_a_section():
+    result = run({"tasks": [{"description": "只有标题"}]})
 
-    assert "prompt 不能为空" in result
+    assert "objective 不能为空" in result
+
+
+def test_rejects_the_free_text_task_shape():
+    """父 agent 不能再扔一段自由文本：六段缺一即打回，报错带上该段该写什么。"""
+    result = run({"tasks": [{"description": "标题", "prompt": "把这件事做完"}]})
+
+    assert "objective 不能为空" in result
+    assert "这次要达成什么" in result
 
 
 def test_rejects_blank_description():
-    result = run({"tasks": [{"description": "   ", "prompt": "p"}]})
+    result = run({"tasks": [task(description="   ")]})
 
     assert "description 不能为空" in result
+
+
+def test_schema_requires_every_section():
+    """协议层的校验先于实现：缺段在 execution 那一步就被打回，不用等下到实现里。"""
+    problem = validate_arguments(SUBAGENT_PARAMETERS, {"tasks": [{"description": "标题"}]})
+
+    assert problem is not None
+    assert "objective" in problem and "必填" in problem
 
 
 def test_rejects_non_object_item():
@@ -94,6 +149,50 @@ def test_validation_happens_before_any_subagent_runs():
     )
 
     assert started == []
+
+
+# ---------- 任务提示的渲染 ----------
+
+
+def test_child_receives_the_rendered_brief():
+    """子 agent 的第一条消息不是父 agent 的自由文本，而是 harness 渲染的固定骨架。
+
+    骨架保证每份任务提示形状一致：标题行 + 五段 + 收尾句，父 agent 只填值。
+    """
+    seen = []
+
+    run({"tasks": [task()]}, runner=lambda prompt, **kwargs: seen.append(prompt) or "ok")
+
+    assert seen == [
+        "干点活\n\n"
+        "Objective:\n把这件事做完\n\n"
+        "Scope:\n整个仓库，但不要改文件\n\n"
+        "Context:\n父对话里已经确认的现象\n\n"
+        "Constraints:\n只读；不要提交\n\n"
+        "Deliverable:\n结论摘要：文件、根因、建议\n\n"
+        + TASK_STOP_LINE
+    ]
+
+
+def test_task_brief_closes_with_the_stop_line():
+    """收尾句由 harness 出，父 agent 不用自己写：做完即停、把结论交回父 agent。"""
+    brief = task_brief(task())
+
+    assert brief.endswith(TASK_STOP_LINE)
+    assert "parent agent" in TASK_STOP_LINE
+
+
+def test_task_brief_keeps_the_sections_in_order():
+    """段的顺序即查读顺序：父 agent 填反了也不会乱，渲染只认字段名。"""
+    brief = task_brief(task(scope="只看 avid/agent/", deliverable="三段话结论"))
+
+    assert brief.index("Objective:") < brief.index("Scope:")
+    assert brief.index("Scope:") < brief.index("Context:")
+    assert brief.index("Context:") < brief.index("Constraints:")
+    assert brief.index("Constraints:") < brief.index("Deliverable:")
+    assert "只看 avid/agent/" in brief
+    assert "三段话结论" in brief
+    assert brief.startswith("干点活\n\nObjective:")
 
 
 # ---------- 并行调度与汇总 ----------
@@ -116,11 +215,13 @@ def test_runs_every_task_and_labels_the_results():
         runner=runner,
     )
 
-    assert seen == ["统计 src 下各文件行数", "列出所有测试文件"]
+    assert [brief.splitlines()[0] for brief in seen] == ["统计行数", "检查测试"]
+    assert "Objective:\n统计 src 下各文件行数" in seen[0]
+    assert "Objective:\n列出所有测试文件" in seen[1]
     assert result.startswith("已并行运行 2 个 subagent：")
     assert "=== 1/2 · 统计行数 ===" in result
     assert "=== 2/2 · 检查测试 ===" in result
-    assert "摘要：统计 src 下各文件行数" in result
+    assert "摘要：统计行数" in result
 
 
 def test_single_task_uses_singular_wording():
@@ -141,7 +242,7 @@ def test_empty_summary_becomes_no_summary():
 
 def test_one_failure_does_not_lose_the_others():
     def runner(prompt, **kwargs):
-        if prompt == "炸":
+        if "炸" in prompt:
             raise RuntimeError("内部错误")
         return "好"
 
@@ -211,7 +312,8 @@ def test_auto_approve_defaults_to_false(monkeypatch):
 # ---------- run_subagent ----------
 
 
-def test_run_subagent_initialises_messages_with_the_prompt(monkeypatch):
+def test_run_subagent_puts_the_task_brief_in_the_first_message(monkeypatch):
+    """run_subagent 只管把交给它的任务提示放进第一条用户消息；骨架渲染在 subagent 那层。"""
     import dataclasses
 
     from avid.agent import run as run_module

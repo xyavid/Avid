@@ -7,6 +7,11 @@ truncation all come for free.
 写什么、调哪个工具。正文与思考增量经子运行自己的 observer 发出，而 subagent 工具给
 observer 打的标记（`{task, index}`）会跟着走，所以父运行的事件流里分得清哪些是它的。
 摘要调用仍走非流式（`summarize=chat_completion`），否则压缩摘要的文本会混进它的正文。
+
+子 agent 的输入是两段：系统提示（``SUB_SYSTEM``，说明它是谁、摘要交给谁）+ **任务提示**。
+任务提示不由父 agent 自由发挥：``TASK_FIELDS`` 声明六段，schema 把它们全设为必填（协议层
+先拦缺段），``task_brief`` 渲染成固定骨架——标题行 + 五段 + 收尾句。父 agent 只填值，
+子 agent 每轮看到的形状都一样。字段名即段名（``objective`` → ``Objective``），改名一处生效。
 """
 
 
@@ -35,10 +40,41 @@ logger = logging.getLogger("avid.subagent")
 
 SUB_SYSTEM = (
     "你是 Avid 的 subagent，被派去独立完成一个子任务。"
-    "专注把这一件事做完，然后给出一份简短、自包含的结论摘要——"
+    "用户消息就是主 agent 给你的任务提示，按 Objective / Scope / Context / Constraints / "
+    "Deliverable 五段写："
+    "守住 Scope 与 Constraints 的边界，照着 Deliverable 交回一份简短、自包含的结论摘要——"
     "主 agent 只看得到你的摘要，看不到你的中间过程。"
     "不要反问、不要索要更多信息，用你能用的工具自己解决。"
 )
+
+#: 任务提示的六段：字段名 + 给父 agent 的填写说明。顺序即渲染顺序，也是报错顺序；
+#: schema 的 properties / required 与 _validate 的报错都从这张表派生，别处不另抄一份。
+TASK_FIELDS: tuple[tuple[str, str], ...] = (
+    ("description", "一句话标题，用于汇总结果与界面上的任务归属"),
+    ("objective", "这次要达成什么"),
+    ("scope", "在哪些文件、目录或链路里做；范围之外的事不要做"),
+    (
+        "context",
+        "从你与用户的对话里带过来的已知事实：报错、现场、已排除的可能——"
+        "subagent 看不到你和用户的对话",
+    ),
+    ("constraints", "边界：不许做什么（例如不要改文件、不要装依赖、不要提交）"),
+    ("deliverable", "要交回什么，逐项写清回报格式"),
+)
+
+#: 收尾句：每份任务提示都以它结束，父 agent 不用自己写。
+TASK_STOP_LINE = "Stop after completing the deliverable and return the findings to the parent agent."
+
+
+def task_brief(task: dict[str, str]) -> str:
+    """Renders one validated task into the child's first user message.
+
+    父 agent 只填值，形状由这里保证：少了哪一段子 agent 都得自己猜，而它看不到父对话，
+    猜错就是一次白跑。
+    """
+    sections = [f"{key.capitalize()}:\n{task[key]}" for key, _ in TASK_FIELDS[1:]]
+    return "\n\n".join([task["description"], *sections, TASK_STOP_LINE])
+
 
 # Children have no round limit, just like the main loop, so their bound is this wall-clock
 # budget, which the whole batch shares rather than each task having its own 300 seconds.
@@ -148,7 +184,12 @@ def run_subagent(
 
 
 def _validate(raw: Any) -> list[dict[str, str]]:
-    """Validates the task list, raising ValueError with text the model can act on."""
+    """Validates the task list, raising ValueError with text the model can act on.
+
+    Missing fields normally never reach here: the protocol layer rejects a call that lacks a
+    required one first. The check stays for direct callers and reports the same way, with the
+    field's own filling hint attached.
+    """
     if not isinstance(raw, list) or not raw:
         _bad("tasks 必须是非空数组")
 
@@ -159,13 +200,13 @@ def _validate(raw: Any) -> list[dict[str, str]]:
     for index, item in enumerate(raw, start=1):
         if not isinstance(item, dict):
             _bad(f"第 {index} 项不是对象")
-        description = item.get("description")
-        prompt = item.get("prompt")
-        if not isinstance(description, str) or not description.strip():
-            _bad(f"第 {index} 项的 description 不能为空")
-        if not isinstance(prompt, str) or not prompt.strip():
-            _bad(f"第 {index} 项的 prompt 不能为空；每条任务都要自包含")
-        tasks.append({"description": description.strip(), "prompt": prompt.strip()})
+        task: dict[str, str] = {}
+        for key, hint in TASK_FIELDS:
+            value = item.get(key)
+            if not isinstance(value, str) or not value.strip():
+                _bad(f"第 {index} 项的 {key} 不能为空：{hint}")
+            task[key] = value.strip()
+        tasks.append(task)
 
     return tasks
 
@@ -216,8 +257,9 @@ def _render(tasks: list[dict[str, str]], results: list[str]) -> str:
     description="把互不依赖的子任务派给多个 subagent 并行处理，全部结束后汇总各自的结果。"
     "【只在任务可拆分、且子任务之间没有共享状态与先后依赖时使用】："
     "存在强依赖、需要共享同一份上下文、或一步就能做完的，不要用，直接自己做。"
-    "subagent 看不到你和用户的对话，只会收到你在 prompt 里写的那段说明——"
-    "所以每条任务都要自包含：写清背景、要做什么、期望的输出格式。"
+    "subagent 看不到你和用户的对话，只会收到你按下面六段写出的任务提示——"
+    "每条任务都要自包含、直接能开工：背景写进 context，边界写进 constraints，"
+    "回报格式写进 deliverable。"
     "一次最多 4 个。",
     properties={
         "tasks": {
@@ -226,16 +268,10 @@ def _render(tasks: list[dict[str, str]], results: list[str]) -> str:
             "items": {
                 "type": "object",
                 "properties": {
-                    "description": {
-                        "type": "string",
-                        "description": "一句话说明这个子任务干什么，用于在汇总结果里标注归属。",
-                    },
-                    "prompt": {
-                        "type": "string",
-                        "description": "发给该 subagent 的完整指令，自包含：背景、要做什么、期望输出。",
-                    },
+                    key: {"type": "string", "description": hint}
+                    for key, hint in TASK_FIELDS
                 },
-                "required": ["description", "prompt"],
+                "required": [key for key, _ in TASK_FIELDS],
                 "additionalProperties": False,
             },
         }
@@ -328,7 +364,7 @@ def subagent(
         futures = [
             executor.submit(
                 run,
-                task["prompt"],
+                task_brief(task),
                 config=config,
                 auto_approve=auto_approve,
                 ask=ask,

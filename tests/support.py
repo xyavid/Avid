@@ -47,7 +47,9 @@ PLACEHOLDER_ARGS: dict[str, str] = {
     "glob": '{"pattern": "*.py"}',
     "bash": '{"command": "echo hi"}',
     "todo_write": '{"todos": []}',
-    "subagent": '{"tasks": [{"description": "子任务", "prompt": "把这件事做完"}]}',
+    "subagent": '{"tasks": [{"description": "子任务", "objective": "把这件事做完", '
+    '"scope": "avid/agent", "context": "无", "constraints": "不要改文件", '
+    '"deliverable": "结论摘要"}]}',
     "load_skill": '{"name": "demo"}',
 }
 
