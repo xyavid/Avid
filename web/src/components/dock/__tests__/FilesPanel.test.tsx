@@ -2,7 +2,8 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { FilesPanel, crumbs, fullPath, langOf } from '../FilesPanel'
+import { langOf } from '../../../markdown/langOf'
+import { FilesPanel, crumbs, fullPath } from '../FilesPanel'
 
 const listFiles = vi.fn()
 const readFile = vi.fn()
@@ -47,6 +48,7 @@ describe('工作区文件面板', () => {
     expect(langOf('src/main.py')).toBe('python')
     expect(langOf('a.tar.gz')).toBe('gz')
     expect(langOf('Makefile')).toBeNull()
+    // 语言标与高亮器同族：工具卡详情的代码视图也吃这张表（markdown/langOf.ts）
   })
 
   it('面包屑：根 + 每一级，都能点回去', () => {

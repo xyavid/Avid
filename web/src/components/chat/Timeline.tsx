@@ -26,6 +26,7 @@ import { MessageActions } from './MessageActions'
 import { ReasoningBlock } from './ReasoningBlock'
 import { ToolCard } from './ToolCard'
 import { TurnSummary } from './TurnSummary'
+import { toolDetail } from './toolDetail'
 import { toolLabel } from './toolLabel'
 import { UserBubble } from './UserBubble'
 
@@ -133,6 +134,9 @@ function itemNodes(list: TimelineItem[], offset: number, ctx: Ctx): ReactNode[] 
     }
 
     const label = toolLabel(item.name, item.args, ctx.workspaceRoot)
+    // 文件类工具的详情视图（差异 / 代码）：折叠态不画，但展开时要有——它只需要参数与
+    // 结果，两条来源（事件流 / 重读会话）都有，所以刷新后同形。
+    const detail = toolDetail(item.name, item.args, item.result, item.status)
     return (
       // data-* 是给端到端脚本读时间线用的：段落的种类与身份写在 DOM 上，
       // 脚本不必猜 class 名（改样式不会让验收脚本静默失效）。
@@ -145,6 +149,7 @@ function itemNodes(list: TimelineItem[], offset: number, ctx: Ctx): ReactNode[] 
           durationMs={item.durationMs}
           steps={item.steps}
           workspaceRoot={ctx.workspaceRoot}
+          detail={detail}
         >
           <span className="line-clamp-6 block whitespace-pre-wrap">{item.result ?? item.args}</span>
         </ToolCard>

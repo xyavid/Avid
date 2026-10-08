@@ -2,21 +2,25 @@
  * 工具卡双形态：
  * - **折叠态（默认）**：单行——工具图标 + 动作词 + 目标（相对路径 / 命令 / 任务名，
  *   等宽小字截断）+ 耗时 + 状态标记，点击展开；
- * - **展开态**：完整卡——头部同上，正文是工具结果；subagent 的子步骤在结果之前
- *   按任务分组列出（子步骤是 live-only：子运行不落库，刷新后只剩这张卡与它的结果）。
+ * - **展开态**：完整卡——头部同上，正文是**详情视图**（文件类工具给差异 / 代码视图，
+ *   见 `toolDetail.ts`）或工具结果原文；subagent 的子步骤在结果之前按任务分组列出
+ *   （子步骤是 live-only：子运行不落库，刷新后只剩这张卡与它的结果）。
  *
- * 宽度 330px 是组件墙的解剖值；失败判定与后端同口径，单点在 `state/timeline.ts`
- * 的 `classifyToolResult`（改动要两侧同步）。
+ * 宽度 330px 是组件墙的解剖值；带详情视图的展开态加宽到 560px——差异与代码要横向读。
+ * 失败判定与后端同口径，单点在 `state/timeline.ts` 的 `classifyToolResult`（改动要两侧同步）。
  */
 
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 
+import { CodeBlock } from '../../markdown'
 import type { SubagentStep, ToolStatus } from '../../state/timeline'
 import { cx } from '../../ui/cx'
 import { durationLabel } from '../../ui/duration'
 import { Icon, type IconName } from '../../ui/Icon'
 import { IconButton } from '../../ui/IconButton'
+import { DiffView } from './DiffView'
+import type { ToolDetail } from './toolDetail'
 import { toolLabel } from './toolLabel'
 
 function StatusMark({ status }: { status: ToolStatus }) {
@@ -88,6 +92,8 @@ export type ToolCardProps = {
   workspaceRoot?: string | null
   defaultExpanded?: boolean
   className?: string
+  /** 详情视图（文件类工具：差异 / 代码）；给了就画它，不给画 `children` 原文。 */
+  detail?: ToolDetail | null
   /** 展开态正文：工具结果（没有结果时给参数）。 */
   children?: ReactNode
 }
@@ -102,6 +108,7 @@ export function ToolCard({
   workspaceRoot = null,
   defaultExpanded = false,
   className,
+  detail = null,
   children,
 }: ToolCardProps) {
   const [expanded, setExpanded] = useState(defaultExpanded)
@@ -135,7 +142,9 @@ export function ToolCard({
   return (
     <div
       className={cx(
-        'w-[330px] max-w-full overflow-hidden rounded-card border-hairline border-hair bg-card shadow-soft',
+        'max-w-full overflow-hidden rounded-card border-hairline border-hair bg-card shadow-soft',
+        // 差异 / 代码视图要横向看：330px 里读 diff 只能一直拖，展开态带详情时加宽
+        detail === null ? 'w-[330px]' : 'w-[560px]',
         className,
       )}
     >
@@ -167,7 +176,24 @@ export function ToolCard({
           ))}
         </div>
       )}
-      <div className="px-a12 py-[9px] font-mono text-micro leading-[1.6] text-ink-muted">{children}</div>
+      {detail === null ? (
+        <div className="px-a12 py-[9px] font-mono text-micro leading-[1.6] text-ink-muted">{children}</div>
+      ) : (
+        <div className="px-a12 py-a8">
+          {detail.kind === 'diff' ? (
+            <DiffView before={detail.before} after={detail.after} lang={detail.lang} />
+          ) : (
+            <CodeBlock
+              lang={detail.lang}
+              text={detail.text}
+              lineNumbers
+              startLine={detail.startLine}
+            />
+          )}
+          {/* 视图画的不是结果本身时（编辑 / 写入），把结果原话留作注脚 */}
+          {detail.note !== null && <p className="font-ui text-hint text-ink-muted">{detail.note}</p>}
+        </div>
+      )}
     </div>
   )
 }

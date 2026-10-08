@@ -279,4 +279,32 @@ describe('Timeline（段落 → 对话列）', () => {
 
     expect(screen.getByText('已完成')).toBeTruthy()
   })
+
+  it('文件类工具卡展开成差异视图（编辑：参数里有旧文与新文）', () => {
+    const items: TimelineItem[] = [
+      { kind: 'user', entryId: 'e1', text: '改一下', ts: 1 },
+      {
+        kind: 'tool',
+        callId: 'c1',
+        name: 'edit_file',
+        args: JSON.stringify({ path: '/w/a.py', old_string: 'a\nb\nc', new_string: 'a\nB\nc' }),
+        result: '已替换 a.py 中的 1 处文本',
+        status: 'ok',
+        durationMs: 5,
+        steps: [],
+      },
+      { kind: 'assistant', entryId: 'e2', text: '改好了。', streaming: false, ts: 2 },
+    ]
+    const { container } = render(<Timeline liveTail items={items} workspaceRoot="/w" />)
+
+    // 折叠态只有一行，差异在点开之后
+    expect(container.querySelectorAll('[data-diff]')).toHaveLength(0)
+    fireEvent.click(screen.getByRole('button', { name: /编辑/ }))
+
+    const rows = [...container.querySelectorAll('[data-diff]')].map(
+      (el) => `${el.getAttribute('data-diff')}|${el.textContent ?? ''}`,
+    )
+    expect(rows).toEqual(['context| a', 'del|-b', 'add|+B', 'context| c'])
+    expect(screen.getByText('已替换 a.py 中的 1 处文本')).toBeTruthy()
+  })
 })

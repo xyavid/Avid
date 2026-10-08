@@ -22,7 +22,9 @@ export type ToolLabel = {
 /** 未登记工具的图标：通用的文件帧。 */
 const FALLBACK_ICON: IconName = 'file-frame'
 
-function parseArgs(args: string): Record<string, unknown> | null {
+/** 参数 JSON → 对象；不是合法 JSON（半截流、上游塞了裸串）时给 null。
+ *  折叠行与详情视图（`toolDetail`）共用这一处解析，口径只有一份。 */
+export function parseArgs(args: string): Record<string, unknown> | null {
   try {
     const parsed: unknown = JSON.parse(args)
     return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)

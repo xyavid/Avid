@@ -11,6 +11,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { ApiError, listFiles, readFile } from '../../api/client'
 import type { FileContent, FileEntry, FileList } from '../../api/types'
 import { CodeBlock } from '../../markdown'
+import { langOf } from '../../markdown/langOf'
 import { cx } from '../../ui/cx'
 import { Icon } from '../../ui/Icon'
 
@@ -19,52 +20,6 @@ export type FilesPanelProps = {
   workspaceId: string | null
   /** 工作区根：预览时显示完整路径，拼的就是它。 */
   root?: string | null
-}
-
-/** 扩展名 → 语言标（顺带就是高亮器认的别名）；没见过的按扩展名原样标，不猜。 */
-const LANGS: Record<string, string> = {
-  py: 'python',
-  ts: 'typescript',
-  tsx: 'tsx',
-  js: 'javascript',
-  jsx: 'jsx',
-  mjs: 'javascript',
-  cjs: 'javascript',
-  json: 'json',
-  md: 'markdown',
-  sh: 'bash',
-  bash: 'bash',
-  zsh: 'bash',
-  yml: 'yaml',
-  yaml: 'yaml',
-  toml: 'toml',
-  ini: 'ini',
-  cfg: 'ini',
-  css: 'css',
-  scss: 'scss',
-  html: 'html',
-  xml: 'xml',
-  svg: 'svg',
-  sql: 'sql',
-  rs: 'rust',
-  go: 'go',
-  java: 'java',
-  c: 'c',
-  h: 'c',
-  cpp: 'cpp',
-  rb: 'ruby',
-  php: 'php',
-  lock: '文本',
-  txt: '文本',
-}
-
-/** 从文件名取语言标；没有扩展名给 null（CodeBlock 于是显示「文本」）。 */
-export function langOf(path: string): string | null {
-  const name = path.split('/').pop() ?? path
-  const dot = name.lastIndexOf('.')
-  if (dot <= 0) return null
-  const ext = name.slice(dot + 1).toLowerCase()
-  return LANGS[ext] ?? ext
 }
 
 function sizeText(size: number | null): string {

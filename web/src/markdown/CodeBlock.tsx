@@ -35,16 +35,18 @@ export type CodeBlockProps = {
   path?: string | null
   /** 左侧行号列；横向滚动只滚代码，行号留在原地。 */
   lineNumbers?: boolean
+  /** 行号起点（读文件的 offset 用：这一段从第 100 行读起，行号就得从 100 数）。 */
+  startLine?: number
 }
 
-/** 行号列的文本（1..n）；尾随换行不额外多算一行给编号——它对应的是空行尾。 */
-export function lineNumbersOf(text: string): number[] {
+/** 行号列的文本（start..start+n-1）；尾随换行不额外多算一行给编号——它对应的是空行尾。 */
+export function lineNumbersOf(text: string, start = 1): number[] {
   const lines = text.split('\n')
   if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop()
-  return lines.map((_, index) => index + 1)
+  return lines.map((_, index) => start + index)
 }
 
-export function CodeBlock({ lang, text, path = null, lineNumbers = false }: CodeBlockProps) {
+export function CodeBlock({ lang, text, path = null, lineNumbers = false, startLine = 1 }: CodeBlockProps) {
   const [copied, setCopied] = useState(false)
   const tokens = highlight(text, lang)
 
@@ -79,7 +81,7 @@ export function CodeBlock({ lang, text, path = null, lineNumbers = false }: Code
             aria-hidden
             className="shrink-0 select-none border-r border-hair px-a8 py-a8 text-right font-mono text-caption leading-[1.6] text-ink-muted"
           >
-            {lineNumbersOf(text).join('\n')}
+            {lineNumbersOf(text, startLine).join('\n')}
           </pre>
         )}
         <pre className="scroll-auto min-w-0 flex-1 overflow-x-auto px-a12 py-a8">

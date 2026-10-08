@@ -6,6 +6,13 @@ import { ToolCard } from '../ToolCard'
 
 afterEach(cleanup)
 
+/** 差异行 → `种类|整行文字`：元素内部被拆成多个文本节点，按 textContent 读最实在。 */
+function diffRows(container: HTMLElement): string[] {
+  return [...container.querySelectorAll('[data-diff]')].map(
+    (el) => `${el.getAttribute('data-diff')}|${el.textContent ?? ''}`,
+  )
+}
+
 describe('ToolCard（双形态：折叠单行 ↔ 展开完整卡）', () => {
   it('折叠单行：动作 + 目标 + 耗时 + 状态，不渲染正文', () => {
     render(
@@ -93,5 +100,64 @@ describe('ToolCard（双形态：折叠单行 ↔ 展开完整卡）', () => {
     expect(screen.getByText('pnpm verify')).toBeTruthy()
     expect(screen.getByLabelText('失败')).toBeTruthy()
     expect(screen.getAllByLabelText('运行中')).toHaveLength(1)
+  })
+})
+
+describe('ToolCard 详情视图（文件类工具点开之后）', () => {
+  it('差异详情：增删行 + 计数 + 语言标，结果原话作注脚', () => {
+    const { container } = render(
+      <ToolCard
+        icon="pencil"
+        verb="编辑"
+        target="a.py"
+        status="ok"
+        defaultExpanded
+        detail={{
+          kind: 'diff',
+          lang: 'python',
+          before: 'a\nb\nc',
+          after: 'a\nB\nc',
+          note: '已替换 a.py 中的 1 处文本',
+        }}
+      >
+        已替换 a.py 中的 1 处文本
+      </ToolCard>,
+    )
+
+    expect(screen.getByText('python')).toBeTruthy()
+    expect(screen.getByText('+1')).toBeTruthy()
+    expect(screen.getByText('-1')).toBeTruthy()
+    expect(screen.getByText('已替换 a.py 中的 1 处文本')).toBeTruthy()
+    // 差异行按种类写在 DOM 上（端到端脚本按它读，不猜 class）
+    expect(diffRows(container)).toEqual(['context| a', 'del|-b', 'add|+B', 'context| c'])
+  })
+
+  it('代码详情：行号从 offset 起数；结果本身就是内容时不再重复一遍', () => {
+    const { container } = render(
+      <ToolCard
+        icon="file-frame"
+        verb="读取"
+        target="a.py"
+        status="ok"
+        defaultExpanded
+        detail={{ kind: 'code', lang: 'python', text: 'x = 1\ny = 2', startLine: 100, note: null }}
+      >
+        原文不该出现
+      </ToolCard>,
+    )
+
+    expect(screen.getByText('python')).toBeTruthy()
+    expect(container.textContent).toContain('100\n101') // 行号列从 100 起
+    expect(screen.queryByText('原文不该出现')).toBeNull()
+  })
+
+  it('没有详情时不画视图：原文照旧（渲染层只照 detail 画，不自己判断）', () => {
+    render(
+      <ToolCard icon="terminal" verb="执行" target="ls" status="ok" defaultExpanded detail={null}>
+        结果原文
+      </ToolCard>,
+    )
+
+    expect(screen.getByText('结果原文')).toBeTruthy()
   })
 })
