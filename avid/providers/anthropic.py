@@ -15,6 +15,7 @@ from .protocol import (
     PromptTooLongError,
     Turn,
     assistant_message,
+    http_error,
     iter_sse_events,
     prompt_too_long,
     usage_of,
@@ -219,7 +220,11 @@ def chat(
             raise PromptTooLongError(
                 f"HTTP {response.status_code} — 上下文超限：{response.text[:300]}"
             )
-        raise LLMError(f"HTTP {response.status_code} — {response.text[:500]}")
+        raise http_error(
+                    response.status_code,
+                    response.text,
+                    sent_reasoning_effort=bool(config.reasoning_effort),
+                )
     try:
         return parse_turn(response.json())
     except ValueError as exc:
@@ -357,7 +362,11 @@ def stream(
                     raise PromptTooLongError(
                         f"HTTP {response.status_code} — 上下文超限：{response.text[:300]}"
                     )
-                raise LLMError(f"HTTP {response.status_code} — {response.text[:500]}")
+                raise http_error(
+                    response.status_code,
+                    response.text,
+                    sent_reasoning_effort=bool(config.reasoning_effort),
+                )
             for event in iter_sse_events(response.iter_lines()):
                 text_piece, thinking_piece = acc.feed(event)
                 if on_delta is not None and text_piece:

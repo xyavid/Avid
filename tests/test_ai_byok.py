@@ -354,6 +354,19 @@ def test_reasoning_effort_flows_from_the_model_decl_into_config(byok_env):
     assert resolve_chat("gw/quick").reasoning_effort is None
 
 
+def test_reasoning_effort_accepts_the_four_levels(byok_env):
+    for level in ("low", "medium", "high", "max"):
+        provider = ProviderDecl(
+            id="gw",
+            label="网关",
+            protocol="openai-compatible",
+            base_url="https://gw.example/v1",
+            models=(ModelDecl(id="m", reasoning_effort=level),),
+        )
+        save_byok(ByokConfig(providers={"gw": provider}, bindings={"chat": "gw/m"}))
+        assert resolve_chat("gw/m").reasoning_effort == level
+
+
 def test_reasoning_effort_rejects_an_unknown_level(byok_env):
     provider = ProviderDecl(
         id="gw",

@@ -19,6 +19,7 @@ from .protocol import (
     Turn,
     assistant_message,
     content_text,
+    http_error,
     iter_sse_events,
     prompt_too_long,
     usage_of,
@@ -145,7 +146,11 @@ def post(
             raise PromptTooLongError(
                 f"HTTP {response.status_code} — 上下文超限：{response.text[:300]}"
             )
-        raise LLMError(f"HTTP {response.status_code} — {response.text[:500]}")
+        raise http_error(
+                    response.status_code,
+                    response.text,
+                    sent_reasoning_effort=bool(config.reasoning_effort),
+                )
 
     try:
         return response.json()
@@ -295,7 +300,11 @@ def stream(
                     raise PromptTooLongError(
                         f"HTTP {response.status_code} — 上下文超限：{response.text[:300]}"
                     )
-                raise LLMError(f"HTTP {response.status_code} — {response.text[:500]}")
+                raise http_error(
+                    response.status_code,
+                    response.text,
+                    sent_reasoning_effort=bool(config.reasoning_effort),
+                )
             for chunk in iter_sse_events(response.iter_lines()):
                 state = merge_stream_chunk(state, chunk)
                 if on_delta is not None:

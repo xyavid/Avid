@@ -315,8 +315,9 @@ export interface CapabilityFlags {
   reasoning?: boolean | null
 }
 
-/** 推理强度：OpenAI 那套三档（Anthropic 的对应物是 thinking 预算，走该提供商的 extra_body）。 */
-export type ReasoningEffort = 'low' | 'medium' | 'high'
+/** 推理强度：low/medium/high 是 OpenAI 那套；`max` 是给自认"拉满"的端点用的。
+ *  Anthropic 的对应物是 thinking 预算（token 数），走该提供商的 extra_body。 */
+export type ReasoningEffort = 'low' | 'medium' | 'high' | 'max'
 
 /** Provider 下的一个具体模型：id + 可选展示名 / 窗口 / 输出上限 / 推理强度 / 能力声明。 */
 export interface ModelEntry {

@@ -37,6 +37,26 @@ _PROMPT_TOO_LONG_SIGNS = (
 )
 
 
+#: 端点不认 reasoning_effort 时的可执行提示（阶段 55）：只在 400/422 且这次真带了
+#: 推理强度时附上，措辞是「这条像是」——猜错也不至于断言错。
+_REASONING_EFFORT_HINT = (
+    "（这条像是端点不认 reasoning_effort：在「设置 → 模型」里把该模型的推理强度改回「不设」，"
+    "或改用该提供商的「透传请求体字段」换一个它认识的字段名）"
+)
+
+
+def http_error(status_code: int, body: str, *, sent_reasoning_effort: bool = False) -> LLMError:
+    """The one way to turn "the endpoint answered with an error" into an exception.
+
+    Keeping it in one place means the body excerpt, the status code and the repair hints stay
+    consistent across the three protocols.
+    """
+    message = f"HTTP {status_code} — {body[:500]}"
+    if sent_reasoning_effort and status_code in (400, 422):
+        message += _REASONING_EFFORT_HINT
+    return LLMError(message)
+
+
 def prompt_too_long(status_code: int, body: str) -> bool:
     """Report whether a status code and body mean the prompt exceeded the context window."""
     # Server errors are not recoverable input problems, even when the body mentions context length.

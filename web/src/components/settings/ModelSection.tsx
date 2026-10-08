@@ -496,13 +496,14 @@ function ProviderEditor({ draft, isNew, onSave, onCancel }: EditorProps) {
                   })
                 }
                 className={cx(SELECT_CLS, '!h-control !w-[110px] shrink-0')}
-                title="每次请求带 reasoning_effort（OpenAI 兼容与 Responses）；Anthropic 的对应物是 thinking 预算，用该提供商的额外请求体设置"
+                title="每次请求带 reasoning_effort（OpenAI 兼容与 Responses）；端点不认这个参数时会在报错里给出提示。Anthropic 的对应物是 thinking 预算，用该提供商的额外请求体设置"
                 aria-label={`模型 ${m.id || '（未命名）'} 的推理强度`}
               >
                 <option value="unset">强度：不设</option>
                 <option value="low">强度：低</option>
                 <option value="medium">强度：中</option>
                 <option value="high">强度：高</option>
+                <option value="max">强度：最高</option>
               </select>
               <select
                 value={m.capabilities.vision === null || m.capabilities.vision === undefined ? 'unset' : m.capabilities.vision ? 'true' : 'false'}

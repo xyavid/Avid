@@ -72,10 +72,11 @@ _REF_PATTERN = re.compile(r"^([a-z0-9-]+)/(.+)$")
 
 CAPABILITY_FIELDS = ("tool_calling", "vision", "json_mode", "streaming", "reasoning")
 
-#: 推理强度（阶段 55）：OpenAI 那套三档语义。它不是一个能力位，而是一个**请求参数**，
-#: 所以放在模型声明上（同一个提供商的不同模型未必都认）。Anthropic 的对应物是 thinking
-#: 预算（token 数），与这三档不是同一件事——那条路留给该提供商的 extra_body，不在这里硬映射。
-REASONING_EFFORTS = ("low", "medium", "high")
+#: 推理强度（阶段 55）：四档，原样发出去。它不是一个能力位，而是一个**请求参数**，
+#: 所以放在模型声明上（同一个提供商的不同模型未必都认）。`max` 不是 OpenAI 的档位，
+#: 是给那些自认「拉满」的端点用的（用户要求加上）；Anthropic 的对应物是 thinking 预算
+#: （token 数），与这几档不是同一件事——那条路留给该提供商的 extra_body，不在这里硬映射。
+REASONING_EFFORTS = ("low", "medium", "high", "max")
 
 
 def config_path() -> Path:
