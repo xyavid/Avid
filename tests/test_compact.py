@@ -224,18 +224,37 @@ def test_checkpoint_structure_is_the_documented_order():
     """结构是给下一个 agent 读的契约：段名与顺序都是接口，不是排版。"""
     assert CHECKPOINT_STRUCTURE.splitlines() == [
         "## Goal",
-        "## Constraints",
+        "## Constraints & Preferences",
         "## Findings",
         "### Verified",
         "### Hypotheses",
         "## Progress",
-        "## Decisions",
-        "## Errors / Fixes",
-        "## Current State",
-        "## Pending Work",
-        "## Next Step",
+        "### Done",
+        "### In Progress",
+        "### Blocked",
+        "## Key Decisions",
+        "## Next Steps",
         "## Critical Context",
     ]
+
+
+def test_both_tasks_share_one_structure():
+    """创建与更新写同一份骨架：第二次压缩不能把检查点换成另一套段名。"""
+    assert CHECKPOINT_STRUCTURE in CREATE_TASK
+    assert CHECKPOINT_STRUCTURE in UPDATE_TASK
+
+
+def test_update_task_keeps_the_update_rules():
+    for anchor in (
+        "PRESERVE all existing information",
+        "In Progress",
+        "Done",
+        "Next Steps",
+        "function names",
+        "error messages",
+        "no longer relevant",
+    ):
+        assert anchor in UPDATE_TASK, anchor
 
 
 def test_no_prompt_may_invent_facts():
@@ -245,6 +264,7 @@ def test_no_prompt_may_invent_facts():
 
 def test_findings_separate_verified_from_hypotheses():
     """假设必须带标签：写成陈述句的假设，下一个 agent 会当事实用。"""
+    assert "## Findings" in CHECKPOINT_STRUCTURE
     assert "### Verified" in CREATE_TASK and "### Hypotheses" in CREATE_TASK
     assert "[hypothesis]" in CREATE_TASK
     assert "[rejected]" in CREATE_TASK
@@ -346,7 +366,10 @@ def test_previous_checkpoint_only_recognises_the_transcript_head():
 
 
 def compaction_after_more_work(chat, state, limits=None):
-    """先压一次，再干几轮，然后强制压第二次——第二次就是更新路径。"""
+    """先压一次，再干几轮，然后强制压第二次——第二次就是更新路径。
+
+    返回 transcript 与那个 FakeChat：requests[0] 是首次压缩，requests[1] 是更新。
+    """
     limits = limits or budget()
     transcript = Transcript(rounds(12))
     run_compaction(
@@ -365,7 +388,7 @@ def compaction_after_more_work(chat, state, limits=None):
         limits=limits,
         force=True,
     )
-    return transcript, chat.requests[1]
+    return transcript, chat
 
 
 def test_second_compaction_updates_the_previous_checkpoint(spill_root, monkeypatch):
@@ -376,19 +399,21 @@ def test_second_compaction_updates_the_previous_checkpoint(spill_root, monkeypat
     )
     chat = FakeChat("## Goal\n把 A 做完")
 
-    transcript, update = compaction_after_more_work(
+    transcript, chat = compaction_after_more_work(
         chat, RunState(workspace_root=str(spill_root))
     )
 
-    body = update["messages"][0]["content"]
+    body = chat.requests[1]["messages"][0]["content"]
     assert "<previous-checkpoint>\n## Goal\n把 A 做完\n</previous-checkpoint>" in body
     # 最初的请求已经并进上一份检查点，再喂一遍会把方向拉回去
     assert "<original-request>" not in body
     assert "<conversation>" in body and "新结果" in body
-    # 上一份只出现一次：同一段内容不喂两遍
-    assert body.count("## Goal") == 1
+    # 上一份的内容只出现一次：同一段内容不喂两遍（骨架里也有 ## Goal，按正文断言）
+    assert body.count("把 A 做完") == 1
     assert "<update-task>" in body
-    assert "UPDATES an existing checkpoint" in update["system"]
+    assert "Update the existing structured summary" in body
+    # 引擎提示只有一份：模式由任务块区分，系统提示不跟着模式漂
+    assert chat.requests[1]["system"] == chat.requests[0]["system"]
     # 更新后的检查点回到 transcript 头部
     assert "（已更新）" in transcript.as_messages()[0]["content"]
 
@@ -401,11 +426,11 @@ def test_update_prompt_carries_the_repo_state(spill_root, monkeypatch):
     )
     chat = FakeChat("## Goal\n把 A 做完")
 
-    _transcript, update = compaction_after_more_work(
+    _transcript, chat = compaction_after_more_work(
         chat, RunState(workspace_root=str(spill_root))
     )
 
-    body = update["messages"][0]["content"]
+    body = chat.requests[1]["messages"][0]["content"]
     assert "<repo-state>" in body and "M avid/agent/compaction.py" in body
 
 
@@ -413,11 +438,11 @@ def test_update_prompt_omits_a_missing_repo_state(spill_root, monkeypatch):
     monkeypatch.setattr(compaction_module, "repo_state", lambda root: None)
     chat = FakeChat("## Goal\n把 A 做完")
 
-    _transcript, update = compaction_after_more_work(
+    _transcript, chat = compaction_after_more_work(
         chat, RunState(workspace_root=str(spill_root))
     )
 
-    assert "<repo-state>" not in update["messages"][0]["content"]
+    assert "<repo-state>" not in chat.requests[1]["messages"][0]["content"]
 
 
 def test_update_prompt_reports_an_empty_conversation(spill_root, monkeypatch):

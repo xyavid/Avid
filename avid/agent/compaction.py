@@ -65,27 +65,31 @@ COMPACTION_SYSTEM = (
     "headings exactly as given. Never invent missing facts."
 )
 
-# 更新路径追加的一句：这次是并进上一份，不是新写一份。
-UPDATE_MODE_NOTE = (
-    "This call UPDATES an existing checkpoint instead of creating one: start from the previous "
-    "checkpoint, fold the new material into it, and never re-derive it from scratch."
-)
-
 #: 检查点结构：两份 prompt 共用一份骨架——结构漂了，下一个 agent 就找不着东西，
 #: 而它只拿到这一份文本。
 CHECKPOINT_STRUCTURE = (
     "## Goal\n"
-    "## Constraints\n"
+    "## Constraints & Preferences\n"
     "## Findings\n"
     "### Verified\n"
     "### Hypotheses\n"
     "## Progress\n"
-    "## Decisions\n"
-    "## Errors / Fixes\n"
-    "## Current State\n"
-    "## Pending Work\n"
-    "## Next Step\n"
+    "### Done\n"
+    "### In Progress\n"
+    "### Blocked\n"
+    "## Key Decisions\n"
+    "## Next Steps\n"
     "## Critical Context"
+)
+
+#: 两份任务块共用的分段说明：光给段名不够，填法也要一致，否则创建与更新的产物没法比。
+STRUCTURE_GUIDE = (
+    "Section notes:\n"
+    "- Progress items carry - [x] when done and - [ ] when not; ### Blocked holds what is "
+    "stuck and why.\n"
+    "- Errors that were hit, and how they were resolved, go under ## Critical Context with the "
+    "exact command or message.\n"
+    "- Keep exact file paths, function names, commands and identifiers everywhere."
 )
 
 #: 首次压缩的任务块：保留/删去清单 + 事实与假设的分层 + 输出结构。
@@ -94,14 +98,12 @@ CREATE_TASK = (
     "\n"
     "Preserve:\n"
     "- user intent\n"
-    "- explicit constraints\n"
+    "- explicit constraints and stated preferences\n"
     "- important decisions\n"
     "- verified facts\n"
     "- current implementation state\n"
     "- errors and resolutions\n"
-    "- exact file paths\n"
-    "- exact commands\n"
-    "- relevant identifiers\n"
+    "- exact file paths, function names, commands and identifiers\n"
     "- pending work\n"
     "- next action\n"
     "\n"
@@ -120,29 +122,36 @@ CREATE_TASK = (
     "[hypothesis]; one the material ruled out stays here tagged [rejected], with what ruled "
     "it out. Nothing moves up to Verified without evidence.\n"
     "\n"
+    f"{STRUCTURE_GUIDE}\n"
+    "\n"
     "Use this exact structure:\n"
     f"{CHECKPOINT_STRUCTURE}"
 )
 
 #: 更新路径的任务块：以旧检查点为底座，用新素材改它，而不是重新摘要一遍。
 UPDATE_TASK = (
-    "Update the checkpoint with the new material.\n"
+    "Update the existing structured summary with new information.\n"
     "\n"
     "Rules:\n"
-    "- Start from the previous checkpoint: it is the base, and the new material is evidence "
-    "about it.\n"
+    "- PRESERVE all existing information from the previous summary, wording included.\n"
+    "- ADD new progress, decisions and context from the new material.\n"
+    "- UPDATE Progress: move items from ### In Progress to ### Done when they are completed.\n"
+    "- UPDATE ### Next Steps based on what was accomplished.\n"
+    "- PRESERVE exact file paths, function names and error messages.\n"
     "- New evidence wins: when the new material contradicts an entry, correct that entry in "
     "place instead of appending a second version of it.\n"
-    "- Keep the finding lists honest: a hypothesis the new material confirmed moves to "
+    "- Refresh paths and status against the repo state and the new material: what no longer "
+    "exists, or is already done, does not survive. If something is no longer relevant, you "
+    "may remove it.\n"
+    "- Keep the finding lists honest: a hypothesis the material confirmed moves to "
     "### Verified with its evidence; a ruled-out one stays under ### Hypotheses tagged "
-    "[rejected] with the reason.\n"
-    "- Drop entries the new material made obsolete; keep entries it does not touch, wording "
-    "included.\n"
-    "- Refresh ## Current State, ## Pending Work, ## Next Step and every path against the repo "
-    "state and the new material: paths that no longer exist and work already done do not "
-    "survive.\n"
+    "[rejected] with the reason. Never promote a hypothesis without evidence.\n"
     "- Never invent missing facts.\n"
-    "- Same structure as the checkpoint you are updating: no new sections, no reordering."
+    "\n"
+    f"{STRUCTURE_GUIDE}\n"
+    "\n"
+    "Use this exact format:\n"
+    f"{CHECKPOINT_STRUCTURE}"
 )
 
 #: 摘要消息的头与脚注标记：``checkpoint_of`` 靠它把检查点正文取回来（更新路径的输入）。
@@ -542,7 +551,6 @@ def run_compaction(
     checkpoint = previous_checkpoint(messages)
     if checkpoint is None:
         body = _create_message(_original_request(earlier), render_conversation(earlier))
-        system = COMPACTION_SYSTEM
         mode = "新建检查点"
     else:
         # 上一份检查点就是这段历史的第一条消息：它已经吃掉了那部分内容，新素材从它之后算起，
@@ -552,9 +560,9 @@ def run_compaction(
             render_conversation(earlier[1:]),
             repo_state(state.workspace_root),
         )
-        system = f"{COMPACTION_SYSTEM}\n\n{UPDATE_MODE_NOTE}"
         mode = "更新检查点"
-    summary = _summarize(body, config=config, chat=chat, system=system)
+    # 引擎提示只有一份：是新建还是更新由任务块说，系统提示不跟着模式漂。
+    summary = _summarize(body, config=config, chat=chat, system=COMPACTION_SYSTEM)
     if summary is None:
         logger.warning("compact: 检查点生成失败，保留原历史")
         return None
