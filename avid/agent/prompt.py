@@ -1,6 +1,6 @@
 """默认 system prompt 文案与常驻内容的字符上限：提示词高频变化集中在这里。
 
-``runtime/context_manager.py`` 负责把这些文案装配成块、按上限截断；本模块只有
+``agent/context.py`` 负责把这些文案装配成块、按上限截断；本模块只有
 常量，不 import 仓库其它模块。上限的口径是字符数——与 usage 的 token 估算共用
 "字符"这一层，避免这里再养一套 token 估算。
 
