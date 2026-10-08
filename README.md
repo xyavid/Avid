@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="web/src/assets/avid-logo-dark.svg">
-    <img src="web/src/assets/avid-logo-light.svg" alt="Avid" width="326">
+    <img src="web/src/assets/avid-logo-light.svg" alt="Avid" width="294">
   </picture>
 </p>
 

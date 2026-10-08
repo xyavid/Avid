@@ -52,15 +52,15 @@ describe('Avid 标识（阶段 33 · 阶段 7）', () => {
     expect(paths(faviconSource)).toEqual(assetPaths)
   })
 
-  it('README 标识的两版也内联同一幅荷花（对账门禁）', () => {
+  it('README 标识的两版也内联同一幅荷花，且背景透明（对账门禁）', () => {
     const assetPaths = paths(assetSource)
 
     expect(lotusPaths(logoLightSource)).toEqual(assetPaths)
     expect(lotusPaths(logoDarkSource)).toEqual(assetPaths)
-    // 每份是 9 条荷花 + 1 条字标；底板与 favicon 同色（青夜：淡粉压纸色只有 1.15 对比）
+    // 每份是 9 条荷花 + 1 条字标；不做圆托、不垫色板——透明底，与 asset 同一条纪律
     for (const source of [logoLightSource, logoDarkSource]) {
       expect(source.match(/<path/g)?.length).toBe(10)
-      expect(source).toContain('fill="#3B4A54"')
+      expect(source).not.toContain('<rect')
     }
   })
 
