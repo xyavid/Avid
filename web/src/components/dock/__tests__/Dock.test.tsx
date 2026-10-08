@@ -21,7 +21,6 @@ const runningTools: LiveTool[] = [
 ]
 
 function renderDock(overrides: {
-  open?: boolean
   active?: DockPanelId
   phase?: RunPhase | null
   tools?: LiveTool[]
@@ -29,10 +28,9 @@ function renderDock(overrides: {
   onDecide?: (id: string, decision: 'allow' | 'deny') => void
   workspaceRoot?: string | null
 } = {}) {
-  const { open = true, active = 'processes', phase = 'running' as RunPhase, tools = runningTools, approvals = [], onDecide = vi.fn() } = overrides
+  const { active = 'processes', phase = 'running' as RunPhase, tools = runningTools, approvals = [], onDecide = vi.fn() } = overrides
   return render(
     <Dock
-      open={open}
       active={active}
       onSelect={() => {}}
       onClose={() => {}}
@@ -46,14 +44,16 @@ function renderDock(overrides: {
   )
 }
 
-describe('右侧 dock（阶段 48）', () => {
-  it('收起时移出视口且 aria-hidden，不再接收指针', () => {
-    const { container } = renderDock({ open: false })
+describe('右侧 dock（阶段 48；阶段 52 起是常驻右列而非浮层）', () => {
+  it('是列不是浮层：占位（无 fixed/translate），收起由页面决定（不挂它）', () => {
+    const { container } = renderDock()
 
     const aside = container.querySelector('aside') as HTMLElement
-    expect(aside.getAttribute('aria-hidden')).toBe('true')
-    expect(aside.className).toContain('translate-x-full')
-    expect(aside.className).toContain('pointer-events-none')
+    expect(aside.className).toContain('h-full')
+    expect(aside.className).toContain('border-l')
+    expect(aside.className).not.toContain('fixed')
+    expect(aside.className).not.toContain('translate')
+    expect(aside.getAttribute('aria-hidden')).toBeNull()
   })
 
   it('进程面板：状态行（进程/工具/审批）+ 工具迷你列表', () => {
@@ -86,7 +86,6 @@ describe('右侧 dock（阶段 48）', () => {
 
     rerender(
       <Dock
-        open
         active="review"
         onSelect={() => {}}
         onClose={() => {}}
@@ -108,28 +107,10 @@ describe('右侧 dock（阶段 48）', () => {
     expect(screen.getByText('1,200')).toBeTruthy()
   })
 
-  it('Esc 关闭：仅展开时监听', () => {
+  it('Esc 关闭：挂着就监听（收起时页面不挂它）', () => {
     const onClose = vi.fn()
-    const { rerender } = render(
+    render(
       <Dock
-        open
-        active="processes"
-        onSelect={() => {}}
-        onClose={onClose}
-        usage={usage}
-        phase="running"
-        tools={[]}
-        approvals={[]}
-        onDecide={() => {}}
-        workspaceRoot="/tmp/ws"
-      />,
-    )
-    fireEvent.keyDown(window, { key: 'Escape' })
-    expect(onClose).toHaveBeenCalledOnce()
-
-    rerender(
-      <Dock
-        open={false}
         active="processes"
         onSelect={() => {}}
         onClose={onClose}

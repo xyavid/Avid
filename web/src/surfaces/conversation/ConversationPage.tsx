@@ -481,6 +481,23 @@ export function ConversationPage() {
           onClick={dock.toggle}
         />
       }
+      // 右列是常驻的 dock 面板：收起 = 不挂它，栅格自然回到两列（主列于是拿回
+      // 那 280px，而不是被浮层盖住）。
+      rail={
+        dock.open ? (
+          <Dock
+            active={dock.active}
+            onSelect={dock.select}
+            onClose={dock.close}
+            usage={usage}
+            phase={liveHere ? live.phase : null}
+            tools={runHere ? live.tools : []}
+            approvals={runHere ? live.approvals : []}
+            workspaceRoot={selected?.workspace?.root ?? null}
+            onDecide={(id, decision) => void live.decide(id, decision)}
+          />
+        ) : undefined
+      }
       sidebar={
         <div className="flex min-h-0 flex-1 flex-col gap-a12">
           <ProjectCard
@@ -573,18 +590,6 @@ export function ConversationPage() {
           />
         </div>
       }
-      />
-      <Dock
-        open={dock.open}
-        active={dock.active}
-        onSelect={dock.select}
-        onClose={dock.close}
-        usage={usage}
-        phase={liveHere ? live.phase : null}
-        tools={runHere ? live.tools : []}
-        approvals={runHere ? live.approvals : []}
-        workspaceRoot={selected?.workspace?.root ?? null}
-        onDecide={(id, decision) => void live.decide(id, decision)}
       />
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
     </>

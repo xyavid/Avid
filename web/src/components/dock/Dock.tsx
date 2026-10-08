@@ -1,8 +1,10 @@
 /**
- * 右侧 dock（阶段 48 立，阶段 49 加重面板）：顶栏按钮开关的常驻面板。
+ * 右侧 dock（阶段 48 立，阶段 49 加重面板）：三栏骨架里**占位**的右列，常驻。
  *
- * 形态语义：常驻而非模态——无蒙层、不挡主列交互（边聊边看），按钮或 Esc 开关。
- * 收起 = translate-x-full 移出视口（面板状态保留，再展开不闪）。
+ * 形态语义：它是 `AppShell` 的 `rail` 插槽内容，不是浮层——展开时主列让位、
+ * 面板不盖住对话（配合的规则在骨架的栅格里：侧栏 240 ｜ 主列 minmax(0,1fr) ｜
+ * 右列 280）。收起由页面决定（不挂这个组件，栅格自然回到两列），所以这里没有
+ * `open` 形态；键盘只留 Esc 一条退出路径。
  * 面板注册表是单点：加面板 = 在 PANELS 加一个条目。Dock 是纯展示，数据由
  * 页面下发（useRunStream 的活状态与会话快照），自己不发请求。
  */
@@ -15,6 +17,7 @@ import type { DockPanelId } from '../../state/dock'
 import { IconButton } from '../../ui/IconButton'
 import { Icon, type IconName } from '../../ui/Icon'
 import { cx } from '../../ui/cx'
+import { useAutoHideScroll } from '../../ui/useAutoHideScroll'
 import { ContextRail } from '../rail/ContextRail'
 import { ApprovalBar } from '../chat/ApprovalBar'
 
@@ -29,7 +32,6 @@ const PANELS: { id: DockPanelId; label: string; icon: IconName }[] = [
 ]
 
 export type DockProps = {
-  open: boolean
   active: DockPanelId
   onSelect: (id: DockPanelId) => void
   onClose: () => void
@@ -97,26 +99,21 @@ function ProcessesPanel({ phase, tools, approvals }: { phase: RunPhase | null; t
   )
 }
 
-export function Dock({ open, active, onSelect, onClose, usage, phase, tools, approvals, onDecide, workspaceRoot }: DockProps) {
-  // Esc 关闭：dock 是常驻面板，但键盘要有一条不找鼠标的退出路径。
+export function Dock({ active, onSelect, onClose, usage, phase, tools, approvals, onDecide, workspaceRoot }: DockProps) {
+  // 面板区自己滚（列只负责裁切），滚动条仍走「滚动时现形」那套。
+  const scrollRef = useAutoHideScroll<HTMLDivElement>()
+  // Esc 关闭：键盘要有一条不找鼠标的退出路径。收起时这个组件根本不挂（页面决定），
+  // 所以监听常开。
   useEffect(() => {
-    if (!open) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [open, onClose])
+  }, [onClose])
 
   return (
-    <aside
-      aria-label="侧边栏"
-      aria-hidden={!open}
-      className={cx(
-        'fixed bottom-0 right-0 top-[var(--titlebar-h)] z-30 flex w-[340px] max-w-[90vw] flex-col border-l border-hair bg-card shadow-soft transition-transform duration-fast ease-out',
-        open ? 'translate-x-0' : 'pointer-events-none translate-x-full',
-      )}
-    >
+    <aside aria-label="侧边栏" className="flex h-full min-h-0 flex-col border-l border-hair bg-card">
       <div className="flex items-center justify-between border-b border-hair pr-a4">
         <div className="flex" role="tablist" aria-label="侧边栏面板">
           {PANELS.map((p) => (
@@ -139,7 +136,7 @@ export function Dock({ open, active, onSelect, onClose, usage, phase, tools, app
         <IconButton icon="x" label="关闭侧边栏" onClick={onClose} />
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={scrollRef} className="scroll-auto min-h-0 flex-1 overflow-y-auto">
         {active === 'context' && (
           <div className="p-a12">
             <ContextRail usage={usage} />

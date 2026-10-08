@@ -1,13 +1,17 @@
 /**
- * 侧边 dock 的界面域状态（localStorage 持久化——界面域状态归前端的约定，
+ * 右侧 dock 的界面域状态（localStorage 持久化——界面域状态归前端的约定，
  * appearance.ts 同一模式）。只持久化开合与激活面板：宽度、面板内容不进存储。
+ *
+ * 默认**开着**：右列是常驻面板（占位而非浮层），关掉它是「给对话腾地方」的例外动作，
+ * 不是默认状态。存储键跟着换了名字：旧值记的是浮层时代的「露不露出来」，
+ * 语义不同，照读会让升级后的第一屏凭空是收起态。
  */
 
 import { useCallback, useEffect, useState } from 'react'
 
 export type DockPanelId = 'context' | 'processes' | 'review' | 'terminal'
 
-const STORAGE_KEY = 'avid.dock'
+const STORAGE_KEY = 'avid.dock.column'
 const PANEL_IDS: DockPanelId[] = ['context', 'processes', 'review', 'terminal']
 
 type StoredDock = { open: boolean; active: DockPanelId }
@@ -15,16 +19,16 @@ type StoredDock = { open: boolean; active: DockPanelId }
 function load(): StoredDock {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw === null) return { open: false, active: 'context' }
+    if (raw === null) return { open: true, active: 'context' }
     const parsed = JSON.parse(raw) as Partial<StoredDock>
     return {
-      open: parsed.open === true,
+      open: parsed.open !== false,
       active: PANEL_IDS.includes(parsed.active as DockPanelId)
         ? (parsed.active as DockPanelId)
         : 'context',
     }
   } catch {
-    return { open: false, active: 'context' }
+    return { open: true, active: 'context' }
   }
 }
 
