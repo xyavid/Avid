@@ -250,6 +250,64 @@ describe('useRunStream（发送 → 订阅 → 段落归并 → 终态收尾）'
     expect(result.current.attachedSession).toBe('s2')
   })
 
+  it('父与子的流式增量各自成串：子的正文进它那条子运行，不混进父那段', async () => {
+    const { result } = renderHook(() => useRunStream('s1', () => {}))
+    await act(async () => {
+      await result.current.send('派活', false)
+    })
+    const subagentArgs = JSON.stringify({ tasks: [{ description: '统计 a.py', prompt: 'x' }] })
+    act(() => {
+      emitter().send(
+        'assistant_message',
+        {
+          entry_id: 'e2',
+          message: {
+            role: 'assistant',
+            content: '派活。',
+            tool_calls: [{ id: 'call_sub', type: 'function', function: { name: 'subagent', arguments: subagentArgs } }],
+          },
+        },
+        0,
+        10,
+      )
+    })
+    act(() => {
+      // 两条增量交错的到达顺序 = 子先吐了一片、父接着吐
+      emitter().send('assistant_delta', { text: '子说', subagent: { task: '统计 a.py', index: 0 } }, 0, 20)
+      emitter().send('assistant_delta', { text: '父说' }, 0, 21)
+    })
+
+    const texts = (items: TimelineItem[]) =>
+      items.flatMap((item) => (item.kind === 'assistant' ? [item.text] : []))
+
+    expect(texts(result.current.items)).toEqual(['派活。', '父说'])
+    const card = result.current.items.find((item) => item.kind === 'tool' && item.name === 'subagent')
+    if (card?.kind !== 'tool') throw new Error('期望时间线上有那张 subagent 卡')
+    expect(texts(card.runs[0]!.items)).toEqual(['子说'])
+  })
+
+  it('子运行的事件不改父读数：带 subagent 标记的用量快照不顶替容量环', async () => {
+    const { result } = renderHook(() => useRunStream('s1', () => {}))
+    await act(async () => {
+      await result.current.send('问一句', false)
+    })
+    const report = (tokens: number) => ({
+      context: { tokens, window: 200000, utilization: 0.01, parts: null },
+      cache: { read_tokens: null, write_tokens: null, hit_ratio: null },
+      compaction: { count: 0, last_compaction_tokens: null, last_step: null },
+    })
+
+    act(() => {
+      emitter().send('run_status', { round: 1, tokens: 10, usage: report(1234) })
+    })
+    act(() => {
+      // 子运行也会发 run_status（同一个事件名 + subagent 标记）：它的占用各算各的
+      emitter().send('run_status', { round: 1, tokens: 10, usage: report(999), subagent: { task: '甲', index: 0 } })
+    })
+
+    expect(result.current.usage?.context.tokens).toBe(1234)
+  })
+
   it('活事件：工具行登记与状态迁移、审批入列', async () => {
     const onSettled = vi.fn()
     const { result } = renderHook(() => useRunStream('s1', onSettled))

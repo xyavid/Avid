@@ -2,44 +2,41 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { Dock } from '../Dock'
 import type { DockPanelId } from '../../../state/dock'
-import type { LiveTool, RunPhase } from '../../../state/useRunStream'
+import type { SubagentRunView } from '../../../state/timeline'
+import { Dock } from '../Dock'
 
 afterEach(cleanup)
 
-const runningTools: LiveTool[] = [
-  { callId: 'c1', tool: 'bash', status: 'running', arguments: '{}', result: null },
-  { callId: 'c2', tool: 'read_file', status: 'ok', arguments: '{}', result: 'ok' },
-]
+function run(overrides: Partial<SubagentRunView> = {}): SubagentRunView {
+  return { callId: 'call_sub', task: '统计 a.py', index: 0, items: [], running: false, ...overrides }
+}
 
-function renderDock(overrides: {
-  active?: DockPanelId
-  phase?: RunPhase | null
-  tools?: LiveTool[]
-  approvals?: { approvalId: string; tool: string; arguments: string; reason: string }[]
-  onSelect?: (id: DockPanelId) => void
-  onDecide?: (id: string, decision: 'allow' | 'deny') => void
-  workspaceRoot?: string | null
-  workspaceId?: string | null
-} = {}) {
-  const { active = 'processes', phase = 'running' as RunPhase, tools = runningTools, approvals = [], onSelect = () => {}, onDecide = vi.fn() } = overrides
+function renderDock(
+  overrides: {
+    active?: DockPanelId
+    runs?: SubagentRunView[]
+    live?: boolean
+    onSelect?: (id: DockPanelId) => void
+    workspaceRoot?: string | null
+    workspaceId?: string | null
+  } = {},
+) {
+  const { active = 'files', runs = [], live = false, onSelect = () => {} } = overrides
   return render(
     <Dock
       active={active}
       onSelect={onSelect}
       onClose={() => {}}
-      phase={phase}
-      tools={tools}
-      approvals={approvals}
-      onDecide={onDecide}
       workspaceRoot={'workspaceRoot' in overrides ? (overrides.workspaceRoot ?? null) : '/tmp/ws'}
       workspaceId={'workspaceId' in overrides ? (overrides.workspaceId ?? null) : null}
+      subagentRuns={runs}
+      live={live}
     />,
   )
 }
 
-describe('右侧 dock（阶段 48；阶段 52 起是常驻右列而非浮层）', () => {
+describe('右侧 dock（阶段 48；阶段 53 起只留三个面板）', () => {
   it('是列不是浮层：占位（无 fixed/translate），收起由页面决定（不挂它）', () => {
     const { container } = renderDock()
 
@@ -51,65 +48,116 @@ describe('右侧 dock（阶段 48；阶段 52 起是常驻右列而非浮层）'
     expect(aside.getAttribute('aria-hidden')).toBeNull()
   })
 
-  it('进程面板：状态行（进程/工具/审批）+ 工具迷你列表', () => {
-    renderDock()
+  it('面板列表三个入口：工作区文件 / 子智能体 / 终端（进程与审查已删）', () => {
+    const onSelect = vi.fn()
+    renderDock({ active: 'files', onSelect })
 
-    // 「进程」在这一屏出现两次：头部（当前面板名）与状态行标签
-    expect(screen.getAllByText('进程')).toHaveLength(2)
-    expect(screen.getByText('运行中')).toBeTruthy()
-    expect(screen.getByText(/2 个 · 1 运行/)).toBeTruthy()
-    expect(screen.getByText('bash')).toBeTruthy()
-    expect(screen.getByText('read_file')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '回到面板列表' }))
+    const list = screen.getByRole('navigation', { name: '面板列表' })
+    const labels = [...list.querySelectorAll('button')].map((item) => item.textContent ?? '')
+
+    expect(labels).toHaveLength(3)
+    expect(labels[0]).toContain('工作区文件')
+    expect(labels[1]).toContain('子智能体')
+    expect(labels[2]).toContain('终端')
+    expect(labels.join(' ')).not.toContain('进程')
+    expect(labels.join(' ')).not.toContain('审查')
+
+    fireEvent.click([...list.querySelectorAll('button')][1]!)
+    expect(onSelect).toHaveBeenCalledWith('subagents')
+    expect(screen.queryByRole('navigation', { name: '面板列表' })).toBeNull()
   })
 
-  it('进程面板空闲态：无活运行给「空闲」与空态文案', () => {
-    renderDock({ phase: null, tools: [] })
+  it('子智能体面板：没派过就说清没有；派过列任务卡（步数 / 明细不落库）', () => {
+    const empty = renderDock({ active: 'subagents', runs: [] })
+    expect(screen.getByText(/还没有派过子智能体/)).toBeTruthy()
+    empty.unmount()
 
-    expect(screen.getByText('空闲')).toBeTruthy()
-    expect(screen.getByText('没有正在运行的进程')).toBeTruthy()
+    renderDock({
+      active: 'subagents',
+      live: true,
+      runs: [
+        run({
+          items: [
+            {
+              kind: 'tool',
+              callId: 'k1',
+              name: 'read_file',
+              args: '{"path":"/w/a.py"}',
+              result: 'print(1)',
+              status: 'ok',
+              durationMs: 3,
+              runs: [],
+            },
+          ],
+          running: true,
+        }),
+        run({ callId: 'call_sub', task: '统计 b.py', index: 1 }),
+      ],
+    })
+
+    expect(screen.getByText('统计 a.py')).toBeTruthy()
+    expect(screen.getByText('1 步')).toBeTruthy()
+    expect(screen.getByLabelText('运行中')).toBeTruthy()
+    // 只落了任务清单的那条：说明白「明细不落库」，不画空时间线
+    expect(screen.getByText('明细不落库（只有任务清单）')).toBeTruthy()
   })
 
-  it('审查面板：待决审批复用审批条（两步确认），拒绝直达 onDecide；空态给文案', () => {
-    const onDecide = vi.fn()
-    const approvals = [{ approvalId: 'a1', tool: 'bash', arguments: '{}', reason: '递归删除根目录' }]
-    const { rerender } = renderDock({ active: 'review', approvals, onDecide })
+  it('点一条子任务进详情：它自己的时间线（复用对话列的渲染器），能回列表', () => {
+    renderDock({
+      active: 'subagents',
+      workspaceRoot: '/w',
+      runs: [
+        run({
+          items: [
+            { kind: 'assistant', entryId: null, text: '我看一眼。', streaming: false, ts: null },
+            {
+              kind: 'tool',
+              callId: 'k1',
+              name: 'read_file',
+              args: '{"path":"/w/a.py"}',
+              result: 'print(1)',
+              status: 'ok',
+              durationMs: 3,
+              runs: [],
+            },
+          ],
+        }),
+      ],
+    })
 
-    expect(screen.getByText(/bash/)).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: /允许/ }))
-    expect(onDecide).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('button', { name: '确认执行' }))
-    expect(onDecide).toHaveBeenCalledWith('a1', 'allow')
+    fireEvent.click(screen.getByRole('button', { name: /统计 a\.py/ }))
 
-    rerender(
-      <Dock
-        active="review"
-        onSelect={() => {}}
-        onClose={() => {}}
-          phase={null}
-        tools={[]}
-        approvals={[]}
-        onDecide={onDecide}
-        workspaceRoot="/tmp/ws"
-        workspaceId={null}
-      />,
-    )
-    expect(screen.getByText('没有待决审批')).toBeTruthy()
+    expect(screen.getByText('我看一眼。')).toBeTruthy()
+    expect(screen.getByText('读取')).toBeTruthy()
+    expect(screen.getByText('a.py')).toBeTruthy()
+    // 子时间线用另一个 testid：验收脚本要能把它与主对话列分开
+    expect(document.querySelector('[data-testid="timeline-subagent"]')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: '回到子任务列表' }))
+    expect(screen.getByRole('navigation', { name: '子任务列表' })).toBeTruthy()
   })
 
+  it('明细不在（刷新后的历史会话）时详情说实话，不画空时间线', () => {
+    renderDock({ active: 'subagents', runs: [run()] })
+
+    fireEvent.click(screen.getByRole('button', { name: /统计 a\.py/ }))
+
+    expect(screen.getByText(/执行明细不落库/)).toBeTruthy()
+    expect(document.querySelector('[data-testid="timeline-subagent"]')).toBeNull()
+  })
 
   it('Esc 关闭：挂着就监听（收起时页面不挂它）', () => {
     const onClose = vi.fn()
     render(
       <Dock
-        active="processes"
+        active="files"
         onSelect={() => {}}
         onClose={onClose}
-          phase="running"
-        tools={[]}
-        approvals={[]}
-        onDecide={() => {}}
         workspaceRoot="/tmp/ws"
         workspaceId={null}
+        subagentRuns={[]}
+        live={false}
       />,
     )
     fireEvent.keyDown(window, { key: 'Escape' })
@@ -117,36 +165,11 @@ describe('右侧 dock（阶段 48；阶段 52 起是常驻右列而非浮层）'
   })
 })
 
-
 describe('dock 重面板（阶段 49）', () => {
-  afterEach(cleanup)
-
   it('终端面板：无工作区时空态，不拉 xterm（lazy 面板等 Suspense 落定）', async () => {
-    renderDock({ active: 'terminal', phase: null, tools: [], workspaceRoot: null })
+    renderDock({ active: 'terminal', workspaceRoot: null })
 
     expect(await screen.findByText('未选择工作区')).toBeTruthy()
     expect(screen.queryByText('连接中…')).toBeNull()
-  })
-
-  it('头部是当前面板 + 回列表；列表四个入口，上下文与浏览器都不在', () => {
-    const onSelect = vi.fn()
-    renderDock({ active: 'files', onSelect })
-
-    // 默认常驻的是工作区文件（头部写着它），点回列表看四个入口
-    expect(screen.getByRole('button', { name: '回到面板列表' }).textContent).toContain('工作区文件')
-    fireEvent.click(screen.getByRole('button', { name: '回到面板列表' }))
-
-    const list = screen.getByRole('navigation', { name: '面板列表' })
-    const labels = [...list.querySelectorAll('button')].map((item) => item.textContent ?? '')
-    expect(labels).toHaveLength(4)
-    expect(labels[0]).toContain('工作区文件')
-    expect(labels[1]).toContain('进程')
-    expect(labels.join(' ')).not.toContain('上下文')
-    expect(labels.join(' ')).not.toContain('浏览器')
-
-    // 选一个条目就把选择交出去，列表收起（面板内容由页面按 active 渲染）
-    fireEvent.click([...list.querySelectorAll('button')][2]!)
-    expect(onSelect).toHaveBeenCalledWith('review')
-    expect(screen.queryByRole('navigation', { name: '面板列表' })).toBeNull()
   })
 })

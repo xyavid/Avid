@@ -34,7 +34,7 @@ import { ApprovalBar } from '../../components/chat/ApprovalBar'
 import { Composer } from '../../components/chat/Composer'
 import { Timeline } from '../../components/chat/Timeline'
 import type { TimelineItem } from '../../state/timeline'
-import { itemsFromEntries, mergeItems, timelineSignature } from '../../state/timeline'
+import { itemsFromEntries, mergeItems, subagentRuns, timelineSignature } from '../../state/timeline'
 import { useRunStream } from '../../state/useRunStream'
 import { useDock } from '../../state/dock'
 import { Dock } from '../../components/dock/Dock'
@@ -152,6 +152,8 @@ export function ConversationPage() {
   const runHere = live.attachedSession === selectedId
   const shown: TimelineItem[] =
     history === null ? [] : runHere ? mergeItems(history, live.items) : history
+  // 右列子智能体面板的数据：整条时间线里摊平出来的子运行（含只剩任务清单的历史项）
+  const subagents = subagentRuns(shown)
   const dock = useDock()
   const scroll = useConversationScroll(
     history === null ? 'loading' : timelineSignature(shown),
@@ -468,6 +470,7 @@ export function ConversationPage() {
             workspaceRoot={selected?.workspace?.root ?? null}
             liveTail={liveHere}
             onBranch={(id) => void branchFrom(id)}
+            onOpenSubagents={() => dock.select('subagents')}
           />
         )}
         {!hasItems && !liveHere && <Welcome detail="这个会话还没有对话内容" />}
@@ -494,12 +497,10 @@ export function ConversationPage() {
             active={dock.active}
             onSelect={dock.select}
             onClose={dock.close}
-            phase={liveHere ? live.phase : null}
-            tools={runHere ? live.tools : []}
-            approvals={runHere ? live.approvals : []}
             workspaceRoot={selected?.workspace?.root ?? null}
             workspaceId={selected?.workspace?.id ?? null}
-            onDecide={(id, decision) => void live.decide(id, decision)}
+            subagentRuns={subagents}
+            live={liveHere}
           />
         ) : undefined
       }

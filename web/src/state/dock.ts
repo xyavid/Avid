@@ -9,10 +9,12 @@
 
 import { useCallback, useEffect, useState } from 'react'
 
-export type DockPanelId = 'files' | 'processes' | 'review' | 'terminal'
+// 阶段 53：删掉「进程」与「审查」——审批在输入区上方那条常驻（权威展示），
+// 进程读数在时间线上逐段可见，右列不必再摆一份。旧存储值由下面的白名单回落默认面板。
+export type DockPanelId = 'files' | 'subagents' | 'terminal'
 
 const STORAGE_KEY = 'avid.dock.column'
-const PANEL_IDS: DockPanelId[] = ['files', 'processes', 'review', 'terminal']
+const PANEL_IDS: DockPanelId[] = ['files', 'subagents', 'terminal']
 
 type StoredDock = { open: boolean; active: DockPanelId }
 

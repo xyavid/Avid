@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { Entry } from '../../api/types'
 import type { TimelineEvent, TimelineItem } from '../timeline'
-import { applyEvent, itemsFromEntries, mergeItems, turnGroups } from '../timeline'
+import { applyEvent, itemsFromEntries, mergeItems, subagentRuns, subagentSteps, turnGroups } from '../timeline'
 
 function entry(seq: number, message: Record<string, unknown>, type = 'message'): Entry {
   return { entry_id: `e${seq}`, parent_id: null, seq, timestamp: seq, type, message }
@@ -25,7 +25,7 @@ function answerItem(entryId: string | null, text: string, ts: number | null = nu
 }
 
 function toolItem(callId: string): TimelineItem {
-  return { kind: 'tool', callId, name: 'bash', args: '{}', result: null, status: 'ok', durationMs: null, steps: [] }
+  return { kind: 'tool', callId, name: 'bash', args: '{}', result: null, status: 'ok', durationMs: null, runs: [] }
 }
 
 function ev(type: string, ts: number, data: Record<string, unknown> = {}): TimelineEvent {
@@ -134,7 +134,7 @@ describe('itemsFromEntries：会话条目 → 段落', () => {
     const args = JSON.stringify({ tasks: [{ description: '前端改造', prompt: '...' }] })
     const items = itemsFromEntries([assistantEntry(2, '', [{ id: 'c1', name: 'subagent', args }])])
 
-    expect(items[0]).toMatchObject({ kind: 'tool', name: 'subagent', args, steps: [] })
+    expect(items[0]).toMatchObject({ kind: 'tool', name: 'subagent', args, runs: [{ task: '前端改造', index: 0, items: [] }] })
   })
 })
 
@@ -224,21 +224,65 @@ describe('applyEvent：事件 → 段落增量', () => {
     expect(items[0]).toMatchObject({ kind: 'user', entryId: 'e1', text: '嗨', ts: 1 })
   })
 
-  it('子 agent 事件折进对应任务的步骤里，父时间线不出现它的工具行', () => {
+  it('子运行的事件进它自己的段落列表（正文 / 思考 / 工具），父时间线不出现它的工具行', () => {
     const args = JSON.stringify({ tasks: [{ description: '前端改造', prompt: '...' }] })
     const items = replay([
       assistantEvent('e2', '派活。', [{ id: 'call_sub', name: 'subagent', args }], 1),
       ev('tool_call_started', 2, { tool: 'subagent', tool_call_id: 'call_sub', arguments: { tasks: JSON.parse(args).tasks } }),
-      ev('tool_call_started', 3, { tool: 'read_file', tool_call_id: 'child1', arguments: { path: '/w/x.tsx' }, subagent: { task: '前端改造', index: 0 } }),
-      ev('tool_call_finished', 4, { tool: 'read_file', tool_call_id: 'child1', status: 'ok', duration_ms: 7, subagent: { task: '前端改造', index: 0 } }),
+      ev('reasoning_delta', 3, { text: '先看目录', subagent: { task: '前端改造', index: 0 } }),
+      ev('assistant_delta', 4, { text: '我看一眼。', subagent: { task: '前端改造', index: 0 } }),
+      ev('tool_call_started', 5, { tool: 'read_file', tool_call_id: 'child1', arguments: { path: '/w/x.tsx' }, subagent: { task: '前端改造', index: 0 } }),
+      ev('tool_call_finished', 6, { tool: 'read_file', tool_call_id: 'child1', status: 'ok', duration_ms: 7, content: 'export const a = 1', subagent: { task: '前端改造', index: 0 } }),
     ])
 
     expect(items.map((i) => i.kind)).toEqual(['assistant', 'tool'])
     const card = items[1]
     if (card?.kind !== 'tool') throw new Error('期望第二段是 subagent 工具卡')
-    expect(card.steps).toEqual([
+    expect(card.runs).toHaveLength(1)
+    const [run] = card.runs
+    expect(run).toMatchObject({ task: '前端改造', index: 0 })
+    // 子运行的段落列表：思考 → 正文 → 工具（带结果）——与父时间线同一套模型
+    expect(
+      run!.items.map((i) =>
+        i.kind === 'tool' ? `${i.name}:${i.result}` : i.kind === 'reasoning' ? `思考:${i.text}` : i.text,
+      ),
+    ).toEqual(['思考:先看目录', '我看一眼。', 'read_file:export const a = 1'])
+    // 卡片折叠行的子步骤由 runs 派生（卡片 API 不变）
+    expect(subagentSteps(card)).toEqual([
       { task: '前端改造', callId: 'child1', name: 'read_file', args: JSON.stringify({ path: '/w/x.tsx' }), status: 'ok' },
     ])
+  })
+
+  it('批已结束、迟到的增量仍归它那条子运行（合帧缓冲让它晚一步到）', () => {
+    const args = JSON.stringify({ tasks: [{ description: '甲', prompt: 'a' }] })
+    const items = replay([
+      assistantEvent('e2', '派活。', [{ id: 'call_sub', name: 'subagent', args }], 1),
+      ev('tool_call_started', 2, { tool: 'subagent', tool_call_id: 'call_sub', arguments: { tasks: JSON.parse(args).tasks } }),
+      // 父级的收尾先到（子运行全回来了），子运行的最后一截正文还在合帧缓冲里
+      ev('tool_call_finished', 3, { tool: 'subagent', tool_call_id: 'call_sub', status: 'ok', duration_ms: 10 }),
+      ev('assistant_delta', 4, { text: '结论：2 行。', subagent: { task: '甲', index: 0 } }),
+    ])
+
+    const card = items[1]
+    if (card?.kind !== 'tool') throw new Error('期望第二段是 subagent 工具卡')
+    expect(card.status).toBe('ok')
+    expect(card.runs[0]!.items).toMatchObject([{ kind: 'assistant', text: '结论：2 行。' }])
+    // 批量结束那一刻子运行的流式正文收笔：面板里的游标不再闪
+    expect(card.runs[0]!.items[0]).toMatchObject({ streaming: false })
+    // 父时间线上不多出这一段
+    expect(items.filter((i) => i.kind === 'assistant')).toHaveLength(1)
+  })
+
+  it('任务清单由参数播种：重读会话（明细不在）也列得出派过哪些任务', () => {
+    const args = JSON.stringify({ tasks: [{ description: '甲', prompt: 'a' }, { description: '乙', prompt: 'b' }] })
+    const items = itemsFromEntries([
+      assistantEntry(1, '', [{ id: 'call_sub', name: 'subagent', args }]),
+      entry(2, { role: 'tool', tool_call_id: 'call_sub', content: '已并行运行 2 个 subagent：…' }),
+    ])
+
+    const runs = subagentRuns(items)
+
+    expect(runs.map((r) => `${r.task}:${r.items.length}:${r.running}`)).toEqual(['甲:0:false', '乙:0:false'])
   })
 
   it('认不出归属的子 agent 事件退化成父时间线上的一行（不丢信息）', () => {

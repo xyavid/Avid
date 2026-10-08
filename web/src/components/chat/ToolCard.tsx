@@ -94,6 +94,9 @@ export type ToolCardProps = {
   className?: string
   /** 详情视图（文件类工具：差异 / 代码）；给了就画它，不给画 `children` 原文。 */
   detail?: ToolDetail | null
+  /** 点开卡片时顺带通知调用方（子智能体卡用它打开右列）——一次点击两个动作是刻意的：
+   *  卡片与右列是同一件事的两个视图，点它就是要看这件事。 */
+  onOpen?: () => void
   /** 展开态正文：工具结果（没有结果时给参数）。 */
   children?: ReactNode
 }
@@ -109,6 +112,7 @@ export function ToolCard({
   defaultExpanded = false,
   className,
   detail = null,
+  onOpen,
   children,
 }: ToolCardProps) {
   const [expanded, setExpanded] = useState(defaultExpanded)
@@ -118,7 +122,10 @@ export function ToolCard({
     return (
       <button
         type="button"
-        onClick={() => setExpanded(true)}
+        onClick={() => {
+          setExpanded(true)
+          onOpen?.()
+        }}
         className={cx(
           'flex w-[330px] max-w-full items-center gap-a8 rounded-sm border-hairline border-hair bg-card px-a8 py-[5px] text-left transition-colors duration-fast ease-out hover:bg-overlay-light',
           className,

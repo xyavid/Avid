@@ -9,6 +9,7 @@
  * 会指向另一个文件。根由调用方下发（会话的工作区根），无根时一律原样。
  */
 
+import { parseArgs, stringField as field, subagentTasks } from '../../state/toolArgs'
 import type { IconName } from '../../ui/Icon'
 
 export type ToolLabel = {
@@ -21,25 +22,6 @@ export type ToolLabel = {
 
 /** 未登记工具的图标：通用的文件帧。 */
 const FALLBACK_ICON: IconName = 'file-frame'
-
-/** 参数 JSON → 对象；不是合法 JSON（半截流、上游塞了裸串）时给 null。
- *  折叠行与详情视图（`toolDetail`）共用这一处解析，口径只有一份。 */
-export function parseArgs(args: string): Record<string, unknown> | null {
-  try {
-    const parsed: unknown = JSON.parse(args)
-    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null
-  } catch {
-    return null
-  }
-}
-
-function field(parsed: Record<string, unknown> | null, key: string): string {
-  if (parsed === null) return ''
-  const value = parsed[key]
-  return typeof value === 'string' ? value : ''
-}
 
 function relativeTo(path: string, root: string | null | undefined): string {
   if (!root) return path
@@ -55,17 +37,6 @@ function firstLine(text: string): string {
 function todoCount(parsed: Record<string, unknown> | null): string {
   const todos = parsed?.todos
   return Array.isArray(todos) ? `${todos.length} 项` : ''
-}
-
-/** subagent 的任务清单：卡片折叠行给数量，展开态按任务分组显示子步骤。 */
-export function subagentTasks(args: string): string[] {
-  const tasks = parseArgs(args)?.tasks
-  if (!Array.isArray(tasks)) return []
-  return tasks.flatMap((task) => {
-    if (task === null || typeof task !== 'object') return []
-    const description = (task as Record<string, unknown>).description
-    return typeof description === 'string' ? [description] : []
-  })
 }
 
 export function toolLabel(name: string, args: string, root?: string | null): ToolLabel {

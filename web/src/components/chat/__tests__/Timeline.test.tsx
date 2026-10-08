@@ -29,7 +29,7 @@ function turn(): TimelineItem[] {
       result: 'print(1)',
       status: 'ok',
       durationMs: 12,
-      steps: [],
+      runs: [],
     },
     { kind: 'assistant', entryId: 'e3', text: '结论是 avid。', streaming: false, ts: 73_000 },
   ]
@@ -123,9 +123,33 @@ describe('Timeline（段落 → 对话列）', () => {
         result: '子任务都回来了',
         status: 'running',
         durationMs: null,
-        steps: [
-          { task: '前端时间线', callId: 'k1', name: 'edit_file', args: '{"path":"/w/a.tsx"}', status: 'ok' },
-          { task: '前端时间线', callId: 'k2', name: 'bash', args: '{"command":"pnpm verify"}', status: 'running' },
+        runs: [
+          {
+            task: '前端时间线',
+            index: 0,
+            items: [
+              {
+                kind: 'tool',
+                callId: 'k1',
+                name: 'edit_file',
+                args: '{"path":"/w/a.tsx"}',
+                result: null,
+                status: 'ok',
+                durationMs: null,
+                runs: [],
+              },
+              {
+                kind: 'tool',
+                callId: 'k2',
+                name: 'bash',
+                args: '{"command":"pnpm verify"}',
+                result: null,
+                status: 'running',
+                durationMs: null,
+                runs: [],
+              },
+            ],
+          },
         ],
       },
     ]
@@ -168,7 +192,7 @@ describe('Timeline（段落 → 对话列）', () => {
         result: 'x',
         status: 'ok',
         durationMs: null,
-        steps: [],
+        runs: [],
       },
       { kind: 'assistant', entryId: 'e3', text: '结论是 avid。', streaming: false, ts: 3 },
     ]
@@ -280,6 +304,49 @@ describe('Timeline（段落 → 对话列）', () => {
     expect(screen.getByText('已完成')).toBeTruthy()
   })
 
+  it('点子智能体卡：展开卡片，并把「打开右列」的通知发出去', () => {
+    const onOpenSubagents = vi.fn()
+    const items: TimelineItem[] = [
+      { kind: 'user', entryId: 'e1', text: '派活', ts: 1 },
+      {
+        kind: 'tool',
+        callId: 'call_sub',
+        name: 'subagent',
+        args: JSON.stringify({ tasks: [{ description: '统计 a.py', prompt: '...' }] }),
+        result: '已运行 1 个 subagent：…',
+        status: 'ok',
+        durationMs: 900,
+        runs: [
+          {
+            task: '统计 a.py',
+            index: 0,
+            items: [
+              {
+                kind: 'tool',
+                callId: 'k1',
+                name: 'read_file',
+                args: '{"path":"/w/a.py"}',
+                result: 'print(1)',
+                status: 'ok',
+                durationMs: 3,
+                runs: [],
+              },
+            ],
+          },
+        ],
+      },
+      { kind: 'assistant', entryId: 'e2', text: '回来了。', streaming: false, ts: 2 },
+    ]
+    render(<Timeline liveTail items={items} workspaceRoot="/w" onOpenSubagents={onOpenSubagents} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /子智能体/ }))
+
+    expect(onOpenSubagents).toHaveBeenCalledOnce()
+    // 一次点击两个动作：卡片也展开（子步骤由 runs 派生）
+    expect(screen.getByText('读取')).toBeTruthy()
+    expect(screen.getByText('a.py')).toBeTruthy()
+  })
+
   it('文件类工具卡展开成差异视图（编辑：参数里有旧文与新文）', () => {
     const items: TimelineItem[] = [
       { kind: 'user', entryId: 'e1', text: '改一下', ts: 1 },
@@ -291,7 +358,7 @@ describe('Timeline（段落 → 对话列）', () => {
         result: '已替换 a.py 中的 1 处文本',
         status: 'ok',
         durationMs: 5,
-        steps: [],
+        runs: [],
       },
       { kind: 'assistant', entryId: 'e2', text: '改好了。', streaming: false, ts: 2 },
     ]

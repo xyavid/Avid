@@ -19,13 +19,28 @@
  */
 
 import type { Entry } from '../api/types'
+import { subagentTasks } from './toolArgs'
 
 /** 工具行状态。内核还有一档 `truncated`（内容被截断，不是调用失败）与 `denied`，
  *  两条路径都要给同一个答案：截断归 ok，拒绝归 failed——重读会话时这两个信息
  *  都不在条目里，只能按结果文本认（见 `classifyToolResult`）。 */
 export type ToolStatus = 'running' | 'ok' | 'failed'
 
-/** 子 agent 内部的一步：live-only（子运行不落库），刷新后随思考一起消失。 */
+/**
+ * 一个子 agent 任务**自己的段落列表**（阶段 53）：正文 / 思考 / 工具，与父时间线
+ * 完全同一套模型——面板里的子运行界面就是拿它画的（`components/chat/Timeline` 复用）。
+ *
+ * 两部分来源不同，这也是「刷新后还剩什么」的答案：
+ *   · 任务清单（`task` / `index`）来自**参数**（落在会话 JSONL 里），刷新后仍在；
+ *   · `items` 来自**事件流**（子运行不落库、增量不重放），刷新后为空。
+ */
+export type SubagentRun = {
+  task: string
+  index: number
+  items: TimelineItem[]
+}
+
+/** 子 agent 内部的一步（卡片折叠行用的扁平形状）：由 `runs` 里的工具段派生。 */
 export type SubagentStep = {
   task: string
   callId: string
@@ -55,7 +70,8 @@ export type TimelineItem =
       result: string | null
       status: ToolStatus
       durationMs: number | null
-      steps: SubagentStep[]
+      /** 子运行各自的段落；非 subagent 工具恒为空数组。 */
+      runs: SubagentRun[]
     }
 
 /** 内核事件的最小形状；`ts` 用来算思考段的持续时长。 */
@@ -114,7 +130,10 @@ export function appendUser(items: TimelineItem[], text: string): TimelineItem[] 
 export function timelineSignature(items: TimelineItem[]): string {
   let chars = 0
   for (const item of items) {
-    if (item.kind === 'tool') chars += item.args.length + (item.result?.length ?? 0) + item.steps.length * 32
+    if (item.kind === 'tool') {
+      const children = item.runs.reduce((n, run) => n + run.items.length, 0)
+      chars += item.args.length + (item.result?.length ?? 0) + children * 32
+    }
     else chars += item.text.length
   }
   return `${items.length}:${chars}`
@@ -131,12 +150,26 @@ function lastIndexOf(items: TimelineItem[], match: (item: TimelineItem) => boole
   return -1
 }
 
-function replace(items: TimelineItem[], index: number, item: TimelineItem): TimelineItem[] {
+function replace<T>(items: T[], index: number, item: T): T[] {
   return [...items.slice(0, index), item, ...items.slice(index + 1)]
 }
 
 function emptyTool(callId: string, name: string, args: string): TimelineItem {
-  return { kind: 'tool', callId, name, args, result: null, status: 'running', durationMs: null, steps: [] }
+  return {
+    kind: 'tool',
+    callId,
+    name,
+    args,
+    result: null,
+    status: 'running',
+    durationMs: null,
+    runs: name === 'subagent' ? seedRuns(args) : [],
+  }
+}
+
+/** 子运行条目先用**参数**里的任务清单播种：面板在刷新后仍列得出这些任务（明细为空）。 */
+function seedRuns(args: string): SubagentRun[] {
+  return subagentTasks(args).map((task, index) => ({ task, index, items: [] }))
 }
 
 /** 思考定稿：正文/工具一到，正在流的思考段就闭段，之后再来的思考 delta 另起一段。
@@ -192,7 +225,7 @@ export function itemsFromEntries(entries: Entry[]): TimelineItem[] {
 
 // ---------------------------------------------------------------- 事件 → 段落增量
 
-function subagentTag(data: Record<string, unknown>): { task: string; index: number } | null {
+export function subagentTag(data: Record<string, unknown>): { task: string; index: number } | null {
   const raw = data.subagent
   if (raw === null || typeof raw !== 'object') return null
   const tag = raw as Record<string, unknown>
@@ -200,49 +233,88 @@ function subagentTag(data: Record<string, unknown>): { task: string; index: numb
   return { task: tag.task, index: tag.index }
 }
 
-/** 子 agent 的子步骤归入它所属的 subagent 卡：父时间线上只留那一张卡。
- *  找不到归属时返回 null，调用方退化成父级的一行——宁可多一行，不能丢信息。 */
-function withChildStep(
+function isSubagentCard(item: TimelineItem): item is Extract<TimelineItem, { kind: 'tool' }> {
+  return item.kind === 'tool' && item.name === 'subagent'
+}
+
+/**
+ * 带标记的事件归哪张卡。三档，顺序是刻意的：
+ *   ① 已在跑、且认领过这条任务的卡——同名任务被重派时，旧卡不会被新批抢走事件；
+ *   ② 最近一张还在跑的 subagent 卡（子运行是独占调用，同一时刻至多一张在跑）；
+ *   ③ 最近一张 subagent 卡——批已经结束，但它的增量还压在合帧缓冲里等着落地，
+ *      那时卡的状态已经是 ok，事件仍要找得到自己的家（否则子运行的正文会漏）。
+ */
+function subagentCardIndex(items: TimelineItem[], tag: { task: string; index: number }): number {
+  const owns = (item: TimelineItem) =>
+    isSubagentCard(item) && item.runs.some((run) => run.task === tag.task || run.index === tag.index)
+  const byIdentity = lastIndexOf(items, (item) => owns(item) && item.kind === 'tool' && item.status === 'running')
+  if (byIdentity >= 0) return byIdentity
+  const running = lastIndexOf(items, (item) => isSubagentCard(item) && item.status === 'running')
+  if (running >= 0) return running
+  return lastIndexOf(items, isSubagentCard)
+}
+
+/** 认领一张卡里的某条子运行：按任务名找，找不到就按 index 补一条（参数里没有的任务）。 */
+function runIndex(runs: SubagentRun[], tag: { task: string; index: number }): number {
+  const at = runs.findIndex((run) => run.task === tag.task)
+  if (at >= 0) return at
+  const byIndex = runs.findIndex((run) => run.index === tag.index)
+  return byIndex
+}
+
+/** 这一批跑完了：子运行最后那段流式正文收笔——游标不能在面板里一直闪。 */
+function closeRunStreams(item: TimelineItem): TimelineItem {
+  if (item.kind !== 'tool' || item.status === 'running' || item.runs.length === 0) return item
+  const runs = item.runs.map((run) => ({
+    ...run,
+    items: run.items.map((child) =>
+      child.kind === 'assistant' && child.streaming ? { ...child, streaming: false } : child,
+    ),
+  }))
+  return { ...item, runs }
+}
+
+/** 子运行自己的段落增量：与父时间线**同一套**归并函数，只是列表换成它自己的。 */
+function childItems(items: TimelineItem[], event: TimelineEvent, data: Record<string, unknown>): TimelineItem[] {
+  switch (event.type) {
+    case 'assistant_delta':
+      return applyAssistantDelta(items, data)
+    case 'reasoning_delta':
+      return applyReasoningDelta(items, event, data)
+    case 'tool_call_started':
+    case 'tool_call_finished':
+    case 'tool_call_denied':
+      return applyToolEvent(items, event)
+    default:
+      // 子运行的其余事件（run_status / run_started / stop_nudge…）不进它的正文：
+      // 状态与读数在父级那张卡上，正文只留"它说了什么、动了什么"。
+      return items
+  }
+}
+
+/** 带 subagent 标记的事件归入它那一条子运行；找不到归属时返回 null，调用方退化成父级一行。 */
+function withChildEvent(
   items: TimelineItem[],
   event: TimelineEvent,
   tag: { task: string; index: number },
 ): TimelineItem[] | null {
-  const data = event.data ?? {}
-  const callId = str(data.tool_call_id)
-  if (!callId) return null
-  // 正在运行的 subagent 卡至多一张（该工具是独占调用），所以兜底可以取"最近一张"。
-  const owned = lastIndexOf(
-    items,
-    (item) =>
-      item.kind === 'tool' &&
-      item.name === 'subagent' &&
-      item.steps.some((step) => step.callId === callId || step.task === tag.task),
-  )
-  const at = owned >= 0 ? owned : lastIndexOf(items, (item) => item.kind === 'tool' && item.name === 'subagent' && item.status === 'running')
+  const at = subagentCardIndex(items, tag)
   if (at < 0) return null
   const card = items[at]
   if (card?.kind !== 'tool') return null
 
-  if (event.type === 'tool_call_started') {
-    if (card.steps.some((step) => step.callId === callId)) return items
-    const step: SubagentStep = {
-      task: tag.task,
-      callId,
-      name: str(data.tool),
-      args: str(data.arguments) || (data.arguments === undefined ? '' : JSON.stringify(data.arguments)),
-      status: 'running',
-    }
-    return replace(items, at, { ...card, steps: [...card.steps, step] })
-  }
-  if (!card.steps.some((step) => step.callId === callId)) return items
-  const status: ToolStatus =
-    event.type === 'tool_call_denied'
-      ? 'failed'
-      : str(data.status) === 'failed' || str(data.status) === 'denied'
-        ? 'failed'
-        : 'ok'
-  const steps = card.steps.map((step) => (step.callId === callId ? { ...step, status } : step))
-  return replace(items, at, { ...card, steps })
+  const found = runIndex(card.runs, tag)
+  const current: SubagentRun =
+    found >= 0 ? card.runs[found]! : { task: tag.task, index: tag.index, items: [] }
+  const nextItems = childItems(current.items, event, event.data ?? {})
+  if (nextItems === current.items && found >= 0) return items // 与这条子运行无关的事件：不动列表
+
+  const runs =
+    found >= 0
+      ? replace(card.runs, found, { ...current, items: nextItems })
+      : [...card.runs, { ...current, items: nextItems }]
+  // 卡已收尾（迟到的那一截）：收笔——不会再有事件来关它了
+  return replace(items, at, closeRunStreams({ ...card, runs }))
 }
 
 /** 一条事件喂进列表；unknown 事件与 live-only 之外的状态事件原样返回。
@@ -250,10 +322,13 @@ function withChildStep(
 export function applyEvent(items: TimelineItem[], event: TimelineEvent): TimelineItem[] {
   const data = event.data ?? {}
   const tag = subagentTag(data)
-  // 子运行的 delta 不进父时间线：子 agent 不流式，真到了也只能是错位文本。
-  if (tag && (event.type === 'assistant_delta' || event.type === 'reasoning_delta')) return items
-  if (tag && event.type.startsWith('tool_call_')) {
-    return withChildStep(items, event, tag) ?? applyToolEvent(items, event)
+  if (tag) {
+    // 子运行的一切都折进它自己的段落列表（panel 画的就是它）：正文、思考、工具。
+    // 归属认不出时退回父级一行——宁可多一行，不能丢信息。
+    const folded = withChildEvent(items, event, tag)
+    if (folded !== null) return folded
+    if (event.type.startsWith('tool_call_')) return applyToolEvent(items, event)
+    return items
   }
   switch (event.type) {
     case 'user_message':
@@ -386,7 +461,7 @@ function applyToolEvent(raw: TimelineItem[], event: TimelineEvent): TimelineItem
     event.type === 'tool_call_denied' ? 'failed' : str(data.status) === 'failed' || str(data.status) === 'denied' ? 'failed' : 'ok'
   const durationMs = typeof data.duration_ms === 'number' ? data.duration_ms : item.durationMs
   const result = typeof data.content === 'string' ? data.content : item.result
-  return replace(items, at, { ...item, status, durationMs, result })
+  return replace(items, at, closeRunStreams({ ...item, status, durationMs, result }))
 }
 
 // ---------------------------------------------------------------- 历史与运行归并
@@ -456,7 +531,8 @@ function overlay(base: TimelineItem, run: TimelineItem): TimelineItem {
     status: rank[run.status] > rank[base.status] ? run.status : base.status,
     result: run.result ?? base.result,
     durationMs: run.durationMs ?? base.durationMs,
-    steps: run.steps.length > 0 ? run.steps : base.steps,
+    // 明细是 live-only：历史端（重读会话）没有它，运行端有——谁有给谁
+    runs: run.runs.some((item) => item.items.length > 0) ? run.runs : base.runs,
   }
 }
 
@@ -524,4 +600,54 @@ function makeGroup(items: TimelineItem[], offset: number): TurnGroup {
     offset,
     key: identity(user ?? answer ?? items[0]!) ?? `turn:${offset}`,
   }
+}
+
+// ---------------------------------------------------------------- 子运行：卡片折叠行与面板
+
+/** 卡片折叠行要的子步骤：把每条子运行里的工具段按任务摊平（顺序就是它调用的顺序）。 */
+export function subagentSteps(item: TimelineItem): SubagentStep[] {
+  if (item.kind !== 'tool') return []
+  const steps: SubagentStep[] = []
+  for (const run of item.runs) {
+    for (const child of run.items) {
+      if (child.kind === 'tool') {
+        steps.push({ task: run.task, callId: child.callId, name: child.name, args: child.args, status: child.status })
+      }
+    }
+  }
+  return steps
+}
+
+/** 面板要的一条子运行（扁平行）。 */
+export type SubagentRunView = {
+  /** 派发它的那次 subagent 调用：面板的 key 用它 + index。 */
+  callId: string
+  task: string
+  index: number
+  items: TimelineItem[]
+  /** 这批还在跑：面板据此给运行中的标记；单条成败只在内核汇总的那段结果里。 */
+  running: boolean
+}
+
+/**
+ * 整条时间线里所有子运行，按出现顺序摊平——面板读的就是它。
+ *
+ * 明细（`items`）不落库，所以刷新后的历史会话里它恒为空（只剩任务清单）；
+ * 这一点面板要照实说，不能画一个空的时间线假装"它什么都没干"。
+ */
+export function subagentRuns(items: TimelineItem[]): SubagentRunView[] {
+  const views: SubagentRunView[] = []
+  for (const item of items) {
+    if (item.kind !== 'tool' || item.name !== 'subagent') continue
+    for (const run of item.runs) {
+      views.push({
+        callId: item.callId,
+        task: run.task,
+        index: run.index,
+        items: run.items,
+        running: item.status === 'running',
+      })
+    }
+  }
+  return views
 }

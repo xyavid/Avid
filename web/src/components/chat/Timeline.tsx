@@ -20,7 +20,7 @@ import { useState } from 'react'
 import type { ReactNode } from 'react'
 
 import type { TimelineItem } from '../../state/timeline'
-import { itemKey, turnGroups } from '../../state/timeline'
+import { itemKey, subagentSteps, turnGroups } from '../../state/timeline'
 import { AssistantMessage } from './AssistantMessage'
 import { MessageActions } from './MessageActions'
 import { ReasoningBlock } from './ReasoningBlock'
@@ -32,12 +32,16 @@ import { UserBubble } from './UserBubble'
 
 export type TimelineProps = {
   items: TimelineItem[]
+  /** 容器上的 data-testid：对话列是 `timeline`，子智能体面板里换一个——验收脚本按它区分两条时间线。 */
+  testId?: string
   /** 工作区根：工具行把路径显示成相对它；null = 原样显示绝对路径。 */
   workspaceRoot?: string | null
   /** 从这条消息分叉；只给已落库的助手消息（还在流里的那条没有 entry_id）。 */
   onBranch?: (entryId: string) => void
   /** 最后一轮还在跑：这一轮不折（过程中的样子要逐段看得见）。 */
   liveTail?: boolean
+  /** 点子智能体卡时通知调用方（打开右列的「子智能体」面板）。 */
+  onOpenSubagents?: () => void
 }
 
 /**
@@ -82,6 +86,7 @@ type TurnAction = { text: string; branchAt: string | null }
 type Ctx = {
   workspaceRoot: string | null
   onBranch?: (entryId: string) => void
+  onOpenSubagents?: () => void
   /** 本轮第一段正文吃标识行；由调用方按"这一轮画过正文没有"消费。 */
   head: { pending: boolean }
   /** 整轮的动作面（复制 / 分支），按段落在组内的下标索引进来的。 */
@@ -147,9 +152,10 @@ function itemNodes(list: TimelineItem[], offset: number, ctx: Ctx): ReactNode[] 
           target={label.target}
           status={item.status}
           durationMs={item.durationMs}
-          steps={item.steps}
+          steps={subagentSteps(item)}
           workspaceRoot={ctx.workspaceRoot}
           detail={detail}
+          onOpen={item.name === 'subagent' ? ctx.onOpenSubagents : undefined}
         >
           <span className="line-clamp-6 block whitespace-pre-wrap">{item.result ?? item.args}</span>
         </ToolCard>
@@ -158,7 +164,14 @@ function itemNodes(list: TimelineItem[], offset: number, ctx: Ctx): ReactNode[] 
   })
 }
 
-export function Timeline({ items, workspaceRoot = null, onBranch, liveTail = false }: TimelineProps) {
+export function Timeline({
+  items,
+  testId = 'timeline',
+  workspaceRoot = null,
+  onBranch,
+  liveTail = false,
+  onOpenSubagents,
+}: TimelineProps) {
   // 手动展开的轮：折叠是默认，点开的那几轮记在这儿（切换会话/刷新即回到默认）。
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set())
   const groups = turnGroups(items)
@@ -179,7 +192,13 @@ export function Timeline({ items, workspaceRoot = null, onBranch, liveTail = fal
     // 且不是正在跑的那一轮。跑着的时候铺开——过程要逐段看得见。
     const foldable = group.answer !== null && group.process.length > 0 && !running
     const open = foldable && opened.has(group.key)
-    const ctx: Ctx = { workspaceRoot, onBranch, head: { pending: true }, actions: turnActions(group.items) }
+    const ctx: Ctx = {
+      workspaceRoot,
+      onBranch,
+      onOpenSubagents,
+      head: { pending: true },
+      actions: turnActions(group.items),
+    }
     const from = group.user === null ? 0 : 1
 
     if (group.user !== null) nodes.push(...itemNodes([group.user], group.offset, ctx))
@@ -203,7 +222,7 @@ export function Timeline({ items, workspaceRoot = null, onBranch, liveTail = fal
   })
 
   return (
-    <div className="flex flex-col gap-a16" data-testid="timeline">
+    <div className="flex flex-col gap-a16" data-testid={testId}>
       {nodes}
     </div>
   )

@@ -16,7 +16,7 @@
 
 import { langOf } from '../../markdown/langOf'
 import type { ToolStatus } from '../../state/timeline'
-import { parseArgs } from './toolLabel'
+import { parseArgs } from '../../state/toolArgs'
 
 export type ToolDetail =
   | { kind: 'diff'; lang: string | null; before: string; after: string; note: string | null }

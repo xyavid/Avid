@@ -23,9 +23,15 @@ import { subscribeRun } from '../api/events'
 import type { UsageReport } from '../api/types'
 import type { RunPermission } from '../events/types'
 import type { TimelineEvent, TimelineItem, ToolStatus } from './timeline'
-import { appendUser, applyEvent } from './timeline'
+import { appendUser, applyEvent, subagentTag } from './timeline'
 
 export type RunPhase = 'idle' | 'starting' | 'running' | 'settling' | 'error'
+
+/** 合帧缓冲里「父运行」那一份的键：子运行的键是 `{task}\u0000{index}`。 */
+const PARENT_KEY = ''
+
+/** 一截待刷的流式增量：文本 + 首片到达的时间 + 它的来源（null = 父运行）。 */
+type PendingDelta = { text: string; ts: number; tag: { task: string; index: number } | null }
 
 export type LiveTool = {
   callId: string
@@ -70,22 +76,33 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
   // 测试桩会把「已消费」的句柄覆盖回非空，卡死后续所有增量。
   // 后台标签页 rAF 停发，另挂 1s 定时器兜底：增量最迟一秒落 state，
   // 不丢不重，也不会在隐藏页里无界积压（评审 L5）。
+  //
+  // 合帧**按来源分组**（阶段 53：子运行也流式，两边的增量会交错到达）：
+  // 父运行的正文与每条子运行的正文各自成串——一面之词混进另一条时间线，
+  // 就是「子 agent 说的话算在主 agent 头上」这种脏数据。
   const pendingFrameRef = useRef(false)
   const frameHandleRef = useRef<number | null>(null)
   const fallbackTimerRef = useRef<number | null>(null)
-  const pendingAssistantRef = useRef('')
-  const pendingAssistantTsRef = useRef(0)
+  const pendingRef = useRef(new Map<string, PendingDelta>())
   const flushDeltas = useCallback(() => {
     pendingFrameRef.current = false
     if (fallbackTimerRef.current !== null) {
       window.clearTimeout(fallbackTimerRef.current)
       fallbackTimerRef.current = null
     }
-    const text = pendingAssistantRef.current
-    if (!text) return
-    pendingAssistantRef.current = ''
-    const event: TimelineEvent = { type: 'assistant_delta', ts: pendingAssistantTsRef.current, data: { text } }
-    setItems((cur) => applyEvent(cur, event))
+    if (pendingRef.current.size === 0) return
+    const chunks = [...pendingRef.current.values()]
+    pendingRef.current.clear()
+    setItems((cur) =>
+      chunks.reduce((acc, chunk) => {
+        const event: TimelineEvent = {
+          type: 'assistant_delta',
+          ts: chunk.ts,
+          data: chunk.tag === null ? { text: chunk.text } : { text: chunk.text, subagent: chunk.tag },
+        }
+        return applyEvent(acc, event)
+      }, cur),
+    )
   }, [])
   const scheduleDeltaFlush = useCallback(() => {
     if (pendingFrameRef.current) return
@@ -105,8 +122,7 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
     frameHandleRef.current = requestAnimationFrame(flush)
     fallbackTimerRef.current = window.setTimeout(flush, 1000)
   }, [flushDeltas])
-  // 最终消息/重置取代 delta 累积：未刷帧的增量必须作废，否则持久消息之后
-  // 会再冒出一段只有增量的残段。
+  /** 任一来源的未刷帧增量作废（终态 / 重置）。 */
   const discardPendingDeltas = useCallback(() => {
     pendingFrameRef.current = false
     if (frameHandleRef.current !== null) {
@@ -117,7 +133,12 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
       window.clearTimeout(fallbackTimerRef.current)
       fallbackTimerRef.current = null
     }
-    pendingAssistantRef.current = ''
+    pendingRef.current.clear()
+  }, [])
+  /** 只作废**父运行**的未刷帧增量：父的持久消息到了，它那截流式残段就没有意义了；
+   *  子运行的增量还在路上，不能被一起丢掉。 */
+  const discardParentDeltas = useCallback(() => {
+    pendingRef.current.delete(PARENT_KEY)
   }, [])
   useEffect(() => () => discardPendingDeltas(), [discardPendingDeltas])
 
@@ -134,8 +155,11 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
     setPhase('idle')
   }, [discardPendingDeltas])
 
-  /** 事件里带的用量快照：形状由内核保证（usage_report 一个出口），这里只挡非对象。 */
+  /** 事件里带的用量快照：形状由内核保证（usage_report 一个出口），这里只挡非对象。
+   *  带 subagent 标记的事件是**子运行**的读数（它就是同一个事件名 + 标记）——子运行的
+   *  上下文占用与父运行不是一回事，拿它顶替父读数会让容量环跳来跳去。 */
   const takeUsage = (data: Record<string, unknown>) => {
+    if (data.subagent !== undefined) return
     const report = data.usage
     if (report !== null && typeof report === 'object') setUsage(report as UsageReport)
   }
@@ -155,15 +179,18 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
         case 'assistant_delta': {
           const text = data.text
           if (typeof text === 'string' && text) {
-            if (pendingAssistantRef.current === '') pendingAssistantTsRef.current = e.ts
-            pendingAssistantRef.current += text
+            const tag = subagentTag(data)
+            const key = tag === null ? PARENT_KEY : `${tag.task}\u0000${tag.index}`
+            const pending = pendingRef.current.get(key)
+            pendingRef.current.set(key, { text: (pending?.text ?? '') + text, ts: pending?.ts ?? e.ts, tag })
             scheduleDeltaFlush()
           }
           return
         }
         case 'assistant_message': {
-          // 持久消息取代增量累积（重放时 delta 已丢失，durable 是权威）。
-          discardPendingDeltas()
+          // 父运行的持久消息取代增量累积（重放时 delta 已丢失，durable 是权威）；
+          // 子运行的增量不受影响——它们不属于这一条消息。
+          discardParentDeltas()
           setItems((cur) => applyEvent(cur, { type: e.type, ts: e.ts, data }))
           return
         }
@@ -204,7 +231,7 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
         }
       }
     },
-    [discardPendingDeltas, onSettled, scheduleDeltaFlush],
+    [discardParentDeltas, discardPendingDeltas, onSettled, scheduleDeltaFlush],
   )
 
   const pollUntilTerminal = useCallback(
