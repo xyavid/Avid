@@ -2,21 +2,36 @@
 
 修复前这里是五步阶梯（tool_result_budget / snip / micro / compact_history /
 reactive）各自的用例；按用户裁定收敛为一条 Pi 式通路——保留最近 N 轮完整
-历史，更早部分经固定 prompt 一次 summarize，切点绝不落在工具批中间。
+历史，更早部分经一次 summarize 压成一条检查点消息，切点绝不落在工具批中间。
+
+检查点分两份 prompt：首次压缩按 <original-request>/<conversation> 写新检查点；
+transcript 头部已是检查点时走更新路径，拿上一份 + 新素材 + 仓库现状刷新它。
 """
 
 
+import shutil
+import subprocess
+
 import pytest
 
+from avid.agent import compaction as compaction_module
 from avid.agent.compaction import (
+    CHECKPOINT_STRUCTURE,
+    COMPACTION_SYSTEM,
     CONTEXT_CHAR_LIMIT,
+    CREATE_TASK,
+    UPDATE_TASK,
     CompactReport,
     ContextBudget,
     _next_spill_path,
     _summarize,
     _summary_message,
     announce,
+    checkpoint_of,
     cut_point,
+    previous_checkpoint,
+    render_conversation,
+    repo_state,
     run_compaction,
     spill,
     trigger_chars,
@@ -71,6 +86,14 @@ def call(call_id="c1", name="read_file"):
         "id": call_id,
         "type": "function",
         "function": {"name": name, "arguments": "{}"},
+    }
+
+
+def bash_call(call_id="c1"):
+    return {
+        "id": call_id,
+        "type": "function",
+        "function": {"name": "bash", "arguments": '{"command": "pytest -q"}'},
     }
 
 
@@ -194,6 +217,267 @@ def test_cut_point_returns_zero_when_fewer_rounds_than_the_window():
     assert cut_point(transcript, keep_recent_turns=10) == 0
 
 
+# ---------- 检查点 prompt ----------
+
+
+def test_checkpoint_structure_is_the_documented_order():
+    """结构是给下一个 agent 读的契约：段名与顺序都是接口，不是排版。"""
+    assert CHECKPOINT_STRUCTURE.splitlines() == [
+        "## Goal",
+        "## Constraints",
+        "## Findings",
+        "### Verified",
+        "### Hypotheses",
+        "## Progress",
+        "## Decisions",
+        "## Errors / Fixes",
+        "## Current State",
+        "## Pending Work",
+        "## Next Step",
+        "## Critical Context",
+    ]
+
+
+def test_no_prompt_may_invent_facts():
+    for text in (COMPACTION_SYSTEM, CREATE_TASK, UPDATE_TASK):
+        assert "invent" in text
+
+
+def test_findings_separate_verified_from_hypotheses():
+    """假设必须带标签：写成陈述句的假设，下一个 agent 会当事实用。"""
+    assert "### Verified" in CREATE_TASK and "### Hypotheses" in CREATE_TASK
+    assert "[hypothesis]" in CREATE_TASK
+    assert "[rejected]" in CREATE_TASK
+    # 更新路径同样不许把假设升格成事实
+    assert "[rejected]" in UPDATE_TASK and "Verified" in UPDATE_TASK
+
+
+def test_engine_prompt_forbids_solving_the_task():
+    assert "Do not solve the task." in COMPACTION_SYSTEM
+    assert "Do not call tools." in COMPACTION_SYSTEM
+
+
+def test_render_conversation_keeps_roles_calls_and_tool_names():
+    messages = [
+        user("把 A 做完"),
+        assistant("先跑一遍测试", [bash_call()]),
+        tool("c1", "1 passed"),
+    ]
+
+    text = render_conversation(messages)
+
+    assert "[user]\n把 A 做完" in text
+    assert "[assistant]\n先跑一遍测试" in text
+    # 精确命令与参数照抄：检查点里丢掉参数，下一个 agent 就得重猜
+    assert '[tool call] bash({"command": "pytest -q"})' in text
+    # 工具结果要标出是哪个工具的结果，光有 call_id 读不出来
+    assert "[tool result: bash]\n1 passed" in text
+
+
+def test_create_prompt_carries_the_request_the_history_and_the_task(spill_root):
+    chat = FakeChat()
+
+    run_compaction(
+        transcript=Transcript(rounds(12)),
+        state=RunState(workspace_root=str(spill_root)),
+        config=CONFIG,
+        chat=chat,
+        limits=budget(),
+    )
+
+    request = chat.requests[0]
+    body = request["messages"][0]["content"]
+    assert request["system"].startswith("You are a context-compaction engine")
+    # rounds() 的首条消息就是最初请求
+    assert "<original-request>\n任务\n</original-request>" in body
+    assert "<conversation>" in body and "</conversation>" in body
+    assert "<compaction-task>" in body
+    assert "<previous-checkpoint>" not in body
+
+
+def test_create_prompt_asks_for_every_section(spill_root):
+    chat = FakeChat()
+
+    run_compaction(
+        transcript=Transcript(rounds(12)),
+        state=RunState(workspace_root=str(spill_root)),
+        config=CONFIG,
+        chat=chat,
+        limits=budget(),
+    )
+
+    body = chat.requests[0]["messages"][0]["content"]
+    for section in CHECKPOINT_STRUCTURE.splitlines():
+        assert section in body, section
+
+
+def test_create_prompt_never_probes_the_repo(spill_root, monkeypatch):
+    """仓库现状只有更新路径要：首次压缩多跑一次 git 是白花。"""
+    monkeypatch.setattr(
+        compaction_module, "repo_state", lambda root: pytest.fail("首次压缩不该探仓库")
+    )
+    chat = FakeChat()
+
+    run_compaction(
+        transcript=Transcript(rounds(12)),
+        state=RunState(workspace_root=str(spill_root)),
+        config=CONFIG,
+        chat=chat,
+        limits=budget(),
+    )
+
+    assert "<repo-state>" not in chat.requests[0]["messages"][0]["content"]
+
+
+def test_checkpoint_of_reads_back_a_summary_message():
+    message = _summary_message("## Goal\nG", ".avid/context/t.json")
+
+    assert checkpoint_of(message) == "## Goal\nG"
+    assert checkpoint_of("把这件事做完") is None
+    assert checkpoint_of("[历史摘要] 另一套格式") is None
+
+
+def test_previous_checkpoint_only_recognises_the_transcript_head():
+    head = user(_summary_message("## Goal\nG", "p"))
+
+    assert previous_checkpoint([head, user("接着干")]) == "## Goal\nG"
+    assert previous_checkpoint([user("接着干")]) is None
+    assert previous_checkpoint([]) is None
+
+
+def compaction_after_more_work(chat, state, limits=None):
+    """先压一次，再干几轮，然后强制压第二次——第二次就是更新路径。"""
+    limits = limits or budget()
+    transcript = Transcript(rounds(12))
+    run_compaction(
+        transcript=transcript, state=state, config=CONFIG, chat=chat, limits=limits
+    )
+    for index in range(12, 24):
+        transcript.append_many(
+            [assistant("", [call(f"c{index}")]), tool(f"c{index}", "新结果")]
+        )
+    chat.text = "## Goal\n把 A 做完（已更新）"
+    run_compaction(
+        transcript=transcript,
+        state=state,
+        config=CONFIG,
+        chat=chat,
+        limits=limits,
+        force=True,
+    )
+    return transcript, chat.requests[1]
+
+
+def test_second_compaction_updates_the_previous_checkpoint(spill_root, monkeypatch):
+    monkeypatch.setattr(
+        compaction_module,
+        "repo_state",
+        lambda root: "$ git status --porcelain -uno\n M avid/agent/compaction.py",
+    )
+    chat = FakeChat("## Goal\n把 A 做完")
+
+    transcript, update = compaction_after_more_work(
+        chat, RunState(workspace_root=str(spill_root))
+    )
+
+    body = update["messages"][0]["content"]
+    assert "<previous-checkpoint>\n## Goal\n把 A 做完\n</previous-checkpoint>" in body
+    # 最初的请求已经并进上一份检查点，再喂一遍会把方向拉回去
+    assert "<original-request>" not in body
+    assert "<conversation>" in body and "新结果" in body
+    # 上一份只出现一次：同一段内容不喂两遍
+    assert body.count("## Goal") == 1
+    assert "<update-task>" in body
+    assert "UPDATES an existing checkpoint" in update["system"]
+    # 更新后的检查点回到 transcript 头部
+    assert "（已更新）" in transcript.as_messages()[0]["content"]
+
+
+def test_update_prompt_carries_the_repo_state(spill_root, monkeypatch):
+    monkeypatch.setattr(
+        compaction_module,
+        "repo_state",
+        lambda root: "$ git status --porcelain -uno\n M avid/agent/compaction.py",
+    )
+    chat = FakeChat("## Goal\n把 A 做完")
+
+    _transcript, update = compaction_after_more_work(
+        chat, RunState(workspace_root=str(spill_root))
+    )
+
+    body = update["messages"][0]["content"]
+    assert "<repo-state>" in body and "M avid/agent/compaction.py" in body
+
+
+def test_update_prompt_omits_a_missing_repo_state(spill_root, monkeypatch):
+    monkeypatch.setattr(compaction_module, "repo_state", lambda root: None)
+    chat = FakeChat("## Goal\n把 A 做完")
+
+    _transcript, update = compaction_after_more_work(
+        chat, RunState(workspace_root=str(spill_root))
+    )
+
+    assert "<repo-state>" not in update["messages"][0]["content"]
+
+
+def test_update_prompt_reports_an_empty_conversation(spill_root, monkeypatch):
+    """连着压两次时新素材是空的：明说，别让模型对着空块猜该更新什么。"""
+    monkeypatch.setattr(compaction_module, "repo_state", lambda root: None)
+    chat = FakeChat("## Goal\n把 A 做完")
+    transcript = Transcript(rounds(12))
+    state = RunState(workspace_root=str(spill_root))
+    limits = budget()
+
+    run_compaction(
+        transcript=transcript, state=state, config=CONFIG, chat=chat, limits=limits
+    )
+    run_compaction(
+        transcript=transcript, state=state, config=CONFIG, chat=chat, limits=limits, force=True
+    )
+
+    body = chat.requests[1]["messages"][0]["content"]
+    assert (
+        "<conversation>\n(no new conversation since the checkpoint)\n</conversation>" in body
+    )
+
+
+def git(root, *args):
+    return subprocess.run(
+        ["git", "-C", str(root), *args],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+
+
+def test_repo_state_reports_branch_tracked_changes_and_diff_stat(tmp_path):
+    if shutil.which("git") is None:
+        pytest.skip("环境里没有 git")
+
+    (tmp_path / "a.txt").write_text("one\n")
+    git(tmp_path, "init", "-q")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
+
+    clean = repo_state(tmp_path)
+
+    assert "$ git rev-parse --abbrev-ref HEAD\n" in clean
+    assert "$ git status --porcelain -uno\n(none)" in clean
+
+    (tmp_path / "a.txt").write_text("two\n")
+
+    text = repo_state(tmp_path)
+
+    assert "M a.txt" in text
+    assert "1 file changed" in text
+
+
+def test_repo_state_is_silent_outside_a_repo(tmp_path):
+    """探针是锦上添花：不是仓库、没有 git 都只是没有这一段，不该让压缩失败。"""
+    assert repo_state(tmp_path) is None
+    assert repo_state(None) is None
+
+
 # ---------- 压缩通路 ----------
 
 
@@ -240,8 +524,8 @@ def test_above_trigger_summarizes_older_history_and_keeps_recent_turns(spill_roo
     assert len(messages) == 1 + 20  # 摘要一条 + 最近 10 轮
     assert messages[0]["content"].startswith("[历史摘要]")
     assert validate(messages) == []
-    # 固定 prompt 的摘要请求里带上了被压缩的更早历史
-    assert chat.requests[0]["system"].startswith("你是上下文压缩器")
+    # 摘要请求带上了被压缩的更早历史（渲染成带标签的文本，见下面的 prompt 用例）
+    assert "x" * 200 in chat.requests[0]["messages"][0]["content"]
     assert transcript.estimate_chars() < before_chars
 
 
@@ -374,9 +658,12 @@ def test_summary_call_is_not_capped(spill_root):
                 finish_reason="stop",
             )
 
-    transcript = Transcript([user("x" * 2000), assistant("y" * 2000)])
-
-    assert _summarize(transcript.as_messages(), config=CONFIG, chat=LongChat()) == "这是摘要"
+    assert (
+        _summarize(
+            "素材文本", config=CONFIG, chat=LongChat(), system=COMPACTION_SYSTEM
+        )
+        == "这是摘要"
+    )
 
 
 def test_summary_message_carries_the_recovery_path():
