@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { AppShell } from '../AppShell'
@@ -36,19 +36,57 @@ describe('AppShell 骨架（阶段 1 立，阶段 48 支持无 rail 两列）', 
     expect(screen.getByText(/侧栏 240px/)).toBeTruthy()
   })
 
-  it('不给 rail：骨架退两列（style 覆盖三列模板），dock 接管右缘', () => {
+  it('不给 rail：两列模板（侧栏 + 主列），没有右列', () => {
     const { container } = render(<AppShell />)
 
-    const grid = container.querySelector('div[class*="grid-cols-"]') as HTMLElement
-    expect(grid.getAttribute('style') ?? '').toContain('grid-template-columns')
+    const grid = container.querySelector('div[style*="grid-template-columns"]') as HTMLElement
+    expect(grid.style.gridTemplateColumns).toMatch(/^\d+px minmax\(0,1fr\)$/)
     expect(screen.queryByText(/右栏 280px/)).toBeNull()
   })
 
-  it('给 rail：三列骨架原样，右栏内容进第三列', () => {
+  it('给 rail：三列模板，右栏内容进第三列', () => {
     const { container } = render(<AppShell rail={<p>右栏内容</p>} />)
 
-    const grid = container.querySelector('div[class*="grid-cols-"]') as HTMLElement
-    expect(grid.getAttribute('style')).toBeNull()
+    const grid = container.querySelector('div[style*="grid-template-columns"]') as HTMLElement
+    expect(grid.style.gridTemplateColumns).toMatch(/^\d+px minmax\(0,1fr\) \d+px$/)
     expect(screen.getByText('右栏内容')).toBeTruthy()
+  })
+})
+
+describe('两侧列可拖（阶段 52）', () => {
+  afterEach(cleanup)
+
+  const grid = (container: HTMLElement) =>
+    container.querySelector('div[style*="grid-template-columns"]') as HTMLElement
+
+  it('两条列缘各有一个拖拽柄；没有右列时只有一条', () => {
+    const both = render(<AppShell rail={<p>右栏</p>} />)
+    expect(screen.getByRole('separator', { name: '调整侧栏宽度' })).toBeTruthy()
+    expect(screen.getByRole('separator', { name: '调整侧边栏宽度' })).toBeTruthy()
+    both.unmount()
+
+    render(<AppShell />)
+    expect(screen.getAllByRole('separator')).toHaveLength(1)
+  })
+
+  it('键盘可调：方向键改模板并落盘（方向按「变宽」算）', () => {
+    const { container } = render(<AppShell rail={<p>右栏</p>} />)
+    const before = grid(container).style.gridTemplateColumns
+
+    fireEvent.keyDown(screen.getByRole('separator', { name: '调整侧栏宽度' }), { key: 'ArrowRight' })
+    const wider = grid(container).style.gridTemplateColumns
+    expect(wider).not.toBe(before)
+    expect(Number.parseInt(wider, 10)).toBeGreaterThan(Number.parseInt(before, 10))
+
+    // 左列的方向键是「往哪边长」：ArrowLeft 变窄，且夹在下限上
+    for (let i = 0; i < 20; i += 1) {
+      fireEvent.keyDown(screen.getByRole('separator', { name: '调整侧栏宽度' }), { key: 'ArrowLeft' })
+    }
+    const floored = grid(container).style.gridTemplateColumns
+    expect(Number.parseInt(floored, 10)).toBe(180)
+
+    // 右列：ArrowLeft 变宽
+    fireEvent.keyDown(screen.getByRole('separator', { name: '调整侧边栏宽度' }), { key: 'ArrowLeft' })
+    expect(JSON.parse(localStorage.getItem('avid.columns') ?? '{}').rail).toBeGreaterThan(280)
   })
 })
