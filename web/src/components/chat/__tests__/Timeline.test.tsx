@@ -134,19 +134,60 @@ describe('Timeline（段落 → 对话列）', () => {
     expect(screen.queryByText(/提醒/)).toBeNull()
   })
 
-  it('流式正文带光标；只有已落库的助手段给「分支」', () => {
+  it('一次回话只挂一行动作：落在末段，复制的是整段原文', () => {
     const onBranch = vi.fn()
+    const items: TimelineItem[] = [
+      { kind: 'user', entryId: 'e1', text: '跑一下' },
+      { kind: 'assistant', entryId: 'e2', text: '先读一遍。', streaming: false },
+      {
+        kind: 'tool',
+        callId: 'c1',
+        name: 'read_file',
+        args: '{"path":"/w/a.py"}',
+        result: 'x',
+        status: 'ok',
+        durationMs: null,
+        steps: [],
+      },
+      { kind: 'assistant', entryId: 'e3', text: '结论是 avid。', streaming: false },
+    ]
+    render(<Timeline items={items} workspaceRoot="/w" onBranch={onBranch} />)
+
+    // 用户那句话一行，整段回话一行——中间那段正文不各挂一排
+    expect(screen.getAllByRole('button', { name: '复制' })).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: '分支' })).toHaveLength(1)
+
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    fireEvent.click(screen.getAllByRole('button', { name: '复制' })[1]!)
+    expect(writeText).toHaveBeenCalledWith('先读一遍。\n\n结论是 avid。')
+
+    fireEvent.click(screen.getByRole('button', { name: '分支' }))
+    expect(onBranch).toHaveBeenCalledWith('e3')
+  })
+
+  it('还在流的末段不出现分支钮（分叉点必须是已落库的条目）', () => {
     const items: TimelineItem[] = [
       { kind: 'user', entryId: null, text: '帮我读一下 pyproject.toml' },
       { kind: 'assistant', entryId: 'e2', text: '项目名是 avid。', streaming: false },
       { kind: 'assistant', entryId: null, text: '正在写下一段', streaming: true },
     ]
-    render(<Timeline items={items} onBranch={onBranch} />)
+    render(<Timeline items={items} onBranch={vi.fn()} />)
 
-    expect(screen.getAllByRole('button', { name: '复制' })).toHaveLength(3)
-    expect(screen.getAllByRole('button', { name: '分支' })).toHaveLength(1)
+    expect(screen.getAllByRole('button', { name: '复制' })).toHaveLength(2)
+    expect(screen.queryByRole('button', { name: '分支' })).toBeNull()
+  })
 
-    fireEvent.click(screen.getByRole('button', { name: '分支' }))
-    expect(onBranch).toHaveBeenCalledWith('e2')
+  it('两轮对话各挂一行：复制数 = 用户消息数 + 回话数', () => {
+    const items: TimelineItem[] = [
+      { kind: 'user', entryId: 'e1', text: '第一问' },
+      { kind: 'assistant', entryId: 'e2', text: '第一答', streaming: false },
+      { kind: 'user', entryId: 'e3', text: '第二问' },
+      { kind: 'assistant', entryId: 'e4', text: '第二答', streaming: false },
+    ]
+    render(<Timeline items={items} onBranch={vi.fn()} />)
+
+    expect(screen.getAllByRole('button', { name: '复制' })).toHaveLength(4)
+    expect(screen.getAllByRole('button', { name: '分支' })).toHaveLength(2)
   })
 })

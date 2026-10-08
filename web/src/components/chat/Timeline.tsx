@@ -8,6 +8,7 @@
  * 轮内顺序就是事件到达的顺序：思考 → 正文 → 它触发的工具。相邻工具行贴紧
  * （连续动作读起来是一组），其余段落之间留呼吸。
  * 标识行只在本轮第一次出现正文时显示：同一轮后面几段是续写，再挂一次名字是噪音。
+ * 动作行（复制 / 分支）同理——一次回话只挂一行，见 `turnActions`。
  */
 
 import type { ReactNode } from 'react'
@@ -29,8 +30,45 @@ export type TimelineProps = {
   onBranch?: (entryId: string) => void
 }
 
+/**
+ * 回话动作面：一次「助手回话」（两条用户消息之间）只挂一行动作，落在它最后一段
+ * 正文上——回话是一个整体，中间每段都挂一排按钮只会把时间线切碎。
+ *
+ * 复制的是整段回话的原文（各段正文按序拼接）；分支点是**末段**那条已落库的消息，
+ * 还在流的那段没有 entry_id（分叉点必须是磁盘上真实存在的条目），此时不出现分支钮。
+ */
+function turnActions(items: TimelineItem[]): Map<number, { text: string; branchAt: string | null }> {
+  const actions = new Map<number, { text: string; branchAt: string | null }>()
+  let texts: string[] = []
+  let last: number | null = null
+  const flush = () => {
+    if (last !== null) {
+      const item = items[last]
+      actions.set(last, {
+        text: texts.join('\n\n'),
+        branchAt: item?.kind === 'assistant' ? item.entryId : null,
+      })
+    }
+    texts = []
+    last = null
+  }
+  items.forEach((item, index) => {
+    if (item.kind === 'user') {
+      flush()
+      return
+    }
+    if (item.kind === 'assistant') {
+      texts.push(item.text)
+      last = index
+    }
+  })
+  flush()
+  return actions
+}
+
 export function Timeline({ items, workspaceRoot = null, onBranch }: TimelineProps) {
   const nodes: ReactNode[] = []
+  const actions = turnActions(items)
   let headPending = true
 
   items.forEach((item, index) => {
@@ -52,12 +90,13 @@ export function Timeline({ items, workspaceRoot = null, onBranch }: TimelineProp
     if (item.kind === 'assistant') {
       const showHead = headPending
       headPending = false
+      const turn = actions.get(index)
       nodes.push(
         <div key={key} className="group" data-item="assistant" data-entry={item.entryId ?? undefined}>
           <AssistantMessage streaming={item.streaming} showHead={showHead}>
             {item.text}
           </AssistantMessage>
-          <MessageActions text={item.text} onBranch={branchHandler(item.entryId, onBranch)} />
+          {turn && <MessageActions text={turn.text} onBranch={branchHandler(turn.branchAt, onBranch)} />}
         </div>,
       )
       return
