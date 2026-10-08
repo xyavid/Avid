@@ -3,6 +3,8 @@ name = "avid"
 version = "0.0.1"
 description = "自建 agent 运行时（harness）：先做通用内核，场景后接"
 requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = ["httpx>=0.27"]
 
 [project.scripts]

@@ -23,21 +23,23 @@
 ## 快速开始
 
 ```bash
-uv tool install --editable ".[web]"        # 装成命令 `avid`
-avid --agent "读 pyproject.toml，告诉我项目名"
+git clone https://github.com/xyavid/Avid.git && cd Avid
+uv sync --extra web                          # 内核 + Web 依赖（只跑 CLI 就别带 [web]）
+uv run avid --agent "读 pyproject.toml，告诉我项目名"
 ```
 
 ```bash
-avid                   # 交互会话：/compact 压缩、/rewind 回滚、/<技能名> 载入技能
-avid web --port 8765   # 浏览器界面 → http://127.0.0.1:8765
+uv run avid                    # 交互会话：/compact 压缩、/rewind 回滚、/<技能名> 载入技能
+uv run avid web --port 8765    # 浏览器界面 → http://127.0.0.1:8765
 ```
 
-`avid web` 需要先交付前端产物：
+`avid web` 之前先交付一次前端产物：
 
 ```bash
-uv sync --extra web && pnpm -C web install && pnpm -C web run copy:dist
+pnpm -C web install && pnpm -C web run copy:dist
 ```
 
+想在任何目录直接敲 `avid`，把它装成命令：`uv tool install --editable ".[web]"`。
 全部参数见 `avid --help`、`avid web --help`、`avid workspace --help`。
 
 ## 概念
@@ -79,4 +81,4 @@ pnpm -C web run verify                       # 前端：类型检查 + 测试 + 
 
 ## 许可
 
-尚未声明：仓库里没有 `LICENSE` 文件，默认保留全部权利。
+[MIT](LICENSE) © 2026 xyavid
