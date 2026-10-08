@@ -799,6 +799,37 @@ def test_tool_status_reaches_the_wire(bundle):
     assert "content" not in finished[0]["data"]
 
 
+def test_child_tool_result_rides_the_wire_truncated():
+    """子运行的工具结果只能走这条线（它不落库、没有 durable 结果通道），父运行照旧只报长度。"""
+    from avid.agent.events import TOOL_CALL_FINISHED, RunEvent
+    from avid.web.schemas import SUBAGENT_CONTENT_CHARS, event_payload
+
+    child = RunEvent(
+        type=TOOL_CALL_FINISHED,
+        data={
+            "tool": "read_file",
+            "tool_call_id": "k1",
+            "content": "行" * (SUBAGENT_CONTENT_CHARS + 10),
+            "subagent": {"task": "甲", "index": 0},
+        },
+        run_id="r1",
+        ts=1,
+    )
+    payload = event_payload(child, "s1")["data"]
+
+    assert len(payload["content"]) == SUBAGENT_CONTENT_CHARS
+    assert payload["content_chars"] == SUBAGENT_CONTENT_CHARS + 10
+    assert payload["status"] == "ok"
+
+    parent = RunEvent(
+        type=TOOL_CALL_FINISHED,
+        data={"tool": "read_file", "tool_call_id": "k1", "content": "行"},
+        run_id="r1",
+        ts=1,
+    )
+    assert "content" not in event_payload(parent, "s1")["data"]
+
+
 # ---------------- 静态与 SPA fallback（§4.3） ----------------
 
 

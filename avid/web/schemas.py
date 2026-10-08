@@ -465,6 +465,10 @@ def classify_tool_status(
     return "ok"
 
 
+#: 子运行工具结果在线上保留的字符数：够看清它拿到了什么，又不让一次并行派发把事件流撑爆。
+SUBAGENT_CONTENT_CHARS = 4000
+
+
 def event_payload(event: RunEvent, session_id: str) -> dict[str, Any]:
     """Maps a kernel event to its wire payload, dropping tool output and adding derived status fields."""
     data = dict(event.data)
@@ -472,6 +476,11 @@ def event_payload(event: RunEvent, session_id: str) -> dict[str, Any]:
         content = data.pop("content", "")
         data["status"] = classify_tool_status(content, truncated=bool(data.get("truncated")))
         data["content_chars"] = len(content) if isinstance(content, str) else 0
+        if "subagent" in data:
+            # 子运行的工具结果**只能走这条线**：它不落库，没有 tool_result_message 那样的
+            # durable 通道。所以这里留一段截断的正文（界面的子智能体面板要看到它拿到了什么）；
+            # 父运行的调用照旧只报状态与长度——结果由 durable 消息给，线格式不重复搬运。
+            data["content"] = content[:SUBAGENT_CONTENT_CHARS] if isinstance(content, str) else ""
     elif event.type == TOOL_CALL_DENIED:
         data["status"] = classify_tool_status("", denied_kind=str(data.get("kind") or "user"))
     return {

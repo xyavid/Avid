@@ -259,6 +259,75 @@ def test_run_subagent_returns_no_summary_for_empty_text(monkeypatch):
     assert run_subagent("随便", config=CONFIG) == "(no summary)"
 
 
+def test_run_subagent_streams_its_words_onto_the_observer(monkeypatch):
+    """子运行默认走流式：正文与思考的增量经它自己的 observer 发出（阶段 53）。
+
+    父运行把 observer 换成一个「加 subagent 标记再转发」的包装，所以这两条增量
+    到前端时带着 {task, index}——面板里的子运行正文就是这么来的。
+    """
+    from avid.agent import run as run_module
+    from avid.agent.tools import subagent as subagent_module
+
+    seen: list[tuple[str, str]] = []
+    specs: list[object] = []
+
+    def fake_stream(config, messages, *, on_delta=None, on_reasoning=None, **kwargs):
+        on_reasoning("先看一眼")
+        on_delta("看完了")
+        return object()
+
+    monkeypatch.setattr(subagent_module, "stream_completion", fake_stream)
+
+    class FakeRun:
+        def __init__(self, messages, spec, **kwargs):
+            specs.append(spec)
+
+        def run(self):
+            # 走 spec 上的 chat——也就是 run_subagent 给的那个默认值
+            specs[-1].chat(None, [{"role": "user", "content": "x"}])
+
+            class _Outcome:
+                text = "摘要"
+
+            return _Outcome()
+
+    monkeypatch.setattr(run_module, "Run", FakeRun)
+
+    assert run_subagent("任务原文", config=CONFIG, observer=seen.append) == "摘要"
+
+    assert [(e.type, e.data["text"]) for e in seen] == [
+        ("reasoning_delta", "先看一眼"),
+        ("assistant_delta", "看完了"),
+    ]
+    # 摘要必须绕开流式，否则压缩摘要的文本会混进子运行的正文
+    assert specs[0].summarize is subagent_module.chat_completion
+
+
+def test_run_subagent_uses_an_injected_chat_as_is(monkeypatch):
+    """注入的 chat 原样用（测试与 benchmark 的脚本模型走这条）。"""
+    from avid.agent import run as run_module
+
+    specs: list[object] = []
+
+    def scripted(config, messages, **kwargs):
+        return object()
+
+    class FakeRun:
+        def __init__(self, messages, spec, **kwargs):
+            specs.append(spec)
+
+        def run(self):
+            class _Outcome:
+                text = "摘要"
+
+            return _Outcome()
+
+    monkeypatch.setattr(run_module, "Run", FakeRun)
+
+    assert run_subagent("任务原文", config=CONFIG, chat=scripted) == "摘要"
+    assert specs[0].chat is scripted
+
+
 # ---------- 取消传导、事件嵌套与 usage 并账（阶段 30c） ----------
 
 

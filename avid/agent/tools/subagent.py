@@ -3,6 +3,10 @@
 A child agent reuses the main loop, so the permission gates, hook events and output
 truncation all come for free.
 
+子运行**也走流式**（阶段 53）：它是「看得见的工人」——前端的子智能体面板要逐字看到它在
+写什么、调哪个工具。正文与思考增量经子运行自己的 observer 发出，而 subagent 工具给
+observer 打的标记（`{task, index}`）会跟着走，所以父运行的事件流里分得清哪些是它的。
+摘要调用仍走非流式（`summarize=chat_completion`），否则压缩摘要的文本会混进它的正文。
 """
 
 
@@ -17,8 +21,9 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from ...providers.byok import resolve_chat
-from ...providers.client import chat_completion
+from ...providers.client import chat_completion, stream_completion
 from ...providers.config import Config
+from ..events import ASSISTANT_DELTA, REASONING_DELTA
 from .registry import tool
 
 if TYPE_CHECKING:  # a runtime import would be circular (state.py imports this package)
@@ -50,12 +55,33 @@ def _no_summary(text: str) -> str:
     return text.strip() or "(no summary)"
 
 
+def streaming_child_chat(state: "RunState") -> Callable[..., Any]:
+    """The child's chat: stream the call and emit text/reasoning deltas onto its observer.
+
+    Why the child streams at all: the front end shows a running child's work in the subagent
+    panel, and without deltas its words never reach the wire (a child has no message sink and
+    persists nothing). The deltas travel the parent's event queue tagged with `{task, index}`,
+    which is the same route its tool events already take — one streaming implementation, not two.
+    """
+
+    def chat(config: Config, messages: list[dict[str, Any]], **kwargs: Any) -> Any:
+        return stream_completion(
+            config,
+            messages,
+            on_delta=lambda text: state.emit(ASSISTANT_DELTA, text=text),
+            on_reasoning=lambda text: state.emit(REASONING_DELTA, text=text),
+            **kwargs,
+        )
+
+    return chat
+
+
 def run_subagent(
     prompt: str,
     *,
     config: Config | None = None,
     auto_approve: bool = False,
-    chat: Callable[..., Any] = chat_completion,
+    chat: Callable[..., Any] | None = None,
     ask: Any = None,
     permission_mode: str | None = None,
     ledger: Any = None,
@@ -99,7 +125,10 @@ def run_subagent(
     messages = [{"role": "user", "content": prompt}]
     spec = RunSpec.resolve(
         config=config or resolve_chat(),
-        chat=chat,
+        # 默认即流式（见 streaming_child_chat）；注入的 chat 走注入的（测试用脚本模型）
+        chat=chat if chat is not None else streaming_child_chat(child_state),
+        # 摘要必须绕开流式：它的文本不是子运行说的话，混进正文就分不出哪句是结论
+        summarize=chat_completion,
         instructions=SUB_SYSTEM,
         tools=SUB_TOOLS,
         registry=SUB_HANDLERS,
