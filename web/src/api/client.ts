@@ -21,6 +21,7 @@ import type {
   Meta,
   Run,
   RunCreated,
+  ScratchSession,
   SessionDetail,
   SessionSummary,
   WorkspaceSummary,
@@ -98,6 +99,18 @@ export function createSession(input: CreateSessionInput): Promise<SessionDetail>
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
+  })
+}
+
+/**
+ * 开一个临时会话：从源会话拷一份上下文（投影消息），带只读标记。
+ * 只在右列的「临时对话」面板里用——离开面板要把它删掉，别让它在会话列表里留痕。
+ */
+export function createScratchSession(sourceId: string): Promise<ScratchSession> {
+  return request(`/api/sessions/${encodeURIComponent(sourceId)}/scratch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
   })
 }
 

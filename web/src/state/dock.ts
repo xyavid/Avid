@@ -11,10 +11,12 @@ import { useCallback, useEffect, useState } from 'react'
 
 // 阶段 53：删掉「进程」与「审查」——审批在输入区上方那条常驻（权威展示），
 // 进程读数在时间线上逐段可见，右列不必再摆一份。旧存储值由下面的白名单回落默认面板。
-export type DockPanelId = 'files' | 'subagents' | 'terminal'
+// 阶段 54：加「临时对话」——它是一次性的（离开面板即销毁），所以不进存储的语义问题：
+// 存的是一个面板名，不是那个会话。
+export type DockPanelId = 'files' | 'subagents' | 'scratch' | 'terminal'
 
 const STORAGE_KEY = 'avid.dock.column'
-const PANEL_IDS: DockPanelId[] = ['files', 'subagents', 'terminal']
+const PANEL_IDS: DockPanelId[] = ['files', 'subagents', 'scratch', 'terminal']
 
 type StoredDock = { open: boolean; active: DockPanelId }
 

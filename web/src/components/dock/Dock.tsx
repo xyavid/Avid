@@ -18,6 +18,7 @@ import { Icon, type IconName } from '../../ui/Icon'
 import { cx } from '../../ui/cx'
 import { useAutoHideScroll } from '../../ui/useAutoHideScroll'
 import { FilesPanel } from './FilesPanel'
+import { ScratchPanel } from './ScratchPanel'
 import { SubagentPanel } from './SubagentPanel'
 
 // 重面板按需加载：xterm 的体积隔离进异步 chunk（体积门禁分档计量）
@@ -28,6 +29,7 @@ const TerminalPanel = lazy(() => import('./TerminalPanel'))
 const PANELS: { id: DockPanelId; label: string; hint: string; icon: IconName }[] = [
   { id: 'files', label: '工作区文件', hint: '浏览会话工作区的文件', icon: 'folder' },
   { id: 'subagents', label: '子智能体', hint: '看每个子任务自己干了什么', icon: 'git-branch' },
+  { id: 'scratch', label: '临时对话', hint: '带主对话上下文的一次性只读支线', icon: 'message-square' },
   { id: 'terminal', label: '终端', hint: '在会话工作区运行命令', icon: 'terminal' },
 ]
 
@@ -42,6 +44,8 @@ export type DockProps = {
   subagentRuns: SubagentRunView[]
   /** 这一轮还在跑：面板据此给运行中的标记。 */
   live: boolean
+  /** 临时对话的上下文来源：当前选中的主会话。null = 还没有选中会话。 */
+  sourceSessionId: string | null
 }
 
 export function Dock({
@@ -52,6 +56,7 @@ export function Dock({
   workspaceId,
   subagentRuns,
   live,
+  sourceSessionId,
 }: DockProps) {
   // 面板区自己滚（列只负责裁切），滚动条仍走「滚动时现形」那套。
   const scrollRef = useAutoHideScroll<HTMLDivElement>()
@@ -123,6 +128,9 @@ export function Dock({
         {active === 'files' && <FilesPanel workspaceId={workspaceId} root={workspaceRoot} />}
         {active === 'subagents' && (
           <SubagentPanel runs={subagentRuns} live={live} workspaceRoot={workspaceRoot} />
+        )}
+        {active === 'scratch' && (
+          <ScratchPanel sourceSessionId={sourceSessionId} workspaceRoot={workspaceRoot} />
         )}
         {active === 'terminal' && (
           <div className="h-full p-a12">

@@ -32,6 +32,7 @@ function renderDock(
       workspaceId={'workspaceId' in overrides ? (overrides.workspaceId ?? null) : null}
       subagentRuns={runs}
       live={live}
+      sourceSessionId={null}
     />,
   )
 }
@@ -48,7 +49,7 @@ describe('右侧 dock（阶段 48；阶段 53 起只留三个面板）', () => {
     expect(aside.getAttribute('aria-hidden')).toBeNull()
   })
 
-  it('面板列表三个入口：工作区文件 / 子智能体 / 终端（进程与审查已删）', () => {
+  it('面板列表四个入口：工作区文件 / 子智能体 / 临时对话 / 终端（进程与审查已删）', () => {
     const onSelect = vi.fn()
     renderDock({ active: 'files', onSelect })
 
@@ -56,10 +57,11 @@ describe('右侧 dock（阶段 48；阶段 53 起只留三个面板）', () => {
     const list = screen.getByRole('navigation', { name: '面板列表' })
     const labels = [...list.querySelectorAll('button')].map((item) => item.textContent ?? '')
 
-    expect(labels).toHaveLength(3)
+    expect(labels).toHaveLength(4)
     expect(labels[0]).toContain('工作区文件')
     expect(labels[1]).toContain('子智能体')
-    expect(labels[2]).toContain('终端')
+    expect(labels[2]).toContain('临时对话')
+    expect(labels[3]).toContain('终端')
     expect(labels.join(' ')).not.toContain('进程')
     expect(labels.join(' ')).not.toContain('审查')
 
@@ -158,6 +160,7 @@ describe('右侧 dock（阶段 48；阶段 53 起只留三个面板）', () => {
         workspaceId={null}
         subagentRuns={[]}
         live={false}
+        sourceSessionId={null}
       />,
     )
     fireEvent.keyDown(window, { key: 'Escape' })

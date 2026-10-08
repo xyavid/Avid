@@ -501,6 +501,7 @@ export function ConversationPage() {
             workspaceId={selected?.workspace?.id ?? null}
             subagentRuns={subagents}
             live={liveHere}
+            sourceSessionId={selectedId}
           />
         ) : undefined
       }

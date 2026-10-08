@@ -117,6 +117,14 @@ export interface SessionDetail extends SessionSummary {
   branch: string
 }
 
+/**
+ * 临时会话（`POST /api/sessions/{id}/scratch`）：从源会话拷了一份上下文、带只读标记，
+ * 界面离开面板即销毁。`copied_messages` 是拷了多少条——面板拿去说「带上了 N 条上下文」。
+ */
+export interface ScratchSession extends SessionDetail {
+  copied_messages: number
+}
+
 export interface Entry {
   entry_id: string
   parent_id: string | null
