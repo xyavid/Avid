@@ -99,6 +99,33 @@ class WorkspaceOut(WorkspaceRef):
     is_default: bool = False
 
 
+class FileEntryOut(BaseModel):
+    """One directory entry; ``path`` is relative to the workspace root (POSIX separators)."""
+
+    name: str
+    path: str
+    kind: str
+    size: int | None = None
+
+
+class FileListOut(BaseModel):
+    path: str
+    parent: str | None = None
+    entries: list[FileEntryOut]
+    #: 条目数超出上限时截断并置真（面板要能说"还有更多"）。
+    truncated: bool = False
+
+
+class FileContentOut(BaseModel):
+    """Preview of one file; a binary file carries no text at all (``text`` is None)."""
+
+    path: str
+    size: int
+    text: str | None = None
+    binary: bool = False
+    truncated: bool = False
+
+
 class WorkspaceListOut(BaseModel):
     workspaces: list[WorkspaceOut]
 

@@ -16,6 +16,8 @@ import type {
   ByokTestResult,
   CancelResult,
   EntryPage,
+  FileContent,
+  FileList,
   Meta,
   Run,
   RunCreated,
@@ -147,6 +149,18 @@ export function createBranch(
 
 export function listWorkspaces(): Promise<{ workspaces: WorkspaceSummary[] }> {
   return request('/api/workspaces')
+}
+
+/** 列一层工作区目录（只读；越界与凭据类由后端拒绝）。 */
+export function listFiles(workspaceId: string, path = ''): Promise<FileList> {
+  const params = new URLSearchParams({ path })
+  return request(`/api/workspaces/${encodeURIComponent(workspaceId)}/files?${params.toString()}`)
+}
+
+/** 读一个文件的预览（超长截断、二进制只报事实）。 */
+export function readFile(workspaceId: string, path: string): Promise<FileContent> {
+  const params = new URLSearchParams({ path })
+  return request(`/api/workspaces/${encodeURIComponent(workspaceId)}/file?${params.toString()}`)
 }
 
 /** 弹宿主机文件夹选择器（服务端 AVID_PICKER_CMD）；null = 用户取消，不是错误。 */

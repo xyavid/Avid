@@ -18,20 +18,23 @@ function renderDock(overrides: {
   phase?: RunPhase | null
   tools?: LiveTool[]
   approvals?: { approvalId: string; tool: string; arguments: string; reason: string }[]
+  onSelect?: (id: DockPanelId) => void
   onDecide?: (id: string, decision: 'allow' | 'deny') => void
   workspaceRoot?: string | null
+  workspaceId?: string | null
 } = {}) {
-  const { active = 'processes', phase = 'running' as RunPhase, tools = runningTools, approvals = [], onDecide = vi.fn() } = overrides
+  const { active = 'processes', phase = 'running' as RunPhase, tools = runningTools, approvals = [], onSelect = () => {}, onDecide = vi.fn() } = overrides
   return render(
     <Dock
       active={active}
-      onSelect={() => {}}
+      onSelect={onSelect}
       onClose={() => {}}
       phase={phase}
       tools={tools}
       approvals={approvals}
       onDecide={onDecide}
       workspaceRoot={'workspaceRoot' in overrides ? (overrides.workspaceRoot ?? null) : '/tmp/ws'}
+      workspaceId={'workspaceId' in overrides ? (overrides.workspaceId ?? null) : null}
     />,
   )
 }
@@ -51,7 +54,8 @@ describe('右侧 dock（阶段 48；阶段 52 起是常驻右列而非浮层）'
   it('进程面板：状态行（进程/工具/审批）+ 工具迷你列表', () => {
     renderDock()
 
-    expect(screen.getByText('进程').textContent).toContain('进程')
+    // 「进程」在这一屏出现两次：头部（当前面板名）与状态行标签
+    expect(screen.getAllByText('进程')).toHaveLength(2)
     expect(screen.getByText('运行中')).toBeTruthy()
     expect(screen.getByText(/2 个 · 1 运行/)).toBeTruthy()
     expect(screen.getByText('bash')).toBeTruthy()
@@ -86,6 +90,7 @@ describe('右侧 dock（阶段 48；阶段 52 起是常驻右列而非浮层）'
         approvals={[]}
         onDecide={onDecide}
         workspaceRoot="/tmp/ws"
+        workspaceId={null}
       />,
     )
     expect(screen.getByText('没有待决审批')).toBeTruthy()
@@ -104,6 +109,7 @@ describe('右侧 dock（阶段 48；阶段 52 起是常驻右列而非浮层）'
         approvals={[]}
         onDecide={() => {}}
         workspaceRoot="/tmp/ws"
+        workspaceId={null}
       />,
     )
     fireEvent.keyDown(window, { key: 'Escape' })
@@ -122,13 +128,25 @@ describe('dock 重面板（阶段 49）', () => {
     expect(screen.queryByText('连接中…')).toBeNull()
   })
 
-  it('页签只剩三项：上下文搬去输入区的容量环，浏览器面板已下线', () => {
-    renderDock()
+  it('头部是当前面板 + 回列表；列表四个入口，上下文与浏览器都不在', () => {
+    const onSelect = vi.fn()
+    renderDock({ active: 'files', onSelect })
 
-    expect(screen.getByTitle('进程')).toBeTruthy()
-    expect(screen.getByTitle('审查')).toBeTruthy()
-    expect(screen.getByTitle('终端')).toBeTruthy()
-    expect(screen.queryByTitle('上下文')).toBeNull()
-    expect(screen.queryByTitle('浏览器')).toBeNull()
+    // 默认常驻的是工作区文件（头部写着它），点回列表看四个入口
+    expect(screen.getByRole('button', { name: '回到面板列表' }).textContent).toContain('工作区文件')
+    fireEvent.click(screen.getByRole('button', { name: '回到面板列表' }))
+
+    const list = screen.getByRole('navigation', { name: '面板列表' })
+    const labels = [...list.querySelectorAll('button')].map((item) => item.textContent ?? '')
+    expect(labels).toHaveLength(4)
+    expect(labels[0]).toContain('工作区文件')
+    expect(labels[1]).toContain('进程')
+    expect(labels.join(' ')).not.toContain('上下文')
+    expect(labels.join(' ')).not.toContain('浏览器')
+
+    // 选一个条目就把选择交出去，列表收起（面板内容由页面按 active 渲染）
+    fireEvent.click([...list.querySelectorAll('button')][2]!)
+    expect(onSelect).toHaveBeenCalledWith('review')
+    expect(screen.queryByRole('navigation', { name: '面板列表' })).toBeNull()
   })
 })

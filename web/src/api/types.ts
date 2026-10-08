@@ -126,6 +126,33 @@ export interface Entry {
   message: Record<string, unknown> | null
 }
 
+/** 工作区文件浏览（`GET /api/workspaces/{id}/files`）的一项。 */
+export interface FileEntry {
+  name: string
+  /** 相对工作区根（POSIX 分隔）。 */
+  path: string
+  kind: 'dir' | 'file'
+  /** 目录没有大小（要递归才知道）。 */
+  size: number | null
+}
+
+export interface FileList {
+  path: string
+  /** 上一级相对路径；根目录为 null。 */
+  parent: string | null
+  entries: FileEntry[]
+  truncated: boolean
+}
+
+/** 文件预览：二进制文件没有 text（只报事实，不猜编码）。 */
+export interface FileContent {
+  path: string
+  size: number
+  text: string | null
+  binary: boolean
+  truncated: boolean
+}
+
 export interface EntryPage {
   session_id: string
   branch: string

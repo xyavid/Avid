@@ -119,6 +119,32 @@ class PickerFailed(ServiceError):
     status = 500
 
 
+class FileOutside(ServiceError):
+    """浏览路径越出工作区（含 `..` 与 symlink 穿透）。"""
+
+    code = "file_outside"
+    status = 403
+
+
+class FileSensitive(ServiceError):
+    """凭据类路径不开放浏览；判据与工具读文件同一道闸。"""
+
+    code = "file_sensitive"
+    status = 403
+
+
+class FileNotDirectory(ServiceError):
+    code = "file_not_directory"
+    status = 400
+
+
+class FileMissing(ServiceError):
+    """目标文件或目录不存在（含读不动：权限、竞态删除）。"""
+
+    code = "file_missing"
+    status = 404
+
+
 class TooManyStreams(ServiceError):
     """Too many event streams are open; the cap is the guard rail published by the service layer."""
 
@@ -131,6 +157,10 @@ __all__ = [
     "ApprovalExpired",
     "ApprovalNotFound",
     "BranchExists",
+    "FileMissing",
+    "FileNotDirectory",
+    "FileOutside",
+    "FileSensitive",
     "InvalidRequest",
     "PickerBusy",
     "PickerFailed",

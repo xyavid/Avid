@@ -496,6 +496,7 @@ export function ConversationPage() {
             tools={runHere ? live.tools : []}
             approvals={runHere ? live.approvals : []}
             workspaceRoot={selected?.workspace?.root ?? null}
+            workspaceId={selected?.workspace?.id ?? null}
             onDecide={(id, decision) => void live.decide(id, decision)}
           />
         ) : undefined
