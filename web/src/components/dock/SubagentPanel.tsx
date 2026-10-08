@@ -5,13 +5,9 @@
  * **详情**（那一条子运行自己的时间线）。详情直接复用 `components/chat/Timeline`——
  * 子运行的段落与父时间线是同一套模型、同一个渲染器，所以这里没有第二套界面语言。
  *
- * 一件必须说实话的事：子运行的**明细不落库**（子运行没有 sink，增量不重放）。
- * 任务清单来自父级那次调用的参数（落在会话 JSONL 里），所以刷新 / 切会话后还在；
- * `items` 会是空的。这时面板说「明细不落库，结论看卡片」，而不是画一个空时间线
- * 假装它什么都没干。
- *
- * 成败不在这里下判断：单条子任务的失败写在内核汇总的那段结果里（父级卡片可见），
- * 面板不解析那段措辞——与 `toolDetail` 的同一条纪律。
+ * 面板里**不写说明性文字**（用户要求）：界面只摆操作需要的东西，解释进 `title`
+ * （悬停才出现）。两件本可以写成长句的事实——子运行明细不落库、单条成败只在内核
+ * 汇总的结果里——因此都只留工具提示，不占版面。
  */
 
 import { useState } from 'react'
@@ -53,11 +49,7 @@ export function SubagentPanel({ runs, live, workspaceRoot }: SubagentPanelProps)
   const run = selected === null ? null : (runs[selected] ?? null)
 
   if (runs.length === 0) {
-    return (
-      <p className="p-a12 font-ui text-hint text-ink-muted">
-        这次会话还没有派过子智能体。主 agent 认为子任务互相独立时会派它们并行去干。
-      </p>
-    )
+    return <p className="p-a12 font-ui text-hint text-ink-muted">还没有子智能体</p>
   }
 
   return (
@@ -91,30 +83,37 @@ export function SubagentPanel({ runs, live, workspaceRoot }: SubagentPanelProps)
                 key={`${item.callId}:${item.index}`}
                 type="button"
                 onClick={() => setSelected(index)}
+                title={
+                  item.items.length === 0
+                    ? '这条子任务的执行明细不落库（刷新或切走会话后只剩任务清单）；结论在主对话那张子智能体卡上'
+                    : undefined
+                }
                 className={cx(
                   'flex items-start gap-a12 rounded-card border-hairline border-hair px-a12 py-a12 text-left transition-colors duration-fast ease-out hover:bg-overlay-light',
                   selected === index && 'bg-overlay-light',
                 )}
               >
                 <span className="mt-[1px] shrink-0 text-accent">
-                  <Icon name="git-branch" size={15} />
+                  <Icon name="bot" size={15} />
                 </span>
                 <span className="flex min-w-0 flex-1 flex-col gap-a2">
                   <span className="flex items-center gap-a6">
                     <span className="min-w-0 flex-1 truncate font-ui text-ui text-ink">{item.task}</span>
                     <StatusMark running={item.running && live} />
                   </span>
-                  <span className="font-ui text-hint text-ink-muted">
-                    {item.items.length === 0 ? '明细不落库（只有任务清单）' : `${stepCount(item)} 步`}
-                  </span>
+                  {item.items.length > 0 && (
+                    <span className="font-ui text-hint text-ink-muted">{`${stepCount(item)} 步`}</span>
+                  )}
                 </span>
               </button>
             ))}
           </nav>
         ) : run.items.length === 0 ? (
-          <p className="p-a12 font-ui text-hint text-ink-muted">
-            这条子任务的执行明细不落库（子运行不写会话），刷新或切走会话后就只剩任务清单；
-            它的结论在主对话里那张子智能体卡上。
+          <p
+            className="p-a12 font-ui text-hint text-ink-muted"
+            title="子运行的执行明细不落库；结论在主对话那张子智能体卡上"
+          >
+            没有可显示的明细
           </p>
         ) : (
           // 子运行的时间线：与主对话同一个渲染器。它不折（子运行没有"收尾消息"这回事），

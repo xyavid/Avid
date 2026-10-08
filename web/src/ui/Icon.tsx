@@ -23,7 +23,8 @@
  * | terminal | bash 工具卡（阶段 3）；globe 备用（联网工具移除后空置） |
  * | folder | 工作区面板（阶段 4） |
  * | list-checks | 待办/计划块（阶段 4） |
- * | git-branch | 分支选择器 / subagent 卡（阶段 4） |
+ * | git-branch | 分叉「分支」那个动作（阶段 4）——子智能体另有 bot，两件事别共用一个记号 |
+ * | bot | 子智能体：工具卡、右列面板、子任务列表（阶段 54） |
  * | shield-check | 审批条与 dock 审查页签（阶段 4/48） |
  * | alert-circle | 失败运行与错误态（阶段 3） |
  * | chevron-down | 工具卡与折叠块的展开（阶段 3） |
@@ -130,6 +131,16 @@ const PATHS = {
       <path d="M13 6h8" />
       <path d="M13 12h8" />
       <path d="M13 18h8" />
+    </>
+  ),
+  bot: (
+    <>
+      <path d="M12 8V4H8" />
+      <rect x="4" y="8" width="16" height="12" rx="2" />
+      <path d="M2 14h2" />
+      <path d="M20 14h2" />
+      <path d="M15 13v2" />
+      <path d="M9 13v2" />
     </>
   ),
   'git-branch': (

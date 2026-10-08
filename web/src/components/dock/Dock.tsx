@@ -28,7 +28,7 @@ const TerminalPanel = lazy(() => import('./TerminalPanel'))
 // hint 是列表里那一行说明（参考界面同形：图标 + 名称 + 一句话）。
 const PANELS: { id: DockPanelId; label: string; hint: string; icon: IconName }[] = [
   { id: 'files', label: '工作区文件', hint: '浏览会话工作区的文件', icon: 'folder' },
-  { id: 'subagents', label: '子智能体', hint: '看每个子任务自己干了什么', icon: 'git-branch' },
+  { id: 'subagents', label: '子智能体', hint: '看每个子任务自己干了什么', icon: 'bot' },
   { id: 'scratch', label: '临时对话', hint: '带主对话上下文的一次性只读支线', icon: 'message-square' },
   { id: 'terminal', label: '终端', hint: '在会话工作区运行命令', icon: 'terminal' },
 ]

@@ -70,9 +70,9 @@ describe('右侧 dock（阶段 48；阶段 53 起只留三个面板）', () => {
     expect(screen.queryByRole('navigation', { name: '面板列表' })).toBeNull()
   })
 
-  it('子智能体面板：没派过就说清没有；派过列任务卡（步数 / 明细不落库）', () => {
+  it('子智能体面板：没派过就说清没有；派过列任务卡（步数；没明细的那条只在 title 里解释）', () => {
     const empty = renderDock({ active: 'subagents', runs: [] })
-    expect(screen.getByText(/还没有派过子智能体/)).toBeTruthy()
+    expect(screen.getByText('还没有子智能体')).toBeTruthy()
     empty.unmount()
 
     renderDock({
@@ -101,8 +101,10 @@ describe('右侧 dock（阶段 48；阶段 53 起只留三个面板）', () => {
     expect(screen.getByText('统计 a.py')).toBeTruthy()
     expect(screen.getByText('1 步')).toBeTruthy()
     expect(screen.getByLabelText('运行中')).toBeTruthy()
-    // 只落了任务清单的那条：说明白「明细不落库」，不画空时间线
-    expect(screen.getByText('明细不落库（只有任务清单）')).toBeTruthy()
+    // 只落了任务清单的那条：版面不写解释，事实挂在 title 上
+    expect(screen.getByText('统计 b.py').closest('button')?.getAttribute('title')).toContain('明细不落库')
+    // 0 步的那条不再挂一行说明（界面只摆操作需要的）
+    expect(screen.queryByText('明细不落库（只有任务清单）')).toBeNull()
   })
 
   it('点一条子任务进详情：它自己的时间线（复用对话列的渲染器），能回列表', () => {
@@ -145,7 +147,8 @@ describe('右侧 dock（阶段 48；阶段 53 起只留三个面板）', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /统计 a\.py/ }))
 
-    expect(screen.getByText(/执行明细不落库/)).toBeTruthy()
+    const empty = screen.getByText('没有可显示的明细')
+    expect(empty.getAttribute('title')).toContain('明细不落库')
     expect(document.querySelector('[data-testid="timeline-subagent"]')).toBeNull()
   })
 

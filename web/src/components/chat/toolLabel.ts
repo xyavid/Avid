@@ -63,7 +63,8 @@ export function toolLabel(name: string, args: string, root?: string | null): Too
     case 'subagent': {
       const tasks = subagentTasks(args)
       return {
-        icon: 'git-branch',
+        // 子智能体有自己的图标（机器人头）：`git-branch` 留给「分支」那个动作，两件事别共用一个记号
+        icon: 'bot',
         verb: '子智能体',
         target: or(tasks.length === 1 ? tasks[0]! : tasks.length > 1 ? `${tasks.length} 个子任务` : ''),
       }

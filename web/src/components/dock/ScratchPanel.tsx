@@ -5,8 +5,9 @@
  * 历史、并打上只读标记）；卸下 → 有活动运行先取消，再 `DELETE` 掉这个会话。所以
  * 「关闭后这个 session 删除消失」不是界面把东西藏起来了，是磁盘上的会话文件真没了。
  *
- * 只读是内核保证的（工具表摘掉写入工具 + 沙箱工作区只读），面板这里只把这件事写在头一行，
- * 让用户知道它不会碰自己的文件；模型那边由环境块里那句「这是临时对话」自己知道。
+ * 只读是内核保证的（工具表摘掉写入工具 + 沙箱工作区只读）；模型那边由环境块里那句
+ * 「这是临时对话」自己知道。面板里**不写说明性文字**（用户要求）：界面只摆操作需要的
+ * 东西——这几件事实（带上几条上下文、只读、离开即删除）进 `title`，悬停才出现。
  *
  * 对话本身与主列同构：`listEntries` 拉历史 → `itemsFromEntries` 建段落 → 同一个
  * `Timeline` 渲染器；运行走同一个 `useRunStream`（第二实例，自己一条流）。差别只有：
@@ -112,21 +113,23 @@ export function ScratchPanel({ sourceSessionId, workspaceRoot }: ScratchPanelPro
   const shown = mergeItems(history ?? [], live.items)
 
   return (
-    <div className="flex h-full min-h-0 flex-col" data-testid="scratch-panel">
-      <p className="border-b border-hair bg-overlay-subtle px-a12 py-a8 font-ui text-hint text-ink-muted">
-        {error !== null
-          ? error
-          : copied > 0
-            ? `已带上主对话的 ${copied} 条上下文；只读（不能改文件）；离开这个面板即删除。`
-            : '正在从主对话取上下文…（只读；离开这个面板即删除）'}
-      </p>
+    <div
+      className="flex h-full min-h-0 flex-col"
+      data-testid="scratch-panel"
+      title={
+        error !== null
+          ? undefined
+          : `已带上主对话的 ${copied} 条上下文；只读，改不了文件；离开这个面板即删除这次对话`
+      }
+    >
+      {error !== null && (
+        <p className="border-b border-hair px-a12 py-a8 font-ui text-hint text-danger">{error}</p>
+      )}
 
       <div className="scroll-auto min-h-0 flex-1 overflow-y-auto px-a12 py-a12">
         {history === null && error === null ? (
           <p className="font-ui text-hint text-ink-muted">加载中…</p>
-        ) : shown.length === 0 ? (
-          <p className="font-ui text-hint text-ink-muted">在这里问点什么都行，它看得到主对话的上下文。</p>
-        ) : (
+        ) : shown.length === 0 ? null : (
           <Timeline
             testId="timeline-scratch"
             items={shown}
@@ -137,8 +140,11 @@ export function ScratchPanel({ sourceSessionId, workspaceRoot }: ScratchPanelPro
       </div>
 
       {live.approvals.length > 0 && (
-        <p className="border-t border-hair px-a12 py-a6 font-ui text-hint text-coral">
-          {`有 ${live.approvals.length} 条待决审批；临时对话里的危险命令同样要在这里答复——它没有单独的面板。`}
+        <p
+          className="border-t border-hair px-a12 py-a6 font-ui text-hint text-coral"
+          title="临时对话里没有答复审批的入口，请到主对话输入区上方那条处理"
+        >
+          {`${live.approvals.length} 条待决审批`}
         </p>
       )}
 
@@ -159,7 +165,10 @@ export function ScratchPanel({ sourceSessionId, workspaceRoot }: ScratchPanelPro
           className="w-full resize-none rounded-input border-hairline border-hair bg-card px-a8 py-a6 font-ui text-ui text-ink outline-none placeholder:text-ink-muted focus:border-accent"
         />
         <div className="mt-a6 flex items-center justify-between">
-          <span className="flex items-center gap-a4 font-ui text-micro text-ink-muted">
+          <span
+            className="flex items-center gap-a4 font-ui text-micro text-ink-muted"
+            title="临时对话：只读（改不了文件），离开这个面板即删除"
+          >
             <Icon name="message-square" size={11} />
             只读支线
           </span>

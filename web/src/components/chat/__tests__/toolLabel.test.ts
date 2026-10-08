@@ -44,11 +44,11 @@ describe('toolLabel：动作 + 目标', () => {
     })
   })
 
-  it('subagent：单任务显示任务名，多任务显示数量', () => {
+  it('subagent 有自己的图标（bot），不与「分支」共用 git-branch', () => {
     const one = JSON.stringify({ tasks: [{ description: '前端改造', prompt: '...' }] })
     const two = JSON.stringify({ tasks: [{ description: '前端改造', prompt: '...' }, { description: '后端收尾', prompt: '...' }] })
 
-    expect(toolLabel('subagent', one, ROOT)).toMatchObject({ icon: 'git-branch', verb: '子智能体', target: '前端改造' })
+    expect(toolLabel('subagent', one, ROOT)).toMatchObject({ icon: 'bot', verb: '子智能体', target: '前端改造' })
     expect(toolLabel('subagent', two, ROOT)).toMatchObject({ verb: '子智能体', target: '2 个子任务' })
   })
 

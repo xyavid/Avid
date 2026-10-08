@@ -69,14 +69,19 @@ afterEach(() => {
 })
 
 describe('临时对话面板', () => {
-  it('挂上就建临时会话：把头一行与拷来的上下文都画出来', async () => {
+  it('挂上就建临时会话：拷来的上下文画出来；三条事实只在 title 里，不占版面', async () => {
     render(<ScratchPanel sourceSessionId="s-main" workspaceRoot="/w" />)
 
     await waitFor(() => expect(createScratchSession).toHaveBeenCalledWith('s-main'))
     expect(await screen.findByText('主线的问题')).toBeTruthy()
     expect(screen.getByText('主线的回答')).toBeTruthy()
-    expect(screen.getByText(/已带上主对话的 2 条上下文/)).toBeTruthy()
-    expect(screen.getByText(/离开这个面板即删除/)).toBeTruthy()
+
+    const title = screen.getByTestId('scratch-panel').getAttribute('title') ?? ''
+    expect(title).toContain('2 条上下文')
+    expect(title).toContain('只读')
+    expect(title).toContain('离开这个面板即删除')
+    // 版面里不该出现这些说明句
+    expect(screen.queryByText(/已带上主对话的/)).toBeNull()
   })
 
   it('在里面正常对话：Enter 发一句话，运行落在同一个会话上', async () => {

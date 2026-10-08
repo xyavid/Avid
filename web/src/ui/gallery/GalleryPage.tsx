@@ -282,7 +282,7 @@ print("hi")
               --duration-instant / fast / slow
             </ToolCard>
             <ToolCard
-              icon="git-branch"
+              icon="bot"
               verb="子智能体"
               target="2 个子任务"
               status="running"
