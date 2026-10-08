@@ -37,7 +37,7 @@ pnpm -C web run copy:dist         # 构建产物交付到 avid/web/static/（avi
 `avid/providers/byok.py` 模块注释）；未配置时运行报「还没有模型配置」。`.env`
 是可选的：它只承载运行期开关，日常运行不需要（命令装法是
 `uv tool install --editable ".[web]"`，之后任何目录直接敲 `avid`）。
-安装、配置项与 CLI 全量参数见 `README.md`。
+安装、配置项与 CLI 全量参数见 `README.md`（英文）与 `README.zh-CN.md`（中文）。
 
 ### 1.2 数据流
 
@@ -157,7 +157,7 @@ Web  POST /api/sessions/{id}/runs ─┴─► svc/runs.RunRegistry（线程 + �
 
 ## 4. 注释与文档纪律（阶段 35 起）
 
-- **没有 docs/ 目录**：仓库内的 md 只有 `README.md`（安装 / 配置 / 运行）、`AGENTS.md`（本约定）与技能的 `SKILL.md`（运行期契约）。
+- **没有 docs/ 目录**：仓库内的 md 只有 `README.md`（英文）与 `README.zh-CN.md`（中文）——两者互为译本，内容一回事（安装 / 配置 / 运行）、`AGENTS.md`（本约定）与技能的 `SKILL.md`（运行期契约）。
 - **代码与注释是唯一现状**：能力、边界、契约、阈值都写在代码与注释里；注释漂移按 bug 修。
 - **注释纪律**：
   - 精简——普通代码不注释，代码能表达的不写；

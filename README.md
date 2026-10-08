@@ -7,70 +7,92 @@
 
 # Avid
 
-> 可扩展的 agent 运行时：模型调用、工具执行、多步循环、上下文与记忆、权限各层都自己掌控，
-> 可替换、可调试。CLI 与本地 Web 服务共用同一个内核。
+> An extensible agent runtime: you own the model calls, tool execution, the multi-step loop,
+> context, memory and permissions — swappable and debuggable. The CLI and the local web server
+> share one kernel.
 
-## 功能
+English · [中文](README.zh-CN.md)
 
-- **工具调用** —— 读写改文件、glob、shell、todo 等内置工具，加工作区声明的 MCP 工具，一律参数校验后执行。
-- **子智能体** —— 互不依赖的子任务并行派发，每个子任务拿到一份结构化的任务提示。
-- **技能** —— 一段可复用的操作说明（`SKILL.md`）：目录里只有描述，命中即载入全文。
-- **上下文管理** —— 分区装配 + 压缩成结构化检查点，事实与假设分开记，长时间任务不掉线。
-- **会话持久化** —— 对话与状态落盘，带分支与变更线；`/rewind` 可回滚对话指针与文件。
-- **模型配置** —— BYOK，四种协议（OpenAI 兼容 / Responses / Anthropic / Ollama）换着用，换模型不动内核。
-- **权限** —— 默认直接执行；毁灭级命令先确认，宿主凭据拒读，可选沙箱与审计。
+## What it does
 
-## 快速开始
+- **Tool use** — built-in tools for reading, writing and editing files, globbing, running shell
+  commands and tracking todos, plus MCP tools the workspace declares; every call is validated first.
+- **Subagents** — independent subtasks run in parallel, each handed a structured task brief.
+- **Skills** — reusable instructions (`SKILL.md`): the catalog shows one line, the full text loads
+  when it applies.
+- **Context management** — assembled in blocks and compacted into a structured checkpoint that keeps
+  verified facts apart from hypotheses, so long tasks stay coherent.
+- **Session persistence** — conversations and state live on disk, with branches and a change line;
+  `/rewind` rolls back the conversation pointer and the files together.
+- **Model/provider abstraction** — BYOK across four protocols (OpenAI-compatible / Responses /
+  Anthropic / Ollama); swapping a model never touches the core.
+- **Permissions** — everything runs by default; destructive commands ask first, host credentials are
+  refused, sandbox and audit are optional.
+
+## Quick Start
 
 ```bash
 git clone https://github.com/xyavid/Avid.git && cd Avid
-uv sync --extra web                          # 内核 + Web 依赖（只跑 CLI 就别带 [web]）
-uv run avid --agent "读 pyproject.toml，告诉我项目名"
+uv sync --extra web                          # kernel + web deps (drop [web] for CLI only)
+uv run avid --agent "Read pyproject.toml and tell me the project name."
 ```
 
 ```bash
-uv run avid                    # 交互会话：/compact 压缩、/rewind 回滚、/<技能名> 载入技能
-uv run avid web --port 8765    # 浏览器界面 → http://127.0.0.1:8765
+uv run avid                    # interactive session: /compact, /rewind, /<skill-name>
+uv run avid web --port 8765    # web UI → http://127.0.0.1:8765
 ```
 
-`avid web` 之前先交付一次前端产物：
+Build the frontend once before `avid web`:
 
 ```bash
 pnpm -C web install && pnpm -C web run copy:dist
 ```
 
-想在任何目录直接敲 `avid`，把它装成命令：`uv tool install --editable ".[web]"`。
-全部参数见 `avid --help`、`avid web --help`、`avid workspace --help`。
+To have `avid` on your PATH anywhere: `uv tool install --editable ".[web]"`.
+All flags: `avid --help`, `avid web --help`, `avid workspace --help`.
 
-## 概念
+## Concepts
 
-- **Agent** —— 一次运行：模型调用 → 工具执行 → 结果回灌的多步循环，直到给出答复或终止。
-- **Tools** —— 模型可调用的动作；声明、实现与参数校验写在一处，无需另注册。
-- **Skills** —— 可复用的操作说明；命中时把全文读进上下文，或按配置常驻。
-- **Subagents** —— 独立跑的子 agent：看不到主对话，只带一份任务提示，结果回到主 agent。
-- **Sessions** —— 对话与状态的落盘单位，可续接、可分支、可回滚。
+- **Agent** — one run: model call → tool execution → results fed back, looping until it answers or stops.
+- **Tools** — the actions the model may call; declaration, implementation and argument validation live
+  in one place.
+- **Skills** — reusable how-to text; loaded into context on demand, or kept resident.
+- **Subagents** — separate child agents: they see none of your conversation, only a task brief, and
+  hand back a summary.
+- **Sessions** — the on-disk unit of conversation and state: resumable, branchable, rewindable.
 
-## 配置
+## Configuration
 
-- **工作区约定**：放一份 `AGENTS.md` 在工作区根目录，它会自动进入模型的常驻上下文。
-- **模型连接（BYOK）**：`~/.avid/models.json`（提供商与绑定，只存密钥引用）+ `~/.avid/secrets.json`
-  （明文密钥，0600）。用界面「设置 → 模型」维护，或手编这两份文件；没配就发送消息会提示缺什么。
-- **确认与授权**：非交互场景用 `--yes` 代答毁灭级确认；`--allow-full-access` 跳过确认并关沙箱
-  （凭据拒读仍然生效）。
-- **环境变量**：可选，日常运行不需要。
+- **Project instructions**: put an `AGENTS.md` in the workspace root — it enters the model's resident
+  context automatically.
+- **Model connections (BYOK)**: `~/.avid/models.json` (providers and bindings, secret references
+  only) + `~/.avid/secrets.json` (plaintext keys, mode 0600). Maintain them from Settings → Models
+  in the UI, or by hand; with nothing configured, sending a message says what is missing.
+- **Approvals**: `--yes` answers the destructive-command prompt in non-interactive runs;
+  `--allow-full-access` skips the prompt and the sandbox (credential refusal still applies).
+- **Environment variables**: all optional, not needed for day-to-day use.
 
+| Variable | Meaning |
+|---|---|
+| `AVID_HOME` | move the user-level directory (sessions, audit), default `~/.avid` |
+| `AVID_AUDIT_DIR` | put the audit JSONL in its own directory |
+| `AVID_MAX_PARALLEL_TOOL_CALLS` | parallel tool calls per step, default 10 |
+| `AVID_MODEL_INFO` | `off` disables probing the provider for the model window |
+| `AVID_SANDBOX_BIN` | use a different bwrap binary (diagnostics / packaging) |
+| `AVID_ALLOWED_HOSTS` | extra trusted host names for the web server (LAN deploys) |
 
-## 开发
+## Development
 
 ```bash
-uv sync --extra web                          # 依赖
-uv run pytest                                # 测试
-uv run ruff check avid tests && uv run mypy   # 静态检查
-pnpm -C web run verify                       # 前端：类型检查 + 测试 + 构建 + 体积门禁
+uv sync --extra web                          # dependencies
+uv run pytest                                # tests
+uv run ruff check avid tests && uv run mypy   # static checks
+pnpm -C web run verify                       # frontend: types + tests + build + size budget
 ```
 
-协作约定（提交格式、测试与注释纪律）见 [AGENTS.md](AGENTS.md)。
+Development conventions (commit format, testing and comment discipline) live in
+[AGENTS.md](AGENTS.md) (Chinese).
 
-## 许可
+## License
 
 [MIT](LICENSE) © 2026 xyavid
