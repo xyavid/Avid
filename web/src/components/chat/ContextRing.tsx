@@ -22,8 +22,9 @@ import { cx } from '../../ui/cx'
 /** 环画到多满就该警觉：越过这条线换 danger 色（纸本语言里没有第三档黄）。 */
 const DANGER_AT = 0.85
 
-const RING_SIZE = 18
-const RING_STROKE = 2.5
+// 没有胶囊托底，环自己就是控件——比胶囊里的图标大一档才立得住。
+const RING_SIZE = 20
+const RING_STROKE = 3
 
 function ratioOf(usage: UsageReport | null): number | null {
   const ratio = usage?.context.utilization
@@ -97,19 +98,20 @@ export function ContextRing({ usage }: ContextRingProps) {
 
   return (
     <div className="relative">
+      {/* 只有环：不套胶囊框、不带旁边的百分比——数在悬停提示与弹层里，
+          输入区那一行留给"一眼的形状"。 */}
       <button
         type="button"
         aria-label={`上下文容量 ${pct(ratio)}`}
         aria-expanded={open}
-        title="上下文容量"
+        title={`上下文容量 ${pct(ratio)}`}
         onClick={() => setOpen((value) => !value)}
         className={cx(
-          'inline-flex h-[26px] items-center gap-a6 rounded-sm border-hairline border-hair px-a8 font-ui text-caption transition-colors duration-fast ease-out hover:bg-overlay-light',
+          'inline-flex h-[26px] w-[26px] items-center justify-center rounded-sm transition-colors duration-fast ease-out hover:bg-overlay-light focus-visible:bg-overlay-light focus:outline-none',
           hot ? 'text-danger' : 'text-ink-light',
         )}
       >
         <Ring ratio={ratio} />
-        <span className="tabular-nums">{pct(ratio)}</span>
       </button>
 
       {open && (
