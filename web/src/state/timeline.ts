@@ -1,7 +1,7 @@
 /**
  * 时间线：一次会话里的有序段落（历史 + 每次运行），过程与收尾共用同一套。
  *
- * 两个来源归并到同一个列表：
+ * 三个来源归并到同一个列表：
  * - **durable 条目**——会话落库后的回拉（`itemsFromEntries`）与运行中的消息事件
  *   （`user_message` / `assistant_message` / `tool_result_message`）同形，都带 `entry_id`；
  * - **live-only 段**——思考（`reasoning_delta`）与子 agent 的子步骤：不落盘、不重放，
@@ -13,6 +13,9 @@
  *
  * 归并幂等：按 `entry_id` / `tool_call_id` 去重。中途刷新会附着到运行并从 seq 0
  * 重放事件，重复投递不能变成重复段落。
+ *
+ * 收尾的折叠（`turnGroups`）也建在这份列表上：一轮跑完就把过程收成一行，
+ * 只留收尾正文——它是纯函数，两条来源因此折出同一个形状。
  */
 
 import type { Entry } from '../api/types'
@@ -31,9 +34,18 @@ export type SubagentStep = {
   status: ToolStatus
 }
 
+/**
+ * 消息段的时间读数（毫秒），用来算一轮的「用时」：`turnGroups` 取用户段与收尾段之差。
+ *
+ * live 路径吃事件的 `ts`、重读路径吃条目的 `timestamp`——同一个写入的两次取时钟，
+ * 相差就是写盘那几毫秒；折叠行精度到秒，两端又同向偏移（差值把写盘时间抵掉了），
+ * 所以刷新前后读数是同一个档。两条路径都没有读数时为 null（折叠行只说「已完成」）。
+ */
+export type MessageTs = number | null
+
 export type TimelineItem =
-  | { kind: 'user'; entryId: string | null; text: string }
-  | { kind: 'assistant'; entryId: string | null; text: string; streaming: boolean }
+  | { kind: 'user'; entryId: string | null; text: string; ts: MessageTs }
+  | { kind: 'assistant'; entryId: string | null; text: string; streaming: boolean; ts: MessageTs }
   | { kind: 'reasoning'; text: string; startedAt: number; endedAt: number; streaming: boolean }
   | {
       kind: 'tool'
@@ -92,9 +104,10 @@ export function itemKey(item: TimelineItem, index: number): string {
   return identity(item) ?? `live:${item.kind}:${index}`
 }
 
-/** 发送时的乐观用户段：`user_message` 事件到达后就地收编，不再多出一条。 */
+/** 发送时的乐观用户段：`user_message` 事件到达后就地收编，不再多出一条。
+ *  读数先用本地时钟占位（服务端与本机是同一台），事件到达即换成服务端那份。 */
 export function appendUser(items: TimelineItem[], text: string): TimelineItem[] {
-  return [...items, { kind: 'user', entryId: null, text }]
+  return [...items, { kind: 'user', entryId: null, text, ts: Date.now() }]
 }
 
 /** 贴底跟随的签名：段落数 + 内容量。它变化 = 有新东西落进列表。 */
@@ -147,12 +160,14 @@ export function itemsFromEntries(entries: Entry[]): TimelineItem[] {
     const role = str(message.role)
     if (role === 'user') {
       const text = messageContent(message.content)
-      if (text) items.push({ kind: 'user', entryId: entry.entry_id, text })
+      if (text) items.push({ kind: 'user', entryId: entry.entry_id, text, ts: entry.timestamp })
       continue
     }
     if (role === 'assistant') {
       const text = messageContent(message.content)
-      if (text.trim()) items.push({ kind: 'assistant', entryId: entry.entry_id, text, streaming: false })
+      if (text.trim()) {
+        items.push({ kind: 'assistant', entryId: entry.entry_id, text, streaming: false, ts: entry.timestamp })
+      }
       for (const call of message.tool_calls ?? []) {
         const callId = str(call.id)
         const name = str(call.function?.name)
@@ -242,9 +257,9 @@ export function applyEvent(items: TimelineItem[], event: TimelineEvent): Timelin
   }
   switch (event.type) {
     case 'user_message':
-      return applyUserMessage(items, data)
+      return applyUserMessage(items, event, data)
     case 'assistant_message':
-      return applyAssistantMessage(items, data)
+      return applyAssistantMessage(items, event, data)
     case 'assistant_delta':
       return applyAssistantDelta(items, data)
     case 'reasoning_delta':
@@ -259,7 +274,7 @@ export function applyEvent(items: TimelineItem[], event: TimelineEvent): Timelin
   }
 }
 
-function applyUserMessage(items: TimelineItem[], data: Record<string, unknown>): TimelineItem[] {
+function applyUserMessage(items: TimelineItem[], event: TimelineEvent, data: Record<string, unknown>): TimelineItem[] {
   const entryId = str(data.entry_id)
   const message = data.message as MessagePayload | undefined
   const text = messageContent(message?.content)
@@ -268,12 +283,16 @@ function applyUserMessage(items: TimelineItem[], data: Record<string, unknown>):
   // 乐观气泡（发送时先画的那个）就地收编，不再多出一条。
   const last = items.at(-1)
   if (last?.kind === 'user' && last.entryId === null && last.text === text) {
-    return replace(items, items.length - 1, { ...last, entryId })
+    return replace(items, items.length - 1, { ...last, entryId, ts: event.ts })
   }
-  return [...items, { kind: 'user', entryId, text }]
+  return [...items, { kind: 'user', entryId, text, ts: event.ts }]
 }
 
-function applyAssistantMessage(items: TimelineItem[], data: Record<string, unknown>): TimelineItem[] {
+function applyAssistantMessage(
+  items: TimelineItem[],
+  event: TimelineEvent,
+  data: Record<string, unknown>,
+): TimelineItem[] {
   const entryId = str(data.entry_id)
   const message = data.message as MessagePayload | undefined
   if (!entryId) return items
@@ -285,10 +304,10 @@ function applyAssistantMessage(items: TimelineItem[], data: Record<string, unkno
     // 原地提交：流式段就是这条消息（重放时 delta 已丢失，这一段的正文以持久消息为准）。
     const item = out[streaming]
     if (item?.kind === 'assistant') {
-      out = replace(out, streaming, { ...item, entryId, text: text || item.text, streaming: false })
+      out = replace(out, streaming, { ...item, entryId, text: text || item.text, streaming: false, ts: event.ts })
     }
   } else if (text.trim()) {
-    out = [...out, { kind: 'assistant', entryId, text, streaming: false }]
+    out = [...out, { kind: 'assistant', entryId, text, streaming: false, ts: event.ts }]
   }
   out = closeReasoning(out)
   for (const call of message?.tool_calls ?? []) {
@@ -308,7 +327,8 @@ function applyAssistantDelta(items: TimelineItem[], data: Record<string, unknown
   const at = lastIndexOf(out, (item) => item.kind === 'assistant' && item.streaming)
   const item = at >= 0 ? out[at] : undefined
   if (item?.kind === 'assistant') return replace(out, at, { ...item, text: item.text + text })
-  return [...out, { kind: 'assistant', entryId: null, text, streaming: true }]
+  // 读数留给持久消息：这一段的正文与落库身份都以它为准，时间读数一起从它取。
+  return [...out, { kind: 'assistant', entryId: null, text, streaming: true, ts: null }]
 }
 
 function applyReasoningDelta(
@@ -437,5 +457,71 @@ function overlay(base: TimelineItem, run: TimelineItem): TimelineItem {
     result: run.result ?? base.result,
     durationMs: run.durationMs ?? base.durationMs,
     steps: run.steps.length > 0 ? run.steps : base.steps,
+  }
+}
+
+// ---------------------------------------------------------------- 一轮回话：分组与折叠
+
+/**
+ * 一轮回话（两条用户消息之间的全部段落）+ 它的折叠判定材料。
+ *
+ * 折叠的是一条回话里的**过程**：跑完的轮只留收尾正文，过程收成一行
+ * （「已完成，用时 13分11秒」，点开还原）。判定全在这里，渲染层只照做——
+ * 于是「过程」与「收尾」折出同一个形状，刷新前后也一样。
+ */
+export type TurnGroup = {
+  /** 这一轮用户说的话；null = 窗口从半轮中间开始（更早的历史还没加载）。 */
+  user: UserItem | null
+  /** 本轮全部段落（含用户段），顺序不变——复制整段回话按它拼。 */
+  items: TimelineItem[]
+  /** 可折叠的过程：用户段与收尾正文之间的一切（思考 / 中间正文 / 工具）。 */
+  process: TimelineItem[]
+  /** 收尾正文：本轮**末段**且已落库的那段正文；null = 这一轮没有收尾，不折。 */
+  answer: AnswerItem | null
+  /** 本轮用时（收尾读数 − 用户读数）；缺读数或时钟倒挂时为 null。 */
+  durationMs: number | null
+  /** 组在扁平列表里的起点：live-only 段的 key 靠它保持全局唯一。 */
+  offset: number
+  /** 折叠开关的身份：取用户段（半轮的组取收尾段）的落库身份，归并与重放都不换 key。 */
+  key: string
+}
+
+type UserItem = Extract<TimelineItem, { kind: 'user' }>
+type AnswerItem = Extract<TimelineItem, { kind: 'assistant' }>
+
+/** 收尾正文：必须是末段——末尾是工具就是中断/失败，那一轮没有「大幅消息」可留，整轮铺着。 */
+function isAnswer(item: TimelineItem): item is AnswerItem {
+  return item.kind === 'assistant' && item.entryId !== null && item.text.trim() !== ''
+}
+
+/** 段落列表 → 各轮分组。切点就是用户段：每条用户消息开启一轮，直到下一条用户消息。 */
+export function turnGroups(items: TimelineItem[]): TurnGroup[] {
+  const groups: TurnGroup[] = []
+  let start = 0
+  for (let end = 0; end <= items.length; end += 1) {
+    if (end < items.length && items[end]!.kind !== 'user') continue
+    const slice = items.slice(start, end)
+    if (slice.length > 0) groups.push(makeGroup(slice, start))
+    start = end
+  }
+  return groups
+}
+
+function makeGroup(items: TimelineItem[], offset: number): TurnGroup {
+  const head = items[0]
+  const user = head?.kind === 'user' ? head : null
+  const tail = items.at(-1)
+  const answer = tail !== undefined && isAnswer(tail) ? tail : null
+  const from = user === null ? 0 : 1
+  const to = answer === null ? items.length : items.length - 1
+  const span = user !== null && user.ts !== null && answer !== null && answer.ts !== null ? answer.ts - user.ts : null
+  return {
+    user,
+    items,
+    process: items.slice(from, to),
+    answer,
+    durationMs: span !== null && span >= 0 ? span : null,
+    offset,
+    key: identity(user ?? answer ?? items[0]!) ?? `turn:${offset}`,
   }
 }

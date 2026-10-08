@@ -15,12 +15,33 @@ function toolCall(id: string, name: string, args: Record<string, unknown>) {
   return { id, type: 'function', function: { name, arguments: JSON.stringify(args) } }
 }
 
+/** 手搭一段「一轮跑完」的段落：读数显式给，折叠行的用时才可断言。 */
+function turn(): TimelineItem[] {
+  return [
+    { kind: 'user', entryId: 'e1', text: '跑一下', ts: 1_000 },
+    { kind: 'reasoning', text: '先想想', startedAt: 1_100, endedAt: 1_500, streaming: false },
+    { kind: 'assistant', entryId: 'e2', text: '先读一遍。', streaming: false, ts: 1_600 },
+    {
+      kind: 'tool',
+      callId: 'c1',
+      name: 'read_file',
+      args: '{"path":"/w/a.py"}',
+      result: 'print(1)',
+      status: 'ok',
+      durationMs: 12,
+      steps: [],
+    },
+    { kind: 'assistant', entryId: 'e3', text: '结论是 avid。', streaming: false, ts: 73_000 },
+  ]
+}
+
 afterEach(cleanup)
 
 describe('Timeline（段落 → 对话列）', () => {
   it('用户气泡 + 衬线正文；一轮里只有第一段正文带标识行', () => {
     render(
       <Timeline
+        liveTail
         items={itemsFromEntries([
           entry(1, { role: 'user', content: '跑一下' }),
           entry(2, { role: 'assistant', content: '先跑。' }),
@@ -137,8 +158,8 @@ describe('Timeline（段落 → 对话列）', () => {
   it('一次回话只挂一行动作：落在末段，复制的是整段原文', () => {
     const onBranch = vi.fn()
     const items: TimelineItem[] = [
-      { kind: 'user', entryId: 'e1', text: '跑一下' },
-      { kind: 'assistant', entryId: 'e2', text: '先读一遍。', streaming: false },
+      { kind: 'user', entryId: 'e1', text: '跑一下', ts: 1 },
+      { kind: 'assistant', entryId: 'e2', text: '先读一遍。', streaming: false, ts: 2 },
       {
         kind: 'tool',
         callId: 'c1',
@@ -149,7 +170,7 @@ describe('Timeline（段落 → 对话列）', () => {
         durationMs: null,
         steps: [],
       },
-      { kind: 'assistant', entryId: 'e3', text: '结论是 avid。', streaming: false },
+      { kind: 'assistant', entryId: 'e3', text: '结论是 avid。', streaming: false, ts: 3 },
     ]
     render(<Timeline items={items} workspaceRoot="/w" onBranch={onBranch} />)
 
@@ -168,9 +189,9 @@ describe('Timeline（段落 → 对话列）', () => {
 
   it('还在流的末段不出现分支钮（分叉点必须是已落库的条目）', () => {
     const items: TimelineItem[] = [
-      { kind: 'user', entryId: null, text: '帮我读一下 pyproject.toml' },
-      { kind: 'assistant', entryId: 'e2', text: '项目名是 avid。', streaming: false },
-      { kind: 'assistant', entryId: null, text: '正在写下一段', streaming: true },
+      { kind: 'user', entryId: null, text: '帮我读一下 pyproject.toml', ts: 1 },
+      { kind: 'assistant', entryId: 'e2', text: '项目名是 avid。', streaming: false, ts: 2 },
+      { kind: 'assistant', entryId: null, text: '正在写下一段', streaming: true, ts: null },
     ]
     render(<Timeline items={items} onBranch={vi.fn()} />)
 
@@ -180,14 +201,82 @@ describe('Timeline（段落 → 对话列）', () => {
 
   it('两轮对话各挂一行：复制数 = 用户消息数 + 回话数', () => {
     const items: TimelineItem[] = [
-      { kind: 'user', entryId: 'e1', text: '第一问' },
-      { kind: 'assistant', entryId: 'e2', text: '第一答', streaming: false },
-      { kind: 'user', entryId: 'e3', text: '第二问' },
-      { kind: 'assistant', entryId: 'e4', text: '第二答', streaming: false },
+      { kind: 'user', entryId: 'e1', text: '第一问', ts: 1 },
+      { kind: 'assistant', entryId: 'e2', text: '第一答', streaming: false, ts: 2 },
+      { kind: 'user', entryId: 'e3', text: '第二问', ts: 3 },
+      { kind: 'assistant', entryId: 'e4', text: '第二答', streaming: false, ts: 4 },
     ]
     render(<Timeline items={items} onBranch={vi.fn()} />)
 
     expect(screen.getAllByRole('button', { name: '复制' })).toHaveLength(4)
     expect(screen.getAllByRole('button', { name: '分支' })).toHaveLength(2)
+  })
+
+  it('跑完的轮折成一行：只留收尾正文，过程（思考 / 工具 / 中间正文）收进「已完成，用时 1分12秒」', () => {
+    render(<Timeline items={turn()} workspaceRoot="/w" />)
+
+    expect(screen.getByText('跑一下')).toBeTruthy()
+    expect(screen.getByText('结论是 avid。')).toBeTruthy()
+    expect(screen.getByText('已完成，用时 1分12秒')).toBeTruthy()
+    expect(screen.queryByText('先读一遍。')).toBeNull()
+    expect(screen.queryByText('读取')).toBeNull()
+    expect(screen.queryByText('思考 · 400ms')).toBeNull()
+  })
+
+  it('折叠行是开合开关：点开还原这一轮的过程，再点收起', () => {
+    render(<Timeline items={turn()} workspaceRoot="/w" />)
+    const line = () => screen.getByRole('button', { name: /已完成/ })
+
+    expect(line().getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByText('先读一遍。')).toBeNull()
+
+    fireEvent.click(line())
+    expect(screen.getByText('先读一遍。')).toBeTruthy()
+    expect(screen.getByText('读取')).toBeTruthy()
+    expect(screen.getByText('思考 · 400ms')).toBeTruthy()
+    expect(line().getAttribute('aria-expanded')).toBe('true')
+
+    fireEvent.click(line())
+    expect(screen.queryByText('先读一遍。')).toBeNull()
+  })
+
+  it('本轮还在跑不折：过程中逐段出现，收尾才收起来', () => {
+    render(<Timeline liveTail items={turn()} workspaceRoot="/w" />)
+
+    expect(screen.getByText('先读一遍。')).toBeTruthy()
+    expect(screen.getByText('读取')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /已完成/ })).toBeNull()
+  })
+
+  it('没有过程的轮不插折叠行（问一句答一句，别为折叠而折叠）', () => {
+    render(
+      <Timeline
+        items={itemsFromEntries([
+          entry(1, { role: 'user', content: '问' }),
+          entry(2, { role: 'assistant', content: '答' }),
+        ])}
+      />,
+    )
+
+    expect(screen.getByText('答')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /已完成/ })).toBeNull()
+  })
+
+  it('末尾是工具（中断、失败）→ 没有收尾消息，整轮照常铺着', () => {
+    const items = [...turn().slice(0, 4)]
+    render(<Timeline items={items} workspaceRoot="/w" />)
+
+    expect(screen.getByText('先读一遍。')).toBeTruthy()
+    expect(screen.getByText('读取')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /已完成/ })).toBeNull()
+  })
+
+  it('读数缺失时折叠行只说「已完成」（不编一个用时出来）', () => {
+    const items = turn().map((item) =>
+      item.kind === 'user' || item.kind === 'assistant' ? { ...item, ts: null } : item,
+    )
+    render(<Timeline items={items} workspaceRoot="/w" />)
+
+    expect(screen.getByText('已完成')).toBeTruthy()
   })
 })

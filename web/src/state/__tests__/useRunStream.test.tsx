@@ -101,12 +101,15 @@ describe('useRunStream（发送 → 订阅 → 段落归并 → 终态收尾）'
     await act(async () => {
       await result.current.send('你好', false)
     })
-    expect(result.current.items).toEqual([{ kind: 'user', entryId: null, text: '你好' }])
+    // 乐观段的 ts 是本地时钟的临时值（发送到事件到达之间），到达后被事件读数取代
+    expect(result.current.items).toEqual([
+      { kind: 'user', entryId: null, text: '你好', ts: expect.any(Number) },
+    ])
 
     act(() => {
-      emitter().send('user_message', { entry_id: 'e1', message: { role: 'user', content: '你好' } }, 1)
+      emitter().send('user_message', { entry_id: 'e1', message: { role: 'user', content: '你好' } }, 0, 7)
     })
-    expect(result.current.items).toEqual([{ kind: 'user', entryId: 'e1', text: '你好' }])
+    expect(result.current.items).toEqual([{ kind: 'user', entryId: 'e1', text: '你好', ts: 7 }])
   })
 
   it('run_started 的两值权限口径落到 runPermission；沙箱事实不从这里反推', async () => {
@@ -241,7 +244,9 @@ describe('useRunStream（发送 → 订阅 → 段落归并 → 终态收尾）'
       await result.current.send('新会话的问题', false)
     })
 
-    expect(result.current.items).toEqual([{ kind: 'user', entryId: null, text: '新会话的问题' }])
+    expect(result.current.items).toEqual([
+      { kind: 'user', entryId: null, text: '新会话的问题', ts: expect.any(Number) },
+    ])
     expect(result.current.attachedSession).toBe('s2')
   })
 

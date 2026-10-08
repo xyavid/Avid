@@ -460,11 +460,13 @@ export function ConversationPage() {
           </div>
         )}
         {/* 一条时间线：历史与本次运行的段落同形，过程与收尾共用它——
-            收尾不再换渲染器，也不重排（这是「逐段出现」的另一半）。 */}
+            收尾不再换渲染器，也不重排（这是「逐段出现」的另一半）。
+            本轮还在跑就铺着过程，跑完由 Timeline 按轮折成一行「已完成，用时 …」。 */}
         {hasItems && (
           <Timeline
             items={shown}
             workspaceRoot={selected?.workspace?.root ?? null}
+            liveTail={liveHere}
             onBranch={(id) => void branchFrom(id)}
           />
         )}

@@ -10,10 +10,22 @@ import { describe, expect, it } from 'vitest'
 
 import type { Entry } from '../../api/types'
 import type { TimelineEvent, TimelineItem } from '../timeline'
-import { applyEvent, itemsFromEntries, mergeItems } from '../timeline'
+import { applyEvent, itemsFromEntries, mergeItems, turnGroups } from '../timeline'
 
 function entry(seq: number, message: Record<string, unknown>, type = 'message'): Entry {
   return { entry_id: `e${seq}`, parent_id: null, seq, timestamp: seq, type, message }
+}
+
+function userItem(entryId: string | null, text: string, ts: number | null = null): TimelineItem {
+  return { kind: 'user', entryId, text, ts }
+}
+
+function answerItem(entryId: string | null, text: string, ts: number | null = null, streaming = false): TimelineItem {
+  return { kind: 'assistant', entryId, text, streaming, ts }
+}
+
+function toolItem(callId: string): TimelineItem {
+  return { kind: 'tool', callId, name: 'bash', args: '{}', result: null, status: 'ok', durationMs: null, steps: [] }
 }
 
 function ev(type: string, ts: number, data: Record<string, unknown> = {}): TimelineEvent {
@@ -58,7 +70,9 @@ function assistantEntry(seq: number, content: string, calls: RawCall[] = []): En
   })
 }
 
-/** 两条路径必须一致的那部分：live-only 段与只属于运行期的读数（耗时、流式标记）除外。 */
+/** 两条路径必须一致的那部分：live-only 段、只属于运行期的读数（工具耗时、流式标记），
+ *  以及时间读数本身——live 吃事件 ts、重读吃条目 timestamp，同一个写入的两次取时钟，
+ *  相差就是写盘那几毫秒，显示精度是秒，折叠行的用时不会因此换一个档。 */
 function durableShape(items: TimelineItem[]) {
   return items
     .filter((item) => item.kind !== 'reasoning')
@@ -202,11 +216,12 @@ describe('applyEvent：事件 → 段落增量', () => {
   })
 
   it('用户消息把乐观气泡就地收编（发送时先画，事件到了认领同一个）', () => {
-    const optimistic: TimelineItem[] = [{ kind: 'user', entryId: null, text: '嗨' }]
+    const optimistic: TimelineItem[] = [{ kind: 'user', entryId: null, text: '嗨', ts: 900 }]
     const items = replay([ev('user_message', 1, { entry_id: 'e1', message: { role: 'user', content: '嗨' } })], optimistic)
 
     expect(items).toHaveLength(1)
-    expect(items[0]).toMatchObject({ kind: 'user', entryId: 'e1', text: '嗨' })
+    // 读数换成服务端那份：本地时钟只是发送到事件到达之间的临时值
+    expect(items[0]).toMatchObject({ kind: 'user', entryId: 'e1', text: '嗨', ts: 1 })
   })
 
   it('子 agent 事件折进对应任务的步骤里，父时间线不出现它的工具行', () => {
@@ -280,5 +295,71 @@ describe('mergeItems：历史与本次运行的归并', () => {
     ])
 
     expect(mergeItems(history, run).map((i) => i.kind)).toEqual(['user', 'reasoning', 'assistant'])
+  })
+})
+
+describe('turnGroups：一次回话的分组与折叠判定', () => {
+  /** 段落的可读身份：持久段用 entry_id、工具用 call_id、思考段就写它的种类。 */
+  const ids = (list: TimelineItem[]) =>
+    list.map((i) => (i.kind === 'tool' ? i.callId : i.kind === 'reasoning' ? 'reasoning' : i.entryId))
+
+  it('一轮 = 一条用户消息到下一条用户消息；中间那一切进过程，末段正文是收尾', () => {
+    const groups = turnGroups([
+      userItem('e1', '跑一下'),
+      answerItem('e2', '先读一遍。'),
+      toolItem('c1'),
+      answerItem('e3', '结论是 avid。'),
+      userItem('e4', '第二问'),
+      answerItem('e5', '第二答'),
+    ])
+
+    expect(groups).toHaveLength(2)
+    expect(groups[0]!.items).toHaveLength(4)
+    expect(ids(groups[0]!.process)).toEqual(['e2', 'c1'])
+    expect(groups[0]!.answer).toMatchObject({ entryId: 'e3', text: '结论是 avid。' })
+    // 收尾本身就是过程之后的那一段：折叠行落在用户段与收尾之间
+    expect(groups[1]!.process).toEqual([])
+    expect(groups[1]!.answer).toMatchObject({ entryId: 'e5' })
+  })
+
+  it('收尾必须是末段：末尾是工具（中断、失败）→ 这一轮没有收尾，界面据它决定折不折', () => {
+    const groups = turnGroups([userItem('e1', '跑一下'), answerItem('e2', '去看一眼。'), toolItem('c1')])
+
+    expect(groups[0]!.answer).toBeNull()
+  })
+
+  it('还在流的末段不算收尾（没有 entry_id：分叉点与时长都要磁盘上真实存在的那条）', () => {
+    const groups = turnGroups([userItem('e1', '跑一下'), answerItem(null, '正在写', 9, true)])
+
+    expect(groups[0]!.answer).toBeNull()
+  })
+
+  it('窗口从半轮中间开始（用户段不在这一页）→ 没有用户段，收尾照认', () => {
+    const groups = turnGroups([toolItem('c1'), answerItem('e2', '补上一轮的回答')])
+
+    expect(groups).toHaveLength(1)
+    expect(groups[0]!.user).toBeNull()
+    expect(groups[0]!.process).toEqual([groups[0]!.items[0]])
+    expect(groups[0]!.answer).toMatchObject({ entryId: 'e2' })
+  })
+
+  it('用时 = 收尾段的读数 − 用户段的读数；缺读数或时钟倒挂 → null（折叠行只说「已完成」）', () => {
+    const [ok] = turnGroups([userItem('e1', '问', 1_000), toolItem('c1'), answerItem('e2', '答', 74_000)])
+    const [missing] = turnGroups([userItem('e1', '问'), answerItem('e2', '答')])
+    const [backwards] = turnGroups([userItem('e1', '问', 5_000), answerItem('e2', '答', 1_000)])
+
+    expect(ok!.durationMs).toBe(73_000)
+    expect(missing!.durationMs).toBeNull()
+    expect(backwards!.durationMs).toBeNull()
+  })
+
+  it('折叠开关的身份取自用户段（合并、重放都不会换 key）；半轮的组退回首段身份', () => {
+    const first = turnGroups([userItem('e1', '问', 1), answerItem('e2', '答', 2)])
+    const again = turnGroups([userItem('e1', '问', 1), answerItem('e2', '答', 2), userItem('e3', '又问', 3)])
+    const head = turnGroups([answerItem('e2', '答', 2)])
+
+    expect(first[0]!.key).toBe('entry:e1')
+    expect(again[0]!.key).toBe('entry:e1')
+    expect(head[0]!.key).toBe('entry:e2')
   })
 })
