@@ -45,12 +45,14 @@ from .types import (
 from .values import (
     COMPACTION_NS,
     DEFAULT_BRANCH,
+    SCRATCH_NS,
     USAGE_NS,
     branch_compaction,
     branch_tip,
     branch_usage,
     entry_label,
     session_name,
+    session_scratch,
     set_value,
     value,
 )
@@ -87,11 +89,13 @@ __all__ = [
     "DEFAULT_BRANCH",
     "USAGE_NS",
     "COMPACTION_NS",
+    "SCRATCH_NS",
     "branch_compaction",
     "branch_tip",
     "branch_usage",
     "entry_label",
     "session_name",
+    "session_scratch",
     "set_value",
     "value",
     # Repositories.

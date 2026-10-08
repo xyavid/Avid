@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from typing import Any
 
 from ..session import (
@@ -17,6 +17,8 @@ from ..session import (
     SessionInvalidIdError,
     SessionMetadata,
     SessionUnknownTargetError,
+    messages_for_branch,
+    session_scratch,
 )
 from .errors import (
     BranchExists,
@@ -140,12 +142,13 @@ class SessionService:
         workspace: str | None,
         id: str | None = None,
         name: str | None = None,
+        parent: str | None = None,
     ) -> dict[str, Any]:
         """Create a session; a workspace is mandatory, since ownership is an immutable fact."""
         owner = self.workspaces.resolve(workspace)
         repo = self.workspaces.repo_for(owner)
         try:
-            session = repo.create(id=id, workspace=owner.id)
+            session = repo.create(id=id, workspace=owner.id, parent_session_id=parent)
             self.workspaces.remember_session(owner, session.metadata)
         except SessionExistsError as exc:
             raise SessionExists(f"会话已存在：{id}") from exc
@@ -168,6 +171,55 @@ class SessionService:
             }
         finally:
             session.close()
+
+    def create_scratch(
+        self,
+        source_id: str,
+        *,
+        name: str | None = None,
+    ) -> dict[str, Any]:
+        """开一个临时会话（阶段 54）：同一工作区、拷一份源会话的投影当历史、打上临时标记。
+
+        为什么拷**投影**而不是全量条目：投影就是模型当时看到的那些消息（被压缩游标覆盖的
+        前缀已由摘要替代），拷它等于把"当时的上下文"原样搬过来，也不会把已经压缩掉的原文
+        重新塞进新会话。
+
+        标记（`session_scratch()`）落在会话上：之后无论谁发起这个会话的运行，工具表与沙箱
+        都按只读装配；关闭面板即销毁，会话文件一并消失。
+        """
+        with self._session(source_id) as source:
+            owner = self.workspaces.find_session(source_id)
+            if owner is None:  # pragma: no cover - _session already proved the session exists
+                raise SessionNotFound(f"没有这个会话：{source_id}")
+            workspace, _ = owner
+            messages = messages_for_branch(source, DEFAULT_BRANCH)
+            source_name = source.get_name()
+
+        created = self.create(
+            workspace=workspace.id,
+            name=name or f"临时对话{f' · {source_name}' if source_name else ''}",
+            # 血缘留着：临时会话从哪条会话长出来的，是排查与展示都用得上的事实
+            parent=source_id,
+        )
+        new_id = str(created["id"])
+        try:
+            with self._session(new_id) as scratch:
+                branch = scratch.branch(DEFAULT_BRANCH) or scratch.create_branch(
+                    DEFAULT_BRANCH, None
+                )
+                for message in messages:
+                    branch.append_message(message)
+                scratch.set_value(session_scratch(), {"source": source_id})
+        except SessionError as exc:
+            # 建一半的临时会话不能留：它没有标记，会被当成普通会话留在列表里
+            found = self.workspaces.find_session(new_id)
+            if found is not None:
+                with suppress(SessionError):
+                    self.workspaces.repo_for(found[0]).delete(found[1])
+            raise SessionReadError(f"临时会话创建失败：{exc}") from exc
+        view = self.get(new_id)
+        view["copied_messages"] = len(messages)
+        return view
 
     def rename(self, session_id: str, name: str) -> dict[str, Any]:
         """Rename a session and return its refreshed view."""

@@ -79,6 +79,10 @@ class RunState:
     # Workspace root for this run; None defers to tools.workspace.WORKSPACE_ROOT, read at call time.
     workspace_root: str | None = None
 
+    # 临时对话（阶段 54）：这个运行来自一个临时会话。三个消费方——工具表摘掉写入工具、
+    # 沙箱把工作区挂只读、环境块里写一句「这是临时对话」；子运行逐字段继承同一个事实。
+    scratch: bool = False
+
     # Approval callback injection point; None falls back to the default stdin-based prompter.
     ask: AskUser | None = None
 
@@ -157,6 +161,8 @@ class RunState:
                 full=self.permission_mode == PERMISSION_FULL,
                 root=self.workspace_root,
                 run_tag=self.run_tag,
+                # 临时对话直接构造 RunState 时也只有读沙箱——这条不能只挂在运行装配上
+                read_only=self.scratch,
             )
 
     @classmethod
@@ -176,6 +182,7 @@ class RunState:
         home: str | None = None,
         audit_dir: str | None = None,
         audit_enabled: bool = True,
+        scratch: bool = False,
     ) -> "RunState":
         """Build a run state and rescan skills; full 只由显式授权（full=True）产生。
 
@@ -194,11 +201,15 @@ class RunState:
                 full=is_full,
                 root=workspace_root,
                 home=home,
+                # 临时对话（scratch）自带只读沙箱：这里与运行装配那条路必须是同一个事实，
+                # 否则直接构造 RunState 的调用方（CLI、测试）会拿到可写沙箱。
+                read_only=scratch,
                 audit_dir=audit_dir,
                 audit_enabled=audit_enabled,
             ),
             ledger=ledger if ledger is not None else ApprovalLedger(),
             workspace_root=workspace_root,
+            scratch=scratch,
             context_window=context_window,
             # The skill directory follows the workspace root and falls back to cwd.
             skills=SkillLoader(default_skills_dir(workspace_root)).scan(),

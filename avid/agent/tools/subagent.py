@@ -87,6 +87,7 @@ def run_subagent(
     ledger: Any = None,
     security: Any = None,
     workspace_root: str | None = None,
+    scratch: bool = False,
     hooks: "HookRegistry | None" = None,
     observer: "RunObserver | None" = None,
     cancel_probe: "Callable[[], str | None] | None" = None,
@@ -95,8 +96,9 @@ def run_subagent(
 ) -> str:
     """Runs one child agent and returns its conclusion summary.
 
-    Permission mode, ledger, security, root and the write-ahead checkpointer are forwarded
-    field by field, since a child on another thread inherits no run state.
+    Permission mode, ledger, security, root, the scratch flag and the write-ahead
+    checkpointer are forwarded field by field, since a child on another thread inherits no
+    run state.
     """
     # A deferred import, since agent/state.py imports this package for the tool tables.
     from ..run import Run
@@ -112,6 +114,7 @@ def run_subagent(
         ledger=ledger,
         security=security,
         workspace_root=workspace_root,
+        scratch=scratch,
         hooks=hooks,
     )
     # The parent's sink is shared as-is: its tip_seq closure points at the parent's session,
@@ -122,6 +125,12 @@ def run_subagent(
     if on_state is not None:
         on_state(child_state)
 
+    tools, handlers = (SUB_TOOLS, SUB_HANDLERS)
+    if scratch:
+        # 临时对话的子运行也摘表：父级的只读约束要跟到底，不能靠"子 agent 大概不会写"
+        from . import without_writers
+
+        tools, handlers = without_writers(SUB_TOOLS, SUB_HANDLERS)
     messages = [{"role": "user", "content": prompt}]
     spec = RunSpec.resolve(
         config=config or resolve_chat(),
@@ -130,8 +139,8 @@ def run_subagent(
         # 摘要必须绕开流式：它的文本不是子运行说的话，混进正文就分不出哪句是结论
         summarize=chat_completion,
         instructions=SUB_SYSTEM,
-        tools=SUB_TOOLS,
-        registry=SUB_HANDLERS,
+        tools=tools,
+        registry=handlers,
     )
     outcome = Run(messages, spec, state=child_state).run()
 
@@ -255,6 +264,7 @@ def subagent(
     auto_approve = state.auto_approve
     ask = state.ask
     permission_mode = state.permission_mode
+    scratch = state.scratch
     ledger = state.ledger
     # The whole security spec is reused, so child verdicts join the same sandbox and audit.
     security = state.security
@@ -327,6 +337,7 @@ def subagent(
                 hooks=hooks,
                 observer=observer_for(index, task["description"]),
                 cancel_probe=probe_for(task["description"]),
+                scratch=scratch,
                 on_state=remember(index),
                 checkpoint=checkpoint,
             )

@@ -140,11 +140,19 @@ def build_run_security(
     probe: BackendProbe | None = None,
     audit_dir: str | Path | None = None,
     audit_enabled: bool = True,
+    read_only: bool = False,
 ) -> RunSecurity:
-    """Assemble run security: the sandbox spec and the audit sink; full 只是个开关。"""
+    """Assemble run security: the sandbox spec and the audit sink; full 只是个开关。
+
+    ``read_only`` 是临时对话（阶段 54）：工作区在沙箱里只读，连 bash 也改不动文件。
+    """
     resolved = root if root is not None else _default_root()
     sandbox = build_spec(
-        policy="disabled" if full else "workspace", root=resolved, home=home, probe=probe
+        policy="disabled" if full else "workspace",
+        root=resolved,
+        home=home,
+        probe=probe,
+        read_only=read_only,
     )
     directory = None
     if audit_enabled:

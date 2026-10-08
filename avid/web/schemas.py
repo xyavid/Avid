@@ -274,6 +274,20 @@ class CreateSessionIn(BaseModel):
     workspace: str | None = Field(default=None, max_length=MAX_ID_CHARS)
 
 
+class ScratchIn(BaseModel):
+    """临时会话的创建载荷：名字可省（服务端给「临时对话 · 源名」）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
+
+
+class ScratchOut(SessionDetail):
+    """临时会话的视图：会话本身 + 拷了多少条消息（界面拿去说「带上了 N 条上下文」）。"""
+
+    copied_messages: int = 0
+
+
 class RenameSessionIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

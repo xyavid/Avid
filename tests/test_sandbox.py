@@ -140,8 +140,11 @@ def test_summary_shape_is_what_events_and_audit_carry(tmp_path, home):
         "degraded",
         "reason",
         "root",
+        "read_only",
         "notes",
     }
+    # 只读是临时对话那一档（阶段 54）：它在 start 事件与会审记录里是可见事实
+    assert summary["read_only"] is False
 
 
 # ---------------------------------------------------------------- argv 组装

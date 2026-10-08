@@ -14,6 +14,10 @@ BRANCH_TIP_NS = "avid.branch.tip"
 USAGE_NS = "avid.usage"
 # Compaction cursor, one address per branch: records that history up to a tip seq was replaced by a summary.
 COMPACTION_NS = "avid.compaction"
+# Scratch marker, one address per session: this session was born as a throwaway side branch of another
+# one, so its runs stay read-only. It sits on the **session** rather than on a run, because the constraint
+# belongs to what the session is: whoever starts a run here gets the same tool table and the same sandbox.
+SCRATCH_NS = "avid.session.scratch"
 
 # The implicit default branch; a session with no branch value yet is read as if it were on main.
 DEFAULT_BRANCH = "main"
@@ -58,6 +62,11 @@ def branch_usage(branch: str) -> ValueAddress:
 def branch_compaction(branch: str) -> ValueAddress:
     """The compaction cursor is per branch for the same reason: each chain compacts independently."""
     return ValueAddress(COMPACTION_NS, branch)
+
+
+def session_scratch() -> ValueAddress:
+    """The scratch marker: its value carries the source session id, so provenance survives."""
+    return ValueAddress(SCRATCH_NS, "")
 
 
 def set_value(address: ValueAddress, next_value: Any) -> ValueSetWrite:

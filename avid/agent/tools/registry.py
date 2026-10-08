@@ -32,6 +32,9 @@ class ToolSpec:
     concurrency: str
     #: Whether the implementation accepts ``state=``; inferred from the signature by default.
     stateful: bool
+    #: Whether this tool writes the user's files (阶段 54): 临时对话按它摘表。
+    #: 只有「直接写盘」的工具算——bash 的写入由沙箱管（只读沙箱里它写不动）。
+    writes: bool = False
 
     def schema(self) -> dict[str, Any]:
         """Returns the function-calling envelope handed to the model."""
@@ -63,6 +66,7 @@ def tool(
     required: tuple[str, ...] = (),
     concurrency: str,
     stateful: bool | None = None,
+    writes: bool = False,
 ) -> Callable[[ToolImpl], ToolImpl]:
     """Declares one tool, with its schema next to its implementation.
 
@@ -87,6 +91,7 @@ def tool(
                 impl=fn,
                 concurrency=concurrency,
                 stateful=bool(inferred),
+                writes=writes,
             )
         )
         return fn

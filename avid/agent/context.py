@@ -194,10 +194,17 @@ class ContextManager:
         runtime = (
             f"{platform.system()} {platform.machine()} / Python {platform.python_version()}"
         )
+        scratch = (
+            "\n这是临时对话（从主对话拷来的上下文）：工作区在沙箱里只读，写入类工具不在表里。"
+            "只做探索与回答；要改文件，请用户回主线对话去做。"
+            if getattr(self.state, "scratch", False)
+            else ""
+        )
         return (
             f"工作目录：{root}\n"
             f"运行时：{runtime}；今天：{date.today().isoformat()}\n"
             f"可用工具：{names}\n"
+            f"{scratch}"
             "\n"
             "Act, don't explain."
         )

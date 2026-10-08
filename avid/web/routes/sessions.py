@@ -11,6 +11,8 @@ from ..schemas import (
     CreateSessionIn,
     EntryPageOut,
     RenameSessionIn,
+    ScratchIn,
+    ScratchOut,
     SessionDetail,
     SessionListOut,
 )
@@ -29,6 +31,16 @@ def create_session(request: Request, body: CreateSessionIn) -> dict:
     return current_services(request).sessions.create(
         id=body.id, name=body.name, workspace=body.workspace
     )
+
+
+@router.post(
+    "/sessions/{session_id}/scratch",
+    response_model=ScratchOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_scratch_session(request: Request, session_id: str, body: ScratchIn) -> dict:
+    """开一个临时会话：拷一份源会话的上下文、打上只读标记（关闭即销毁）。"""
+    return current_services(request).sessions.create_scratch(session_id, name=body.name)
 
 
 @router.get("/sessions/{session_id}", response_model=SessionDetail)

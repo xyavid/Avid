@@ -178,6 +178,7 @@ def read_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     },
     required=("path", "content"),
     concurrency="exclusive",
+    writes=True,
 )
 def write_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     """Writes a whole file, creating missing parents, and reports the new line count."""
@@ -232,6 +233,7 @@ def write_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     },
     required=("path", "old_string", "new_string"),
     concurrency="exclusive",
+    writes=True,
 )
 def edit_file(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     """Replaces one exactly-once occurrence of old_string, refusing anything ambiguous."""

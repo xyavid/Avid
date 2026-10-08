@@ -44,6 +44,8 @@ EXPECTED = {
     "DEFAULT_BRANCH",
     "USAGE_NS",
     "COMPACTION_NS",
+    "SCRATCH_NS",
+    "session_scratch",
     "branch_tip",
     "branch_usage",
     "branch_compaction",

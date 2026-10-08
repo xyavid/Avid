@@ -37,7 +37,7 @@ from ..agent.events import (
 from ..agent.run import Run, RunCancelled
 from ..agent.spec import RunSpec
 from ..agent.state import RunState
-from ..agent.tools import TOOLS, build_toolset
+from ..agent.tools import TOOLS, build_toolset, without_writers
 from ..agent.tools.mcp import McpManager
 from ..providers.byok import resolve_chat
 from ..providers.client import LLMError, chat_completion, stream_completion
@@ -52,6 +52,7 @@ from ..session import (
     branch_compaction,
     branch_tip,
     messages_for_branch,
+    session_scratch,
 )
 from .approvals import APPROVAL_TIMEOUT_SECONDS, ApprovalTable
 from .errors import (
@@ -697,11 +698,14 @@ class RunRegistry:
         # Permission shape and sandbox state go into run_started: a refresh rebuilds the view
         # from that event rather than from the in-memory record, so "was the sandbox off" stays
         # a visible fact.
+        scratched = session.get_value(session_scratch()) is not None
         safety = build_run_security(
             full=full_ack,
             root=workspace.root,
             run_tag=record.run_id,
             run_id=record.run_id,
+            # 临时对话：工作区在沙箱里只读（写入类工具另有工具表摘除，两道互不替代）
+            read_only=scratched,
         )
         state_spec = safety.summary()
         self.emit(
@@ -798,6 +802,7 @@ class RunRegistry:
                 observer=lambda event: self._observe(record, event),
                 full=full_ack,
                 workspace_root=workspace.root,
+                scratch=scratched,
                 # The very same spec as in run_started: the event and the enforcement agree.
                 security=safety,
                 # The utilization denominator follows this run's actual model configuration.
@@ -828,13 +833,19 @@ class RunRegistry:
             # No injected chat means the production path: main rounds stream, summaries do not.
             streaming = chat is None
             mcp_schemas, mcp_impls = build_toolset(state)
+            if self.tool_registry is not None:
+                # An injected registry (tests, benchmarks) keeps its old meaning: no MCP tools.
+                schemas, impls = TOOLS, self.tool_registry
+                if scratched:  # 只读这条约束不管表是谁给的
+                    schemas, impls = without_writers(schemas, impls)
+            else:
+                schemas, impls = mcp_schemas, mcp_impls
             spec = RunSpec.resolve(
                 config=config,
                 chat=chat if chat is not None else self.streaming_chat(record),
                 summarize=chat_completion if streaming else None,
-                # An injected registry (tests, benchmarks) keeps its old meaning: no MCP tools.
-                tools=TOOLS if self.tool_registry is not None else mcp_schemas,
-                registry=self.tool_registry if self.tool_registry is not None else mcp_impls,
+                tools=schemas,
+                registry=impls,
             )
             outcome = Run(
                 messages,

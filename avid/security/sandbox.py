@@ -228,6 +228,9 @@ class SandboxSpec:
     env_allow: tuple[str, ...] = ()
     # Host home for this run: both the mask list and the child HOME derive from it, or they diverge.
     home: str | None = None
+    #: 工作区挂只读（阶段 54：临时对话）。基线本来就是「整个 / 只读」，所以这一档只是不再把
+    #: 工作区重新挂成读写——bash 里的重定向、sed -i、rm 都写不动。
+    read_only: bool = False
     notes: tuple[str, ...] = field(default_factory=tuple)
 
     # Semantics
@@ -256,6 +259,7 @@ class SandboxSpec:
             "degraded": self.degraded,
             "reason": self.reason,
             "root": self.root,
+            "read_only": self.read_only,
             "notes": list(self.notes),
         }
 
@@ -264,7 +268,8 @@ class SandboxSpec:
         if self.policy == SANDBOX_DISABLED:
             return "沙箱：已禁用（full）"
         if self.enforced:
-            return f"沙箱：工作区（{self.backend}，网络不限）"
+            suffix = "，只读" if self.read_only else ""
+            return f"沙箱：工作区（{self.backend}，网络不限{suffix}）"
         return f"沙箱：不可用（{self.reason or '未知原因'}）"
 
     # Execution
@@ -338,9 +343,11 @@ class SandboxSpec:
             if Path(item).is_file() and empty is not None:
                 argv += ["--ro-bind", str(empty), item]
 
-        # The workspace is bound read-write last, so it covers every earlier mount on that path.
+        # The workspace is bound last so it covers every earlier mount on that path: read-write
+        # normally, read-only for a scratch run (its baseline is an all-read-only / 已经如此，
+        # 这里少一次读写重挂就是只读）。
         if workdir:
-            argv += ["--bind", workdir, workdir]
+            argv += ["--ro-bind" if self.read_only else "--bind", workdir, workdir]
         # 网络不隔离（阶段 51 轻量化）：网络命令直接跑，不在沙箱里断网。
         # Unshare every namespace that could leak host state and start from an empty environment.
         argv += [
@@ -437,6 +444,7 @@ def build_spec(
     root: str | None = None,
     home: str | Path | None = None,
     probe: BackendProbe | None = None,
+    read_only: bool = False,
 ) -> SandboxSpec:
     """Compose a run's sandbox spec from the three axes, the workspace root and a backend probe."""
     home_dir = Path(home) if home is not None else Path.home()
@@ -448,6 +456,7 @@ def build_spec(
         "backend": found.backend,
         "binary": found.binary,
         "home": str(home_dir),
+        "read_only": read_only,
     }
 
     if policy == SANDBOX_DISABLED:
@@ -460,6 +469,8 @@ def build_spec(
 
     notes: list[str] = []
     mask_dirs, mask_files = _masks(root, home_dir, notes)
+    if read_only:
+        notes.append("工作区挂只读（临时对话）")
     if root is None:
         return SandboxSpec(
             policy=SANDBOX_WORKSPACE,
