@@ -178,7 +178,7 @@ export function Dock({
         </nav>
       ) : (
       <div ref={scrollRef} className="scroll-auto min-h-0 flex-1 overflow-y-auto">
-        {active === 'files' && <FilesPanel workspaceId={workspaceId} />}
+        {active === 'files' && <FilesPanel workspaceId={workspaceId} root={workspaceRoot} />}
         {active === 'processes' && <ProcessesPanel phase={phase} tools={tools} approvals={approvals} />}
         {active === 'review' && (
           <div className="p-a12">

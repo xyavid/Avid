@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { FilesPanel, crumbs } from '../FilesPanel'
+import { FilesPanel, crumbs, fullPath, langOf } from '../FilesPanel'
 
 const listFiles = vi.fn()
 const readFile = vi.fn()
@@ -40,6 +40,15 @@ const root = {
 }
 
 describe('工作区文件面板', () => {
+  it('完整路径与语言标：预览头部给的是根 + 相对路径', () => {
+    expect(fullPath('/home/me/proj', 'src/main.py')).toBe('/home/me/proj/src/main.py')
+    expect(fullPath('/home/me/proj/', 'a.py')).toBe('/home/me/proj/a.py')
+    expect(fullPath(null, 'a.py')).toBe('a.py')
+    expect(langOf('src/main.py')).toBe('python')
+    expect(langOf('a.tar.gz')).toBe('gz')
+    expect(langOf('Makefile')).toBeNull()
+  })
+
   it('面包屑：根 + 每一级，都能点回去', () => {
     expect(crumbs('')).toEqual([{ name: '工作区', path: '' }])
     expect(crumbs('src/lib')).toEqual([
@@ -76,7 +85,9 @@ describe('工作区文件面板', () => {
 
     readFile.mockResolvedValue({ path: 'src/main.py', size: 12, text: 'print(1)\n', binary: false, truncated: false })
     fireEvent.click(screen.getByText('main.py'))
-    expect(await screen.findByText(/print\(1\)/)).toBeTruthy()
+    // 高亮把代码拆成多个 span，所以按整块文本断言
+    const code = await screen.findByText('python')
+    expect(code.closest('div')?.parentElement?.textContent).toContain('print(1)')
     expect(readFile).toHaveBeenCalledWith('w1', 'src/main.py')
   })
 
@@ -105,6 +116,6 @@ describe('工作区文件面板', () => {
     render(<FilesPanel workspaceId="w1" />)
 
     fireEvent.click(await screen.findByText('blob.bin'))
-    expect(await screen.findByText('二进制文件，不预览内容')).toBeTruthy()
+    expect(await screen.findByText(/二进制文件，不预览内容/)).toBeTruthy()
   })
 })

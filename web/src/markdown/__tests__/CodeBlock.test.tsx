@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { CodeBlock } from '../CodeBlock'
+import { CodeBlock, lineNumbersOf } from '../CodeBlock'
 
 describe('代码块（高亮）', () => {
   afterEach(cleanup)
@@ -42,5 +42,39 @@ describe('代码块（高亮）', () => {
     render(<CodeBlock lang={null} text={'plain'} />)
 
     expect(screen.getByText('文本')).toBeTruthy()
+  })
+})
+
+describe('代码块 · 文件预览形态（路径行 + 行号）', () => {
+  afterEach(cleanup)
+
+  it('给了路径就多一行完整路径（截断显示，不换行）', () => {
+    const { container } = render(
+      <CodeBlock lang="python" text="import os" path="/home/me/proj/src/main.py" />,
+    )
+
+    expect(screen.getByText('/home/me/proj/src/main.py')).toBeTruthy()
+    expect(container.querySelector('.truncate')?.textContent).toBe('/home/me/proj/src/main.py')
+  })
+
+  it('没给路径就不多那一行（正文里的围栏代码块不受影响）', () => {
+    render(<CodeBlock lang="python" text="import os" />)
+
+    expect(screen.queryByText('/home/me/proj/src/main.py')).toBeNull()
+  })
+
+  it('行号列与内容同列数、同字号（对不齐就等于没有行号）', () => {
+    const { container } = render(<CodeBlock lang="python" text={'a = 1\nb = 2\nc = 3'} lineNumbers />)
+
+    const gutter = container.querySelector('pre[aria-hidden]') as HTMLElement
+    expect(gutter.textContent).toBe('1\n2\n3')
+    expect(gutter.className).toContain('leading-[1.6]')
+    expect(gutter.className).toContain('font-mono')
+  })
+
+  it('lineNumbersOf：尾随换行不多编号', () => {
+    expect(lineNumbersOf('a\nb')).toEqual([1, 2])
+    expect(lineNumbersOf('a\nb\n')).toEqual([1, 2])
+    expect(lineNumbersOf('')).toEqual([1])
   })
 })

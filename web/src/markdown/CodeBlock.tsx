@@ -1,6 +1,10 @@
 /**
  * 代码块（阶段 33 · 阶段 9）：语言标 + 复制按钮 + 横向滚动。
  *
+ * 两个可选能力来自「文件预览」（stage 52 的右列文件面板）：`path` 在最上面加一行
+ * 完整路径（预览时要看清自己在看哪个文件），`lineNumbers` 在左侧加一列行号
+ * （阅读代码时行号是坐标）。两处都用同一套字体与行高，行号才与代码对得上。
+ *
  * 两条纪律：
  *   · 一切颜色/圆角/字号引用 token（纸面上是「凹下去的一块」，用 overlay 底 + 发丝线，
  *     不用深色主题那种黑底，免得在暖纸上砸出一个洞）；
@@ -27,9 +31,20 @@ const KIND_CLASS: Record<TokenKind, string> = {
 export type CodeBlockProps = {
   lang: string | null
   text: string
+  /** 完整路径（文件预览用）；null = 不显示这一行。 */
+  path?: string | null
+  /** 左侧行号列；横向滚动只滚代码，行号留在原地。 */
+  lineNumbers?: boolean
 }
 
-export function CodeBlock({ lang, text }: CodeBlockProps) {
+/** 行号列的文本（1..n）；尾随换行不额外多算一行给编号——它对应的是空行尾。 */
+export function lineNumbersOf(text: string): number[] {
+  const lines = text.split('\n')
+  if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop()
+  return lines.map((_, index) => index + 1)
+}
+
+export function CodeBlock({ lang, text, path = null, lineNumbers = false }: CodeBlockProps) {
   const [copied, setCopied] = useState(false)
   const tokens = highlight(text, lang)
 
@@ -43,6 +58,11 @@ export function CodeBlock({ lang, text }: CodeBlockProps) {
 
   return (
     <div className="my-a12 overflow-hidden rounded-sm border-hairline border-hair bg-overlay-subtle">
+      {path !== null && (
+        <div className="border-b border-hair bg-overlay-light px-a8 py-a4">
+          <span className="block truncate font-mono text-micro text-ink-muted">{path}</span>
+        </div>
+      )}
       <div className="flex items-center justify-between border-b border-hair bg-overlay-light px-a8 py-a4">
         <span className="font-mono text-micro text-ink-muted">{lang ?? '文本'}</span>
         <button
@@ -53,17 +73,27 @@ export function CodeBlock({ lang, text }: CodeBlockProps) {
           {copied ? '已复制' : '复制'}
         </button>
       </div>
-      <pre className="scroll-auto overflow-x-auto px-a12 py-a8">
-        <code className={cx('font-mono text-caption leading-[1.6] text-ink')}>
-          {/* 逐 token 出文本节点：拼回去逐字等于原文（highlight.ts 的硬不变量），
-              复制按钮复制的也是原文，不经过任何转换。 */}
-          {tokens.map((token, i) => (
-            <span key={i} className={KIND_CLASS[token.kind]}>
-              {token.text}
-            </span>
-          ))}
-        </code>
-      </pre>
+      <div className="flex">
+        {lineNumbers && (
+          <pre
+            aria-hidden
+            className="shrink-0 select-none border-r border-hair px-a8 py-a8 text-right font-mono text-caption leading-[1.6] text-ink-muted"
+          >
+            {lineNumbersOf(text).join('\n')}
+          </pre>
+        )}
+        <pre className="scroll-auto min-w-0 flex-1 overflow-x-auto px-a12 py-a8">
+          <code className={cx('font-mono text-caption leading-[1.6] text-ink')}>
+            {/* 逐 token 出文本节点：拼回去逐字等于原文（highlight.ts 的硬不变量），
+                复制按钮复制的也是原文，不经过任何转换。 */}
+            {tokens.map((token, i) => (
+              <span key={i} className={KIND_CLASS[token.kind]}>
+                {token.text}
+              </span>
+            ))}
+          </code>
+        </pre>
+      </div>
     </div>
   )
 }

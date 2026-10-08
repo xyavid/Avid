@@ -10,12 +10,61 @@ import { useCallback, useEffect, useState } from 'react'
 
 import { ApiError, listFiles, readFile } from '../../api/client'
 import type { FileContent, FileEntry, FileList } from '../../api/types'
+import { CodeBlock } from '../../markdown'
 import { cx } from '../../ui/cx'
 import { Icon } from '../../ui/Icon'
 
 export type FilesPanelProps = {
   /** 归属工作区 id；null = 还没有选中会话。 */
   workspaceId: string | null
+  /** 工作区根：预览时显示完整路径，拼的就是它。 */
+  root?: string | null
+}
+
+/** 扩展名 → 语言标（顺带就是高亮器认的别名）；没见过的按扩展名原样标，不猜。 */
+const LANGS: Record<string, string> = {
+  py: 'python',
+  ts: 'typescript',
+  tsx: 'tsx',
+  js: 'javascript',
+  jsx: 'jsx',
+  mjs: 'javascript',
+  cjs: 'javascript',
+  json: 'json',
+  md: 'markdown',
+  sh: 'bash',
+  bash: 'bash',
+  zsh: 'bash',
+  yml: 'yaml',
+  yaml: 'yaml',
+  toml: 'toml',
+  ini: 'ini',
+  cfg: 'ini',
+  css: 'css',
+  scss: 'scss',
+  html: 'html',
+  xml: 'xml',
+  svg: 'svg',
+  sql: 'sql',
+  rs: 'rust',
+  go: 'go',
+  java: 'java',
+  c: 'c',
+  h: 'c',
+  cpp: 'cpp',
+  rb: 'ruby',
+  php: 'php',
+  lock: '文本',
+  txt: '文本',
+}
+
+/** 从文件名取语言标；没有扩展名给 null（CodeBlock 于是显示「文本」）。 */
+export function langOf(path: string): string | null {
+  const name = path.split('/').pop() ?? path
+  const dot = name.lastIndexOf('.')
+  if (dot <= 0) return null
+  const ext = name.slice(dot + 1).toLowerCase()
+  return LANGS[ext] ?? ext
 }
 
 function sizeText(size: number | null): string {
@@ -23,6 +72,12 @@ function sizeText(size: number | null): string {
   if (size < 1024) return `${size} B`
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
   return `${(size / (1024 * 1024)).toFixed(1)} MB`
+}
+
+/** 预览里显示的完整路径：工作区根 + 相对路径（没有根就只给相对路径）。 */
+export function fullPath(root: string | null, relative: string): string {
+  if (root === null || root === '') return relative
+  return `${root.replace(/\/+$/, '')}/${relative}`
 }
 
 /** 面包屑：根 + 每一级；点哪一级就回哪一级。 */
@@ -33,7 +88,7 @@ export function crumbs(path: string): { name: string; path: string }[] {
   return trail
 }
 
-export function FilesPanel({ workspaceId }: FilesPanelProps) {
+export function FilesPanel({ workspaceId, root = null }: FilesPanelProps) {
   const [path, setPath] = useState('')
   const [list, setList] = useState<FileList | null>(null)
   const [file, setFile] = useState<FileContent | null>(null)
@@ -119,20 +174,23 @@ export function FilesPanel({ workspaceId }: FilesPanelProps) {
 
         {file !== null && (
           <div className="p-a8">
-            <p className="flex items-baseline gap-a8 px-a4 font-ui text-hint text-ink-muted">
-              <span className="min-w-0 truncate">{file.path}</span>
-              <span className="ml-auto shrink-0">{sizeText(file.size)}</span>
-            </p>
             {file.binary ? (
-              <p className="px-a4 py-a8 font-ui text-hint text-ink-muted">二进制文件，不预览内容</p>
+              <p className="px-a4 py-a8 font-ui text-hint text-ink-muted">
+                二进制文件，不预览内容（{sizeText(file.size)}）
+              </p>
             ) : (
-              <pre className="mt-a4 px-a4 font-mono text-micro leading-[1.6] text-ink">
-                <code>{file.text}</code>
-              </pre>
+              // 与正文里的代码块同一个组件：路径行 + 语言标 + 复制 + 行号。
+              <CodeBlock
+                lang={langOf(file.path)}
+                text={file.text ?? ''}
+                path={fullPath(root, file.path)}
+                lineNumbers
+              />
             )}
-            {file.truncated && (
-              <p className="px-a4 py-a8 font-ui text-micro text-ink-muted">只显示前 256 KB</p>
-            )}
+            <p className="px-a4 font-ui text-micro text-ink-muted">
+              {sizeText(file.size)}
+              {file.truncated && ' · 只显示前 256 KB'}
+            </p>
           </div>
         )}
 
