@@ -1,5 +1,5 @@
 export { CodeBlock } from './CodeBlock'
 export { copyText } from './clipboard'
-export { parseInline, type Inline } from './inline'
 export { Markdown } from './Markdown'
-export { parseBlocks, type Align, type Block, type HeadingLevel, type ListItem } from './parse'
+export type { Align, Block, HeadingLevel, Inline, ListItem } from './parse'
+export { parseBlocks } from './parse'

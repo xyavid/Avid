@@ -167,19 +167,22 @@ def test_a11_recorder_remains_the_only_session_writer():
 
 
 def test_a12_frontend_has_no_third_party_urls_outside_api():
-    # 两类例外，都不是「直连第三方」：
+    # 三类例外，都不是「直连第三方」：
     #   · `__tests__/`：URL 夹具（例如 sanitizeUrl 的用例）必须拿真实字面量当输入，
     #     而它们不产生请求；
     #   · `www.w3.org/`：XML 命名空间标识（`xmlns="http://www.w3.org/2000/svg"`）。
     #     它是格式要求的名字，不是可请求的端点——SVG 数据地址里必须有它，
     #     浏览器才认这是 SVG。
-    # 规则拦的是运行时代码里的第三方端点，这两类都不沾边。
+    #   · `http://${…}`：GFM 自动链接补协议（`www.a.example` → `http://www.a.example`）
+    #     用的前缀——模板串里没有主机名，主机名来自模型输出，不存在硬编码端点。
+    # 规则拦的是运行时代码里的第三方端点，这三类都不沾边。
     found = [
         item
         for item in hits(frontend_sources(), r"https?://")
         if not item.split(":")[0].startswith("web/src/api/")
         and "/__tests__/" not in item.split(":")[0]
         and "www.w3.org/" not in item
+        and "http://${" not in item
     ]
     assert found == [], f"前端在 api/ 之外直连了第三方：{found}"
 

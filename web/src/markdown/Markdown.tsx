@@ -1,23 +1,30 @@
 /**
- * markdown 渲染（阶段 33 · 阶段 9）。
+ * markdown 渲染：把 `parse.ts` 的渲染模型画成 React 元素。
  *
  * 设计约束（三条，都是这个仓库的既有纪律）：
  *   1. **不注入 HTML**：全程 React 元素，`dangerouslySetInnerHTML` 一次都不用——
- *      模型输出是外部内容，进 DOM 的唯一通路就是文本节点与属性；
+ *      模型输出是外部内容，进 DOM 的唯一通路就是文本节点与属性；解析器认不出的
+ *      写法（HTML 块、行内标签）也只当纯文本显示；
  *   2. **SVG 走 <img> 数据地址**：`<img>` 里的 SVG 是隔离的（不执行脚本、不外链），
- *      所以模型给的图能直接看，而不用把它内联进文档；
+ *      所以模型给的图能直接看，而不用把它内联进文档；外链图片同理降级成链接
+ *      （CSP 的 img-src 只允许 self 与 data:，何况外链图是追踪像素的现成载体）；
  *   3. **样式只引用 token**：纸本语言里没有「深色代码块」，代码块是纸面上凹下去的一块
  *      （overlay 底 + 发丝线），标题走衬线栈，字重只用 400 / 500。
+ *
+ * 两处渲染期的取舍：**软换行渲染成断行**（对话场景：模型排版里的换行是内容的一部分），
+ * **列表的紧凑/松散渲染成同一副样子**（列表项只有一个段落时不套 `<p>`，避免聊天里
+ * 出现一整屏的段间距）。解析交给标准实现，见 `parse.ts` 的模块注释。
  *
  * 解析结果按文本记忆化：流式追加时每帧都会重渲染，但只有文本变了才重新解析。
  */
 
 import { useMemo, useState, type ReactNode } from 'react'
 
+import { Icon } from '../ui/Icon'
 import { CodeBlock } from './CodeBlock'
 import { copyText } from './clipboard'
-import { parseInline, type Inline } from './inline'
-import { parseBlocks, type Align, type Block, type HeadingLevel, type ListItem } from './parse'
+import type { Align, Block, HeadingLevel, Inline, ListItem } from './parse'
+import { parseBlocks } from './parse'
 
 export type MarkdownProps = {
   children: string
@@ -42,7 +49,7 @@ function renderBlock(block: Block, key: number, trailing?: ReactNode) {
     case 'paragraph':
       return (
         <p key={key} className="my-a8 break-words">
-          {renderSoftBreaks(block.text)}
+          {renderInline(block.inline)}
           {trailing}
         </p>
       )
@@ -55,7 +62,8 @@ function renderBlock(block: Block, key: number, trailing?: ReactNode) {
           key={key}
           className={`mt-a16 mb-a8 font-serif font-medium tracking-[0.01em] text-ink first:mt-0 ${headingSize(block.level)}`}
         >
-          {parseInline(block.text).map(renderInline)}
+          {renderInline(block.inline)}
+          {trailing}
         </Tag>
       )
     }
@@ -69,7 +77,8 @@ function renderBlock(block: Block, key: number, trailing?: ReactNode) {
           <Tag
             className={`mt-a12 mb-a8 text-center font-serif font-medium tracking-[0.01em] text-ink ${headingSize(block.level)}`}
           >
-            {parseInline(block.text).map(renderInline)}
+            {renderInline(block.inline)}
+            {trailing}
           </Tag>
         </div>
       )
@@ -110,7 +119,7 @@ function renderBlock(block: Block, key: number, trailing?: ReactNode) {
                     className="border-hairline border-hair px-a8 py-a4 font-ui font-medium text-ink"
                     style={{ textAlign: alignOf(block.align, i) }}
                   >
-                    {parseInline(cell).map(renderInline)}
+                    {renderInline(cell)}
                   </th>
                 ))}
               </tr>
@@ -124,7 +133,7 @@ function renderBlock(block: Block, key: number, trailing?: ReactNode) {
                       className="border-hairline border-hair px-a8 py-a4 align-top text-ink"
                       style={{ textAlign: alignOf(block.align, c) }}
                     >
-                      {parseInline(cell).map(renderInline)}
+                      {renderInline(cell)}
                     </td>
                   ))}
                 </tr>
@@ -135,15 +144,37 @@ function renderBlock(block: Block, key: number, trailing?: ReactNode) {
       )
     case 'hr':
       return <hr key={key} className="my-a16 border-t border-hair" />
+    case 'literal':
+      // 解析器认不出的块（HTML 块等）：原样当纯文本，保留它自己的换行。
+      return (
+        <p key={key} className="my-a8 whitespace-pre-wrap break-words font-mono text-caption text-ink-muted">
+          {block.text}
+        </p>
+      )
   }
 }
 
 function renderItem(item: ListItem, key: number) {
+  // 单个段落的列表项不套 <p>：紧凑与松散在聊天里渲染成同一副样子。
+  const only = item.blocks.length === 1 && item.blocks[0]?.kind === 'paragraph' ? item.blocks[0] : null
   return (
     <li key={key} className="my-a4">
-      {renderSoftBreaks(item.text)}
-      {item.children.map((b, i) => renderBlock(b, i))}
+      {item.checked !== null && <Checkbox checked={item.checked} />}
+      {only !== null ? renderInline(only.inline) : item.blocks.map((b, i) => renderBlock(b, i))}
     </li>
+  )
+}
+
+/** GFM 任务框：纸面语言里不用原生 checkbox（表单控件与纸面不合），画一个小方框。 */
+function Checkbox({ checked }: { checked: boolean }) {
+  return (
+    <span
+      role="img"
+      aria-label={checked ? '已完成' : '未完成'}
+      className="mr-a6 inline-flex h-[13px] w-[13px] translate-y-[1px] items-center justify-center rounded-xs border-hairline border-hair text-accent"
+    >
+      {checked && <Icon name="check" size={10} />}
+    </span>
   )
 }
 
@@ -167,55 +198,76 @@ function alignOf(align: Align[], i: number): Align {
   return align[i] ?? 'left'
 }
 
-/** 段落内换行 → <br>：模型排版里的换行保留，不在中文之间补空格。 */
-function renderSoftBreaks(text: string) {
-  const parts = text.split('\n')
-  return parts.flatMap((part, i) =>
-    i === 0 ? [parseInline(part).map(renderInline)] : [<br key={`br${i}`} />, parseInline(part).map(renderInline)],
-  )
+function renderInline(nodes: Inline[]): ReactNode {
+  return nodes.map((node, i) => {
+    switch (node.kind) {
+      case 'text':
+        return <span key={i}>{node.text}</span>
+      case 'code':
+        return (
+          <code
+            key={i}
+            className="rounded-xs bg-overlay-light px-[4px] py-[1px] font-mono text-[0.92em] text-ink"
+          >
+            {node.text}
+          </code>
+        )
+      case 'strong':
+        // 字重只用 400 / 500（纸本纪律），所以加粗落在 medium 上而不是 bold
+        return (
+          <strong key={i} className="font-medium text-ink">
+            {renderInline(node.children)}
+          </strong>
+        )
+      case 'em':
+        return <em key={i}>{renderInline(node.children)}</em>
+      case 'del':
+        return (
+          <del key={i} className="text-ink-muted">
+            {renderInline(node.children)}
+          </del>
+        )
+      case 'link':
+        return (
+          <a
+            key={i}
+            href={node.href}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="text-accent underline decoration-accent/40 underline-offset-2 transition-colors duration-fast ease-out hover:decoration-accent"
+          >
+            {renderInline(node.children)}
+          </a>
+        )
+      case 'image':
+        return inlineImage(node.src, node.alt, i)
+      case 'break':
+      case 'softbreak':
+        return <br key={i} />
+    }
+  })
 }
 
-function renderInline(node: Inline, key: number) {
-  switch (node.kind) {
-    case 'text':
-      return <span key={key}>{node.text}</span>
-    case 'code':
-      return (
-        <code
-          key={key}
-          className="rounded-xs bg-overlay-light px-[4px] py-[1px] font-mono text-[0.92em] text-ink"
-        >
-          {node.text}
-        </code>
-      )
-    case 'strong':
-      // 字重只用 400 / 500（纸本纪律），所以加粗落在 medium 上而不是 bold
-      return (
-        <strong key={key} className="font-medium text-ink">
-          {node.children.map(renderInline)}
-        </strong>
-      )
-    case 'em':
-      return <em key={key}>{node.children.map(renderInline)}</em>
-    case 'del':
-      return (
-        <del key={key} className="text-ink-muted">
-          {node.children.map(renderInline)}
-        </del>
-      )
-    case 'link':
-      return (
-        <a
-          key={key}
-          href={node.href}
-          target="_blank"
-          rel="noreferrer noopener"
-          className="text-accent underline decoration-accent/40 underline-offset-2 transition-colors duration-fast ease-out hover:decoration-accent"
-        >
-          {node.children.map(renderInline)}
-        </a>
-      )
+/**
+ * 图片：`data:` 地址直接画（自带内容、不产生请求），外链降级成链接。
+ * 外链不画进正文不是漏做——CSP 的 img-src 只允许 self 与 data:，
+ * 何况模型给的远端图正是追踪像素的现成载体；点开由用户自己决定。
+ */
+function inlineImage(src: string, alt: string, key: number) {
+  if (src.startsWith('data:') && src.startsWith('data:image/')) {
+    return <img key={key} src={src} alt={alt} className="my-a4 max-h-[420px] max-w-full rounded-sm" />
   }
+  return (
+    <a
+      key={key}
+      href={src}
+      target="_blank"
+      rel="noreferrer noopener"
+      className="text-accent underline decoration-accent/40 underline-offset-2 transition-colors duration-fast ease-out hover:decoration-accent"
+    >
+      {alt || src}
+    </a>
+  )
 }
 
 /** 语言标是 svg、或 html 块里其实是 <svg>：都按图渲染。 */

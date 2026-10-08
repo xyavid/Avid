@@ -133,4 +133,37 @@ describe('markdown 渲染', () => {
 
     expect(container.querySelectorAll('p br')).toHaveLength(1)
   })
+
+  it('硬换行（行尾两空格 / 反斜杠）同样断行', () => {
+    const { container } = render(<Markdown>{'甲  \n乙\\\n丙'}</Markdown>)
+
+    expect(container.querySelectorAll('p br')).toHaveLength(2)
+  })
+
+  it('GFM 任务列表：画成纸面上的小方框，不用原生 checkbox', () => {
+    const { container } = render(<Markdown>{'- [x] 做完了\n- [ ] 还没做'}</Markdown>)
+
+    expect(container.querySelectorAll('input')).toHaveLength(0)
+    expect(screen.getByLabelText('已完成')).toBeTruthy()
+    expect(screen.getByLabelText('未完成')).toBeTruthy()
+  })
+
+  it('图片：data: 地址画出来，外链降级成链接（CSP 只允许 self/data，且外链图 = 追踪像素）', () => {
+    const { container } = render(
+      <Markdown>{'![外图](https://a.example/x.png)\n\n![内嵌](data:image/png;base64,AAAA)'}</Markdown>,
+    )
+
+    const images = container.querySelectorAll('img')
+    expect(images).toHaveLength(1)
+    expect(images[0]?.getAttribute('src')).toMatch(/^data:image\/png/)
+    expect(screen.getByRole('link', { name: '外图' }).getAttribute('href')).toBe('https://a.example/x.png')
+  })
+
+  it('HTML 块原样成文本（保留自己的换行），不成元素', () => {
+    const { container } = render(<Markdown>{'<div class="x">\n块内容\n</div>'}</Markdown>)
+
+    expect(container.querySelector('.x')).toBeNull()
+    expect(container.textContent).toContain('<div class="x">')
+    expect(container.textContent).toContain('块内容')
+  })
 })
