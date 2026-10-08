@@ -9,7 +9,7 @@
  * 页面下发（会话快照与活运行的子运行），自己不发请求。
  */
 
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 
 import type { SubagentRunView } from '../../state/timeline'
 import type { DockPanelId } from '../../state/dock'
@@ -35,6 +35,9 @@ const PANELS: { id: DockPanelId; label: string; hint: string; icon: IconName }[]
 
 export type DockProps = {
   active: DockPanelId
+  /** 是否停在选择页（面板列表）：手动打开时的第一屏。 */
+  choosing: boolean
+  onChoose: (on: boolean) => void
   onSelect: (id: DockPanelId) => void
   onClose: () => void
   /** 终端面板的工作目录 / 文件面板要浏览的工作区：选中会话的工作区。 */
@@ -50,6 +53,8 @@ export type DockProps = {
 
 export function Dock({
   active,
+  choosing,
+  onChoose,
   onSelect,
   onClose,
   workspaceRoot,
@@ -60,8 +65,9 @@ export function Dock({
 }: DockProps) {
   // 面板区自己滚（列只负责裁切），滚动条仍走「滚动时现形」那套。
   const scrollRef = useAutoHideScroll<HTMLDivElement>()
-  // 列表是"换面板"的入口，不是第四种面板：点条目进面板，面板头部再回列表。
-  const [listing, setListing] = useState(false)
+  // 选择页是"换面板"的入口，不是第四种面板：点条目进面板，面板头部再回列表。
+  // 开还是关由页面持有（手动打开先给选择页），这里只管画。
+  const listing = choosing
   const current = PANELS.find((p) => p.id === active) ?? PANELS[0]!
   // Esc 关闭：键盘要有一条不找鼠标的退出路径。收起时这个组件根本不挂（页面决定），
   // 所以监听常开。
@@ -83,7 +89,7 @@ export function Dock({
             type="button"
             aria-label="回到面板列表"
             title="面板列表"
-            onClick={() => setListing(true)}
+            onClick={() => onChoose(true)}
             className="flex min-w-0 flex-1 items-center gap-a6 rounded-sm px-a4 py-a6 text-left transition-colors duration-fast ease-out hover:bg-overlay-light"
           >
             <span aria-hidden className="shrink-0 rotate-90 text-ink-muted">
@@ -104,10 +110,7 @@ export function Dock({
             <button
               key={panel.id}
               type="button"
-              onClick={() => {
-                onSelect(panel.id)
-                setListing(false)
-              }}
+              onClick={() => onSelect(panel.id)}
               className={cx(
                 'flex items-start gap-a12 rounded-card border-hairline border-hair px-a12 py-a12 text-left transition-colors duration-fast ease-out hover:bg-overlay-light',
                 active === panel.id && 'bg-overlay-light',

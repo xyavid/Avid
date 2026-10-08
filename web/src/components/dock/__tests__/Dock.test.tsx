@@ -15,17 +15,28 @@ function run(overrides: Partial<SubagentRunView> = {}): SubagentRunView {
 function renderDock(
   overrides: {
     active?: DockPanelId
+    choosing?: boolean
     runs?: SubagentRunView[]
     live?: boolean
     onSelect?: (id: DockPanelId) => void
+    onChoose?: (on: boolean) => void
     workspaceRoot?: string | null
     workspaceId?: string | null
   } = {},
 ) {
-  const { active = 'files', runs = [], live = false, onSelect = () => {} } = overrides
+  const {
+    active = 'files',
+    choosing = false,
+    runs = [],
+    live = false,
+    onSelect = () => {},
+    onChoose = () => {},
+  } = overrides
   return render(
     <Dock
       active={active}
+      choosing={choosing}
+      onChoose={onChoose}
       onSelect={onSelect}
       onClose={() => {}}
       workspaceRoot={'workspaceRoot' in overrides ? (overrides.workspaceRoot ?? null) : '/tmp/ws'}
@@ -49,11 +60,16 @@ describe('右侧 dock（阶段 48；阶段 53 起只留三个面板）', () => {
     expect(aside.getAttribute('aria-hidden')).toBeNull()
   })
 
+  it('手动打开先给选择页：choosing 为真时第一屏就是面板列表', () => {
+    renderDock({ choosing: true, active: 'files' })
+
+    expect(screen.getByRole('navigation', { name: '面板列表' })).toBeTruthy()
+  })
+
   it('面板列表四个入口：工作区文件 / 子智能体 / 临时对话 / 终端（进程与审查已删）', () => {
     const onSelect = vi.fn()
-    renderDock({ active: 'files', onSelect })
+    renderDock({ choosing: true, active: 'files', onSelect })
 
-    fireEvent.click(screen.getByRole('button', { name: '回到面板列表' }))
     const list = screen.getByRole('navigation', { name: '面板列表' })
     const labels = [...list.querySelectorAll('button')].map((item) => item.textContent ?? '')
 
@@ -65,9 +81,17 @@ describe('右侧 dock（阶段 48；阶段 53 起只留三个面板）', () => {
     expect(labels.join(' ')).not.toContain('进程')
     expect(labels.join(' ')).not.toContain('审查')
 
+    // 选一个条目就把选择交出去（收起列表由页面的 select 负责，组件不留状态）
     fireEvent.click([...list.querySelectorAll('button')][1]!)
     expect(onSelect).toHaveBeenCalledWith('subagents')
-    expect(screen.queryByRole('navigation', { name: '面板列表' })).toBeNull()
+  })
+
+  it('停在面板上时，头部那个 chevron 是回选择页的路', () => {
+    const onChoose = vi.fn()
+    renderDock({ choosing: false, active: 'files', onChoose })
+
+    fireEvent.click(screen.getByRole('button', { name: '回到面板列表' }))
+    expect(onChoose).toHaveBeenCalledWith(true)
   })
 
   it('子智能体面板：没派过就说清没有；派过列任务卡（步数；没明细的那条只在 title 里解释）', () => {
@@ -157,6 +181,8 @@ describe('右侧 dock（阶段 48；阶段 53 起只留三个面板）', () => {
     render(
       <Dock
         active="files"
+        choosing={false}
+        onChoose={() => {}}
         onSelect={() => {}}
         onClose={onClose}
         workspaceRoot="/tmp/ws"

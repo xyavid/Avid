@@ -495,6 +495,8 @@ export function ConversationPage() {
         dock.open ? (
           <Dock
             active={dock.active}
+            choosing={dock.choosing}
+            onChoose={dock.choose}
             onSelect={dock.select}
             onClose={dock.close}
             workspaceRoot={selected?.workspace?.root ?? null}

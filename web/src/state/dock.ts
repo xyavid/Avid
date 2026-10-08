@@ -2,9 +2,10 @@
  * 右侧 dock 的界面域状态（localStorage 持久化——界面域状态归前端的约定，
  * appearance.ts 同一模式）。只持久化开合与激活面板：宽度、面板内容不进存储。
  *
- * 默认**开着**：右列是常驻面板（占位而非浮层），关掉它是「给对话腾地方」的例外动作，
- * 不是默认状态。存储键跟着换了名字：旧值记的是浮层时代的「露不露出来」，
- * 语义不同，照读会让升级后的第一屏凭空是收起态。
+ * 默认**收起**（阶段 54 用户裁定）：右列不是常驻栏，用的时候点顶栏那个按钮，
+ * 打开先给**选择页**（面板列表）——「收起 → 点开 → 选」是它的三段式。
+ * 由代码选中某个面板（点子智能体卡那种）是另一回事：那是明确的意图，直接进面板，
+ * 不再多问一层。选择页在 `choosing` 里，和 `open` 分开——它不是一种面板。
  */
 
 import { useCallback, useEffect, useState } from 'react'
@@ -20,36 +21,47 @@ const PANEL_IDS: DockPanelId[] = ['files', 'subagents', 'scratch', 'terminal']
 
 type StoredDock = { open: boolean; active: DockPanelId }
 
+const DEFAULTS: StoredDock = { open: false, active: 'files' }
+
 function load(): StoredDock {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw === null) return { open: true, active: 'files' }
+    if (raw === null) return DEFAULTS
     const parsed = JSON.parse(raw) as Partial<StoredDock>
     return {
-      open: parsed.open !== false,
+      open: parsed.open === true,
       active: PANEL_IDS.includes(parsed.active as DockPanelId)
         ? (parsed.active as DockPanelId)
-        : 'files',
+        : DEFAULTS.active,
     }
   } catch {
-    return { open: true, active: 'files' }
+    return DEFAULTS
   }
 }
 
 export function useDock() {
   const [open, setOpen] = useState(() => load().open)
   const [active, setActive] = useState<DockPanelId>(() => load().active)
+  // 选择页（面板列表）：默认收起时它是「打开的第一屏」，所以随 open 一起只在内存里
+  const [choosing, setChoosing] = useState(false)
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ open, active }))
   }, [open, active])
 
-  const toggle = useCallback(() => setOpen((v) => !v), [])
+  const toggle = useCallback(() => {
+    setOpen((v) => {
+      if (!v) setChoosing(true) // 手动打开：先给选择页
+      return !v
+    })
+  }, [])
   const close = useCallback(() => setOpen(false), [])
+  const choose = useCallback((on: boolean) => setChoosing(on), [])
   const select = useCallback((id: DockPanelId) => {
     setActive(id)
-    setOpen(true) // 点面板图标即展开：收起态下选面板是最自然的展开方式
+    setChoosing(false) // 明确的意图：直接进面板
+    setOpen(true)
   }, [])
 
-  return { open, active, toggle, close, select }
+  return { open, active, choosing, toggle, close, choose, select }
 }
