@@ -77,6 +77,14 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 const SELECT_CLS =
   'h-control w-full rounded-sm border-hairline border-hair bg-card px-a8 font-ui text-ui text-ink transition-[border-color,box-shadow] duration-fast ease-out focus:border-accent focus:shadow-focus-ring focus:outline-none'
 
+/** 「low, high」→ ['low','high']：逗号分隔，空段与空白丢掉（输入框自己留原文，见 effortText）。 */
+function parseLevels(text: string): string[] {
+  return text
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part !== '')
+}
+
 export function ModelSection() {
   const [settings, setSettings] = useState<ByokSettings | null>(null)
   const [providers, setProviders] = useState<ProviderInput[]>([])
@@ -337,6 +345,8 @@ const ID_HINT = '小写字母、数字、连字符'
 
 function ProviderEditor({ draft, isNew, onSave, onCancel }: EditorProps) {
   const [form, setForm] = useState<ProviderInput>(draft)
+  // 档位输入框的编辑中原文（按模型行）：受控值不能是解析结果的回写，见那个 Input 的注释
+  const [effortText, setEffortText] = useState<Record<number, string>>({})
   const [headersText, setHeadersText] = useState(JSON.stringify(draft.headers, null, 2))
   const [extraText, setExtraText] = useState(JSON.stringify(draft.extra_body, null, 2))
   const [error, setError] = useState<string | null>(null)
@@ -482,20 +492,24 @@ function ProviderEditor({ draft, isNew, onSave, onCancel }: EditorProps) {
                   不是全局开关。档位由配置的人定（各家不一样），输入区的强度选择器按这份列表列选项。
                   图片输入目前只作声明：界面还没有图片入口。 */}
               <Input
-                value={(m.reasoning_efforts ?? []).join(', ')}
-                onChange={(e) =>
+                // 值取"编辑中的原文"：列表是从文本解析出来的，但输入框必须看着原文——
+                // 每敲一个逗号都被解析回去（"low," → ["low"] → "low"），第二档就永远打不出来。
+                value={effortText[index] ?? (m.reasoning_efforts ?? []).join(', ')}
+                onChange={(e) => {
+                  setEffortText((cur) => ({ ...cur, [index]: e.target.value }))
                   patch({
                     models: form.models.map((x, i) =>
                       i === index
-                        ? {
-                            ...x,
-                            reasoning_efforts: e.target.value
-                              .split(',')
-                              .map((part) => part.trim())
-                              .filter((part) => part !== ''),
-                          }
+                        ? { ...x, reasoning_efforts: parseLevels(e.target.value) }
                         : x,
                     ),
+                  })
+                }}
+                onBlur={() =>
+                  setEffortText((cur) => {
+                    const next = { ...cur }
+                    delete next[index]
+                    return next
                   })
                 }
                 placeholder="强度档位，逗号分隔"

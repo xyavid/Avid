@@ -405,14 +405,16 @@ def test_http_error_offers_a_hint_when_reasoning_effort_may_be_the_culprit():
     from avid.providers.protocol import http_error
 
     hinted = http_error(400, '{"error":"unknown parameter: reasoning_effort"}', sent_reasoning_effort=True)
-    assert "HTTP 400" in str(hinted) and "设置 → 模型" in str(hinted)
+    assert "HTTP 400" in str(hinted)
+    # 提示要指到能改的地方：输入区那一档（以及设置里那份档位列表）
+    assert "不设" in str(hinted) and "设置 → 模型" in str(hinted)
 
     # 没带这个参数就别乱指（同样的 400 只是原始消息）
     plain = http_error(400, "bad request", sent_reasoning_effort=False)
-    assert "设置 → 模型" not in str(plain)
+    assert "不设" not in str(plain)
 
     # 401/500 这类不是参数问题的，也不附提示
-    assert "设置 → 模型" not in str(http_error(401, "unauthorized", sent_reasoning_effort=True))
+    assert "不设" not in str(http_error(401, "unauthorized", sent_reasoning_effort=True))
 
 
 def test_reasoning_effort_rides_each_protocol_in_its_own_shape():

@@ -141,9 +141,11 @@ describe('SettingsModal（设置界面 · BYOK 模型段）', () => {
     fireEvent.change(screen.getByPlaceholderText('模型 id，例如 deepseek-chat'), {
       target: { value: 'reasoner' },
     })
-    fireEvent.change(screen.getByLabelText('模型 reasoner 的推理强度档位'), {
-      target: { value: 'low, high, max' },
-    })
+    const levels = screen.getByLabelText('模型 reasoner 的推理强度档位') as HTMLInputElement
+    fireEvent.change(levels, { target: { value: 'low,' } })
+    // 输入框看的是原文：逗号不能被解析结果吃回去（否则第二档永远打不出来）
+    expect(levels.value).toBe('low,')
+    fireEvent.change(levels, { target: { value: 'low, high, max' } })
     fireEvent.change(screen.getByLabelText('模型 reasoner 的图片输入能力'), { target: { value: 'true' } })
     fireEvent.click(screen.getByRole('button', { name: '完成' }))
 
