@@ -417,6 +417,9 @@ export function ConversationPage() {
     }
   }
 
+  // 上下文环的读数：运行中吃事件里的每轮快照（所以它是动态的），
+  // 其余时候用分支落盘的那份（切会话/刷新都还在）。
+  const shownUsage = runHere ? (live.usage ?? usage) : usage
   const liveActive = live.phase === 'starting' || live.phase === 'running' || live.phase === 'settling'
   const liveHere = liveActive && runHere
   const displayError = error ?? (live.phase === 'error' && runHere ? live.error : null)
@@ -489,7 +492,6 @@ export function ConversationPage() {
             active={dock.active}
             onSelect={dock.select}
             onClose={dock.close}
-            usage={usage}
             phase={liveHere ? live.phase : null}
             tools={runHere ? live.tools : []}
             approvals={runHere ? live.approvals : []}
@@ -585,6 +587,7 @@ export function ConversationPage() {
             onChangeModel={setRunModel}
             effectiveModel={meta?.capabilities.model ?? null}
             byokModels={meta?.capabilities.models ?? []}
+            usage={shownUsage}
             onSend={(text) => void live.send(text, full, runModel, branch)}
             onStop={() => void live.stop()}
           />

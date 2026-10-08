@@ -9,26 +9,26 @@
 
 import { useCallback, useEffect, useState } from 'react'
 
-export type DockPanelId = 'context' | 'processes' | 'review' | 'terminal'
+export type DockPanelId = 'processes' | 'review' | 'terminal'
 
 const STORAGE_KEY = 'avid.dock.column'
-const PANEL_IDS: DockPanelId[] = ['context', 'processes', 'review', 'terminal']
+const PANEL_IDS: DockPanelId[] = ['processes', 'review', 'terminal']
 
 type StoredDock = { open: boolean; active: DockPanelId }
 
 function load(): StoredDock {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw === null) return { open: true, active: 'context' }
+    if (raw === null) return { open: true, active: 'processes' }
     const parsed = JSON.parse(raw) as Partial<StoredDock>
     return {
       open: parsed.open !== false,
       active: PANEL_IDS.includes(parsed.active as DockPanelId)
         ? (parsed.active as DockPanelId)
-        : 'context',
+        : 'processes',
     }
   } catch {
-    return { open: true, active: 'context' }
+    return { open: true, active: 'processes' }
   }
 }
 

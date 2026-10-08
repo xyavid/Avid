@@ -11,8 +11,9 @@
 
 import { useRef, useState } from 'react'
 
-import type { ModelCandidate } from '../../api/types'
+import type { ModelCandidate, UsageReport } from '../../api/types'
 import { Icon, type IconName } from '../../ui/Icon'
+import { ContextRing } from './ContextRing'
 import { PermissionButton } from './PermissionButton'
 import { ModelButton } from './ModelButton'
 
@@ -42,6 +43,8 @@ export type ComposerProps = {
   effectiveModel?: string | null
   /** BYOK 候选（providerId/modelId ref）；非空时模型胶囊优先展示。 */
   byokModels?: ModelCandidate[]
+  /** 上下文用量快照（运行中吃事件里的每轮读数，收尾后是落盘那份）。 */
+  usage?: UsageReport | null
 }
 
 export function Composer({
@@ -55,6 +58,7 @@ export function Composer({
   onChangeModel,
   effectiveModel = null,
   byokModels = [],
+  usage = null,
 }: ComposerProps) {
   const [text, setText] = useState('')
   const composingRef = useRef(false)
@@ -108,6 +112,7 @@ export function Composer({
                 candidates={byokModels}
               />
             )}
+            <ContextRing usage={usage} />
           </div>
           {busy ? (
             <StopButton onClick={onStop} />

@@ -12,20 +12,19 @@
 import { lazy, Suspense, useEffect } from 'react'
 
 import type { LiveApproval, LiveTool, RunPhase } from '../../state/useRunStream'
-import type { UsageReport } from '../../api/types'
 import type { DockPanelId } from '../../state/dock'
 import { IconButton } from '../../ui/IconButton'
 import { Icon, type IconName } from '../../ui/Icon'
 import { cx } from '../../ui/cx'
 import { useAutoHideScroll } from '../../ui/useAutoHideScroll'
-import { ContextRail } from '../rail/ContextRail'
 import { ApprovalBar } from '../chat/ApprovalBar'
 
 // 重面板按需加载：xterm 的体积隔离进异步 chunk（体积门禁分档计量）
 const TerminalPanel = lazy(() => import('./TerminalPanel'))
 
+// 上下文读数不在这一列了：输入区左簇的容量环是它的家（点开就是明细，
+// 见 `chat/ContextRing.tsx`）——边聊边看的那个数不该藏在要手动展开的面板里。
 const PANELS: { id: DockPanelId; label: string; icon: IconName }[] = [
-  { id: 'context', label: '上下文', icon: 'file-text' },
   { id: 'processes', label: '进程', icon: 'activity' },
   { id: 'review', label: '审查', icon: 'shield-check' },
   { id: 'terminal', label: '终端', icon: 'terminal' },
@@ -35,8 +34,7 @@ export type DockProps = {
   active: DockPanelId
   onSelect: (id: DockPanelId) => void
   onClose: () => void
-  /** 面板数据：会话的用量快照与活运行状态（无活运行时 phase 为 null）。 */
-  usage: UsageReport | null
+  /** 面板数据：活运行状态（无活运行时 phase 为 null）。 */
   phase: RunPhase | null
   tools: LiveTool[]
   approvals: LiveApproval[]
@@ -99,7 +97,7 @@ function ProcessesPanel({ phase, tools, approvals }: { phase: RunPhase | null; t
   )
 }
 
-export function Dock({ active, onSelect, onClose, usage, phase, tools, approvals, onDecide, workspaceRoot }: DockProps) {
+export function Dock({ active, onSelect, onClose, phase, tools, approvals, onDecide, workspaceRoot }: DockProps) {
   // 面板区自己滚（列只负责裁切），滚动条仍走「滚动时现形」那套。
   const scrollRef = useAutoHideScroll<HTMLDivElement>()
   // Esc 关闭：键盘要有一条不找鼠标的退出路径。收起时这个组件根本不挂（页面决定），
@@ -137,11 +135,6 @@ export function Dock({ active, onSelect, onClose, usage, phase, tools, approvals
       </div>
 
       <div ref={scrollRef} className="scroll-auto min-h-0 flex-1 overflow-y-auto">
-        {active === 'context' && (
-          <div className="p-a12">
-            <ContextRail usage={usage} />
-          </div>
-        )}
         {active === 'processes' && <ProcessesPanel phase={phase} tools={tools} approvals={approvals} />}
         {active === 'review' && (
           <div className="p-a12">

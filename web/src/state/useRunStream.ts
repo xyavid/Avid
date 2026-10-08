@@ -20,6 +20,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { cancelRun, decideApproval, getRun, startRun } from '../api/client'
 import { subscribeRun } from '../api/events'
+import type { UsageReport } from '../api/types'
 import type { RunPermission } from '../events/types'
 import type { TimelineEvent, TimelineItem, ToolStatus } from './timeline'
 import { appendUser, applyEvent } from './timeline'
@@ -50,6 +51,9 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
   // items 属于哪个会话：切走会话后它的段落不跟过去，切回来时按 entry_id 去重后重并。
   const [attachedSession, setAttachedSession] = useState<string | null>(null)
   const [approvals, setApprovals] = useState<LiveApproval[]>([])
+  // 每轮的用量快照（run_status 带，run_finished 再兜一次）：上下文环要吃它才"动态"——
+  // 落盘的那份只在本轮结束时刷新，运行中会一直停在上一轮。
+  const [usage, setUsage] = useState<UsageReport | null>(null)
   const [error, setError] = useState<string | null>(null)
   // 内核在 run_started 里记录的实际权限形态（normal/full）；null = 还没有这个事实。
   const [runPermission, setRunPermission] = useState<RunPermission | null>(null)
@@ -130,6 +134,12 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
     setPhase('idle')
   }, [discardPendingDeltas])
 
+  /** 事件里带的用量快照：形状由内核保证（usage_report 一个出口），这里只挡非对象。 */
+  const takeUsage = (data: Record<string, unknown>) => {
+    const report = data.usage
+    if (report !== null && typeof report === 'object') setUsage(report as UsageReport)
+  }
+
   const handleEvent = useCallback(
     (e: EventFrame) => {
       const data = (e.data ?? {}) as Record<string, unknown>
@@ -180,6 +190,7 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
           if (settlingRef.current) return
           settlingRef.current = true
           discardPendingDeltas()
+          takeUsage(data)
           if (e.type === 'run_failed') setError(String(data.message ?? '运行失败'))
           setPhase('settling')
           onSettled()
@@ -187,7 +198,8 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
         }
         default: {
           // 其余全交给归并：不相关的事件类型是空操作，返回同一个数组引用，
-          // React 也不会因为一次无关事件重渲染。
+          // React 也不会因为一次无关事件重渲染。带 usage 的事件（run_status）顺手收下。
+          takeUsage(data)
           setItems((cur) => applyEvent(cur, { type: e.type, ts: e.ts, data }))
         }
       }
@@ -309,6 +321,7 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
     tools,
     approvals,
     runPermission,
+    usage,
     error,
     send,
     stop,

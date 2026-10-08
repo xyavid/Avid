@@ -1,6 +1,7 @@
 export { ApprovalBar } from './ApprovalBar'
 export { AssistantMessage } from './AssistantMessage'
 export { Composer } from './Composer'
+export { ContextRing } from './ContextRing'
 export { MessageActions } from './MessageActions'
 export { Timeline } from './Timeline'
 export { ToolCard } from './ToolCard'

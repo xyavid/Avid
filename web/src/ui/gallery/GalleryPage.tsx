@@ -7,8 +7,7 @@
 
 import type { ReactNode } from 'react'
 
-import { AssistantMessage, Composer, ToolCard, UserBubble } from '../../components/chat'
-import { ContextRail } from '../../components/rail'
+import { AssistantMessage, Composer, ContextRing, ToolCard, UserBubble } from '../../components/chat'
 import { ProjectCard, SessionItem, SessionNav, SidebarFooter } from '../../components/session'
 import type { SessionSummary, UsageReport } from '../../api/types'
 import { Badge } from '../Badge'
@@ -42,7 +41,12 @@ export function GalleryPage() {
     { id: 'd3', name: '周报草稿', created_at: Date.now() - 86_400_000, storage_version: 1, parent_session_id: null, workspace: null, message_count: 6, active_run_id: null, truncated_tail: false },
   ]
   const demoUsage: UsageReport = {
-    context: { tokens: 15_200, window: 200_000, utilization: 0.076, parts: null },
+    context: {
+      tokens: 15_200,
+      window: 200_000,
+      utilization: 0.076,
+      parts: { system: 900, tools: 1_100, messages: 13_200 },
+    },
     cache: { read_tokens: 9_800, write_tokens: 1_200, hit_ratio: 0.808 },
     compaction: { count: 0, last_compaction_tokens: null, last_step: null },
   }
@@ -53,7 +57,7 @@ export function GalleryPage() {
         <>
           <h1 className="font-serif text-[26px] font-medium">Avid 组件墙</h1>
           <p className="mt-a4 font-ui text-caption text-ink-muted">
-            标识 · 荷花 ｜ markdown ｜ 基础 · 按钮 输入 标签 徽章 图标 ｜ 组合 · 消息 会话 卡片 标签页 工具卡 会话列表 项目卡 右栏 输入区 ｜ 实际页面看主页（不带 ?gallery=1）
+            标识 · 荷花 ｜ markdown ｜ 基础 · 按钮 输入 标签 徽章 图标 ｜ 组合 · 消息 会话 卡片 标签页 工具卡 会话列表 项目卡 上下文环 输入区 ｜ 实际页面看主页（不带 ?gallery=1）
           </p>
           <div className="mb-a16 mt-a16 border-t border-hair" />
         </>
@@ -330,10 +334,10 @@ print("hi")
         </Section>
       )}
 
-      {show('rail') && (
-        <Section id="rail" title="右栏 · 上下文卡（280px 实宽）">
-          <div className="w-rail">
-            <ContextRail usage={demoUsage} />
+      {show('context') && (
+        <Section id="context" title="上下文容量环（输入区左簇；点开是明细）">
+          <div className="pb-[280px]">
+            <ContextRing usage={demoUsage} />
           </div>
         </Section>
       )}

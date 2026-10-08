@@ -5,15 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Dock } from '../Dock'
 import type { DockPanelId } from '../../../state/dock'
 import type { LiveTool, RunPhase } from '../../../state/useRunStream'
-import type { UsageReport } from '../../../api/types'
 
 afterEach(cleanup)
-
-const usage: UsageReport = {
-  context: { tokens: 1200, window: 65536, utilization: 0.02, parts: null },
-  cache: { read_tokens: null, write_tokens: null, hit_ratio: null },
-  compaction: { count: 0, last_compaction_tokens: null, last_step: null },
-}
 
 const runningTools: LiveTool[] = [
   { callId: 'c1', tool: 'bash', status: 'running', arguments: '{}', result: null },
@@ -34,7 +27,6 @@ function renderDock(overrides: {
       active={active}
       onSelect={() => {}}
       onClose={() => {}}
-      usage={usage}
       phase={phase}
       tools={tools}
       approvals={approvals}
@@ -89,8 +81,7 @@ describe('右侧 dock（阶段 48；阶段 52 起是常驻右列而非浮层）'
         active="review"
         onSelect={() => {}}
         onClose={() => {}}
-        usage={usage}
-        phase={null}
+          phase={null}
         tools={[]}
         approvals={[]}
         onDecide={onDecide}
@@ -100,12 +91,6 @@ describe('右侧 dock（阶段 48；阶段 52 起是常驻右列而非浮层）'
     expect(screen.getByText('没有待决审批')).toBeTruthy()
   })
 
-  it('上下文面板：复用 ContextRail 展示用量读数', () => {
-    renderDock({ active: 'context' })
-
-    expect(screen.getByText('已用 tokens')).toBeTruthy()
-    expect(screen.getByText('1,200')).toBeTruthy()
-  })
 
   it('Esc 关闭：挂着就监听（收起时页面不挂它）', () => {
     const onClose = vi.fn()
@@ -114,8 +99,7 @@ describe('右侧 dock（阶段 48；阶段 52 起是常驻右列而非浮层）'
         active="processes"
         onSelect={() => {}}
         onClose={onClose}
-        usage={usage}
-        phase="running"
+          phase="running"
         tools={[]}
         approvals={[]}
         onDecide={() => {}}
@@ -138,13 +122,13 @@ describe('dock 重面板（阶段 49）', () => {
     expect(screen.queryByText('连接中…')).toBeNull()
   })
 
-  it('页签只有四项：浏览器面板已下线（内嵌外站受 X-Frame-Options 限制，废多留少）', () => {
-    renderDock({ active: 'context' })
+  it('页签只剩三项：上下文搬去输入区的容量环，浏览器面板已下线', () => {
+    renderDock()
 
-    expect(screen.getByTitle('上下文')).toBeTruthy()
     expect(screen.getByTitle('进程')).toBeTruthy()
     expect(screen.getByTitle('审查')).toBeTruthy()
     expect(screen.getByTitle('终端')).toBeTruthy()
+    expect(screen.queryByTitle('上下文')).toBeNull()
     expect(screen.queryByTitle('浏览器')).toBeNull()
   })
 })
