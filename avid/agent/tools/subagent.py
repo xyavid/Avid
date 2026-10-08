@@ -258,7 +258,9 @@ def subagent(
         return f"错误：{exc}"
 
     run = run_subagent if runner is None else runner
-    config = resolve_chat()
+    # 子运行跟父运行用同一个模型与推理强度（界面选的那两个）；没有覆盖就一起按设置解析——
+    # 否则用户选了 A 模型，子 agent 悄悄按绑定里的 B 跑。
+    config = resolve_chat(model=state.model_ref, effort=state.effort)
     # Auto-approval, the ask callback, the permission mode and the ledger are read from the run
     # state and passed explicitly, since implicit state does not follow a child to its thread.
     auto_approve = state.auto_approve

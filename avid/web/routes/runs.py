@@ -24,6 +24,7 @@ def start_run(request: Request, session_id: str, body: StartRunIn) -> dict:
         branch=body.branch,
         full_ack=body.full_access_ack,
         model=body.model,
+        effort=body.reasoning_effort,
     )
     return {
         "run_id": record.run_id,

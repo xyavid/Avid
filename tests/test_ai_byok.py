@@ -27,6 +27,7 @@ from avid.providers.byok import (
     ModelCapabilities,
     ModelDecl,
     ProviderDecl,
+    byok_model_candidates,
     config_path,
     delete_secret,
     load_byok,
@@ -336,57 +337,69 @@ def test_static_headers_and_extra_fields_flow_into_config(byok_env):
     assert config.context_window is None  # 未声明窗口 → 交给运行期的内置表兜底
 
 
-def test_reasoning_effort_flows_from_the_model_decl_into_config(byok_env):
-    """推理强度是模型声明上的请求参数（阶段 55）：解析进 Config，随每次请求发出去。"""
+def test_reasoning_effort_is_chosen_per_run_from_the_declared_list(byok_env):
+    """档位列表由模型声明，**运行时挑一个**（阶段 55 追加）：挑中的进 Config，随请求发出去。"""
     provider = ProviderDecl(
         id="gw",
         label="网关",
         protocol="openai-compatible",
         base_url="https://gw.example/v1",
         models=(
-            ModelDecl(id="deep", reasoning_effort="high"),
+            ModelDecl(id="deep", reasoning_efforts=("low", "medium", "high", "max")),
             ModelDecl(id="quick"),
         ),
     )
     save_byok(ByokConfig(providers={"gw": provider}, bindings={"chat": "gw/deep"}))
 
-    assert resolve_chat().reasoning_effort == "high"
-    assert resolve_chat("gw/quick").reasoning_effort is None
+    assert resolve_chat("gw/deep", effort="max").reasoning_effort == "max"
+    # 不挑就不带这个参数（没有隐式默认档位）
+    assert resolve_chat("gw/deep").reasoning_effort is None
+    # 绑定的模型走同一条路（裸模型名解析）
+    assert resolve_chat(effort="low").reasoning_effort == "low"
+
+    with pytest.raises(ConfigError, match="没有声明推理强度"):
+        resolve_chat("gw/deep", effort="turbo")
+    with pytest.raises(ConfigError, match="没有声明"):
+        resolve_chat("gw/quick", effort="high")
 
 
-def test_reasoning_effort_accepts_the_four_levels(byok_env):
-    for level in ("low", "medium", "high", "max"):
-        provider = ProviderDecl(
-            id="gw",
-            label="网关",
-            protocol="openai-compatible",
-            base_url="https://gw.example/v1",
-            models=(ModelDecl(id="m", reasoning_effort=level),),
+def test_reasoning_effort_list_is_free_form_and_validated(byok_env):
+    """档位是配置的人定的（各家不一样），内核只挡住空串、过长与重复。"""
+    ok = ModelDecl(id="m", reasoning_efforts=("minimal", "low", "xhigh"))
+    validate_byok(
+        ByokConfig(
+            providers={
+                "gw": ProviderDecl(
+                    id="gw", label="x", protocol="openai-compatible",
+                    base_url="https://gw.example/v1", models=(ok,),
+                )
+            },
+            bindings={"chat": "gw/m"},
         )
-        save_byok(ByokConfig(providers={"gw": provider}, bindings={"chat": "gw/m"}))
-        assert resolve_chat("gw/m").reasoning_effort == level
-
-
-def test_reasoning_effort_rejects_an_unknown_level(byok_env):
-    provider = ProviderDecl(
-        id="gw",
-        label="网关",
-        protocol="openai-compatible",
-        base_url="https://gw.example/v1",
-        models=(ModelDecl(id="m1", reasoning_effort="turbo"),),
     )
 
-    with pytest.raises(ConfigError, match="reasoning_effort"):
-        validate_byok(ByokConfig(providers={"gw": provider}, bindings={"chat": "gw/m1"}))
+    for bad in (("",), ("a" * 33,), ("low", "low")):
+        provider = ProviderDecl(
+            id="gw", label="x", protocol="openai-compatible",
+            base_url="https://gw.example/v1", models=(ModelDecl(id="m", reasoning_efforts=bad),),
+        )
+        with pytest.raises(ConfigError, match="reasoning_efforts"):
+            validate_byok(ByokConfig(providers={"gw": provider}, bindings={"chat": "gw/m"}))
 
 
-def test_reasoning_effort_survives_a_save_and_load_round_trip(byok_env):
+def test_reasoning_effort_list_survives_a_save_and_load_round_trip(byok_env):
     provider = ProviderDecl(
         id="gw",
         label="网关",
         protocol="openai-compatible",
         base_url="https://gw.example/v1",
-        models=(ModelDecl(id="m1", reasoning_effort="low", capabilities=ModelCapabilities(vision=True)),),
+        models=(
+            ModelDecl(
+                id="m1",
+                reasoning_efforts=("low", "high", "max"),
+                capabilities=ModelCapabilities(vision=True),
+            ),
+        ),
     )
 
     save_byok(ByokConfig(providers={"gw": provider}, bindings={"chat": "gw/m1"}))
@@ -395,8 +408,12 @@ def test_reasoning_effort_survives_a_save_and_load_round_trip(byok_env):
     assert loaded is not None
     model = loaded.providers["gw"].model("m1")
     assert model is not None
-    assert model.reasoning_effort == "low"
+    assert model.reasoning_efforts == ("low", "high", "max")
     assert model.capabilities.vision is True
+
+    # 列表随候选发给界面（composer 的强度选择器靠它）
+    candidates = byok_model_candidates()
+    assert candidates[0]["reasoning_efforts"] == ["low", "high", "max"]
 
 
 def test_tool_calling_guard_applies_to_override_too(byok_env):

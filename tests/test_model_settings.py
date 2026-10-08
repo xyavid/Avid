@@ -115,7 +115,9 @@ def test_put_writes_config_and_secret_and_takes_effect(tmp_path):
     # meta 的 model 与 BYOK 候选同步变化
     meta = http.get("/api/meta").json()["capabilities"]
     assert meta["model"] == "deepseek-chat"
-    assert meta["models"] == [{"ref": "deepseek/deepseek-chat", "label": "DeepSeek · deepseek-chat"}]
+    assert meta["models"] == [
+        {"ref": "deepseek/deepseek-chat", "label": "DeepSeek · deepseek-chat", "reasoning_efforts": []}
+    ]
 
 
 def test_put_without_key_keeps_existing_secret(tmp_path):

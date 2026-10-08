@@ -43,10 +43,14 @@ class BuildInfo(BaseModel):
 
 
 class ModelCandidate(BaseModel):
-    """按运行换模型的 BYOK 候选：`ref` 是 providerId/modelId，label 是展示名。"""
+    """按运行换模型的 BYOK 候选：`ref` 是 providerId/modelId，label 是展示名。
+
+    `reasoning_efforts` 是这个模型声明的推理强度档位（界面据此列出可选项）；空 = 不提。
+    """
 
     ref: str = Field(max_length=MAX_NAME_CHARS)
     label: str = Field(max_length=MAX_NAME_CHARS)
+    reasoning_efforts: list[str] = Field(default_factory=list)
 
 
 class Capabilities(BaseModel):
@@ -159,7 +163,7 @@ class CapabilityFlags(BaseModel):
 
 
 class ByokModel(BaseModel):
-    """一个具体模型：id + 可选展示名 / 窗口 / 输出上限 / 推理强度 / 能力声明（读写同形）。"""
+    """一个具体模型：id + 可选展示名 / 窗口 / 输出上限 / 推理强度档位 / 能力声明（读写同形）。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -167,8 +171,8 @@ class ByokModel(BaseModel):
     label: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
     context_window: int | None = Field(default=None, ge=1)
     max_output: int | None = Field(default=None, ge=1)
-    # 每次请求带的 reasoning_effort（阶段 55）；None = 不带。取值由 byok.REASONING_EFFORTS 收口。
-    reasoning_effort: str | None = Field(default=None, max_length=16)
+    # 这个模型认哪些推理强度档位（运行时从列表里挑一个）；空 = 不带这个参数。
+    reasoning_efforts: list[str] = Field(default_factory=list)
     capabilities: CapabilityFlags = Field(default_factory=CapabilityFlags)
 
 
@@ -392,6 +396,8 @@ class StartRunIn(BaseModel):
     branch: str = Field(default="main", max_length=MAX_NAME_CHARS)
     # 本次运行的模型覆盖；缺省 = 按设置（.env + 界面覆盖层）解析。空串按缺省处理。
     model: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
+    # 本次运行的推理强度：必须在所选模型声明的档位列表里（内核按列表校验）。空串按缺省处理。
+    reasoning_effort: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
     full_access_ack: bool = False
 
 

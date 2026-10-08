@@ -114,6 +114,8 @@ class RunRecord:
     finished_at: int | None = None
     # 本次运行的模型覆盖（界面选的那个）；None = 按设置解析。
     model: str | None = None
+    # 本次运行的推理强度（必须在该模型声明的档位列表里）；None = 不带这个参数。
+    effort: str | None = None
     # 会话内命令（"compact" / "rewind" / "unknown"）；None = 普通运行。
     command: str | None = None
 
@@ -248,6 +250,7 @@ class RunRegistry:
         branch: str = DEFAULT_BRANCH,
         full_ack: bool = False,
         model: str | None = None,
+        effort: str | None = None,
     ) -> RunRecord:
         """Register a run and start its thread; raises RunBusy or SessionNotFound."""
         # The branch decides which chain the run appends to; full_ack 直接决定完全访问。
@@ -282,6 +285,7 @@ class RunRegistry:
                     session_id=session_id,
                     started_at=now_ms(),
                     model=(model or "").strip() or None,
+                    effort=(effort or "").strip() or None,
                     command=command,
                 )
 
@@ -730,7 +734,7 @@ class RunRegistry:
         # The recorder is built inside the try: if resolve_chat fails it never exists, and
         # _finish then has no usage to persist because record.recorder stays None.
         try:
-            config = resolve_chat(model=record.model)
+            config = resolve_chat(model=record.model, effort=record.effort)
             recorder = SessionRecorder(session, branch)
             # Hand it to the record so _finish can persist usage before announcing the end.
             record.recorder = recorder
@@ -804,6 +808,9 @@ class RunRegistry:
                 full=full_ack,
                 workspace_root=workspace.root,
                 scratch=scratched,
+                # 子运行要用同一份模型与档位（见 RunState 的字段注释）
+                model_ref=record.model,
+                effort=record.effort,
                 # The very same spec as in run_started: the event and the enforcement agree.
                 security=safety,
                 # The utilization denominator follows this run's actual model configuration.

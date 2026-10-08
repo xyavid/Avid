@@ -83,6 +83,12 @@ class RunState:
     # 沙箱把工作区挂只读、环境块里写一句「这是临时对话」；子运行逐字段继承同一个事实。
     scratch: bool = False
 
+    # 本次运行的模型覆盖与推理强度（界面选的那两个，阶段 55）：子运行要用同一份——
+    # 不然用户选了 A 模型，子 agent 却按设置里的绑定 B 跑（花的还是钱）。
+    # None = 没有覆盖，按设置解析（与父运行同一条路）。
+    model_ref: str | None = None
+    effort: str | None = None
+
     # Approval callback injection point; None falls back to the default stdin-based prompter.
     ask: AskUser | None = None
 
@@ -183,6 +189,8 @@ class RunState:
         audit_dir: str | None = None,
         audit_enabled: bool = True,
         scratch: bool = False,
+        model_ref: str | None = None,
+        effort: str | None = None,
     ) -> "RunState":
         """Build a run state and rescan skills; full 只由显式授权（full=True）产生。
 
@@ -210,6 +218,8 @@ class RunState:
             ledger=ledger if ledger is not None else ApprovalLedger(),
             workspace_root=workspace_root,
             scratch=scratch,
+            model_ref=model_ref,
+            effort=effort,
             context_window=context_window,
             # The skill directory follows the workspace root and falls back to cwd.
             skills=SkillLoader(default_skills_dir(workspace_root)).scan(),

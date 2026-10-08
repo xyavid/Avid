@@ -82,7 +82,8 @@ class Config:
     extra_headers: dict[str, str] | None = None
     extra_body: dict[str, Any] | None = None
     max_output: int | None = None
-    # 推理强度（BYOK 的模型声明）：随每次请求发出去；None = 不带。
+    # 本次运行选的推理强度（来自运行请求，取值必须在模型声明的档位列表里）；
+    # None = 这次不带这个参数。
     reasoning_effort: str | None = None
 
     @property

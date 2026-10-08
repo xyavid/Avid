@@ -72,11 +72,11 @@ _REF_PATTERN = re.compile(r"^([a-z0-9-]+)/(.+)$")
 
 CAPABILITY_FIELDS = ("tool_calling", "vision", "json_mode", "streaming", "reasoning")
 
-#: 推理强度（阶段 55）：四档，原样发出去。它不是一个能力位，而是一个**请求参数**，
-#: 所以放在模型声明上（同一个提供商的不同模型未必都认）。`max` 不是 OpenAI 的档位，
-#: 是给那些自认「拉满」的端点用的（用户要求加上）；Anthropic 的对应物是 thinking 预算
-#: （token 数），与这几档不是同一件事——那条路留给该提供商的 extra_body，不在这里硬映射。
-REASONING_EFFORTS = ("low", "medium", "high", "max")
+#: 推理强度的取值不在内核里写死：**模型声明的是档位列表**（`reasoning_efforts`），
+#: 运行时从列表里挑一个（`StartRunInput.reasoning_effort`），值原样发出去。
+#: 为什么是列表而不是枚举：各家的档位不一样（OpenAI 的 low/medium/high、有的端点认
+#: "max"、有的认 "minimal"），把内核当字典是替别人定调；配置的人最清楚自己的端点认什么。
+MAX_EFFORT_CHARS = 32
 
 
 def config_path() -> Path:
@@ -108,8 +108,8 @@ class ModelDecl:
     context_window: int | None = None
     max_output: int | None = None
     capabilities: ModelCapabilities = field(default_factory=ModelCapabilities)
-    #: 每次请求带的 reasoning_effort；None = 不带（由提供方自己决定）。
-    reasoning_effort: str | None = None
+    #: 这个模型认哪些推理强度档位（界面把它们列出来供选）；空 = 不提这件事，请求里不带参数。
+    reasoning_efforts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -168,11 +168,14 @@ def _validate_provider(provider: ProviderDecl) -> None:
             value = getattr(model, name)
             if value is not None and value < 1:
                 raise _err(f"provider {provider.id} 模型 {model.id} 的 {name} 必须 ≥ 1：{value}")
-        if model.reasoning_effort is not None and model.reasoning_effort not in REASONING_EFFORTS:
-            raise _err(
-                f"provider {provider.id} 模型 {model.id} 的 reasoning_effort 必须是 "
-                f"{'、'.join(REASONING_EFFORTS)} 之一：{model.reasoning_effort!r}"
-            )
+        if len(set(model.reasoning_efforts)) != len(model.reasoning_efforts):
+            raise _err(f"provider {provider.id} 模型 {model.id} 的 reasoning_efforts 有重复档位")
+        for level in model.reasoning_efforts:
+            if not level.strip() or len(level) > MAX_EFFORT_CHARS:
+                raise _err(
+                    f"provider {provider.id} 模型 {model.id} 的 reasoning_efforts 里每一档"
+                    f"必须是 1–{MAX_EFFORT_CHARS} 字符的非空字符串：{level!r}"
+                )
 
 
 def validate_byok(config: ByokConfig) -> None:
@@ -242,7 +245,7 @@ def _decl_to_json(provider: ProviderDecl) -> dict[str, Any]:
                 "label": m.label,
                 "context_window": m.context_window,
                 "max_output": m.max_output,
-                "reasoning_effort": m.reasoning_effort,
+                "reasoning_efforts": list(m.reasoning_efforts),
                 "capabilities": {name: getattr(m.capabilities, name) for name in CAPABILITY_FIELDS},
             }
             for m in provider.models
@@ -307,9 +310,18 @@ def _parse_provider(raw: Any) -> ProviderDecl:
                 not isinstance(value, int) or isinstance(value, bool) or value < 1
             ):
                 raise _err(f"{where} 模型 {item['id']} 的 {name} 必须是正整数：{value!r}")
-        effort = item.get("reasoning_effort")
-        if effort is not None and not isinstance(effort, str):
-            raise _err(f"{where} 模型 {item['id']} 的 reasoning_effort 必须是字符串：{effort!r}")
+        raw_efforts = item.get("reasoning_efforts", item.get("reasoning_effort"))
+        if raw_efforts is None:
+            efforts: tuple[str, ...] = ()
+        elif isinstance(raw_efforts, str):
+            # 手编文件写成一个字符串也认（等价于只有一个档位的列表）
+            efforts = (raw_efforts,)
+        elif isinstance(raw_efforts, list) and all(isinstance(x, str) for x in raw_efforts):
+            efforts = tuple(raw_efforts)
+        else:
+            raise _err(
+                f"{where} 模型 {item['id']} 的 reasoning_efforts 必须是字符串数组：{raw_efforts!r}"
+            )
         models.append(
             ModelDecl(
                 id=str(item["id"]),
@@ -319,7 +331,7 @@ def _parse_provider(raw: Any) -> ProviderDecl:
                 capabilities=_parse_capabilities(
                     item.get("capabilities"), f"{where} 模型 {item['id']}"
                 ),
-                reasoning_effort=effort,
+                reasoning_efforts=efforts,
             )
         )
     return ProviderDecl(
@@ -415,7 +427,12 @@ def _parallel_cap(env: Mapping[str, str] | None) -> int:
 
 
 def config_from_provider(
-    provider: ProviderDecl, model_id: str, env=None, *, secret: str | None = None
+    provider: ProviderDecl,
+    model_id: str,
+    env=None,
+    *,
+    secret: str | None = None,
+    effort: str | None = None,
 ) -> Config:
     """Resolve one provider+model into the runtime Config (secret plaintext included).
 
@@ -428,6 +445,13 @@ def config_from_provider(
         secret = read_secrets().get(provider.id, "")
     model = provider.model(model_id)
     capabilities = model.capabilities if model else ModelCapabilities()
+    if effort is not None:
+        declared = model.reasoning_efforts if model else ()
+        if effort not in declared:
+            available = "、".join(declared) if declared else "（该模型没有声明任何档位）"
+            raise _err(
+                f"模型 {provider.id}/{model_id} 没有声明推理强度 {effort!r}；可用：{available}"
+            )
     if capabilities.tool_calling is False:
         raise _err(
             f"模型 {provider.id}/{model_id} 声明不支持工具调用；agent 的 chat 槽位需要能调工具的模型"
@@ -444,7 +468,7 @@ def config_from_provider(
         extra_headers=extra_headers or None,
         extra_body=dict(provider.extra_body) or None,
         max_output=model.max_output if model else None,
-        reasoning_effort=model.reasoning_effort if model else None,
+        reasoning_effort=effort,
     )
 
 
@@ -459,7 +483,7 @@ def _pick_provider(config: ByokConfig, provider_id: str) -> ProviderDecl:
     return provider
 
 
-def _resolve_ref(config: ByokConfig, ref: str, env=None) -> Config:
+def _resolve_ref(config: ByokConfig, ref: str, env=None, *, effort: str | None = None) -> Config:
     match = _REF_PATTERN.match(ref)
     if match is None:
         raise _err(f"模型覆盖必须是 providerId/modelId 形式：{ref!r}")
@@ -467,7 +491,7 @@ def _resolve_ref(config: ByokConfig, ref: str, env=None) -> Config:
     model_id = match.group(2)
     if provider.model(model_id) is None:
         raise _err(f"提供商 {provider.id} 下没有模型 {model_id!r}")
-    return config_from_provider(provider, model_id, env)
+    return config_from_provider(provider, model_id, env, effort=effort)
 
 _NO_CONFIG_MESSAGE = (
     "还没有模型配置：在界面「设置 → 模型」里添加提供商并绑定 chat 槽位，\n"
@@ -476,7 +500,12 @@ _NO_CONFIG_MESSAGE = (
 )
 
 
-def resolve_chat(model: str | None = None, env: Mapping[str, str] | None = None) -> Config:
+def resolve_chat(
+    model: str | None = None,
+    env: Mapping[str, str] | None = None,
+    *,
+    effort: str | None = None,
+) -> Config:
     """唯一解析入口：本次覆盖 > chat 绑定；没有可用的绑定就是 ConfigError。
 
     `model` 是「本次运行用哪个模型」：`providerId/modelId` ref 直接定位；
@@ -484,11 +513,12 @@ def resolve_chat(model: str | None = None, env: Mapping[str, str] | None = None)
     `env` 只作用于运行期开关（并行工具上限）的读取来源。
     """
     override = (model or "").strip() or None
+    chosen = (effort or "").strip() or None
     byok = load_byok()
     if byok is None:
         raise _err(_NO_CONFIG_MESSAGE)
     if override is not None and "/" in override:
-        return _resolve_ref(byok, override, env)
+        return _resolve_ref(byok, override, env, effort=chosen)
     binding = byok.bindings.get(CHAT_SLOT)
     if not binding:
         raise _err(
@@ -507,11 +537,14 @@ def resolve_chat(model: str | None = None, env: Mapping[str, str] | None = None)
                 "先在「设置 → 模型」里给它加上，或用 providerId/modelId 形式指定其他提供商的模型"
             )
         model_id = override
-    return config_from_provider(provider, model_id, env)
+    return config_from_provider(provider, model_id, env, effort=chosen)
 
 
-def byok_model_candidates() -> list[dict[str, str]]:
-    """界面「按运行换模型」的 BYOK 候选：启用的提供商里 tool_calling≠false 的模型。"""
+def byok_model_candidates() -> list[dict[str, Any]]:
+    """界面「按运行换模型」的 BYOK 候选：启用的提供商里 tool_calling≠false 的模型。
+
+    每个候选带上它声明的推理强度档位——界面据此列出来供选（列表由配置的人定）。
+    """
     byok = load_byok()
     if byok is None:
         return []
@@ -526,6 +559,7 @@ def byok_model_candidates() -> list[dict[str, str]]:
                 {
                     "ref": f"{provider.id}/{model.id}",
                     "label": f"{provider.label} · {model.label or model.id}",
+                    "reasoning_efforts": list(model.reasoning_efforts),
                 }
             )
     return candidates
