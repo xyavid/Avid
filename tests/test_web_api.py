@@ -673,6 +673,31 @@ def test_entries_pagination_walks_the_chain(bundle):
     )
 
 
+def test_truncated_tail_covers_a_run_that_left_nothing(bundle):
+    """末尾是用户消息（这一轮一个回复都没有）也算中断——首个模型调用就失败时就是这个形状。
+
+    真实案例：一次 run 在第一次模型调用上超时失败，会话里只留下用户那句话；界面上一刷新
+    什么都看不到，像是"什么都没发生"。运行**中**的会话不算（那半截是理所应当的）。
+    """
+    client, services = bundle()
+    session_id = create_session(client).json()["id"]
+    session = services.repo.open(services.runs.find_metadata(session_id))
+    try:
+        SessionRecorder(session).ensure_branch().append_message({"role": "user", "content": "问题"})
+    finally:
+        session.close()
+
+    assert client.get(f"/api/sessions/{session_id}").json()["truncated_tail"] is True
+
+    # 运行中的会话不算：那一刻的"没有回复"是当然的
+    original = services.runs.active_run_id
+    services.runs.active_run_id = lambda _session_id: "run_fake"  # type: ignore[method-assign]
+    try:
+        assert client.get(f"/api/sessions/{session_id}").json()["truncated_tail"] is False
+    finally:
+        services.runs.active_run_id = original  # type: ignore[method-assign]
+
+
 def test_truncated_tail_is_derived_not_persisted(bundle):
     client, services = bundle()
     session_id = create_session(client).json()["id"]

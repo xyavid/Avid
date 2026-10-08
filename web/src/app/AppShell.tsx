@@ -114,7 +114,7 @@ export function AppShell({ sidebar, main, rail, actions }: AppShellProps) {
         <main className="min-h-0 overflow-hidden">{main ?? <RegionNote>对话列 ≤720px · 阶段 4 组装</RegionNote>}</main>
 
         {/* 右列只给栅格与滚动边界：边线、内边距、滚动条样式都由插槽内容自带
-            （dock 是常驻面板，它的页签条要贴着列缘）。 */}
+            （dock 的头部要贴着列缘）。 */}
         {rail && (
           <aside className="relative min-h-0 overflow-hidden">
             {rail}

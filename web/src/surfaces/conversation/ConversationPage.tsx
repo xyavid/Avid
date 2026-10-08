@@ -425,7 +425,10 @@ export function ConversationPage() {
   const shownUsage = runHere ? (live.usage ?? usage) : usage
   const liveActive = live.phase === 'starting' || live.phase === 'running' || live.phase === 'settling'
   const liveHere = liveActive && runHere
+  // 取数失败（打不开会话、事件流断了）与运行失败分开：前者没有时间线可展示，占正文；
+  // 后者是对话题目里的一件事，留在时间线下面那一条——**不能**把整段对话换掉。
   const displayError = error ?? (live.phase === 'error' && runHere ? live.error : null)
+  const runFailure = runHere && !liveHere ? live.error : null
 
   let body = (
     <Welcome
@@ -490,8 +493,8 @@ export function ConversationPage() {
           onClick={dock.toggle}
         />
       }
-      // 右列是常驻的 dock 面板：收起 = 不挂它，栅格自然回到两列（主列于是拿回
-      // 那 280px，而不是被浮层盖住）。
+      // 右列是占位的 dock 列（阶段 54 起默认收起）：收起 = 不挂它，栅格自然回到两列
+      // （主列于是拿回那 280px，而不是被浮层盖住）；打开先给选择页。
       rail={
         dock.open ? (
           <Dock
@@ -577,6 +580,15 @@ export function ConversationPage() {
                 </button>
               )}
             </div>
+          )}
+          {runFailure !== null && (
+            <p
+              className="px-a16 pb-a8 font-ui text-hint text-danger"
+              title="这次运行没有跑完；上面那条时间线是它已经落下的部分"
+              data-testid="run-failure"
+            >
+              {runFailure}
+            </p>
           )}
           {live.approvals.length > 0 && runHere && (
             <div className="px-a16 pb-a8">

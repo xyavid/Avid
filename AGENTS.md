@@ -10,7 +10,7 @@ Avid 是一个自建的 agent 运行时（harness）：模型调用、工具执�
 - **目标**：改动任一模块（模型 / 工具 / 上下文策略）不需要动其它部分。
 - **验收基准**：参考场景 **R**（读取本地文件 + 计算）——首个工具从它长出来。
 - **技术栈**：内核 Python 3.12，`uv` 管理依赖，运行期依赖只有 `httpx`；前端在 `web/`（React 18 + Vite + pnpm + TypeScript）。
-- **现状**：模型调用 → 循环 → 8 个内置工具 + stdio MCP → 权限轻量化（毁灭级命令双确认 + 凭据拒读 + 跨平台沙箱 + 审计）→ hook 四事件 → 技能 → 上下文压缩 → 会话持久化 → 本地 Web 服务，端到端可用；浏览器界面随阶段 33 重建（纸本视觉对话界面 + 会话/工作区管理 + 设置）。
+- **现状**：模型调用 → 循环 → 8 个内置工具 + stdio MCP → 权限轻量化（毁灭级命令双确认 + 凭据拒读 + 跨平台沙箱 + 审计）→ hook 四事件 → 技能 → 上下文压缩 → 会话持久化 → 本地 Web 服务，端到端可用；浏览器界面随阶段 33 重建（纸本视觉对话界面 + 会话/工作区管理 + 设置），阶段 52–54 补齐：时间线逐段实时 + 收尾折成一行、文件类工具卡点开是差异/代码视图、右列按需打开（选择页 → 工作区文件 / 子智能体 / 临时对话 / 终端）、模型在输入区由用户自选（设置只提供候选列表）。
 - **阶段 35 重置**：包平铺到仓库根（`avid/`，无 src 层）；评测仪器（benchmarks）整体删除，评测另立阶段；docs 体系撤除，**代码与模块注释是唯一现状**。
 
 **仓库现状问谁**：不问文档，问代码——每个模块的职责、边界与不变量写在模块 docstring 与注释里；跨包边界由 `tests/test_web_boundaries.py` 的门禁（A1–A13）钉住，前端契约由 `test_wire_contract.py` / `test_event_contract.py` 双侧钉住。
@@ -99,6 +99,7 @@ Web  POST /api/sessions/{id}/runs ─┴─► svc/runs.RunRegistry（线程 + �
 | 加一个界面 | `web/src/surfaces/` 加页面并在 `app/App.tsx` 挂路由；颜色 / 字号 / 圆角只取 `styles/tokens.css` 的 token，不写散档 |
 | 加一个右列面板 | `components/dock/Dock.tsx` 的 `PANELS` 加一条 + `state/dock.ts` 的 `DockPanelId` 与 `PANEL_IDS` 同步；面板视图在 `components/dock/`，数据由页面下发（Dock 是纯展示，不发请求） |
 | 改对话时间线（段落顺序 / 工具行 / 思考段 / 收尾折叠） | `web/src/state/timeline.ts` 是单点（段落模型 + 事件→段落 + 历史归并 + 一键折叠判定 `turnGroups`），渲染在 `components/chat/Timeline.tsx`——过程与收尾共用它，别在页面里另起一套 |
+| 改模型选择 / 候选来源 | `web/src/state/runModel.ts`（选哪个、记不记得住、候选没了怎么办）+ `components/chat/ModelButton.tsx`（画它）；候选来自 `GET /api/meta` 的 `capabilities.models`，设置页只负责那份列表 |
 | 改 markdown 支持的写法 / 危险协议名单 | `web/src/markdown/parse.ts` 是「标准解析器（@lezer/markdown，CommonMark+GFM）→ 渲染模型」的翻译层与协议闸门，`Markdown.tsx` 只负责画（全程 React 元素，不注入 HTML）；软换行成断行、外链图降级成链接是有意偏离，写在模块注释里 |
 
 ## 2. 提交规范

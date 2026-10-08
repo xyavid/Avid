@@ -22,7 +22,7 @@ import { cancelRun, decideApproval, getRun, startRun } from '../api/client'
 import { subscribeRun } from '../api/events'
 import type { UsageReport } from '../api/types'
 import type { RunPermission } from '../events/types'
-import type { TimelineEvent, TimelineItem, ToolStatus } from './timeline'
+import type { TimelineEvent, TimelineItem } from './timeline'
 import { appendUser, applyEvent, subagentTag } from './timeline'
 
 export type RunPhase = 'idle' | 'starting' | 'running' | 'settling' | 'error'
@@ -32,16 +32,6 @@ const PARENT_KEY = ''
 
 /** 一截待刷的流式增量：文本 + 首片到达的时间 + 它的来源（null = 父运行）。 */
 type PendingDelta = { text: string; ts: number; tag: { task: string; index: number } | null }
-
-export type LiveTool = {
-  callId: string
-  tool: string
-  status: ToolStatus
-  /** 调用参数（JSON 串）——活卡片预览用，来自 tool_call_started。 */
-  arguments: string
-  /** 工具结果（tool_result_message 落地后填入）；null = 结果未到。 */
-  result: string | null
-}
 
 export type LiveApproval = { approvalId: string; tool: string; arguments: string; reason: string }
 
@@ -142,7 +132,13 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
   }, [])
   useEffect(() => () => discardPendingDeltas(), [discardPendingDeltas])
 
-  /** 收尾：收订阅、清运行态，**保留 items**（时间线不跳变）；下次发送或切会话再收拾。 */
+  /**
+   * 收尾：收订阅、清运行态，**保留 items**（时间线不跳变）；下次发送或切会话再收拾。
+   *
+   * `error` 不在这里清：运行失败（run_failed）的原因是这个运行唯一的痕迹——清掉它，
+   * 界面就只剩「用户那句话 + 什么都没发生」，那正是「run 突然停了」的观感。
+   * 它留到下一次 `send`（新一次运行）或 `attach`（换一条流）时才清。
+   */
   const settle = useCallback(() => {
     subRef.current?.abort()
     subRef.current = null
@@ -151,7 +147,6 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
     discardPendingDeltas()
     setRunId(null)
     setApprovals([])
-    setError(null)
     setPhase('idle')
   }, [discardPendingDeltas])
 
@@ -309,6 +304,7 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
   const attach = useCallback(
     (id: string) => {
       settle()
+      setError(null) // 换一条流：上一条的失败不再挂在界面上
       setItems([])
       setAttachedSession(sessionId)
       runIdRef.current = id
@@ -333,19 +329,11 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
     [],
   )
 
-  // Dock 的进程面板用的扁平工具表：从工具段派生，状态与结果随段实时更新。
-  const tools: LiveTool[] = items.flatMap((item) =>
-    item.kind === 'tool'
-      ? [{ callId: item.callId, tool: item.name, status: item.status, arguments: item.args, result: item.result }]
-      : [],
-  )
-
   return {
     phase,
     runId,
     items,
     attachedSession,
-    tools,
     approvals,
     runPermission,
     usage,

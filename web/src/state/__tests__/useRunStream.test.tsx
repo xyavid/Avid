@@ -174,10 +174,6 @@ describe('useRunStream（发送 → 订阅 → 段落归并 → 终态收尾）'
     })
     expect(texts(result.current.items, 'assistant')).toEqual(['结论是这样'])
     expect(texts(result.current.items, 'user')).toEqual(['跑一下'])
-    // Dock 进程面板的扁平表随段派生
-    expect(result.current.tools).toEqual([
-      { callId: 'c1', tool: 'bash', status: 'ok', arguments: '{"command":"ls"}', result: 'total 0' },
-    ])
   })
 
   it('delta 合帧：同一帧内多次增量一次刷出；assistant_message 作废未刷的增量', async () => {
@@ -248,6 +244,31 @@ describe('useRunStream（发送 → 订阅 → 段落归并 → 终态收尾）'
       { kind: 'user', entryId: null, text: '新会话的问题', ts: expect.any(Number) },
     ])
     expect(result.current.attachedSession).toBe('s2')
+  })
+
+  it('运行失败的原因留到下一次运行：收尾不清它（界面靠它说"为什么停了"）', async () => {
+    const onSettled = vi.fn()
+    const { result } = renderHook(() => useRunStream('s1', onSettled))
+    await act(async () => {
+      await result.current.send('跑一下', false)
+    })
+
+    act(() => {
+      emitter().send('run_failed', { code: 'llm_error', message: '请求失败：The read operation timed out' })
+    })
+    await waitFor(() => expect(result.current.phase).toBe('settling'))
+    expect(result.current.error).toContain('timed out')
+
+    // 页面在终态事件后回拉用量，然后 settle —— 收尾不该把原因擦掉
+    act(() => result.current.settle())
+    expect(result.current.phase).toBe('idle')
+    expect(result.current.error).toContain('timed out')
+
+    // 下一次运行才清：那是新的一件事
+    await act(async () => {
+      await result.current.send('再问一句', false)
+    })
+    expect(result.current.error).toBeNull()
   })
 
   it('父与子的流式增量各自成串：子的正文进它那条子运行，不混进父那段', async () => {
@@ -325,9 +346,6 @@ describe('useRunStream（发送 → 订阅 → 段落归并 → 终态收尾）'
     })
 
     expect(texts(result.current.items, 'assistant')).toEqual(['你好呀'])
-    expect(result.current.tools).toEqual([
-      { callId: 'c1', tool: 'bash', status: 'ok', arguments: '{}', result: null },
-    ])
     expect(result.current.approvals).toHaveLength(1)
     expect(result.current.phase).toBe('running')
 

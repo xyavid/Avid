@@ -20,6 +20,7 @@ from ..session import (
     messages_for_branch,
     session_scratch,
 )
+from ..session.types import MESSAGE_ENTRY
 from .errors import (
     BranchExists,
     InvalidRequest,
@@ -355,7 +356,15 @@ class SessionService:
     # Internals.
 
     def _truncated_tail(self, session: Any) -> bool:
-        """Whether the tip holds tool calls without results, meaning the run stopped mid batch."""
+        """Whether the tip is a run that never finished（界面据此说「上次运行在此中断」）。
+
+        两种形状都是中断：**工具调用没有结果**（停在批次中间）、以及**末尾是用户消息**
+        （这一轮一个回复都没留下——最常见的原因是首个模型调用就失败了）。
+
+        正在跑的会话不算：那半截是理所应当的，不是中断。
+        """
+        if self.runs.active_run_id(session.metadata.id) is not None:
+            return False
         target = session.branch(DEFAULT_BRANCH)
         if target is None:
             return False
@@ -367,6 +376,8 @@ class SessionService:
             if message.get("role") == "tool":
                 seen.add(str(message.get("tool_call_id")))
                 continue
+            if entry.type == MESSAGE_ENTRY and message.get("role") == "user":
+                return True
             # The first non-result message ends the batch under inspection.
             expected = {
                 str(call.get("id")) for call in (message.get("tool_calls") or [])
