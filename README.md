@@ -17,7 +17,7 @@
 - **技能** —— 一段可复用的操作说明（`SKILL.md`）：目录里只有描述，命中即载入全文。
 - **上下文管理** —— 分区装配 + 压缩成结构化检查点，事实与假设分开记，长时间任务不掉线。
 - **会话持久化** —— 对话与状态落盘，带分支与变更线；`/rewind` 可回滚对话指针与文件。
-- **模型无关** —— BYOK，四种协议（OpenAI 兼容 / Responses / Anthropic / Ollama）换着用，换模型不动内核。
+- **模型配置** —— BYOK，四种协议（OpenAI 兼容 / Responses / Anthropic / Ollama）换着用，换模型不动内核。
 - **权限** —— 默认直接执行；毁灭级命令先确认，宿主凭据拒读，可选沙箱与审计。
 
 ## 快速开始
@@ -59,14 +59,6 @@ pnpm -C web install && pnpm -C web run copy:dist
   （凭据拒读仍然生效）。
 - **环境变量**：可选，日常运行不需要。
 
-| 变量 | 说明 |
-|---|---|
-| `AVID_HOME` | 用户级目录（会话、审计）改到别处，默认 `~/.avid` |
-| `AVID_AUDIT_DIR` | 审计 JSONL 单独落一个目录 |
-| `AVID_MAX_PARALLEL_TOOL_CALLS` | 一步内并行工具调用上限，默认 10 |
-| `AVID_MODEL_INFO` | 设 `off` 关闭「向 provider 问模型窗口」的探测 |
-| `AVID_SANDBOX_BIN` | 换一个 bwrap 可执行文件（诊断 / 打包用） |
-| `AVID_ALLOWED_HOSTS` | Web 服务额外信任的主机名（LAN 部署） |
 
 ## 开发
 
