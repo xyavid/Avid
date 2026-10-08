@@ -39,6 +39,9 @@ export type ComposerProps = {
   /** 本次运行的模型（providerId/modelId）；null = 还没选——那时发不出去，也不替用户猜。 */
   model?: string | null
   onChangeModel?: (model: string) => void
+  /** 本次运行的推理强度（该模型声明的档位之一）；null = 不设 → 请求里不带这个参数。 */
+  effort?: string | null
+  onChangeEffort?: (effort: string | null) => void
   /** BYOK 候选（providerId/modelId ref）：模型胶囊的全部选项来自这里。 */
   byokModels?: ModelCandidate[]
   /** 上下文用量快照（运行中吃事件里的每轮读数，收尾后是落盘那份）。 */
@@ -54,6 +57,8 @@ export function Composer({
   onStop,
   model = null,
   onChangeModel,
+  effort = null,
+  onChangeEffort,
   byokModels = [],
   usage = null,
 }: ComposerProps) {
@@ -103,7 +108,13 @@ export function Composer({
           <div className="flex items-center gap-a8">
             <PermissionButton full={full} onToggleFull={onToggleFull} />
             {onChangeModel && (
-              <ModelButton model={model} onChange={onChangeModel} candidates={byokModels} />
+              <ModelButton
+                model={model}
+                onChange={onChangeModel}
+                effort={effort}
+                onChangeEffort={onChangeEffort}
+                candidates={byokModels}
+              />
             )}
             <ContextRing usage={usage} />
           </div>

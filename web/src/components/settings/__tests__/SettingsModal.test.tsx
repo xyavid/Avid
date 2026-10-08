@@ -126,7 +126,7 @@ describe('SettingsModal（设置界面 · BYOK 模型段）', () => {
     await waitFor(() => expect(screen.getByText(/已保存/)).toBeTruthy())
   })
 
-  it('模型的推理强度与图片输入：两个选择都跟着载荷走（阶段 55）', async () => {
+  it('模型的推理强度档位与图片输入：都跟着载荷走（阶段 55）', async () => {
     render(<SettingsModal onClose={() => {}} />)
     await waitFor(() => expect(getByokSettings).toHaveBeenCalled())
 
@@ -141,7 +141,9 @@ describe('SettingsModal（设置界面 · BYOK 模型段）', () => {
     fireEvent.change(screen.getByPlaceholderText('模型 id，例如 deepseek-chat'), {
       target: { value: 'reasoner' },
     })
-    fireEvent.change(screen.getByLabelText('模型 reasoner 的推理强度'), { target: { value: 'high' } })
+    fireEvent.change(screen.getByLabelText('模型 reasoner 的推理强度档位'), {
+      target: { value: 'low, high, max' },
+    })
     fireEvent.change(screen.getByLabelText('模型 reasoner 的图片输入能力'), { target: { value: 'true' } })
     fireEvent.click(screen.getByRole('button', { name: '完成' }))
 
@@ -154,11 +156,12 @@ describe('SettingsModal（设置界面 · BYOK 模型段）', () => {
 
     await waitFor(() => expect(saveByokSettings).toHaveBeenCalledOnce())
     const payload = saveByokSettings.mock.calls[0]![0] as {
-      providers: { models: { id: string; reasoning_effort: string | null; capabilities: { vision: boolean | null } }[] }[]
+      providers: { models: { id: string; reasoning_efforts: string[]; capabilities: { vision: boolean | null } }[] }[]
     }
     expect(payload.providers[0]!.models[0]).toMatchObject({
       id: 'reasoner',
-      reasoning_effort: 'high',
+      // 逗号分隔的列表原样拆成数组（顺序保留，空白丢掉）
+      reasoning_efforts: ['low', 'high', 'max'],
       capabilities: { vision: true },
     })
   })

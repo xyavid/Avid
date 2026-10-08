@@ -206,6 +206,8 @@ export type StartRunInput = {
   /** 这次运行接在哪条链尾上；缺省 = main。 */  branch?: string
   /** 本次运行的模型覆盖；缺省 = 按设置解析（.env + 界面覆盖层）。 */
   model?: string
+  /** 本次运行的推理强度：必须在所选模型声明的档位列表里（内核按列表校验）。 */
+  reasoning_effort?: string
   /** `true` = 完全访问（跳过毁灭级确认、关沙箱）；唯一的授权凭据，没有模式字段。 */
   full_access_ack?: boolean
 }

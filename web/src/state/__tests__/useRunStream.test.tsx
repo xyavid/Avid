@@ -271,6 +271,24 @@ describe('useRunStream（发送 → 订阅 → 段落归并 → 终态收尾）'
     expect(result.current.error).toBeNull()
   })
 
+  it('推理强度只在选了档位时才随载荷带上（不选 = 不发这个参数）', async () => {
+    const { result } = renderHook(() => useRunStream('s1', () => {}))
+    await act(async () => {
+      await result.current.send('问一句', false, 'stub/a', 'main', 'max')
+    })
+    expect(startRun).toHaveBeenLastCalledWith('s1', expect.objectContaining({
+      prompt: '问一句',
+      model: 'stub/a',
+      reasoning_effort: 'max',
+    }))
+
+    await act(async () => {
+      await result.current.send('再问一句', false, 'stub/a', 'main', null)
+    })
+    const payload = startRun.mock.calls.at(-1)![1] as Record<string, unknown>
+    expect(payload).not.toHaveProperty('reasoning_effort')
+  })
+
   it('父与子的流式增量各自成串：子的正文进它那条子运行，不混进父那段', async () => {
     const { result } = renderHook(() => useRunStream('s1', () => {}))
     await act(async () => {

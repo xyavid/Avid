@@ -274,7 +274,13 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
   )
 
   const send = useCallback(
-    async (prompt: string, full: boolean, model?: string | null, branch?: string) => {
+    async (
+      prompt: string,
+      full: boolean,
+      model?: string | null,
+      branch?: string,
+      effort?: string | null,
+    ) => {
       if (!sessionId) return
       setPhase('starting')
       setError(null)
@@ -289,6 +295,8 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
           prompt,
           // 只在选了覆盖时才带 model：不带 = 服务端按设置解析（与旧行为逐字一致）
           ...(model ? { model } : {}),
+          // 同理只在选了档位时才带：不带 = 这次请求不发这个参数
+          ...(effort ? { reasoning_effort: effort } : {}),
           // 只在非主线时才带 branch：不带 = 服务端默认 main，载荷与旧行为逐字一致
           ...(branch && branch !== 'main' ? { branch } : {}),
           // 完全访问的唯一凭据；默认形态不带这个字段。

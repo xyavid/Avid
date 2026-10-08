@@ -21,7 +21,7 @@ import {
   saveByokSettings,
   testByokModel,
 } from '../../api/client'
-import type { ByokProtocol, ByokSettings, ByokTestResult, ProviderEntry, ProviderInput, ReasoningEffort } from '../../api/types'
+import type { ByokProtocol, ByokSettings, ByokTestResult, ProviderEntry, ProviderInput } from '../../api/types'
 import { cx } from '../../ui/cx'
 import { Icon } from '../../ui/Icon'
 import { Input } from '../../ui/Input'
@@ -478,33 +478,31 @@ function ProviderEditor({ draft, isNew, onSave, onCancel }: EditorProps) {
               >
                 <Icon name="x" size={14} />
               </button>
-              {/* 第二行：推理强度（请求参数）与图片输入（能力位）——都是"这个模型认什么"，
-                  不是全局开关。图片输入目前只作声明：界面还没有图片入口。 */}
-              <select
-                value={m.reasoning_effort ?? 'unset'}
+              {/* 第二行：推理强度档位列表（逗号分隔）与图片输入（能力位）——都是"这个模型认什么"，
+                  不是全局开关。档位由配置的人定（各家不一样），输入区的强度选择器按这份列表列选项。
+                  图片输入目前只作声明：界面还没有图片入口。 */}
+              <Input
+                value={(m.reasoning_efforts ?? []).join(', ')}
                 onChange={(e) =>
                   patch({
                     models: form.models.map((x, i) =>
                       i === index
                         ? {
                             ...x,
-                            reasoning_effort:
-                              e.target.value === 'unset' ? null : (e.target.value as ReasoningEffort),
+                            reasoning_efforts: e.target.value
+                              .split(',')
+                              .map((part) => part.trim())
+                              .filter((part) => part !== ''),
                           }
                         : x,
                     ),
                   })
                 }
-                className={cx(SELECT_CLS, '!h-control !w-[110px] shrink-0')}
-                title="每次请求带 reasoning_effort（OpenAI 兼容与 Responses）；端点不认这个参数时会在报错里给出提示。Anthropic 的对应物是 thinking 预算，用该提供商的额外请求体设置"
-                aria-label={`模型 ${m.id || '（未命名）'} 的推理强度`}
-              >
-                <option value="unset">强度：不设</option>
-                <option value="low">强度：低</option>
-                <option value="medium">强度：中</option>
-                <option value="high">强度：高</option>
-                <option value="max">强度：最高</option>
-              </select>
+                placeholder="强度档位，逗号分隔"
+                className="!w-[150px] shrink-0"
+                title="这个模型认哪些推理强度（例如 low, medium, high 或 max）；每个运行时在输入区挑一个。端点不认这个参数时会在报错里给出提示"
+                aria-label={`模型 ${m.id || '（未命名）'} 的推理强度档位`}
+              />
               <select
                 value={m.capabilities.vision === null || m.capabilities.vision === undefined ? 'unset' : m.capabilities.vision ? 'true' : 'false'}
                 onChange={(e) =>
@@ -543,7 +541,7 @@ function ProviderEditor({ draft, isNew, onSave, onCancel }: EditorProps) {
                     label: null,
                     context_window: null,
                     max_output: null,
-                    reasoning_effort: null,
+                    reasoning_efforts: [],
                     capabilities: { tool_calling: true },
                   },
                 ],

@@ -29,8 +29,9 @@ export type ScratchPanelProps = {
   sourceSessionId: string | null
   /** 工作区根：时间线里工具行的路径相对化用。 */
   workspaceRoot: string | null
-  /** 这次运行用哪个模型：跟随主输入区选定的那个（面板里不放第二个选择器）。null = 还没选。 */
+  /** 这次运行用哪个模型与哪档强度：跟随主输入区（面板里不放第二个选择器）。 */
   model: string | null
+  effort: string | null
 }
 
 /** 拆掉临时会话：先让活动运行停下来，再删（会话有活动 run 时服务端会拒绝销毁）。 */
@@ -48,7 +49,7 @@ async function destroyScratch(sessionId: string, runId: string | null): Promise<
   await deleteSession(sessionId).catch(() => {})
 }
 
-export function ScratchPanel({ sourceSessionId, workspaceRoot, model }: ScratchPanelProps) {
+export function ScratchPanel({ sourceSessionId, workspaceRoot, model, effort }: ScratchPanelProps) {
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [copied, setCopied] = useState(0)
   const [history, setHistory] = useState<TimelineItem[] | null>(null)
@@ -108,8 +109,8 @@ export function ScratchPanel({ sourceSessionId, workspaceRoot, model }: ScratchP
     const text = draft.trim()
     if (text === '' || sessionId === null || model === null) return
     setDraft('')
-    void live.send(text, false, model, 'main')
-  }, [draft, live, model, sessionId])
+    void live.send(text, false, model, 'main', effort)
+  }, [draft, effort, live, model, sessionId])
 
   const busy = live.phase === 'starting' || live.phase === 'running' || live.phase === 'settling'
   const shown = mergeItems(history ?? [], live.items)

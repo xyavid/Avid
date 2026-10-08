@@ -14,7 +14,11 @@ describe('模型选择（阶段 54：由用户自己选，没有「跟随设置�
   afterEach(cleanup)
 
   const byok: ModelCandidate[] = [
-    { ref: 'command/deepseek/deepseek-v4.1-flash', label: 'command · deepseek-v4.1-flash' },
+    {
+      ref: 'command/deepseek/deepseek-v4.1-flash',
+      label: 'command · deepseek-v4.1-flash',
+      reasoning_efforts: ['low', 'medium', 'high', 'max'],
+    },
     { ref: 'stub/stub-chat', label: '本地假端点 · stub-chat' },
   ]
   const base = { model: null, candidates: byok, onChange: () => {} }
@@ -63,6 +67,40 @@ describe('模型选择（阶段 54：由用户自己选，没有「跟随设置�
     render(<ModelButton {...base} model="ghost/removed" />)
 
     expect(screen.getByRole('button', { name: /模型/ }).textContent).toContain('ghost/removed')
+  })
+
+  it('推理强度：档位来自所选模型的声明列表，选项是「不设 + 那几档」', () => {
+    const onChangeEffort = vi.fn()
+    render(
+      <ModelButton
+        {...base}
+        model="command/deepseek/deepseek-v4.1-flash"
+        effort="high"
+        onChangeEffort={onChangeEffort}
+      />,
+    )
+
+    // 胶囊把当前档位带出来（几档不占位就不显示）
+    expect(screen.getByRole('button', { name: /模型/ }).textContent).toContain('· high')
+
+    fireEvent.click(screen.getByRole('button', { name: /模型/ }))
+    const dialog = screen.getByRole('dialog', { name: '模型' })
+    expect(dialog.textContent).toContain('推理强度')
+    for (const level of ['不设', 'low', 'medium', 'high', 'max']) {
+      expect(dialog.textContent).toContain(level)
+    }
+
+    fireEvent.click(screen.getByText('max'))
+    expect(onChangeEffort).toHaveBeenCalledWith('max')
+    expect(screen.queryByRole('dialog', { name: '模型' })).toBeNull()
+  })
+
+  it('没声明档位的模型：不出现强度那一段（这个模型不提这件事）', () => {
+    render(<ModelButton {...base} model="stub/stub-chat" onChangeEffort={vi.fn()} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /模型/ }))
+
+    expect(screen.getByRole('dialog', { name: '模型' }).textContent).not.toContain('推理强度')
   })
 
   it('没有 BYOK 候选时不列任何预置模型，给出去设置里添加的指引', () => {

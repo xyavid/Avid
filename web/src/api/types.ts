@@ -63,6 +63,8 @@ export interface WorkspaceSummary {
 export interface ModelCandidate {
   ref: string
   label: string
+  /** 该模型声明的推理强度档位：输入区的强度选择器按它列选项。 */
+  reasoning_efforts?: string[]
 }
 
 export interface Capabilities {
@@ -281,20 +283,6 @@ export interface BranchList {
   branches: Branch[]
 }
 
-export interface StartRunInput {
-  prompt: string
-  auto_approve?: boolean
-  /** 这次运行接在哪条链尾上；缺省 = main。 */
-  branch?: string
-  /**
-   * 完全访问的**显式授权凭据**（阶段 51 起是唯一开关，没有 permission 模式字段）。
-   *
-   * `true` = 跳过毁灭级确认、关沙箱、不滤环境变量；缺省/`false` = 默认形态
-   * （只有毁灭级命令问一次）。服务端 `extra="forbid"`：旧字段随载荷带上会被
-   * 422 拒收，界面也没有第二个开关可填。
-   */
-  full_access_ack?: boolean
-}
 
 /**
  * BYOK 模型配置（阶段 34；GET/PUT/POST test/DELETE `/api/settings/byok`）。
@@ -315,9 +303,7 @@ export interface CapabilityFlags {
   reasoning?: boolean | null
 }
 
-/** 推理强度：low/medium/high 是 OpenAI 那套；`max` 是给自认"拉满"的端点用的。
- *  Anthropic 的对应物是 thinking 预算（token 数），走该提供商的 extra_body。 */
-export type ReasoningEffort = 'low' | 'medium' | 'high' | 'max'
+
 
 /** Provider 下的一个具体模型：id + 可选展示名 / 窗口 / 输出上限 / 推理强度 / 能力声明。 */
 export interface ModelEntry {
@@ -325,8 +311,8 @@ export interface ModelEntry {
   label?: string | null
   context_window?: number | null
   max_output?: number | null
-  /** 每次请求带的 reasoning_effort；null = 不带（由提供方自己决定）。 */
-  reasoning_effort?: ReasoningEffort | null
+  /** 这个模型认哪些推理强度档位（运行时从列表里挑一个）；空 = 不提这件事。 */
+  reasoning_efforts?: string[]
   capabilities: CapabilityFlags
 }
 

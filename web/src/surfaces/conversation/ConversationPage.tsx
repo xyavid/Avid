@@ -35,7 +35,7 @@ import { Composer } from '../../components/chat/Composer'
 import { Timeline } from '../../components/chat/Timeline'
 import type { TimelineItem } from '../../state/timeline'
 import { itemsFromEntries, mergeItems, subagentRuns, timelineSignature } from '../../state/timeline'
-import { useRunModel } from '../../state/runModel'
+import { useRunChoice } from '../../state/runModel'
 import { useRunStream } from '../../state/useRunStream'
 import { useDock } from '../../state/dock'
 import { Dock } from '../../components/dock/Dock'
@@ -99,9 +99,9 @@ export function ConversationPage() {
   // 完全访问开关：默认 false（normal 形态）。开启即这次运行跳过毁灭级确认、关沙箱，
   // 随 StartRunInput 的 full_access_ack 提交；粘住直到用户改回来。
   const [full, setFull] = useState(false)
-  // 本次运行用的模型：由用户在输入区自己选（阶段 54 起没有「跟随设置」这一档），
-  // 选过就记住；候选来自「设置 → 模型」。candidates 落地前先不动记忆。
-  const [runModel, chooseRunModel] = useRunModel(meta?.capabilities.models ?? [])
+  // 本次运行用的模型与推理强度：都由用户在输入区自己选（阶段 54/55 起没有「跟随设置」这一档），
+  // 选过就记住；候选与档位来自「设置 → 模型」。candidates 落地前先不动记忆。
+  const run = useRunChoice(meta?.capabilities.models ?? [])
   // 工作区候选与「新会话将使用的工作区」选择；新增走宿主机 picker（不可用时手动路径）。
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[] | null>(null)
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null)
@@ -507,7 +507,8 @@ export function ConversationPage() {
             subagentRuns={subagents}
             live={liveHere}
             sourceSessionId={selectedId}
-            model={runModel}
+            model={run.model}
+            effort={run.effort}
           />
         ) : undefined
       }
@@ -594,11 +595,13 @@ export function ConversationPage() {
             onToggleFull={setFull}
             disabled={!selectedId}
             busy={liveHere}
-            model={runModel}
-            onChangeModel={chooseRunModel}
+            model={run.model}
+            onChangeModel={run.chooseModel}
+            effort={run.effort}
+            onChangeEffort={run.chooseEffort}
             byokModels={meta?.capabilities.models ?? []}
             usage={shownUsage}
-            onSend={(text) => void live.send(text, full, runModel, branch)}
+            onSend={(text) => void live.send(text, full, run.model, branch, run.effort)}
             onStop={() => void live.stop()}
           />
         </div>
