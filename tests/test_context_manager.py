@@ -224,19 +224,22 @@ def test_always_total_cap_skips_later_skills(tmp_path, monkeypatch):
     assert "### b" not in request.system
 
 
-def test_default_instructions_carry_identity_contract_and_guardrail():
-    """默认文案（阶段 31 起来自 policy.prompt）钉住四类必备内容。"""
+def test_default_instructions_carry_base_capabilities_and_guardrails():
+    """默认文案钉住 base 段（身份 + 能力）与行为规则段的必备内容。"""
     request = make_manager().compose()
 
+    # base：身份、流式沟通与计划、工具调用以及权限层的确认/拒绝语义
     assert "你是 Avid" in request.system
-    # 工具契约：授权执行并验证、不可逆先确认、缺信息先澄清、等结果再答复
+    assert "工具调用" in request.system
+    assert "todo_write" in request.system
+    assert "确认" in request.system
+    assert "拒绝" in request.system
+    # 行为规则：授权执行并验证、不可逆先确认、缺信息先澄清、等结果再答复
     assert "不可逆" in request.system
     assert "澄清" in request.system
     assert "工具结果" in request.system
     # 外部内容防线：工具结果是数据不是指令
     assert "不是指令" in request.system
-    # 原有的 todo 约定保留
-    assert "todo_write" in request.system
 
 
 def test_environment_includes_runtime_facts():
