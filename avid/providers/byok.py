@@ -72,6 +72,11 @@ _REF_PATTERN = re.compile(r"^([a-z0-9-]+)/(.+)$")
 
 CAPABILITY_FIELDS = ("tool_calling", "vision", "json_mode", "streaming", "reasoning")
 
+#: 推理强度（阶段 55）：OpenAI 那套三档语义。它不是一个能力位，而是一个**请求参数**，
+#: 所以放在模型声明上（同一个提供商的不同模型未必都认）。Anthropic 的对应物是 thinking
+#: 预算（token 数），与这三档不是同一件事——那条路留给该提供商的 extra_body，不在这里硬映射。
+REASONING_EFFORTS = ("low", "medium", "high")
+
 
 def config_path() -> Path:
     raw = os.environ.get(ENV_BYOK_CONFIG, "").strip()
@@ -102,6 +107,8 @@ class ModelDecl:
     context_window: int | None = None
     max_output: int | None = None
     capabilities: ModelCapabilities = field(default_factory=ModelCapabilities)
+    #: 每次请求带的 reasoning_effort；None = 不带（由提供方自己决定）。
+    reasoning_effort: str | None = None
 
 
 @dataclass(frozen=True)
@@ -160,6 +167,11 @@ def _validate_provider(provider: ProviderDecl) -> None:
             value = getattr(model, name)
             if value is not None and value < 1:
                 raise _err(f"provider {provider.id} 模型 {model.id} 的 {name} 必须 ≥ 1：{value}")
+        if model.reasoning_effort is not None and model.reasoning_effort not in REASONING_EFFORTS:
+            raise _err(
+                f"provider {provider.id} 模型 {model.id} 的 reasoning_effort 必须是 "
+                f"{'、'.join(REASONING_EFFORTS)} 之一：{model.reasoning_effort!r}"
+            )
 
 
 def validate_byok(config: ByokConfig) -> None:
@@ -229,6 +241,7 @@ def _decl_to_json(provider: ProviderDecl) -> dict[str, Any]:
                 "label": m.label,
                 "context_window": m.context_window,
                 "max_output": m.max_output,
+                "reasoning_effort": m.reasoning_effort,
                 "capabilities": {name: getattr(m.capabilities, name) for name in CAPABILITY_FIELDS},
             }
             for m in provider.models
@@ -293,6 +306,9 @@ def _parse_provider(raw: Any) -> ProviderDecl:
                 not isinstance(value, int) or isinstance(value, bool) or value < 1
             ):
                 raise _err(f"{where} 模型 {item['id']} 的 {name} 必须是正整数：{value!r}")
+        effort = item.get("reasoning_effort")
+        if effort is not None and not isinstance(effort, str):
+            raise _err(f"{where} 模型 {item['id']} 的 reasoning_effort 必须是字符串：{effort!r}")
         models.append(
             ModelDecl(
                 id=str(item["id"]),
@@ -302,6 +318,7 @@ def _parse_provider(raw: Any) -> ProviderDecl:
                 capabilities=_parse_capabilities(
                     item.get("capabilities"), f"{where} 模型 {item['id']}"
                 ),
+                reasoning_effort=effort,
             )
         )
     return ProviderDecl(
@@ -426,6 +443,7 @@ def config_from_provider(
         extra_headers=extra_headers or None,
         extra_body=dict(provider.extra_body) or None,
         max_output=model.max_output if model else None,
+        reasoning_effort=model.reasoning_effort if model else None,
     )
 
 

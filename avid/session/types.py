@@ -18,6 +18,10 @@ EntryType = str
 MESSAGE_ENTRY: EntryType = "message"
 # Kernel-injected notice (todo reminder / stop nudge): shown to the model, but not conversation.
 NOTICE_ENTRY: EntryType = "notice"
+# 运行失败的记账（阶段 55）：写给**人**看的一行，不是对话、也不进模型上下文——
+# 下一次运行不该看见上一次是怎么挂的（那只会污染它的判断）。投影按 _TRANSCRIPT_TYPES
+# 白名单取条目，所以这种条目天然被挡在模型之外。
+ERROR_ENTRY: EntryType = "error"
 
 Order = Literal["asc", "desc"]
 BranchOrder = Literal["newestFirst", "oldestFirst"]

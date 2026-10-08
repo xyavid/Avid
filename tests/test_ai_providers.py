@@ -400,6 +400,55 @@ def _responses_message(text="hi", tool_calls=()):
     return message
 
 
+def test_reasoning_effort_rides_each_protocol_in_its_own_shape():
+    """推理强度（阶段 55）：OpenAI 兼容是顶层字段，Responses 收在 reasoning 对象里；
+    Anthropic 不映射（它的对应物是 thinking 预算，要开就在 extra_body 里写）。"""
+    from avid.providers import openai_compat
+
+    config = Config(
+        api_key="k",
+        base_url="https://api.test/v1",
+        model="m",
+        provider="openai",
+        reasoning_effort="medium",
+    )
+    body = openai_compat.build_request(config, [{"role": "user", "content": "嗨"}], system="系统")
+    assert body["reasoning_effort"] == "medium"
+
+    responses_body = responses.build_request(
+        Config(
+            api_key="k",
+            base_url="https://api.test/v1",
+            model="m",
+            provider="responses",
+            reasoning_effort="low",
+        ),
+        [{"role": "user", "content": "嗨"}],
+        system="系统",
+    )
+    assert responses_body["reasoning"] == {"effort": "low"}
+
+    # 不带时字段不出现（None = 由提供方自己决定，不是"发个空值"）
+    plain = openai_compat.build_request(
+        Config(api_key="k", base_url="https://api.test/v1", model="m"),
+        [{"role": "user", "content": "嗨"}],
+    )
+    assert "reasoning_effort" not in plain
+
+    anthropic_body = anthropic.build_request(
+        Config(
+            api_key="k",
+            base_url="https://api.test",
+            model="m",
+            provider="anthropic",
+            reasoning_effort="high",
+        ),
+        [{"role": "user", "content": "嗨"}],
+        system="系统",
+    )
+    assert "reasoning_effort" not in anthropic_body and "thinking" not in anthropic_body
+
+
 def test_responses_request_translates_messages_and_tools():
     request = responses.build_request(
         RESPONSES_CONFIG,

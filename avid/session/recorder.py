@@ -6,7 +6,7 @@ import logging
 from typing import Any
 
 from .session import SessionBranch, StorageBackedSession
-from .types import MESSAGE_ENTRY, NOTICE_ENTRY
+from .types import MESSAGE_ENTRY, EntryType
 from .values import DEFAULT_BRANCH, branch_compaction, branch_usage
 
 logger = logging.getLogger("avid.session.recorder")
@@ -33,12 +33,15 @@ class SessionRecorder:
             )
         return self._branch
 
-    def on_message(self, message: dict[str, Any], *, notice: bool = False) -> str:
-        """Same signature as the notification callback, so it can be passed in directly; returns the new entry id."""
+    def on_message(
+        self, message: dict[str, Any], *, entry_type: EntryType = MESSAGE_ENTRY
+    ) -> str:
+        """Same signature as the notification callback, so it can be passed in directly; returns the new entry id.
+
+        `entry_type` 决定这条消息怎么被读到（消息 / 提醒 / 失败记账），见 types.py 的三个常量。
+        """
         branch = self.ensure_branch()
-        entry_id = branch.append_message(
-            message, entry_type=NOTICE_ENTRY if notice else MESSAGE_ENTRY
-        )
+        entry_id = branch.append_message(message, entry_type=entry_type)
         self.entry_ids.append(entry_id)
         logger.debug("会话落库 %s：%s", entry_id, message.get("role"))
         return entry_id

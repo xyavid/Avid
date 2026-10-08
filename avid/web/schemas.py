@@ -159,7 +159,7 @@ class CapabilityFlags(BaseModel):
 
 
 class ByokModel(BaseModel):
-    """一个具体模型：id + 可选展示名 / 窗口 / 输出上限 / 能力声明（读写同形）。"""
+    """一个具体模型：id + 可选展示名 / 窗口 / 输出上限 / 推理强度 / 能力声明（读写同形）。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -167,6 +167,8 @@ class ByokModel(BaseModel):
     label: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
     context_window: int | None = Field(default=None, ge=1)
     max_output: int | None = Field(default=None, ge=1)
+    # 每次请求带的 reasoning_effort（阶段 55）；None = 不带。取值由 byok.REASONING_EFFORTS 收口。
+    reasoning_effort: str | None = Field(default=None, max_length=16)
     capabilities: CapabilityFlags = Field(default_factory=CapabilityFlags)
 
 

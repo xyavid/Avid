@@ -54,6 +54,7 @@ from ..session import (
     messages_for_branch,
     session_scratch,
 )
+from ..session.types import ERROR_ENTRY, MESSAGE_ENTRY, NOTICE_ENTRY
 from .approvals import APPROVAL_TIMEOUT_SECONDS, ApprovalTable
 from .errors import (
     RunBusy,
@@ -925,7 +926,9 @@ class RunRegistry:
             # Identify before persisting: injected nudges are stored as notices so the UI does
             # not render them as words the user spoke, since their text comes from a hook.
             label = record.injected.pop(id(message), None)
-            entry_id = recorder.on_message(message, notice=label is not None)
+            entry_id = recorder.on_message(
+                message, entry_type=NOTICE_ENTRY if label is not None else MESSAGE_ENTRY
+            )
             if label == "nudge":
                 type = STOP_NUDGE
             else:
@@ -1036,8 +1039,28 @@ class RunRegistry:
             logger.info("回收 %d 条已结束的运行记录", len(victims))
 
     def _fail(self, record: RunRecord, code: str, message: str) -> None:
+        """失败也要留痕：往会话里记一条 error 条目（阶段 55）。
+
+        为什么必须落盘：运行失败是这个运行唯一的产出，不写下来，界面刷新之后只剩「用户那句话
+        + 什么都没发生」——「run 突然停了」的观感就是从这儿来的。它不进模型上下文（见 ERROR_ENTRY），
+        只给人看；entry_id 随 run_failed 出去，前端据此把这条记账与随后重读会话的结果对齐。
+        """
         record.error = {"code": code, "message": message}
-        self._finish(record, RUN_FAILED, code=code, message=message)
+        # 展示文本由内核拼一次：落盘的条目与实时事件用同一句，前端不必自己补前缀
+        text = f"运行失败：{message}"
+        entry_id = self._record_failure(record, text)
+        self._finish(record, RUN_FAILED, code=code, message=message, text=text, entry_id=entry_id)
+
+    def _record_failure(self, record: RunRecord, text: str) -> str | None:
+        """Append the failure notice to the session; None when the run never owned a recorder."""
+        recorder = record.recorder
+        if recorder is None:  # pragma: no cover - a failure before assembly has no session yet
+            return None
+        try:
+            return recorder.on_message({"role": "assistant", "content": text}, entry_type=ERROR_ENTRY)
+        except SessionError:  # 记账失败不能盖掉真正的失败原因
+            logger.warning("运行 %s 的失败没能写进会话", record.run_id, exc_info=True)
+            return None
 
     # ---- Session lookup ----
 

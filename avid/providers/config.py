@@ -82,6 +82,8 @@ class Config:
     extra_headers: dict[str, str] | None = None
     extra_body: dict[str, Any] | None = None
     max_output: int | None = None
+    # 推理强度（BYOK 的模型声明）：随每次请求发出去；None = 不带。
+    reasoning_effort: str | None = None
 
     @property
     def resolved_provider(self) -> str:

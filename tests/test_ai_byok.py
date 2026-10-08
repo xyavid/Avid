@@ -34,6 +34,7 @@ from avid.providers.byok import (
     save_byok,
     secrets_path,
     set_secret,
+    validate_byok,
 )
 from avid.providers.config import ConfigError
 
@@ -333,6 +334,56 @@ def test_static_headers_and_extra_fields_flow_into_config(byok_env):
     assert config.extra_body == {"provider": {"order": ["b1"]}}
     assert config.max_output == 1024
     assert config.context_window is None  # 未声明窗口 → 交给运行期的内置表兜底
+
+
+def test_reasoning_effort_flows_from_the_model_decl_into_config(byok_env):
+    """推理强度是模型声明上的请求参数（阶段 55）：解析进 Config，随每次请求发出去。"""
+    provider = ProviderDecl(
+        id="gw",
+        label="网关",
+        protocol="openai-compatible",
+        base_url="https://gw.example/v1",
+        models=(
+            ModelDecl(id="deep", reasoning_effort="high"),
+            ModelDecl(id="quick"),
+        ),
+    )
+    save_byok(ByokConfig(providers={"gw": provider}, bindings={"chat": "gw/deep"}))
+
+    assert resolve_chat().reasoning_effort == "high"
+    assert resolve_chat("gw/quick").reasoning_effort is None
+
+
+def test_reasoning_effort_rejects_an_unknown_level(byok_env):
+    provider = ProviderDecl(
+        id="gw",
+        label="网关",
+        protocol="openai-compatible",
+        base_url="https://gw.example/v1",
+        models=(ModelDecl(id="m1", reasoning_effort="turbo"),),
+    )
+
+    with pytest.raises(ConfigError, match="reasoning_effort"):
+        validate_byok(ByokConfig(providers={"gw": provider}, bindings={"chat": "gw/m1"}))
+
+
+def test_reasoning_effort_survives_a_save_and_load_round_trip(byok_env):
+    provider = ProviderDecl(
+        id="gw",
+        label="网关",
+        protocol="openai-compatible",
+        base_url="https://gw.example/v1",
+        models=(ModelDecl(id="m1", reasoning_effort="low", capabilities=ModelCapabilities(vision=True)),),
+    )
+
+    save_byok(ByokConfig(providers={"gw": provider}, bindings={"chat": "gw/m1"}))
+    loaded = load_byok()
+
+    assert loaded is not None
+    model = loaded.providers["gw"].model("m1")
+    assert model is not None
+    assert model.reasoning_effort == "low"
+    assert model.capabilities.vision is True
 
 
 def test_tool_calling_guard_applies_to_override_too(byok_env):

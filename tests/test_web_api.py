@@ -24,6 +24,7 @@ from support import (
 from avid.agent.events import ASSISTANT_MESSAGE, EVENT_TYPES, TOOL_RESULT_MESSAGE, USER_MESSAGE
 from avid.services import API_VERSION, FEATURES, Services
 from avid.session import SessionRecorder
+from avid.session.types import NOTICE_ENTRY
 from avid.web import create_app
 from avid.web.schemas import classify_tool_status
 
@@ -598,7 +599,9 @@ def test_injected_reminder_keeps_its_notice_type_on_the_wire(bundle):
         recorder = SessionRecorder(session)
         recorder.ensure_branch()
         recorder.on_message({"role": "user", "content": "问题"})
-        recorder.on_message({"role": "user", "content": "还有一步"}, notice=True)
+        recorder.on_message(
+            {"role": "user", "content": "还有一步"}, entry_type=NOTICE_ENTRY
+        )
     finally:
         session.close()
 
@@ -671,6 +674,51 @@ def test_entries_pagination_walks_the_chain(bundle):
     assert [item["seq"] for item in ascending["entries"]] == sorted(
         item["seq"] for item in ascending["entries"]
     )
+
+
+def test_a_failed_run_leaves_a_durable_error_entry(bundle):
+    """运行失败要落一条 error 条目（阶段 55）：刷新之后还看得见「为什么停了」。
+
+    它不进模型上下文（投影只取 message/notice），也不当作中断提示（有原因的记录在，
+    那句含糊的「上次运行在此中断」就不必要了）。
+    """
+    from avid.providers.protocol import LLMError
+
+    def failing(config, messages, **kwargs):
+        raise LLMError("请求 https://api.example/v1/chat/completions 失败：The read operation timed out")
+
+    client, _ = bundle(failing)
+    session_id = create_session(client).json()["id"]
+    started = client.post(
+        f"/api/sessions/{session_id}/runs", json={"prompt": "跑一下", "auto_approve": True}
+    )
+    assert started.status_code == 201, started.text
+    run_id = started.json()["run_id"]
+    assert wait_for(
+        lambda: client.get(f"/api/runs/{run_id}").json()["status"]
+        in ("finished", "failed", "cancelled")
+    )
+
+    run = client.get(f"/api/runs/{run_id}").json()
+    assert run["status"] == "failed"
+    assert run["error"]["code"] == "llm_error"
+    assert "timed out" in run["error"]["message"]
+
+    entries = client.get(f"/api/sessions/{session_id}/entries?order=asc").json()["entries"]
+    assert [entry["type"] for entry in entries] == ["message", "error"]
+    assert entries[-1]["message"]["content"].startswith("运行失败：")
+
+    # 落盘的记账替代了那句含糊的中断提示
+    assert client.get(f"/api/sessions/{session_id}").json()["truncated_tail"] is False
+
+    # 事件的载荷带上 entry_id：前端据此把实时那条与随后重读会话的结果对齐
+    body = client.get(f"/api/runs/{run_id}/events").text
+    finished = [
+        json.loads(line[len("data: ") :])
+        for line in body.splitlines()
+        if line.startswith("data: ") and '"run_failed"' in line
+    ]
+    assert finished and finished[0]["data"]["entry_id"] == entries[-1]["entry_id"]
 
 
 def test_truncated_tail_covers_a_run_that_left_nothing(bundle):

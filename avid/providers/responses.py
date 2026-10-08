@@ -112,6 +112,9 @@ def build_request(
     flattened = _tool_schemas(tools)
     if flattened:
         request["tools"] = flattened
+    # 推理强度：Responses API 把它收在 reasoning 对象里（同一个三档语义）
+    if config.reasoning_effort:
+        request["reasoning"] = {"effort": config.reasoning_effort}
     # BYOK passthrough merges last: an explicit override is deliberate.
     if config.extra_body:
         request.update(config.extra_body)
