@@ -70,7 +70,7 @@ afterEach(() => {
 
 describe('临时对话面板', () => {
   it('挂上就建临时会话：拷来的上下文画出来；三条事实只在 title 里，不占版面', async () => {
-    render(<ScratchPanel sourceSessionId="s-main" workspaceRoot="/w" />)
+    render(<ScratchPanel sourceSessionId="s-main" workspaceRoot="/w" model="stub/a" />)
 
     await waitFor(() => expect(createScratchSession).toHaveBeenCalledWith('s-main'))
     expect(await screen.findByText('主线的问题')).toBeTruthy()
@@ -85,7 +85,7 @@ describe('临时对话面板', () => {
   })
 
   it('在里面正常对话：Enter 发一句话，运行落在同一个会话上', async () => {
-    render(<ScratchPanel sourceSessionId="s-main" workspaceRoot="/w" />)
+    render(<ScratchPanel sourceSessionId="s-main" workspaceRoot="/w" model="stub/a" />)
     const box = await screen.findByLabelText('临时对话输入')
 
     fireEvent.change(box, { target: { value: '这里问一句' } })
@@ -102,7 +102,7 @@ describe('临时对话面板', () => {
   })
 
   it('卸下就拆：会话被删掉（不是藏起来）', async () => {
-    const { unmount } = render(<ScratchPanel sourceSessionId="s-main" workspaceRoot="/w" />)
+    const { unmount } = render(<ScratchPanel sourceSessionId="s-main" workspaceRoot="/w" model="stub/a" />)
     await screen.findByText('主线的问题')
 
     unmount()
@@ -113,7 +113,7 @@ describe('临时对话面板', () => {
   it('建会话失败：把服务端的话原样说出来，输入框不再可用', async () => {
     createScratchSession.mockRejectedValue(new FakeApiError('没有这个会话：s-main'))
 
-    render(<ScratchPanel sourceSessionId="s-main" workspaceRoot="/w" />)
+    render(<ScratchPanel sourceSessionId="s-main" workspaceRoot="/w" model="stub/a" />)
 
     expect(await screen.findByText('没有这个会话：s-main')).toBeTruthy()
     expect(screen.getByLabelText('临时对话输入').hasAttribute('disabled')).toBe(true)

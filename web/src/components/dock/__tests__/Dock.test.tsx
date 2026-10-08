@@ -44,6 +44,7 @@ function renderDock(
       subagentRuns={runs}
       live={live}
       sourceSessionId={null}
+      model={null}
     />,
   )
 }
@@ -190,6 +191,7 @@ describe('右侧 dock（阶段 48；阶段 53 起只留三个面板）', () => {
         subagentRuns={[]}
         live={false}
         sourceSessionId={null}
+        model={null}
       />,
     )
     fireEvent.keyDown(window, { key: 'Escape' })

@@ -6,13 +6,16 @@ import { Composer } from '../Composer'
 
 afterEach(cleanup)
 
-function renderComposer(overrides?: { busy?: boolean; disabled?: boolean }) {
+function renderComposer(overrides?: { busy?: boolean; disabled?: boolean; model?: string | null }) {
   const onSend = vi.fn()
   const onStop = vi.fn()
   const view = render(
     <Composer
       full={false}
       onToggleFull={() => {}}
+      // 阶段 54 起模型是必选：默认给一个，专测"没选"的那条用例自己覆盖成 null
+      model="stub/a"
+      onChangeModel={() => {}}
       onSend={onSend}
       onStop={onStop}
       {...overrides}
@@ -44,6 +47,16 @@ describe('Composer（多行输入与发送/停止）', () => {
     fireEvent.click(send())
     expect(onSend).toHaveBeenCalledWith('跑一下')
     expect(input().value).toBe('')
+  })
+
+  it('没选模型不发车：发送钮保持禁用（不由服务端替用户决定用哪个模型）', () => {
+    renderComposer({ model: null })
+
+    fireEvent.change(input(), { target: { value: '跑一下' } })
+
+    expect((screen.getByRole('button', { name: '发送' }) as HTMLButtonElement).disabled).toBe(true)
+    // 胶囊此时是"选择模型"，并把原因写在可访问名里（不靠说明句）
+    expect(screen.getByRole('button', { name: /模型/ }).textContent).toContain('选择模型')
   })
 
   it('Enter 发送；空文本 Enter 不触发', () => {

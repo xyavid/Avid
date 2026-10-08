@@ -184,8 +184,8 @@ export function ModelSection() {
       {settings !== null && providers.length === 0 && (
         <div className="mt-a8 rounded-md border-hairline border-hair bg-card p-a12">
           <p className="font-ui text-hint leading-[1.6] text-ink-muted">
-            还没有模型配置：点「新增提供商」填入接口地址与密钥，然后在下方把 chat 槽位
-            绑定到一个模型。没有绑定时，发送消息会报「还没有模型配置」。
+            还没有模型配置：点「新增提供商」填入接口地址与密钥，模型就会出现在输入区的
+            模型选择里（实际用哪个由你在那里选）。下方那个默认模型供命令行与兜底使用。
           </p>
         </div>
       )}
@@ -285,14 +285,18 @@ export function ModelSection() {
         </button>
       )}
 
-      {/* chat 绑定 + 保存 / 重置 */}
-      <Field label="chat 槽位（主对话模型）" hint="必须绑定，未绑定时无法运行">
+      {/* chat 绑定 + 保存 / 重置。阶段 54 起界面里每一个运行都显式带模型（用户在输入区选），
+          所以这里的绑定是**兜底**：命令行、以及没有显式模型的调用才用它。 */}
+      <Field
+        label="默认模型（界面没选时兜底）"
+        hint="命令行与没有显式模型的调用用它；界面里每个运行都会带上用户选的那个模型"
+      >
         <select
           value={chatBinding}
           onChange={(e) => setChatBinding(e.target.value)}
           className={SELECT_CLS}
         >
-          <option value="">未绑定（发送消息会报配置错误）</option>
+          <option value="">未绑定（界面里仍可用——前提是先在输入区选模型）</option>
           {bindingOptions.map((o) => (
             <option key={o.ref} value={o.ref}>
               {o.label}

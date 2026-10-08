@@ -49,6 +49,8 @@ export type DockProps = {
   live: boolean
   /** 临时对话的上下文来源：当前选中的主会话。null = 还没有选中会话。 */
   sourceSessionId: string | null
+  /** 这次运行用哪个模型（临时对话面板跟随主输入区的选择）。 */
+  model: string | null
 }
 
 export function Dock({
@@ -62,6 +64,7 @@ export function Dock({
   subagentRuns,
   live,
   sourceSessionId,
+  model,
 }: DockProps) {
   // 面板区自己滚（列只负责裁切），滚动条仍走「滚动时现形」那套。
   const scrollRef = useAutoHideScroll<HTMLDivElement>()
@@ -133,7 +136,7 @@ export function Dock({
           <SubagentPanel runs={subagentRuns} live={live} workspaceRoot={workspaceRoot} />
         )}
         {active === 'scratch' && (
-          <ScratchPanel sourceSessionId={sourceSessionId} workspaceRoot={workspaceRoot} />
+          <ScratchPanel sourceSessionId={sourceSessionId} workspaceRoot={workspaceRoot} model={model} />
         )}
         {active === 'terminal' && (
           <div className="h-full p-a12">

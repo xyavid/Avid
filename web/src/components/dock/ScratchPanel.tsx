@@ -29,6 +29,8 @@ export type ScratchPanelProps = {
   sourceSessionId: string | null
   /** 工作区根：时间线里工具行的路径相对化用。 */
   workspaceRoot: string | null
+  /** 这次运行用哪个模型：跟随主输入区选定的那个（面板里不放第二个选择器）。null = 还没选。 */
+  model: string | null
 }
 
 /** 拆掉临时会话：先让活动运行停下来，再删（会话有活动 run 时服务端会拒绝销毁）。 */
@@ -46,7 +48,7 @@ async function destroyScratch(sessionId: string, runId: string | null): Promise<
   await deleteSession(sessionId).catch(() => {})
 }
 
-export function ScratchPanel({ sourceSessionId, workspaceRoot }: ScratchPanelProps) {
+export function ScratchPanel({ sourceSessionId, workspaceRoot, model }: ScratchPanelProps) {
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [copied, setCopied] = useState(0)
   const [history, setHistory] = useState<TimelineItem[] | null>(null)
@@ -104,10 +106,10 @@ export function ScratchPanel({ sourceSessionId, workspaceRoot }: ScratchPanelPro
 
   const send = useCallback(() => {
     const text = draft.trim()
-    if (text === '' || sessionId === null) return
+    if (text === '' || sessionId === null || model === null) return
     setDraft('')
-    void live.send(text, false, null, 'main')
-  }, [draft, live, sessionId])
+    void live.send(text, false, model, 'main')
+  }, [draft, live, model, sessionId])
 
   const busy = live.phase === 'starting' || live.phase === 'running' || live.phase === 'settling'
   const shown = mergeItems(history ?? [], live.items)
@@ -184,10 +186,10 @@ export function ScratchPanel({ sourceSessionId, workspaceRoot }: ScratchPanelPro
             <button
               type="button"
               onClick={send}
-              disabled={draft.trim() === '' || sessionId === null}
+              disabled={draft.trim() === '' || sessionId === null || model === null}
               className={cx(
                 'rounded-sm px-a10 py-[3px] font-ui text-caption transition-colors duration-fast ease-out',
-                draft.trim() === '' || sessionId === null
+                draft.trim() === '' || sessionId === null || model === null
                   ? 'bg-overlay-light text-ink-muted'
                   : 'bg-accent text-card hover:bg-accent-hover',
               )}

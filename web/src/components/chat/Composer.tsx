@@ -36,12 +36,10 @@ export type ComposerProps = {
   busy?: boolean
   onSend: (text: string) => void
   onStop: () => void
-  /** 本次运行的模型覆盖；null = 跟随设置。 */
+  /** 本次运行的模型（providerId/modelId）；null = 还没选——那时发不出去，也不替用户猜。 */
   model?: string | null
-  onChangeModel?: (model: string | null) => void
-  /** 设置里解析出来的模型（展示用）。 */
-  effectiveModel?: string | null
-  /** BYOK 候选（providerId/modelId ref）；非空时模型胶囊优先展示。 */
+  onChangeModel?: (model: string) => void
+  /** BYOK 候选（providerId/modelId ref）：模型胶囊的全部选项来自这里。 */
   byokModels?: ModelCandidate[]
   /** 上下文用量快照（运行中吃事件里的每轮读数，收尾后是落盘那份）。 */
   usage?: UsageReport | null
@@ -56,14 +54,14 @@ export function Composer({
   onStop,
   model = null,
   onChangeModel,
-  effectiveModel = null,
   byokModels = [],
   usage = null,
 }: ComposerProps) {
   const [text, setText] = useState('')
   const composingRef = useRef(false)
   const areaRef = useRef<HTMLTextAreaElement>(null)
-  const canSend = !disabled && !busy && text.trim().length > 0
+  // 没选模型就不发车：显式带上模型，不由服务端的 chat 绑定替用户决定
+  const canSend = !disabled && !busy && text.trim().length > 0 && model !== null
 
   const submit = () => {
     if (!canSend) return
@@ -105,12 +103,7 @@ export function Composer({
           <div className="flex items-center gap-a8">
             <PermissionButton full={full} onToggleFull={onToggleFull} />
             {onChangeModel && (
-              <ModelButton
-                model={model}
-                onChange={onChangeModel}
-                effective={effectiveModel}
-                candidates={byokModels}
-              />
+              <ModelButton model={model} onChange={onChangeModel} candidates={byokModels} />
             )}
             <ContextRing usage={usage} />
           </div>
