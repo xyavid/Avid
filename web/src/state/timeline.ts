@@ -60,6 +60,8 @@ export type MessageTs = number | null
 
 export type TimelineItem =
   | { kind: 'user'; entryId: string | null; text: string; ts: MessageTs }
+  /** 运行失败的记账（阶段 55）：内核把它落成 error 条目，人或刷新都看得见，模型看不见。 */
+  | { kind: 'error'; entryId: string | null; text: string }
   | { kind: 'assistant'; entryId: string | null; text: string; streaming: boolean; ts: MessageTs }
   | { kind: 'reasoning'; text: string; startedAt: number; endedAt: number; streaming: boolean }
   | {
@@ -109,7 +111,7 @@ function messageContent(value: unknown): string {
 /** 去重身份：有身份的段落（落库消息、工具调用）在两条路径里指向同一件事。 */
 function identity(item: TimelineItem): string | null {
   if (item.kind === 'tool') return `tool:${item.callId}`
-  if (item.kind === 'user' || item.kind === 'assistant') {
+  if (item.kind === 'user' || item.kind === 'assistant' || item.kind === 'error') {
     return item.entryId === null ? null : `entry:${item.entryId}`
   }
   return null
@@ -133,8 +135,7 @@ export function timelineSignature(items: TimelineItem[]): string {
     if (item.kind === 'tool') {
       const children = item.runs.reduce((n, run) => n + run.items.length, 0)
       chars += item.args.length + (item.result?.length ?? 0) + children * 32
-    }
-    else chars += item.text.length
+    } else chars += item.text.length
   }
   return `${items.length}:${chars}`
 }
@@ -188,6 +189,11 @@ export function itemsFromEntries(entries: Entry[]): TimelineItem[] {
   const items: TimelineItem[] = []
   const byCallId = new Map<string, number>()
   for (const entry of entries) {
+    if (entry.type === 'error') {
+      const text = messageContent((entry.message as MessagePayload | null)?.content)
+      if (text) items.push({ kind: 'error', entryId: entry.entry_id, text })
+      continue
+    }
     if (entry.type !== 'message' || entry.message === null) continue
     const message = entry.message as MessagePayload
     const role = str(message.role)
@@ -331,6 +337,8 @@ export function applyEvent(items: TimelineItem[], event: TimelineEvent): Timelin
     return items
   }
   switch (event.type) {
+    case 'run_failed':
+      return applyRunFailed(items, data)
     case 'user_message':
       return applyUserMessage(items, event, data)
     case 'assistant_message':
@@ -347,6 +355,17 @@ export function applyEvent(items: TimelineItem[], event: TimelineEvent): Timelin
     default:
       return items
   }
+}
+
+/** 运行失败：就地落一段错误段（带 entry_id 时按身份去重，重读会话不会多出一条）。
+ *  它是这次运行唯一的产出，界面必须留得住——「run 突然停了」的观感就是从"什么都没留下"来的。 */
+function applyRunFailed(items: TimelineItem[], data: Record<string, unknown>): TimelineItem[] {
+  // `text` 是内核拼好的展示句（与落盘那条一字不差）；`message` 是原始原因，作为兜底
+  const message = str(data.text) || str(data.message)
+  if (!message) return items
+  const entryId = str(data.entry_id) || null
+  if (entryId !== null && items.some((item) => item.kind === 'error' && item.entryId === entryId)) return items
+  return [...items, { kind: 'error', entryId, text: message }]
 }
 
 function applyUserMessage(items: TimelineItem[], event: TimelineEvent, data: Record<string, unknown>): TimelineItem[] {

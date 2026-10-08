@@ -126,6 +126,43 @@ describe('SettingsModal（设置界面 · BYOK 模型段）', () => {
     await waitFor(() => expect(screen.getByText(/已保存/)).toBeTruthy())
   })
 
+  it('模型的推理强度与图片输入：两个选择都跟着载荷走（阶段 55）', async () => {
+    render(<SettingsModal onClose={() => {}} />)
+    await waitFor(() => expect(getByokSettings).toHaveBeenCalled())
+
+    fireEvent.click(screen.getByRole('button', { name: '新增提供商' }))
+    fireEvent.click(screen.getByRole('button', { name: '添加模型' }))
+    fireEvent.change(screen.getByPlaceholderText('deepseek'), { target: { value: 'gw' } })
+    fireEvent.change(screen.getByPlaceholderText('DeepSeek'), { target: { value: '网关' } })
+    fireEvent.change(screen.getByPlaceholderText('中转站 / 自部署服务的接口地址'), {
+      target: { value: 'https://gw.example/v1' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('输入 API 密钥（可留空）'), { target: { value: 'sk-gw' } })
+    fireEvent.change(screen.getByPlaceholderText('模型 id，例如 deepseek-chat'), {
+      target: { value: 'reasoner' },
+    })
+    fireEvent.change(screen.getByLabelText('模型 reasoner 的推理强度'), { target: { value: 'high' } })
+    fireEvent.change(screen.getByLabelText('模型 reasoner 的图片输入能力'), { target: { value: 'true' } })
+    fireEvent.click(screen.getByRole('button', { name: '完成' }))
+
+    await waitFor(() => expect(screen.getByText('密钥已配置')).toBeTruthy())
+    const binding = screen.getAllByRole('combobox').find(
+      (el) => (el as HTMLSelectElement).value === '',
+    ) as HTMLSelectElement
+    fireEvent.change(binding, { target: { value: 'gw/reasoner' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => expect(saveByokSettings).toHaveBeenCalledOnce())
+    const payload = saveByokSettings.mock.calls[0]![0] as {
+      providers: { models: { id: string; reasoning_effort: string | null; capabilities: { vision: boolean | null } }[] }[]
+    }
+    expect(payload.providers[0]!.models[0]).toMatchObject({
+      id: 'reasoner',
+      reasoning_effort: 'high',
+      capabilities: { vision: true },
+    })
+  })
+
   it('校验：接口地址缺协议时给出可执行的错误，不发起保存', async () => {
     render(<SettingsModal onClose={() => {}} />)
     await waitFor(() => expect(getByokSettings).toHaveBeenCalled())

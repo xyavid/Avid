@@ -315,12 +315,17 @@ export interface CapabilityFlags {
   reasoning?: boolean | null
 }
 
-/** Provider 下的一个具体模型：id + 可选展示名 / 上下文窗口 / 输出上限 / 能力。 */
+/** 推理强度：OpenAI 那套三档（Anthropic 的对应物是 thinking 预算，走该提供商的 extra_body）。 */
+export type ReasoningEffort = 'low' | 'medium' | 'high'
+
+/** Provider 下的一个具体模型：id + 可选展示名 / 窗口 / 输出上限 / 推理强度 / 能力声明。 */
 export interface ModelEntry {
   id: string
   label?: string | null
   context_window?: number | null
   max_output?: number | null
+  /** 每次请求带的 reasoning_effort；null = 不带（由提供方自己决定）。 */
+  reasoning_effort?: ReasoningEffort | null
   capabilities: CapabilityFlags
 }
 

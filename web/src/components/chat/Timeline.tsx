@@ -126,6 +126,20 @@ function itemNodes(list: TimelineItem[], offset: number, ctx: Ctx): ReactNode[] 
       )
     }
 
+    if (item.kind === 'error') {
+      // 失败记账：一段带危险色的窄条，不进气泡、不挂动作行（它不是"谁说的话"）
+      return (
+        <div
+          key={key}
+          data-item="error"
+          data-entry={item.entryId ?? undefined}
+          className="rounded-sm border-hairline border-hair bg-danger/5 px-a8 py-a4 font-ui text-hint leading-[1.7] text-danger"
+        >
+          {item.text}
+        </div>
+      )
+    }
+
     if (item.kind === 'reasoning') {
       return (
         <div key={key} data-item="reasoning">

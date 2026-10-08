@@ -213,7 +213,12 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
           settlingRef.current = true
           discardPendingDeltas()
           takeUsage(data)
-          if (e.type === 'run_failed') setError(String(data.message ?? '运行失败'))
+          if (e.type === 'run_failed') {
+            setError(String(data.message ?? '运行失败'))
+            // 失败段进时间线（带 entry_id，与重读会话后的那条对齐）；外面那行提示留一份，
+            // 覆盖"这条记账还没落盘"的窗口（事件与条目之间只差一次写盘）
+            setItems((cur) => applyEvent(cur, { type: e.type, ts: e.ts, data }))
+          }
           setPhase('settling')
           onSettled()
           return

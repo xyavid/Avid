@@ -24,6 +24,11 @@ function answerItem(entryId: string | null, text: string, ts: number | null = nu
   return { kind: 'assistant', entryId, text, streaming, ts }
 }
 
+/** 段落身份（与 timeline.ts 的 identity 同口径）：只给用例读。 */
+function identityOf(item: TimelineItem): string {
+  return item.kind === 'tool' ? `tool:${item.callId}` : item.kind === 'reasoning' ? 'live' : `entry:${item.entryId}`
+}
+
 function toolItem(callId: string): TimelineItem {
   return { kind: 'tool', callId, name: 'bash', args: '{}', result: null, status: 'ok', durationMs: null, runs: [] }
 }
@@ -119,6 +124,43 @@ describe('itemsFromEntries：会话条目 → 段落', () => {
 
     expect(items.map((i) => (i.kind === 'tool' ? i.status : i.kind))).toEqual(['failed', 'failed', 'running'])
     expect(items[2]).toMatchObject({ kind: 'tool', callId: 'c3', result: null })
+  })
+
+  it('error 条目（运行失败的记账）进时间线；notice 不进', () => {
+    const items = itemsFromEntries([
+      entry(1, { role: 'user', content: '跑一下' }),
+      entry(2, { role: 'assistant', content: '运行失败：请求超时' }, 'error'),
+      entry(3, { role: 'user', content: '问题' }),
+    ])
+
+    expect(items.map((i) => i.kind)).toEqual(['user', 'error', 'user'])
+    expect(items[1]).toMatchObject({ kind: 'error', entryId: 'e2', text: '运行失败：请求超时' })
+    // 身份按条目 id：切会话回来时与重读会话的那条对齐，不重复
+    expect(identityOf(items[1]!)).toBe('entry:e2')
+  })
+
+  it('run_failed 事件也落一段（live 路径与重读会话同形）', () => {
+    const live = replay([
+      ev('user_message', 1, { entry_id: 'e1', message: { role: 'user', content: '跑一下' } }),
+      ev('run_failed', 2, {
+        code: 'llm_error',
+        message: '请求超时',
+        text: '运行失败：请求超时',
+        entry_id: 'e9',
+      }),
+    ])
+
+    expect(live.map((i) => i.kind)).toEqual(['user', 'error'])
+    // 展示句用内核给的 text（与落盘那条一字不差），不是原始 message
+    expect(live[1]).toMatchObject({ kind: 'error', entryId: 'e9', text: '运行失败：请求超时' })
+
+    // 同一事件重放一遍不翻倍（中途刷新附着靠这条）
+    expect(
+      replay(
+        [ev('run_failed', 2, { code: 'llm_error', message: '请求超时', text: '运行失败：请求超时', entry_id: 'e9' })],
+        live,
+      ),
+    ).toHaveLength(2)
   })
 
   it('notice 条目不进时间线（内核注入的提醒不是对话）', () => {

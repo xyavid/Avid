@@ -21,13 +21,7 @@ import {
   saveByokSettings,
   testByokModel,
 } from '../../api/client'
-import type {
-  ByokProtocol,
-  ByokSettings,
-  ByokTestResult,
-  ProviderEntry,
-  ProviderInput,
-} from '../../api/types'
+import type { ByokProtocol, ByokSettings, ByokTestResult, ProviderEntry, ProviderInput, ReasoningEffort } from '../../api/types'
 import { cx } from '../../ui/cx'
 import { Icon } from '../../ui/Icon'
 import { Input } from '../../ui/Input'
@@ -484,6 +478,56 @@ function ProviderEditor({ draft, isNew, onSave, onCancel }: EditorProps) {
               >
                 <Icon name="x" size={14} />
               </button>
+              {/* 第二行：推理强度（请求参数）与图片输入（能力位）——都是"这个模型认什么"，
+                  不是全局开关。图片输入目前只作声明：界面还没有图片入口。 */}
+              <select
+                value={m.reasoning_effort ?? 'unset'}
+                onChange={(e) =>
+                  patch({
+                    models: form.models.map((x, i) =>
+                      i === index
+                        ? {
+                            ...x,
+                            reasoning_effort:
+                              e.target.value === 'unset' ? null : (e.target.value as ReasoningEffort),
+                          }
+                        : x,
+                    ),
+                  })
+                }
+                className={cx(SELECT_CLS, '!h-control !w-[110px] shrink-0')}
+                title="每次请求带 reasoning_effort（OpenAI 兼容与 Responses）；Anthropic 的对应物是 thinking 预算，用该提供商的额外请求体设置"
+                aria-label={`模型 ${m.id || '（未命名）'} 的推理强度`}
+              >
+                <option value="unset">强度：不设</option>
+                <option value="low">强度：低</option>
+                <option value="medium">强度：中</option>
+                <option value="high">强度：高</option>
+              </select>
+              <select
+                value={m.capabilities.vision === null || m.capabilities.vision === undefined ? 'unset' : m.capabilities.vision ? 'true' : 'false'}
+                onChange={(e) =>
+                  patch({
+                    models: form.models.map((x, i) =>
+                      i === index
+                        ? {
+                            ...x,
+                            capabilities: {
+                              ...x.capabilities,
+                              vision: e.target.value === 'unset' ? null : e.target.value === 'true',
+                            },
+                          }
+                        : x,
+                    ),
+                  })
+                }
+                className={cx(SELECT_CLS, '!h-control !w-[110px] shrink-0')}
+                aria-label={`模型 ${m.id || '（未命名）'} 的图片输入能力`}
+              >
+                <option value="unset">图片：未声明</option>
+                <option value="true">图片：支持</option>
+                <option value="false">图片：不支持</option>
+              </select>
             </div>
           ))}
           <button
@@ -493,7 +537,14 @@ function ProviderEditor({ draft, isNew, onSave, onCancel }: EditorProps) {
               patch({
                 models: [
                   ...form.models,
-                  { id: '', label: null, context_window: null, max_output: null, capabilities: { tool_calling: true } },
+                  {
+                    id: '',
+                    label: null,
+                    context_window: null,
+                    max_output: null,
+                    reasoning_effort: null,
+                    capabilities: { tool_calling: true },
+                  },
                 ],
               })
             }

@@ -236,6 +236,30 @@ describe('Timeline（段落 → 对话列）', () => {
     expect(screen.getAllByRole('button', { name: '分支' })).toHaveLength(2)
   })
 
+  it('失败记账画成一段危险色窄条；它不算收尾，所以那一轮不折', () => {
+    const items: TimelineItem[] = [
+      { kind: 'user', entryId: 'e1', text: '跑一下', ts: 1 },
+      {
+        kind: 'tool',
+        callId: 'c1',
+        name: 'bash',
+        args: '{"command":"ls"}',
+        result: 'a.py',
+        status: 'ok',
+        durationMs: 3,
+        runs: [],
+      },
+      { kind: 'error', entryId: 'e2', text: '运行失败：请求超时' },
+    ]
+    const { container } = render(<Timeline items={items} workspaceRoot="/w" />)
+
+    const row = container.querySelector('[data-item=error]')
+    expect(row?.textContent).toBe('运行失败：请求超时')
+    // 没有「已完成」折叠行：末尾不是收尾正文，过程照常铺着
+    expect(screen.queryByRole('button', { name: /已完成/ })).toBeNull()
+    expect(screen.getByText('执行')).toBeTruthy()
+  })
+
   it('跑完的轮折成一行：只留收尾正文，过程（思考 / 工具 / 中间正文）收进「已完成，用时 1分12秒」', () => {
     render(<Timeline items={turn()} workspaceRoot="/w" />)
 

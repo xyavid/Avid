@@ -425,10 +425,9 @@ export function ConversationPage() {
   const shownUsage = runHere ? (live.usage ?? usage) : usage
   const liveActive = live.phase === 'starting' || live.phase === 'running' || live.phase === 'settling'
   const liveHere = liveActive && runHere
-  // 取数失败（打不开会话、事件流断了）与运行失败分开：前者没有时间线可展示，占正文；
-  // 后者是对话题目里的一件事，留在时间线下面那一条——**不能**把整段对话换掉。
+  // 只有"打不开会话 / 事件流断了"这种取数失败占正文（那时没有时间线可展示）。
+  // 运行失败不走这里：它已经在时间线上是一条 error 段（内核落的账），不该把整段对话换掉。
   const displayError = error ?? (live.phase === 'error' && runHere ? live.error : null)
-  const runFailure = runHere && !liveHere ? live.error : null
 
   let body = (
     <Welcome
@@ -580,15 +579,6 @@ export function ConversationPage() {
                 </button>
               )}
             </div>
-          )}
-          {runFailure !== null && (
-            <p
-              className="px-a16 pb-a8 font-ui text-hint text-danger"
-              title="这次运行没有跑完；上面那条时间线是它已经落下的部分"
-              data-testid="run-failure"
-            >
-              {runFailure}
-            </p>
           )}
           {live.approvals.length > 0 && runHere && (
             <div className="px-a16 pb-a8">
