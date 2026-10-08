@@ -98,6 +98,7 @@ Web  POST /api/sessions/{id}/runs ─┴─► svc/runs.RunRegistry（线程 + �
 | 加一个事件 | `agent/events.py`（唯一单点）；同时在 `web/src/events/types.ts` 的 EVENTS 块里加同名成员——`tests/test_event_contract.py` 拦住两侧漂移 |
 | 加一个界面 | `web/src/surfaces/` 加页面并在 `app/App.tsx` 挂路由；颜色 / 字号 / 圆角只取 `styles/tokens.css` 的 token，不写散档 |
 | 改对话时间线（段落顺序 / 工具行 / 思考段） | `web/src/state/timeline.ts` 是单点（段落模型 + 事件→段落 + 历史归并），渲染在 `components/chat/Timeline.tsx`——过程与收尾共用它，别在页面里另起一套 |
+| 改 markdown 支持的写法 / 危险协议名单 | `web/src/markdown/parse.ts` 是「标准解析器（@lezer/markdown，CommonMark+GFM）→ 渲染模型」的翻译层与协议闸门，`Markdown.tsx` 只负责画（全程 React 元素，不注入 HTML）；软换行成断行、外链图降级成链接是有意偏离，写在模块注释里 |
 
 ## 2. 提交规范
 
