@@ -3,13 +3,23 @@ import { cleanup, render } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import assetSource from '../../../src/assets/avid-mark.svg?raw'
+import logoDarkSource from '../../assets/avid-logo-dark.svg?raw'
+import logoLightSource from '../../assets/avid-logo-light.svg?raw'
 import faviconSource from '../../assets/favicon.svg?raw'
 import { AvidMark } from '../Mark'
 
+/** 标识里全部 path 的 d 串，排序后可比对——各份副本对账用同一把尺子。 */
+const paths = (text: string) => (text.match(/ d="[^"]+"/g) ?? []).sort()
+
+/** README 标识里荷花那一层：它嵌在 <svg x="14"> 里，字标在外面。 */
+const lotusPaths = (text: string) =>
+  paths(/<svg x="\d+"[\s\S]*?<\/svg>/.exec(text)?.[0] ?? '')
+
 /**
- * 标识的两条纪律，都用会失败的断言钉住：
- *   1. 同一幅画有两份副本（组件用的 asset 与 favicon）——副本漂移必须当场报错；
- *   2. 落位不做圆托、不垫色板（背景透明），尺寸由调用点给。
+ * 标识的三条纪律，都用会失败的断言钉住：
+ *   1. 同一幅画有多份副本（组件用的 asset、favicon、README 的深浅两版）——副本漂移必须当场报错；
+ *   2. 落位不做圆托、不垫色板（背景透明），尺寸由调用点给；
+ *   3. README 那两版多一个字标，它是**轮廓**——查看端有没有 Inter 都得长一样。
  */
 describe('Avid 标识（阶段 33 · 阶段 7）', () => {
   afterEach(cleanup)
@@ -35,13 +45,36 @@ describe('Avid 标识（阶段 33 · 阶段 7）', () => {
   })
 
   it('asset 与 favicon 是同一幅画：两边 path 集合逐字一致（对账门禁）', () => {
-    const paths = (text: string) => (text.match(/ d="[^"]+"/g) ?? []).sort()
-
     const assetPaths = paths(assetSource)
     // 9 条有厚度的色块。上限是防「重新描摹一遍」把 400 多条发丝墨线带回来。
     expect(assetPaths.length).toBeGreaterThanOrEqual(6)
     expect(assetPaths.length).toBeLessThan(40)
     expect(paths(faviconSource)).toEqual(assetPaths)
+  })
+
+  it('README 标识的两版也内联同一幅荷花（对账门禁）', () => {
+    const assetPaths = paths(assetSource)
+
+    expect(lotusPaths(logoLightSource)).toEqual(assetPaths)
+    expect(lotusPaths(logoDarkSource)).toEqual(assetPaths)
+    // 每份是 9 条荷花 + 1 条字标；底板与 favicon 同色（青夜：淡粉压纸色只有 1.15 对比）
+    for (const source of [logoLightSource, logoDarkSource]) {
+      expect(source.match(/<path/g)?.length).toBe(10)
+      expect(source).toContain('fill="#3B4A54"')
+    }
+  })
+
+  it('字标是轮廓，不依赖查看端字体', () => {
+    // 轮廓化是这份文件存在的理由：视图里的 <text> 会随系统字体跑版。
+    expect(logoLightSource).not.toContain('<text')
+    expect(logoDarkSource).not.toContain('<text')
+  })
+
+  it('浅色与深色两版只差字标颜色', () => {
+    const shape = (text: string) =>
+      text.replace(/<!--[\s\S]*?-->/, '').replace(/fill="#[0-9A-Fa-f]{6}"/g, 'fill="X"')
+
+    expect(shape(logoLightSource)).toBe(shape(logoDarkSource))
   })
 
   it('没有发丝级墨线（它们在 22px 下会变成一圈黑噪点）', () => {
