@@ -36,6 +36,16 @@ English · [中文](README.zh-CN.md)
 - **Permissions** — everything runs by default; destructive commands ask first, host credentials are
   refused, sandbox and audit are optional.
 
+## Requirements
+
+| | Requirement | Notes |
+|---|---|---|
+| Python | **3.12 or newer** | `requires-python >= 3.12`. The kernel's only runtime dependency is `httpx`; the web stack (fastapi / uvicorn / pydantic / websockets) sits in the optional `[web]` extra, so a CLI-only install never pulls it |
+| uv | any recent version | Creates the environment, installs dependencies and the `avid` command (`uv sync` / `uv tool install`). Not mandatory: `python -m venv` + `pip install -e ".[web]"` works too |
+| Node + pnpm | Node **≥ 22.22.2**, pnpm **10** | Needed **only for the browser UI** (the exact pins live in `web/package.json`: `engines` and `packageManager`) |
+| OS | Linux, macOS, Windows (incl. WSL) | Kernel and CLI are pure Python and run on all three; **the sandbox exists on Linux only** (bubblewrap) and degrades visibly elsewhere, with the reason reported in the run state |
+| Optional external commands | `bwrap`, `rg`, a system folder picker (`zenity` / `kdialog` / `powershell.exe` / `osascript`) | Everything still runs, one capability level lower: no bwrap → the sandbox is not enforced (child environments are still scrubbed of credential-shaped variables); no ripgrep → `grep_search` falls back to Python (an order of magnitude slower on large trees); no picker → type the path by hand in the UI |
+
 ## Quick Start
 
 ```bash
@@ -92,6 +102,19 @@ All flags: `avid --help`, `avid web --help`, `avid workspace --help`, `avid sess
   rebuilds it, and deleting the file costs nothing but the next build. Nothing in it is
   required to read your sessions.
 - **Environment variables**: all optional, not needed for day-to-day use.
+
+| Variable | Meaning |
+|---|---|
+| `AVID_HOME` | Where the whole user-level directory lives (settings, registry, sessions, audit); default `~/.avid` |
+| `AVID_SESSIONS_DIR` | Put the session store elsewhere (wins over the settings file) |
+| `AVID_INDEX_DIR` | Put the derived search index elsewhere |
+| `AVID_AUDIT_DIR` | Put the audit JSONL in a directory of its own |
+| `AVID_MAX_PARALLEL_TOOL_CALLS` | Parallel tool calls per step; default 10 |
+| `AVID_MODEL_INFO` | Set to `off` to stop asking the provider for the model's context window |
+| `AVID_SANDBOX_BIN` | Use a different bwrap executable (diagnostics / packaging) |
+| `AVID_ALLOWED_HOSTS` | Extra hosts the web server trusts (LAN deployments) |
+| `AVID_BYOK_CONFIG` | Use a different `models.json` (default `~/.avid/models.json`) |
+| `AVID_BYOK_SECRETS` | Use a different `secrets.json` (default `~/.avid/secrets.json`) |
 
 ## Development
 

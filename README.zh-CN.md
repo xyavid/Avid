@@ -27,6 +27,16 @@
 - **模型配置** —— BYOK，四种协议（OpenAI 兼容 / Responses / Anthropic / Ollama）换着用，换模型不动内核。
 - **权限** —— 默认直接执行；毁灭级命令先确认，宿主凭据拒读，可选沙箱与审计。
 
+## 环境要求
+
+| | 要求 | 说明 |
+|---|---|---|
+| Python | **3.12 或更高** | `requires-python >= 3.12`。内核运行期只依赖 `httpx`；Web 那一套（fastapi / uvicorn / pydantic / websockets）在可选依赖 `[web]` 里，只跑 CLI 不必装 |
+| uv | 近期版本 | 建环境、装依赖、装命令都走它（`uv sync` / `uv tool install`）。不用 uv 也行：`python -m venv` + `pip install -e ".[web]"` |
+| Node + pnpm | Node **≥ 22.22.2**、pnpm **10** | **只有要浏览器界面时才需要**（口径在 `web/package.json` 的 `engines` 与 `packageManager`） |
+| 操作系统 | Linux / macOS / Windows（含 WSL） | 内核与 CLI 是纯 Python，三处都能跑；**沙箱只有 Linux 有**（bubblewrap），其它平台自动降级，并把原因写进运行状态 |
+| 可选外部命令 | `bwrap`、`rg`、系统文件夹选择器（`zenity` / `kdialog` / `powershell.exe` / `osascript`） | 缺了照样跑，只是对应能力降一档：没有 bwrap → 沙箱不生效（子进程环境仍会洗掉凭据形状的变量）；没有 ripgrep → `grep_search` 走 Python 兜底（大仓库慢一个量级）；没有选择器 → 界面上手填路径 |
+
 ## 快速开始
 
 ```bash
@@ -86,6 +96,8 @@ pnpm -C web install && pnpm -C web run copy:dist
 | `AVID_MODEL_INFO` | 设为 `off` 就不去问 provider 要模型窗口 |
 | `AVID_SANDBOX_BIN` | 换一个 bwrap 可执行文件（诊断 / 打包） |
 | `AVID_ALLOWED_HOSTS` | Web 服务额外信任的域名（局域网部署） |
+| `AVID_BYOK_CONFIG` | 换一份 `models.json`（默认 `~/.avid/models.json`） |
+| `AVID_BYOK_SECRETS` | 换一份 `secrets.json`（默认 `~/.avid/secrets.json`） |
 
 
 ## 开发
