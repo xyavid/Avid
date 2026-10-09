@@ -117,19 +117,25 @@ export function ConversationPage() {
   const [navQuery, setNavQuery] = useState('')
   const [contentHits, setContentHits] = useState<SearchHit[]>([])
   const [searchingContent, setSearchingContent] = useState(false)
-  // 跳到哪条：会话 id 决定「要不要换页」，条目 id 决定「高亮谁」。
-  const [focusEntry, setFocusEntry] = useState<{
-    sessionId: string
-    entryId: string
-    seq: number
-  } | null>(null)
-  const focusEntryId = focusEntry?.entryId ?? null
+  // 跳到哪条分两件事（别合成一个状态）：jump 是「这次要换页」的请求，用完即清；
+  // focusEntryId 是「高亮谁」，留到用户自己切走——合成一个会在换页后把高亮也清掉（踩过）。
+  const [jump, setJump] = useState<{ sessionId: string; seq: number } | null>(null)
+  const [focusEntryId, setFocusEntryId] = useState<string | null>(null)
   // 活运行：一次运行的发送/订阅/终态回拉。它自己的段落属于哪个会话由 hook 记着
   // （live.attachedSession）——切走会话时那些段落不跟过去；attachedRunRef 防重复附着。
   // `?settings=1` 是开发期钉子（截图/联调直达设置界面），与 ?gallery=1 同性质
   const [settingsOpen, setSettingsOpen] = useState(
     () => new URLSearchParams(window.location.search).has('settings'),
   )
+  /**
+   * 用户自己选会话（侧栏列表或内容命中）：先清掉跳转与高亮这两个状态，再切。
+   * 三件事必须一起做——留着上一次的高亮或锚点，下一个会话会从别人的位置开始取页。
+   */
+  const selectSession = (id: string) => {
+    setJump(null)
+    setFocusEntryId(null)
+    setSelectedId(id)
+  }
   const selectedIdRef = useRef<string | null>(null)
   selectedIdRef.current = selectedId
   const branchRef = useRef('main')
@@ -234,13 +240,12 @@ export function ConversationPage() {
     // 用量快照与条目分属两个端点；快照失败不该连累对话流，静默回退到「—」。
     // 从检索跳过来时（focus 指向这条会话）改成从那条开始取页：cursor 是排他的，
     // seq + 1 正好把命中那条放在这一页的新端，「加载更早」照旧往回接。
-    const anchor = focusEntry?.sessionId === selectedId ? focusEntry.seq + 1 : undefined
+    const anchor = jump?.sessionId === selectedId ? jump.seq + 1 : undefined
     listEntries(selectedId, { branch, limit: 50, cursorSeq: anchor })
       .then((page) => {
         if (!alive) return
         setHistory(itemsFromEntries([...page.entries].reverse()))
         setEarlier({ hasMore: page.has_more, cursor: page.next_cursor })
-        setFocusEntry(null)  // 跳一次就够，之后的重渲染不该再换页
       })
       .catch((e: unknown) => {
         if (alive) {
@@ -260,7 +265,8 @@ export function ConversationPage() {
     return () => {
       alive = false
     }
-  }, [selectedId, branch])
+     // jump 在依赖里：点命中时换了它，这一遍就从这个锚点取页（清它由切会话统一做）
+  }, [selectedId, branch, jump])
 
   const selected = sessions?.find((s) => s.id === selectedId) ?? null
 
@@ -583,7 +589,7 @@ export function ConversationPage() {
             sessions={sessions ?? []}
             workspaceId={activeWorkspaceId}
             selectedId={selectedId}
-            onSelect={setSelectedId}
+            onSelect={selectSession}
             onCreateSession={() => void createSessionInProject()}
             onRenameSession={(id, name) => void renameSessionById(id, name)}
             onDeleteSession={(id) => void deleteSessionById(id)}
@@ -591,8 +597,9 @@ export function ConversationPage() {
             contentSearching={searchingContent}
             onSearchQuery={setNavQuery}
             onSelectHit={(hit) => {
-              setSelectedId(hit.session_id)
-              setFocusEntry({ sessionId: hit.session_id, entryId: hit.entry_id, seq: hit.seq })
+              selectSession(hit.session_id)
+              setJump({ sessionId: hit.session_id, seq: hit.seq })
+              setFocusEntryId(hit.entry_id)
             }}
             creating={sessionsBusy}
             notice={sessionsHint}

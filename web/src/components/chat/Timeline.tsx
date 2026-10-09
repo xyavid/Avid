@@ -89,9 +89,11 @@ function turnActions(items: TimelineItem[]): Map<number, { text: string; branchA
 
 type TurnAction = { text: string; branchAt: string | null }
 
-/** 被检索点到的那一条：一圈浅底标出来（只加底色，不动字号与位置）。 */
+/** 被检索点到的那一条：套一圈 accent 光晕 + 浅底（`shadow-focus-ring` 是输入框聚焦用的同一个记号）。 */
 function isFocused(entryId: string | null | undefined, focus: string | null): string {
-  return entryId && focus && entryId === focus ? 'rounded-sm bg-accent-light/60 p-a4' : ''
+  return entryId && focus && entryId === focus
+    ? 'rounded-sm bg-accent-light/40 p-a4 shadow-focus-ring'
+    : ''
 }
 
 type Ctx = {
