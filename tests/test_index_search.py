@@ -300,3 +300,56 @@ def test_rest_search_rejects_an_empty_query(tmp_path):
         assert client.get("/api/search", params={"q": "x" * 501}).status_code == 422
     finally:
         services.close()
+
+
+# ---------------- 评审修复（2026-10-09）：混合长短词必须是 AND ----------------
+
+
+def test_a_mixed_query_requires_every_word(indexer, store):
+    """长词 + 短词：两路各查一遍再合并只能得并集，与「多个词按 AND」的承诺矛盾。"""
+    make_session(store, session_id="s-both", messages=({"role": "user", "content": "alpha 配置都在这儿"},))
+    make_session(store, session_id="s-only-long", messages=({"role": "user", "content": "只有 alpha"},))
+    make_session(store, session_id="s-only-short", messages=({"role": "user", "content": "只有配置"},))
+    indexer.index_all()
+
+    def hits_of(query: str) -> list[str]:
+        # 三个会话的 updated_at 可能落在同一毫秒：只比集合，不比顺序（顺序另有用例管）。
+        return sorted(hit.session_id for hit in queries.search_entries(indexer.conn, query))
+
+    assert hits_of("alpha 配置") == ["s-both"]
+    assert hits_of("alpha") == ["s-both", "s-only-long"]
+    assert hits_of("配置") == ["s-both", "s-only-short"]
+
+
+def test_a_compaction_summary_is_searchable(indexer, store):
+    """压缩摘要在会话里只落在 value（游标值），不是条目——但它概括了被压掉的历史，得能搜到。"""
+    from avid.session import JsonlSessionRepo
+    from avid.session.values import branch_compaction
+
+    make_session(store, session_id="s-compact", messages=({"role": "user", "content": "起个头"},))
+    file = next((store / ALPHA).glob("*_s-compact.jsonl"))
+    repo = JsonlSessionRepo(file.parent, workspace=ALPHA)
+    try:
+        session = repo.open(next(item for item in repo.list() if item.id == "s-compact"))
+        session.set_value(
+            branch_compaction("main"),
+            {
+                "through_seq": 1,
+                "keep": 0,
+                "summary": {
+                    "facts": ["用户要求把索引放在 ~/.avid/index"],
+                    "next": "继续做检索出口",
+                },
+            },
+        )
+    finally:
+        repo.close()
+
+    indexer.index_all()
+    assert indexer.reconcile().failed == 0  # 再扫一遍：派生 id 要稳定，不能重复
+
+    hits = queries.search_entries(indexer.conn, "检索出口")
+    assert [hit.session_id for hit in hits] == ["s-compact"]
+    assert hits[0].entry_type == "compaction"
+    rows = queries.entries_of(indexer.conn, "s-compact")
+    assert len([row for row in rows if row["type"] == "compaction"]) == 1

@@ -206,3 +206,83 @@ def test_plan_deduplicates_overlapping_sources(tmp_path):
     plan = plan_migration(store=tmp_path / "store", roots=[root], from_dir=legacy_dir(root))
 
     assert len(plan.moves) == 1
+
+
+# ---------------- 评审修复（2026-10-09）：计划不写盘、符号链接、混合目录、越界 id ----------------
+
+
+def test_planning_does_not_create_lock_files(tmp_path):
+    """「只出清单」不能有副作用：锁文件不存在就说明没人打开过它，不必造一个来探。"""
+    root = tmp_path / "project"
+    file = make_session(legacy_dir(root), workspace="w-1")
+    lock = file.with_name(file.name + ".lock")
+    lock.unlink(missing_ok=True)
+
+    plan_migration(store=tmp_path / "store", roots=[root])
+
+    assert not lock.exists()
+
+
+def test_from_scans_both_shapes_of_a_mixed_directory(tmp_path):
+    """--from 指的目录里既有 w-* 子目录又有平铺会话时，两批都要扫到。"""
+    mixed = tmp_path / "mixed"
+    sub = make_session(mixed / "w-9", workspace=None)
+    flat = make_session(mixed, workspace="w-4")
+
+    plan = plan_migration(store=tmp_path / "new-store", from_dir=mixed)
+
+    assert sorted(move.source for move in plan.moves) == sorted([sub, flat])
+
+
+def test_a_symlinked_session_is_skipped_with_a_reason(tmp_path):
+    """搬链接只会搬链接本身，而列表的符号链接守卫会把它藏起来——那等于搬了个看不见的会话。"""
+    root = tmp_path / "project"
+    real = make_session(tmp_path / "elsewhere", workspace="w-1")
+    legacy = legacy_dir(root)
+    legacy.mkdir(parents=True)
+    link = legacy / real.name
+    link.symlink_to(real)
+
+    plan = plan_migration(store=tmp_path / "store", roots=[root])
+
+    assert plan.moves == ()
+    assert "符号链接" in plan.skips[0].reason
+
+
+def test_a_header_id_that_is_a_path_is_refused(tmp_path):
+    """归属来自文件内容（可能来自别人的仓库）：它不能当路径分量使。"""
+    from avid.session.jsonl import JsonlHeader, encode_header
+
+    legacy = legacy_dir(tmp_path / "project")
+    legacy.mkdir(parents=True)
+    (legacy / "evil_1.jsonl").write_text(
+        encode_header(JsonlHeader(id="evil", storage_version=1, created_at=1, workspace="../../outside"))
+        + "\n",
+        encoding="utf-8",
+    )
+
+    plan = plan_migration(store=tmp_path / "store", roots=[tmp_path / "project"])
+
+    assert plan.moves == ()
+    assert "不能当目录名" in plan.skips[0].reason
+
+
+def test_a_store_root_recorded_by_the_index_is_found_again(tmp_path):
+    """改过会话目录之后，旧位置靠索引里的 store_root 还能找回来（migrate 的第四种来源）。"""
+    from avid.index import db as index_db
+    from avid.index.writer import record_store_root
+
+    old_store = tmp_path / "old-store"
+    file = make_session(old_store / "w-1", workspace=None)
+    conn = index_db.open_db(tmp_path / "index.sqlite")
+    try:
+        record_store_root(conn, old_store)
+        from avid.index.writer import indexed_store_root
+
+        assert indexed_store_root(conn) == str(old_store)
+    finally:
+        conn.close()
+
+    plan = plan_migration(store=tmp_path / "new-store", from_dir=old_store)
+
+    assert [move.source for move in plan.moves] == [file]

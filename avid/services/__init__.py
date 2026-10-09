@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import sqlite3
 import threading
 import time
 from pathlib import Path
@@ -23,7 +25,7 @@ from ..security import userdirs
 from ..security.sandbox import default_backend_summary
 from ..session import JsonlSessionRepo
 from .approvals import APPROVAL_TIMEOUT_SECONDS
-from .errors import TooManyStreams
+from .errors import SessionBusy, TooManyStreams
 from .picker import available_backend
 from .runs import (
     MAX_EVENT_BUFFER,
@@ -35,6 +37,8 @@ from .runs import (
 from .sessions import SessionService
 from .workspace_registry import WorkspaceRegistry
 from .workspaces import WorkspaceService, bound_workspace, single_workspace
+
+logger = logging.getLogger("avid.services")
 
 # Bump on a breaking wire change; clients branch on the feature table, not on this number.
 API_VERSION = 1
@@ -140,15 +144,22 @@ class Services:
         def _roots() -> list[Path]:
             return [Path(sessions_root)] if sessions_root is not None else [userdirs.sessions_dir()]
 
-        self.indexer = SessionIndexer(
-            roots=_roots,
-            lookup_workspace=workspace_lookup(
-                lambda: (
-                    (item.id, item.root, item.name) for item in self.workspaces.known_workspaces()
-                )
-            ),
-        )
-        self.indexer.start()
+        # 索引是可丢的派生层：建不起来（盘满/目录只读/库坏了）就整体停用，
+        # 绝不能连累会话读写与运行——搜索会明确报「索引不可用」。
+        try:
+            self.indexer: SessionIndexer | None = SessionIndexer(
+                roots=_roots,
+                lookup_workspace=workspace_lookup(
+                    lambda: (
+                        (item.id, item.root, item.name)
+                        for item in self.workspaces.known_workspaces()
+                    )
+                ),
+            )
+            self.indexer.start()
+        except (sqlite3.Error, OSError) as exc:
+            logger.warning("索引不可用，本进程停用索引（会话不受影响）：%s", exc)
+            self.indexer = None
         self.root = (
             self.workspaces.sessions_root(default) if default is not None else None
         )
@@ -248,8 +259,24 @@ class Services:
             # 配置文件坏了也要让界面能加载——错误文案会在设置面板里暴露。
             return []
 
+    def rebind_session_store(self) -> None:
+        """Re-derive the repositories after the session directory moved.
+
+        活动 run 期间**拒绝**：run 手里的会话句柄是从按工作区缓存的仓库里开的，而解绑会关掉
+        那些仓库（连同句柄）。关掉之后这次运行的下一次提交抛 SessionClosed，模型那条回复
+        就永远不落盘——丢的不是索引，是对话。所以先让它跑完再来改设置。
+        """
+        busy = self.runs.active_runs()
+        if busy:
+            raise SessionBusy(
+                "还有运行在跑，先等它结束再改会话目录"
+                f"（进行中：{'、'.join(busy)}）。这次运行写的是老位置，改到这里不影响它。"
+            )
+        self.workspaces.rebind()
+
     def close(self) -> None:
-        self.indexer.stop()
+        if self.indexer is not None:
+            self.indexer.stop()
         self.workspaces.close()
 
 

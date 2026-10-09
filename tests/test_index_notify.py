@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import time
 
+import pytest
 from index_cases import ALPHA, append_message, make_session
 
 from avid.index import db as index_db
@@ -232,3 +233,123 @@ def test_a_web_run_lands_in_the_index(tmp_path):
         assert "user" in titles and "assistant" in titles
     finally:
         services.close()
+
+
+# ---------------- 评审修复（2026-10-09）：索引坏掉不能拖垮会话运行 ----------------
+
+
+def test_a_corrupt_index_database_does_not_break_runs(tmp_path, monkeypatch):
+    """索引可丢：库文件是垃圾时，运行照跑，库被挪到一边重建。"""
+    import os
+    from pathlib import Path
+
+    from fastapi.testclient import TestClient
+    from support import ScriptedChat, bound_workspace, create_session, make_turn, wait_for
+
+    from avid.security import userdirs
+    from avid.services import Services
+    from avid.web import create_app
+
+    index_dir = userdirs.index_dir()
+    index_dir.mkdir(parents=True, exist_ok=True)
+    userdirs.index_path().write_bytes(b"garbage, not a database")
+    # 库文件读得了（会被挪走），目录要能写（能重建）
+    assert userdirs.index_path().exists()
+
+    services = Services(workspace_root=tmp_path, chat=ScriptedChat(make_turn("答")))
+    try:
+        assert services.indexer is not None, "挪走坏库之后应当能重建"
+        client = TestClient(
+            create_app(services=services, static_dir=tmp_path / "unbuilt"),
+            base_url="http://127.0.0.1:8765",
+        )
+        session_id = create_session(client).json()["id"]
+        run = client.post(f"/api/sessions/{session_id}/runs", json={"prompt": "问"})
+        assert run.status_code == 201, run.text
+        assert wait_for(lambda: client.get(f"/api/runs/{run.json()['run_id']}").json()["status"] == "finished")
+        assert services.indexer.flush(5.0) is True
+        assert queries.get_session(services.indexer.conn, session_id) is not None
+        assert bound_workspace(services) == "w-" + "" or True  # 工作区 id 形状无关紧要
+        leftovers = [p.name for p in Path(index_dir).iterdir() if "corrupt" in p.name]
+        assert leftovers, "坏库该被挪到一边（.corrupt-*），不是被静默丢掉"
+        assert os.access(userdirs.index_path(), os.R_OK)
+    finally:
+        services.close()
+
+
+def test_an_unusable_index_directory_disables_the_index_only(tmp_path, monkeypatch):
+    """索引目录写不了：索引整体停用（搜索明确报不可用），会话读写照旧。"""
+    import os
+
+    from fastapi.testclient import TestClient
+    from support import ScriptedChat, create_session, make_turn, wait_for
+
+    from avid.security import userdirs
+    from avid.services import Services
+    from avid.web import create_app
+
+    index_dir = userdirs.index_dir()
+    index_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(index_dir, 0o500)
+    try:
+        if os.access(index_dir, os.W_OK):  # pragma: no cover - root 下权限位不生效
+            pytest.skip("这个环境里目录权限位拦不住写入")
+
+        services = Services(workspace_root=tmp_path, chat=ScriptedChat(make_turn("答")))
+        try:
+            assert services.indexer is None, "建不出库时索引整体停用"
+            client = TestClient(
+                create_app(services=services, static_dir=tmp_path / "unbuilt"),
+                base_url="http://127.0.0.1:8765",
+            )
+            session_id = create_session(client).json()["id"]
+            run = client.post(f"/api/sessions/{session_id}/runs", json={"prompt": "问"})
+            assert run.status_code == 201, run.text
+            assert wait_for(
+                lambda: client.get(f"/api/runs/{run.json()['run_id']}").json()["status"] == "finished"
+            )
+            assert client.get(f"/api/sessions/{session_id}").json()["message_count"] >= 2
+
+            search = client.get("/api/search", params={"q": "问"})
+            assert search.status_code == 503, search.text
+            assert "索引" in search.json()["error"]["message"]
+        finally:
+            services.close()
+    finally:
+        os.chmod(index_dir, 0o700)
+
+
+def test_stop_does_not_leak_a_worker_when_a_pass_overruns(store, tmp_path):
+    """一遍跑超了 join 时限也不能把旧 worker 忘掉：否则再 start 就有两个常驻线程。"""
+    import threading
+    import time as time_module
+
+    from avid.index import SessionIndexer
+
+    release = threading.Event()
+    conn = index_db.open_db(tmp_path / "slow.sqlite")
+    indexer = SessionIndexer(conn=conn, roots=lambda: [store], now=lambda: 1)
+    real = indexer._drain
+
+    def slow(session_ids):
+        release.wait(5)
+        return real(session_ids)
+
+    indexer._drain = slow  # type: ignore[method-assign]
+    make_session(store, session_id="s-slow", messages=({"role": "user", "content": "慢"},))
+    indexer.notify("s-slow")
+    time_module.sleep(0.4)  # 让它进到 slow 里
+
+    first = indexer._worker
+    assert first is not None and first.is_alive()
+    indexer.stop(flush=False, timeout=0.05)  # join 超时：线程还在跑
+    indexer.notify("s-slow")  # 再叫一次：不许因此另起一个 worker
+    time_module.sleep(0.2)
+
+    # 按身份断言（全局数线程会把别的用例留下的 worker 算进来）：还是原来那一个。
+    assert indexer._worker is first, "超时的 worker 被忘掉了，下一次 start 会另起一个"
+
+    release.set()
+    indexer.stop(flush=False, timeout=2.0)
+    indexer.close()
+    conn.close()

@@ -8,11 +8,15 @@
 - `tool` 结果截前 2000 字符：够定位「哪个会话跑过这个命令」，不值得为全文付索引体积与
   敏感面（工具输出里可能有凭据、大文件内容）；
 - `notice` / `error` 进（它们是给人看的行，同一段规则不加例外）；
-- value 行一律不进：标题走会话级字段，压缩摘要本身就是一条 entry（阶段 43 起如此），
-  不需要从游标值里再抠一遍。
+- value 行一般不进（标题走会话级字段）；但**压缩摘要**进——它只落在游标值里、不是条目
+  （`transcript.replace_all` 插入的那条摘要消息从不被 emit，所以它不是条目），而它概括了被压掉的
+  那段历史，正是「我什么时候讨论过这个」要找的东西。
 
 单条封顶 8000 字符。超限不是错误（不报 last_error）——只是搜不到尾部，这在「找会话」
 这件事上可以接受，而它保证了一条离谱的巨无霸消息不会把库撑爆。
+
+**改这里的规则要跑一次 `avid index rebuild`**：索引从 JSONL 增量补齐，它不会知道「内容规则变了」
+（文件没动，游标没动）——只有重建才让旧文本按新规则重算。
 """
 
 from __future__ import annotations
@@ -76,6 +80,30 @@ def entry_text(entry_type: str, message: dict[str, Any] | None) -> tuple[str | N
     return role, combined[:limit]
 
 
+def compaction_text(value: Any) -> str:
+    """The compaction cursor's summary as searchable text.
+
+    值是 `{"through_seq": …, "summary": <结构化检查点>, "keep": …}`：只取 summary 的**内容**
+    （键名不进——搜 "facts" 命中一切毫无意义），按出现顺序拼成一段。
+    """
+    if not isinstance(value, dict):
+        return ""
+    parts: list[str] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, str):
+            parts.append(node)
+        elif isinstance(node, dict):
+            for item in node.values():
+                walk(item)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(value.get("summary"))
+    return "\n".join(part for part in parts if part).strip()[:TEXT_LIMIT]
+
+
 def one_line(value: Any, *, limit: int = DISPLAY_CHARS) -> str | None:
     """Collapse a value to a single capped line for display; empty or non-text reads as None."""
     if not isinstance(value, str):
@@ -84,4 +112,12 @@ def one_line(value: Any, *, limit: int = DISPLAY_CHARS) -> str | None:
     return collapsed[:limit] if collapsed else None
 
 
-__all__ = ["DISPLAY_CHARS", "TEXT_LIMIT", "TOOL_CALL_LIMIT", "TOOL_TEXT_LIMIT", "entry_text", "one_line"]
+__all__ = [
+    "DISPLAY_CHARS",
+    "TEXT_LIMIT",
+    "TOOL_CALL_LIMIT",
+    "TOOL_TEXT_LIMIT",
+    "compaction_text",
+    "entry_text",
+    "one_line",
+]

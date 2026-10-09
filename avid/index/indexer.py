@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import sqlite3
 import threading
@@ -37,6 +38,7 @@ from .types import (
 )
 from .writer import (
     apply_scan,
+    forget_path_owner,
     forget_session,
     mark_error,
     mark_missing,
@@ -147,11 +149,19 @@ class SessionIndexer:
         if flush:
             self.flush(timeout)
         with self._queue:
-            worker, self._worker = self._worker, None
+            worker = self._worker
             self._stopped = True
             self._queue.notify_all()
         if worker is not None:
             worker.join(timeout)
+            if worker.is_alive():
+                # 这一遍还没完（比如第一轮 reconcile 很大）：**不**清引用。清掉的话下一次
+                # notify → start() 会另起一个 worker，两个线程并排常驻、还共用同一个连接。
+                logger.warning("索引线程还在收尾，先把引用留着；下一次 start 会复用它")
+                return
+        with self._queue:
+            if self._worker is worker:
+                self._worker = None
 
     def _record_store(self) -> None:
         """Remember which session store this index describes; `check` compares it on the next run."""
@@ -218,8 +228,18 @@ class SessionIndexer:
                     discovered, _ = self.discover()
                 path = discovered.get(session_id)
             if path is None or not path.exists():
-                continue
-            self._index_one(session_id, path, force_full=False)
+                # 记录里的路径没了（改名/迁移/被删）：按发现结果再找一次——改名/迁移能找到
+                # 新落点，找不到就是真没了（删除），那时把这一行清掉，别留一条指向旧文件的
+                # 幽灵命中（检索会点进去 404）。
+                if discovered is None:
+                    discovered, _ = self.discover()
+                path = discovered.get(session_id)
+                if path is None:
+                    if row is not None:
+                        with self._lock:
+                            forget_session(self._conn, session_id)
+                    continue
+            self._index_one_reported(session_id, path, force_full=False)
 
     # Discovery.
 
@@ -292,14 +312,9 @@ class SessionIndexer:
         report = IndexReport(details=notes)
         self._record_store()
         for session_id, path in sorted(found.items()):
-            try:
-                ok = self._index_one(session_id, path, force_full=False)
-            except sqlite3.Error as exc:  # 库整体不可用：再试下去只会重复等锁
-                report = report.merged(
-                    IndexReport(failed=1, details=(f"索引库不可用，中止这一遍：{exc}",))
-                )
-                break
-            report = report.merged(IndexReport(indexed=1 if ok else 0, skipped=0 if ok else 1))
+            report = report.merged(self._index_one_reported(session_id, path, force_full=False))
+            if report.details and report.details[-1].startswith("索引库不可用"):
+                break  # 库整体不可用：再试下去只会重复等锁
         return report
 
     def reconcile(self) -> IndexReport:
@@ -325,14 +340,10 @@ class SessionIndexer:
                         mark_missing(self._conn, session_id)
                 report = report.merged(IndexReport(skipped=1))
                 continue
-            try:
-                ok = self._index_one(session_id, path, force_full=False)
-            except sqlite3.Error as exc:
-                report = report.merged(
-                    IndexReport(failed=1, details=(f"索引库不可用，中止这一遍：{exc}",))
-                )
+            outcome = self._index_one_reported(session_id, path, force_full=False)
+            report = report.merged(outcome)
+            if outcome.details and outcome.details[-1].startswith("索引库不可用"):
                 break
-            report = report.merged(IndexReport(indexed=1 if ok else 0, skipped=0 if ok else 1))
 
         # Rows under the scanned roots whose files no longer exist: the session file was deleted.
         with self._lock:
@@ -366,16 +377,32 @@ class SessionIndexer:
         report = IndexReport(details=notes)
         self._record_store()
         for session_id, path in sorted(found.items()):
-            try:
-                ok = self._index_one(session_id, path, force_full=True)
-            except sqlite3.Error as exc:
-                return report.merged(
-                    IndexReport(failed=1, details=(f"索引库不可用，中止这一遍：{exc}",))
-                )
-            report = report.merged(IndexReport(indexed=1 if ok else 0, skipped=0 if ok else 1))
+            outcome = self._index_one_reported(session_id, path, force_full=True)
+            report = report.merged(outcome)
+            if outcome.details and outcome.details[-1].startswith("索引库不可用"):
+                break
         return report
 
     # One session, from its cursor to the end of the file.
+
+    def _index_one_reported(self, session_id: str, path: Path, *, force_full: bool) -> IndexReport:
+        """One session's pass, with the two failure kinds kept apart.
+
+        A constraint error belongs to that session (bad file, duplicate id): report it and keep
+        going. Anything else means the database itself is unusable — those must stop the pass,
+        because every later session would just wait for a lock that is not coming.
+        """
+        try:
+            ok = self._index_one(session_id, path, force_full=force_full)
+        except sqlite3.IntegrityError as exc:
+            logger.warning("索引 %s 撞上约束错误（跳过它，继续别的）：%s", path, exc)
+            with contextlib.suppress(sqlite3.Error):
+                with self._lock:
+                    mark_error(self._conn, session_id, file_path=str(path), error=str(exc))
+            return IndexReport(failed=1, details=(f"{session_id}：{exc}",))
+        except sqlite3.Error as exc:
+            return IndexReport(failed=1, details=(f"索引库不可用，中止这一遍：{exc}",))
+        return IndexReport(indexed=1 if ok else 0, skipped=0 if ok else 1)
 
     def _index_one(self, session_id: str, path: Path, *, force_full: bool) -> bool:
         with self._lock:
@@ -413,8 +440,22 @@ class SessionIndexer:
             logger.info("文件不在了 %s：%s", path, exc)
             return False
 
-        # 没有新条目、长度没变、mtime 没变、状态还是 ok：这一遍没什么可写的。
-        # （标题等会话级事实只可能随新行变化，而新行会改变长度——所以这三项够了。）
+        # 长度没变但 mtime 变了 = 原地改写（本仓库唯一的来源是撕裂行修复之外的异常写）。
+        # 长度看不出来，mtime 是唯一信号：这时候「刷新一下 updated_at」等于把证据吃掉，
+        # 之后 check 再也抓不到它——只能整篇重扫。
+        if (
+            row is not None
+            and not force_full
+            and not scan.entries
+            and int(row.indexed_bytes) == scan.next_offset
+            and int(row.file_size) == stat.st_size
+            and int(row.updated_at or 0) != int(stat.st_mtime * 1000)
+            and row.index_status == INDEX_STATUS_OK
+        ):
+            return self._index_one(session_id, path, force_full=True)
+
+        # 没有新条目、长度没变、mtime 没变、路径没变、状态还是 ok：这一遍没什么可写的。
+        # （会话级事实只可能随新行变化，而新行会改变长度；路径会随改名/迁移变。）
         if (
             not scan.entries
             and row is not None
@@ -422,6 +463,7 @@ class SessionIndexer:
             and int(row.indexed_bytes) == scan.next_offset
             and int(row.file_size) == stat.st_size
             and int(row.updated_at or 0) == int(stat.st_mtime * 1000)
+            and str(row.file_path) == str(path)
             and row.index_status == INDEX_STATUS_OK
         ):
             return False
@@ -444,8 +486,11 @@ class SessionIndexer:
             last_error=None,
         )
         with self._lock:
+            # 一条路径只能属于一个会话（file_path UNIQUE）：凡是占着这条路径、id 又不是它的行，
+            # 都得先让位——否则插入直接撞约束，而且每一遍都撞（索引永久卡死）。
+            forget_path_owner(self._conn, str(path), scan.session_id)
             if scan.session_id != session_id:
-                # 文件被换成了另一个会话（复制/改名）：旧 id 的行必须清掉，别留一个指向同一文件的行。
+                # 文件被换成了另一个会话（复制/改名）：旧 id 的行也清掉。
                 forget_session(self._conn, session_id)
             if force_full:
                 replace_scan(self._conn, session, scan)

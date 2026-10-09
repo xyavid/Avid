@@ -250,6 +250,18 @@ def test_default_sessions_store_under_the_avid_home_is_not_masked_twice(tmp_path
     assert str(tmp_path / "host-home" / ".avid" / "sessions") not in spec.mask_dirs
 
 
+def test_the_relocated_avid_home_is_masked_not_only_dot_avid(tmp_path, home, monkeypatch):
+    """掩蔽名单里那句 ~/.avid 是常量，而 AVID_HOME 能把它搬到别处：密钥/审计/索引跟着走，就得跟着掩。"""
+    relocated = tmp_path / "elsewhere" / "avid-home"
+    monkeypatch.setenv("AVID_HOME", str(relocated))
+    monkeypatch.setenv("AVID_SESSIONS_DIR", str(relocated / "sessions"))
+
+    spec = build_spec(policy="workspace", root=str(tmp_path / "ws"), home=home, probe=WORKING)
+
+    assert str(relocated) in spec.mask_dirs
+    assert str(relocated / "sessions") not in spec.mask_dirs  # 已被上面那条盖住，不重复挂
+
+
 def test_sessions_store_inside_the_workspace_is_masked_after_the_workspace_bind(
     tmp_path, home, monkeypatch
 ):
@@ -391,14 +403,18 @@ def test_real_run_cannot_read_the_masked_credentials(real_spec, home):
 
 
 def test_real_run_cannot_read_the_session_store(tmp_path, home, monkeypatch):
-    """真跑：会话文件在沙箱里既读不到也列不出——工具视野里没有自己的对话历史。"""
+    """真跑：会话文件在沙箱里既读不到也列不出——工具视野里没有自己的对话历史。
+
+    会话库**必须放在 /tmp 之外**：沙箱里 /tmp 是一块空 tmpfs，放那儿的话这条断言与
+    会话目录掩蔽无关（把掩蔽代码删掉照样过——评审抓到的空转）。
+    """
     found = probe_backend()
     if not found.available:
         pytest.skip(f"这台机器上没有可用的 bwrap：{found.reason}")
     root = tmp_path / "ws"
     root.mkdir()
-    store = tmp_path / "avid-sessions"
-    store.mkdir()
+    store = home.parent / "avid-sessions"  # /tmp 之外
+    store.mkdir(exist_ok=True)
     (store / "2026-10-09T00-00-00-000_s-1.jsonl").write_text(
         '{"kind": "header", "id": "s-1"}\n', encoding="utf-8"
     )

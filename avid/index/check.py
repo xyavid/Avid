@@ -23,6 +23,7 @@ CLI 的 `avid index check --fix` 与测试走同一个 `apply_fixes`。
 
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -179,18 +180,30 @@ def check_index(indexer: "SessionIndexer", *, roots: Sequence[Path] | None = Non
 
 
 def apply_fixes(indexer: "SessionIndexer", report: CheckReport) -> FixTally:
-    """Follow the recommendations; each one is idempotent and safe to re-run."""
+    """Follow the recommendations; each one is idempotent and safe to re-run.
+
+    单条修不动（约束错误、库只读）只记跳过，不让整条命令崩——check 的契约是「说清楚」，
+    不是「保证修好」。
+    """
     tally = FixTally()
     for finding in report.findings:
         if finding.fix == FIX_FORGET:
-            forget_session(indexer.conn, finding.session_id)
+            try:
+                forget_session(indexer.conn, finding.session_id)
+            except sqlite3.Error:
+                tally = tally.merged(FixTally(skipped=1))
+                continue
             tally = tally.merged(FixTally(forgotten=1))
         elif finding.fix == FIX_REBUILD:
             if finding.kind == "other_store":
                 report_all = indexer.rebuild()
                 tally = tally.merged(FixTally(rebuilt=report_all.indexed))
                 break  # 全量重建之后按第一次的清单继续修就没意义了
-            result: IndexReport = indexer.rebuild(finding.session_id)
+            try:
+                result: IndexReport = indexer.rebuild(finding.session_id)
+            except sqlite3.Error:
+                tally = tally.merged(FixTally(skipped=1))
+                continue
             tally = tally.merged(
                 FixTally(rebuilt=1) if result.indexed else FixTally(skipped=1)
             )

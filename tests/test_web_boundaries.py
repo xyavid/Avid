@@ -142,7 +142,16 @@ def test_a6_event_names_are_single_sourced():
     assert found == [], f"事件名字面量泄漏到 events.py 之外：{found}"
 
 
-def test_a10_on_message_wiring_stays_in_four_places():
+def test_a10_the_message_callback_is_wired_in_a_known_set_of_places():
+    """消息回调只在这几处出现；多一处就得在这里显式加一行并说清为什么。
+
+    逐处的理由：
+    - `agent/run.py`：循环调用它（唯一真正的接线点）；
+    - `session/recorder.py`：recorder 自己的公开写入口；
+    - `cli.py` / `services/runs.py`：两个平级接线点把 recorder 接给运行；
+    - `services/sessions.py`：临时会话批量拷贝历史时**直接**用 recorder（不接循环），
+      阶段 57 评审把原来自己 `append_message` 的旁路收回来时新增的。
+    """
     found = {
         item.split(":")[0]
         for item in hits(files_under(suffix=".py"), r"on_message")
@@ -152,6 +161,7 @@ def test_a10_on_message_wiring_stays_in_four_places():
         "avid/session/recorder.py",
         "avid/cli.py",
         "avid/services/runs.py",
+        "avid/services/sessions.py",
     }, found
 
 
@@ -159,8 +169,13 @@ def test_a10_on_message_wiring_stays_in_four_places():
 
 
 def test_a11_recorder_remains_the_only_session_writer():
-    assert hits(files_under("web"), r"append_message|\.commit\(") == []
-    assert hits(files_under("svc"), r"append_message|\.commit\(") == []
+    """会话内容只经 SessionRecorder 落库。
+
+    这条门禁原来扫的 `svc` 在阶段 35 就改名成 `services` 了——扫一个不存在的目录等于空转
+    （评审抓到）。改成真包名之后它立刻抓到一处旁路：临时会话批量拷消息直接 append，已收回 recorder。
+    """
+    for package in ("web", "services", "agent", "providers"):
+        assert hits(files_under(package), r"append_message|\.commit\(") == [], package
 
 
 # ---------------- A12 ----------------

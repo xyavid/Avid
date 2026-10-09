@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..security import userdirs
-from ..session.errors import SessionError, SessionStorageError
+from ..session.errors import SessionError, SessionLockedError, SessionStorageError
 from ..session.jsonl import SUFFIX, SessionFileLock, read_header
 from .workspace_registry import derive_id
 
@@ -89,15 +89,15 @@ def plan_migration(
         candidates.append((path / LEGACY_RELPATH, derive_id(path)))
     if from_dir is not None:
         given = Path(from_dir).expanduser()
+        # 两种形状都扫：集中目录的子目录（id 取目录名）与直接躺在这一层的平铺会话。
+        # 只挑一种会让混合目录里的另一批静默漏掉（用户只会看到「没有可搬的会话」）。
         subdirs = [
             child
             for child in sorted(given.glob(f"{WORKSPACE_DIR_PREFIX}*"))
             if child.is_dir()
         ]
-        if subdirs:
-            candidates += [(child, child.name) for child in subdirs]
-        else:
-            candidates.append((given, None))
+        candidates += [(child, child.name) for child in subdirs]
+        candidates.append((given, None))
 
     moves: list[Move] = []
     skips: list[Skip] = []
@@ -130,8 +130,11 @@ def apply_migration(plan: MigrationPlan) -> MigrationTally:
         if move.target.exists():
             skipped.append(Skip(move.source, f"目标已存在：{move.target}"))
             continue
-        if _in_use(move.source):
-            skipped.append(Skip(move.source, "正在被另一个进程使用"))
+        in_use, reason = _in_use(move.source)
+        if in_use:
+            skipped.append(
+                Skip(move.source, f"正在被另一个进程使用（{reason}）" if reason else "正在被另一个进程使用")
+            )
             continue
         try:
             _move_file(move.source, move.target)
@@ -162,26 +165,51 @@ def _plan_one(file: Path, *, fallback: str | None, store: Path) -> tuple[Move | 
     owner = header.workspace or fallback
     if not owner:
         return None, Skip(file, "header 里没有 workspaceId，认不出归属")
+    if not _safe_component(owner):
+        # 归属来自文件内容，而文件可能来自别人的仓库：它不能当路径分量使。
+        return None, Skip(file, f"header 里的 workspaceId 不能当目录名：{owner!r}")
+
+    if file.is_symlink():
+        # 搬链接只会把链接搬过去（真身留在原处），而列表的符号链接守卫会把这种条目藏起来
+        # ——用户会以为搬成功了却永远看不到它。让真身自己来。
+        return None, Skip(file, "是符号链接：先自己决定用真身还是链接，这里不搬")
 
     target = store / owner / file.name
     if target.resolve() == file.resolve():
         return None, None  # 已经在新位置（--from 指到集中目录自身）
     if target.exists():
         return None, Skip(file, f"目标已存在：{target}")
-    if _in_use(file):
-        return None, Skip(file, "正在被另一个进程使用")
+    in_use, reason = _in_use(file)
+    if in_use:
+        return None, Skip(file, f"正在被另一个进程使用（{reason}）" if reason else "正在被另一个进程使用")
     return Move(source=file, target=target, workspace_id=owner), None
 
 
-def _in_use(path: Path) -> bool:
-    """拿一下旁挂锁：拿得到说明没人在用（随即放开）；拿不到、或锁都开不了，都算在用。"""
+def _safe_component(value: str) -> bool:
+    """A workspace id must be a single plain path component: no separators, no traversal, no NUL."""
+    if value in ("", ".", "..") or "\x00" in value:
+        return False
+    return "/" not in value and "\\" not in value
+
+
+def _in_use(path: Path) -> tuple[bool, str | None]:
+    """(在用吗, 别的原因)。
+
+    计划阶段**不写盘**：锁文件不存在就说明从来没有进程打开过这个会话（写者一打开就会建它），
+    不必为了探一下而把 `.lock` 造出来。锁文件在、但拿不到 → 真有人在用；开不了锁文件本身
+    （权限/磁盘）→ 如实报原因，别谎报成「正在被使用」。
+    """
     lock = SessionFileLock(path)
+    if not lock.path.exists():
+        return False, None
     try:
         lock.acquire(f"迁移 {path.name}")
-    except SessionError:
-        return True
+    except SessionLockedError:
+        return True, None
+    except SessionError as exc:
+        return True, str(exc)
     lock.release()
-    return False
+    return False, None
 
 
 def _drop_lock(source: Path) -> None:

@@ -222,7 +222,8 @@ def put_sessions_settings(request: Request, body: SessionsDirIn) -> SessionsDirO
     except OSError as exc:
         raise InvalidRequest(f"设置写不进 {userdirs.settings_path()}（{exc}）") from exc
     # 仓库按工作区缓存着：不重新绑定的话，下一条消息还会写进旧目录。
-    current_services(request).workspaces.rebind()
+    # 有活动 run 时这一步会拒绝（409 session_busy）——见 Services.rebind_session_store。
+    current_services(request).rebind_session_store()
     return _sessions_out()
 
 

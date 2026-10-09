@@ -341,6 +341,11 @@ class RunRegistry:
             raise RunNotFound(f"没有这个运行：{run_id}")
         return record
 
+    def active_runs(self) -> list[str]:
+        """Run ids currently in flight in this process (copy under the lock)."""
+        with self._lock:
+            return list(self._active.values())
+
     def active_run_id(self, session_id: str) -> str | None:
         with self._lock:
             return self._active.get(session_id)
@@ -1073,11 +1078,11 @@ class RunRegistry:
         except SessionError:  # 记账失败不能盖掉真正的失败原因
             logger.warning("运行 %s 的失败没能写进会话", record.run_id, exc_info=True)
             return None
-        self._notify_index(record.session_id)
+        self.notify_index(record.session_id)
         return entry_id
 
-    def _notify_index(self, session_id: str) -> None:
-        """Tell the index this session has new rows; the index is never awaited from here."""
+    def notify_index(self, session_id: str) -> None:
+        """Tell the index this session changed (new rows, renamed, gone); never awaited."""
         if self.indexer is not None:
             self.indexer.notify(session_id)
 

@@ -590,3 +590,41 @@ def test_session_migrate_takes_a_store_root_through_from(sandbox, capsys, tmp_pa
 
     assert "已搬 1 个" in capsys.readouterr().out
     assert len(session_files(sandbox)) == 1
+
+
+def test_session_migrate_finds_the_previous_store_through_the_index(sandbox, capsys, tmp_path):
+    """改过会话目录之后，旧位置只有索引记得——`avid session migrate` 要能顺着这条线索找回去。"""
+    from avid.index import db as index_db
+    from avid.index.writer import indexed_store_root, record_store_root
+
+    legacy_session_file(sandbox)  # 现在 cwd 下的旧布局里有一个会话
+    legacy = str(sandbox / ".avid" / "sessions")
+    conn = index_db.open_db()
+    try:
+        record_store_root(conn, sandbox / ".avid" / "sessions")
+        assert indexed_store_root(conn) == legacy
+    finally:
+        conn.close()
+
+    # 把当前会话目录指到别处（模拟「改过位置」），cwd 的旧布局照旧存在
+    target = tmp_path / "moved-sessions"
+    monkeypatch_env = {"AVID_SESSIONS_DIR": str(target)}
+
+    import os
+
+    saved = {name: os.environ.get(name) for name in monkeypatch_env}
+    os.environ.update(monkeypatch_env)
+    try:
+        assert cli.main(["session", "migrate", "--yes"]) == 0
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+    out = capsys.readouterr()
+    assert "已搬 1 个" in out.out
+    moved = list(target.rglob("*.jsonl"))
+    assert len(moved) == 1
+    assert "索引记着的旧会话目录" in out.err

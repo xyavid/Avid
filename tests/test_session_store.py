@@ -175,3 +175,90 @@ def test_put_refuses_while_the_environment_wins(client, tmp_path, monkeypatch):
     assert written.status_code == 400
     assert userdirs.SESSIONS_DIR_ENV in written.json()["error"]["message"]
     assert not (tmp_path / "ignored").exists()
+
+
+# ---------------- 评审修复（2026-10-09）：改会话目录不得打断正在跑的 run ----------------
+
+
+def test_changing_the_store_is_refused_while_a_run_is_live(tmp_path):
+    """活动 run 手里握着从缓存仓库里开的会话句柄：解绑会把它关掉，模型回复就丢了。"""
+    import threading
+
+    from fastapi.testclient import TestClient
+    from support import create_session
+
+    from avid.services import Services
+    from avid.web import create_app
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_chat(config, messages, **kwargs):
+        started.set()
+        assert release.wait(10), "测试没有放开这次模型调用"
+        from support import make_turn
+
+        return make_turn("答")
+
+    services = Services(workspace_root=tmp_path, chat=blocking_chat)
+    try:
+        client = TestClient(
+            create_app(services=services, static_dir=tmp_path / "unbuilt"),
+            base_url="http://127.0.0.1:8765",
+        )
+        session_id = create_session(client).json()["id"]
+        run = client.post(f"/api/sessions/{session_id}/runs", json={"prompt": "问"})
+        assert run.status_code == 201, run.text
+        assert started.wait(10), "run 没跑起来"
+
+        refused = client.put("/api/settings/sessions", json={"dir": str(tmp_path / "moved")})
+
+        assert refused.status_code == 409, refused.text
+        assert refused.json()["error"]["code"] == "session_busy"
+        assert "运行" in refused.json()["error"]["message"]
+
+        release.set()
+        assert wait_for_run(client, run.json()["run_id"]), "run 没结束"
+        # 回复没丢：这一次运行的两条消息都落进会话文件（也就是老位置的库）
+        detail = client.get(f"/api/sessions/{session_id}").json()
+        assert detail["message_count"] >= 2
+
+        allowed = client.put("/api/settings/sessions", json={"dir": str(tmp_path / "moved")})
+        assert allowed.status_code == 200, allowed.text
+    finally:
+        release.set()
+        services.close()
+
+
+def wait_for_run(client, run_id: str, timeout: float = 5.0) -> bool:
+    from support import wait_for
+
+    return wait_for(
+        lambda: client.get(f"/api/runs/{run_id}").json()["status"] in ("finished", "failed", "cancelled"),
+        timeout,
+    )
+
+
+def test_a_busy_services_reports_session_busy_not_a_crash(tmp_path):
+    """直接调 Services 的路径也一样（路由只是它的一个调用方）。"""
+    from avid.services import Services
+    from avid.services.errors import SessionBusy
+
+    services = Services(workspace_root=tmp_path)
+    try:
+        runs = services.runs
+        with runs._lock:
+            runs._active["s-fake"] = "run-fake"
+        try:
+            try:
+                services.rebind_session_store()
+            except SessionBusy as exc:
+                assert "run-fake" in str(exc) or "运行" in str(exc)
+            else:  # pragma: no cover - 没抛就是漏了守卫
+                raise AssertionError("有活动 run 时不该允许解绑")
+        finally:
+            with runs._lock:
+                runs._active.pop("s-fake", None)
+        services.rebind_session_store()  # 没有活动 run 时照样能解绑
+    finally:
+        services.close()

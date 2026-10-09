@@ -11,12 +11,17 @@
 from __future__ import annotations
 
 import contextlib
+import logging
+import os
 import sqlite3
+import time
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
 from ..security import userdirs
+
+logger = logging.getLogger("avid.index.db")
 
 # 2 秒：本地单用户工具里超过这个时间还没拿到锁，说明有别的东西卡住了（等下去只会更糟）。
 BUSY_TIMEOUT_MS = 2000
@@ -121,6 +126,32 @@ def open_db(
     target = Path(path) if path is not None else userdirs.index_path()
     target.parent.mkdir(parents=True, exist_ok=True)
 
+    conn = _connect(target, timeout_ms)
+    try:
+        conn.execute("PRAGMA journal_mode = WAL")
+    except sqlite3.DatabaseError as exc:
+        # 「不是数据库」= 文件坏了：它是可丢的派生层，挪到一边重建比让整个进程起不来强。
+        if not _looks_corrupt(exc):
+            conn.close()
+            raise
+        conn.close()
+        aside = target.with_name(f"{target.name}.corrupt-{int(time.time())}")
+        logger.warning("索引库不是数据库，挪到一边重建：%s → %s", target, aside)
+        os.replace(target, aside)
+        for suffix in ("-wal", "-shm"):  # WAL 的伴生文件一起挪，别让新库继承它们
+            with contextlib.suppress(OSError):
+                os.replace(Path(str(target) + suffix), Path(str(aside) + suffix))
+        conn = _connect(target, timeout_ms)
+        conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute(f"PRAGMA busy_timeout = {timeout_ms}")
+    # 派生层：崩了重建即可，不值得为它付每次提交的 fsync。
+    conn.execute("PRAGMA synchronous = NORMAL")
+    migrate(conn, migrations=migrations)
+    return conn
+
+
+def _connect(target: Path, timeout_ms: int) -> sqlite3.Connection:
     conn = sqlite3.connect(
         str(target),
         timeout=timeout_ms / 1000,
@@ -128,13 +159,13 @@ def open_db(
         check_same_thread=False,  # 索引线程与请求线程共用一个连接，串行化由调用方保证
     )
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute(f"PRAGMA busy_timeout = {timeout_ms}")
-    # 派生层：崩了重建即可，不值得为它付每次提交的 fsync。
-    conn.execute("PRAGMA synchronous = NORMAL")
-    migrate(conn, migrations=migrations)
     return conn
+
+
+def _looks_corrupt(exc: sqlite3.DatabaseError) -> bool:
+    """True for the two messages SQLite uses when the file simply is not a database."""
+    text = str(exc).lower()
+    return "not a database" in text or "file is encrypted" in text
 
 
 def schema_version(conn: sqlite3.Connection) -> int:
@@ -161,11 +192,13 @@ def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
     conn.execute("BEGIN IMMEDIATE")
     try:
         yield conn
+        conn.execute("COMMIT")
     except BaseException:
+        # COMMIT 自己失败（盘满/等不到锁）也要回滚：否则事务一直开着，
+        # 之后每一次 BEGIN IMMEDIATE 都报「cannot start a transaction within a transaction」。
         with contextlib.suppress(sqlite3.Error):
             conn.execute("ROLLBACK")
         raise
-    conn.execute("COMMIT")
 
 
 def read_meta(conn: sqlite3.Connection, key: str) -> str | None:

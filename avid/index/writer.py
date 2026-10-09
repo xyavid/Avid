@@ -193,6 +193,20 @@ def mark_ok(conn: sqlite3.Connection, session_id: str) -> None:
     _set_status(conn, session_id, INDEX_STATUS_OK, None)
 
 
+def forget_path_owner(conn: sqlite3.Connection, file_path: str, keep_session_id: str) -> None:
+    """Drop the row that owns this path under a different session id.
+
+    A path can only be owned by one session (`file_path UNIQUE`), so when a file is replaced by
+    another session the old row must go first — otherwise the insert raises IntegrityError and
+    the whole pass aborts (and keeps aborting on every later pass).
+    """
+    with transaction(conn):
+        conn.execute(
+            "DELETE FROM sessions WHERE file_path = ? AND session_id != ?",
+            (file_path, keep_session_id),
+        )
+
+
 def forget_session(conn: sqlite3.Connection, session_id: str) -> None:
     """Drop a session that no longer has a file; its entries go with it through the cascade."""
     with transaction(conn):
@@ -211,6 +225,7 @@ def indexed_store_root(conn: sqlite3.Connection) -> str | None:
 
 __all__ = [
     "apply_scan",
+    "forget_path_owner",
     "forget_session",
     "indexed_store_root",
     "mark_error",

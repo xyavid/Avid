@@ -117,6 +117,8 @@ export function ConversationPage() {
   const [navQuery, setNavQuery] = useState('')
   const [contentHits, setContentHits] = useState<SearchHit[]>([])
   const [searchingContent, setSearchingContent] = useState(false)
+  // 内容那一路的提示：检索失败要说清，索引落后也要说（别让人以为搜全了）。
+  const [searchNotice, setSearchNotice] = useState<string | null>(null)
   // 跳到哪条分两件事（别合成一个状态）：jump 是「这次要换页」的请求，用完即清；
   // focusEntryId 是「高亮谁」，留到用户自己切走——合成一个会在换页后把高亮也清掉（踩过）。
   const [jump, setJump] = useState<{ sessionId: string; seq: number } | null>(null)
@@ -135,6 +137,8 @@ export function ConversationPage() {
     setJump(null)
     setFocusEntryId(null)
     setSelectedId(id)
+    // 上一次的错误（比如点了个已被删掉的命中）不该跟着切到新会话——错误屏会一直粘着。
+    setError(null)
   }
   const selectedIdRef = useRef<string | null>(null)
   selectedIdRef.current = selectedId
@@ -210,6 +214,7 @@ export function ConversationPage() {
     if (needle.length < 2) {
       setContentHits([])
       setSearchingContent(false)
+      setSearchNotice(null)
       return
     }
     let alive = true
@@ -219,9 +224,12 @@ export function ConversationPage() {
         .then((result) => {
           if (!alive) return
           setContentHits(result.hits)
+          setSearchNotice(result.behind > 0 ? `索引还落后 ${result.behind} 个会话` : null)
         })
-        .catch(() => {
-          if (alive) setContentHits([])
+        .catch((e: unknown) => {
+          if (!alive) return
+          setContentHits([])
+          setSearchNotice(e instanceof ApiError ? e.message : '内容检索暂时用不了')
         })
         .finally(() => {
           if (alive) setSearchingContent(false)
@@ -246,6 +254,7 @@ export function ConversationPage() {
         if (!alive) return
         setHistory(itemsFromEntries([...page.entries].reverse()))
         setEarlier({ hasMore: page.has_more, cursor: page.next_cursor })
+        setError(null)  // 这一次读成功了：把上一次的错误屏收掉
       })
       .catch((e: unknown) => {
         if (alive) {
@@ -466,6 +475,8 @@ export function ConversationPage() {
     setSessionsHint(null)
     try {
       await deleteSession(id)
+      // 这个会话的命中立刻从侧栏收掉：它在索引里要等下一次通知/补齐才消失（点进去只会 404）。
+      setContentHits((current) => current.filter((hit) => hit.session_id !== id))
       const list = await refreshSessions()
       if (selectedIdRef.current === id) {
         const inProject = list.filter((s) => s.workspace?.id === activeWorkspaceId)
@@ -595,6 +606,7 @@ export function ConversationPage() {
             onDeleteSession={(id) => void deleteSessionById(id)}
             contentHits={contentHits}
             contentSearching={searchingContent}
+            searchNotice={searchNotice}
             onSearchQuery={setNavQuery}
             onSelectHit={(hit) => {
               selectSession(hit.session_id)

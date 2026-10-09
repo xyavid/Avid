@@ -532,8 +532,18 @@ def _masks(
             continue
         files.append(str(Path(expanded).resolve()))
 
+    # 用户级 Avid 目录本身（secrets / settings / registry / audit / index）：DEFAULT_MASK_DIRS
+    # 里写死的是 ~/.avid，而 AVID_HOME 能把它搬到别处——那时密钥与审计就全在沙箱里可读了。
+    home_dir_text = str(avid_home().expanduser().resolve())
+    if root and _contains(home_dir_text, root):
+        notes.append(f"工作区位于用户级 Avid 目录内（{home_dir_text}），跳过该掩蔽")
+    elif any(_contains(item, home_dir_text) for item in dirs):
+        pass
+    else:
+        dirs.append(home_dir_text)
+
     # 会话文件就是对话历史本身，agent 的工具不该读自己的记录（阶段 56：会话搬出工作区后
-    # 这条才成立）。默认位置已被上面的 ~/.avid 覆盖，配置到别处时这一条生效。
+    # 这条才成立）。默认位置已被上面两条覆盖，配置到别处时这一条生效。
     store = str(sessions_dir().expanduser().resolve())
     if root and _contains(store, root):
         notes.append(f"工作区位于会话目录内（{store}），跳过该掩蔽")

@@ -14,6 +14,7 @@ from dataclasses import asdict
 from fastapi import APIRouter, Query, Request
 
 from ...index.queries import index_stats, search_entries
+from ...services.errors import SearchUnavailable
 from ..schemas import SearchResultOut
 
 router = APIRouter()
@@ -33,6 +34,11 @@ def search(
     limit: int = Query(default=20, ge=1, le=100),
 ) -> dict:
     indexer = request.app.state.services.indexer
+    if indexer is None:
+        raise SearchUnavailable(
+            "这个进程里索引不可用（多半是索引目录写不了或库坏了）；"
+            "会话本身不受影响，`avid index check` 能看原因、`avid index rebuild` 能重建。"
+        )
     indexer.flush(SEARCH_FLUSH_SECONDS)
     hits = search_entries(
         indexer.conn, q, session_id=session, workspace_id=workspace, limit=limit

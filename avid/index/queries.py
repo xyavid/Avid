@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 import sqlite3
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 from .db import row_to_dict
@@ -77,10 +78,12 @@ def list_sessions(
         clauses.append("index_status = ?")
         params.append(status)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    tail = ""
     if limit is not None:
+        tail = " LIMIT ?"
         params.append(limit)
     rows = conn.execute(
-        f"SELECT * FROM sessions {where} ORDER BY updated_at DESC, session_id", params
+        f"SELECT * FROM sessions {where} ORDER BY updated_at DESC, session_id{tail}", params
     ).fetchall()
     return [_to_session(row) for row in rows]
 
@@ -238,36 +241,29 @@ def search_entries(
     short_words = [word for word in words if len(word) < MIN_FTS_TOKEN]
 
     hits: list[SearchHit] = []
-    if long_words:
+    if short_words:
+        # 有短词时整条查询都走 LIKE：短词 FTS 看不见，而两路各查一遍再合并只能得到**并集**
+        # ——那与「多个词按 AND」的承诺矛盾（实测：专有词 + 两字中文词会捞回只含短词的会话）。
+        # 几千行的量级是毫秒级，所以宁可全扫也要语义正确：所有词（长与短）都必须是子串。
+        clauses = [" AND ".join("e.search_text LIKE ? ESCAPE '\\'" for _ in words)]
+        params: list[object] = [_like_pattern(word) for word in words]
+        clauses.extend(scope)
+        hits = _fetch_hits(
+            conn, where=" AND ".join(clauses), params=params, needles=words, limit=limit
+        )
+    elif long_words:
         # 加引号 = 当成字面量：既不解析 AND/OR，也不会把 * 当通配符。
         expression = " AND ".join(f'"{word}"' for word in long_words)
         where = ["e.entry_pk IN (SELECT rowid FROM entries_fts WHERE entries_fts MATCH ?)"]
-        params: list[object] = [expression, *scope_params]
+        params = [expression, *scope_params]
         where.extend(scope)
         hits = _fetch_hits(
             conn,
             where=" AND ".join(where),
             params=params,
-            needles=[*long_words, *short_words],
+            needles=long_words,
             limit=limit,
         )
-
-    if short_words:
-        # 短词（中文两字词最常见）FTS 看不见：直接扫 search_text。几千行的量级是毫秒级，
-        # 所以不设扫描上限，也不假装结果不全——真慢了是加索引的信号，不是这里加闸门。
-        clauses = [" AND ".join("e.search_text LIKE ? ESCAPE '\\'" for _ in short_words)]
-        params = [_like_pattern(word) for word in short_words]
-        clauses.extend(scope)
-        seen = {(hit.session_id, hit.entry_id) for hit in hits}
-        for hit in _fetch_hits(
-            conn,
-            where=" AND ".join(clauses),
-            params=params,
-            needles=words,
-            limit=limit,
-        ):
-            if (hit.session_id, hit.entry_id) not in seen:
-                hits.append(hit)
 
     return hits[:limit]
 
@@ -282,12 +278,15 @@ def index_stats(conn: sqlite3.Connection) -> dict[str, Any]:
             "SELECT index_status, COUNT(*) AS n FROM sessions GROUP BY index_status"
         )
     }
-    behind = int(
-        conn.execute(
-            "SELECT COUNT(*) FROM sessions WHERE indexed_bytes < file_size AND index_status = ?",
-            (INDEX_STATUS_OK,),
-        ).fetchone()[0]
-    )
+    # 「落后」= 没读到头（游标 < 长度）、或记录指向的文件已经不在（幽灵行）。两者都让
+    # 检索结果不可信，所以都算进这个数——它要能当新鲜度信号用。
+    behind = 0
+    for row in conn.execute(
+        "SELECT file_path, file_size, indexed_bytes FROM sessions WHERE index_status = ?",
+        (INDEX_STATUS_OK,),
+    ):
+        if int(row["indexed_bytes"]) < int(row["file_size"]) or not Path(row["file_path"]).exists():
+            behind += 1
     return {
         "sessions": sessions,
         "entries": entries,

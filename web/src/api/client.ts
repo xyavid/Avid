@@ -128,6 +128,7 @@ export function renameSession(sessionId: string, name: string): Promise<SessionD
 /**
  * 删除会话（204 无正文）。这会**销毁磁盘上的会话记录文件**——与「从项目列表移除、
  * 会话文件还在」的工作区删除不同，删完不可恢复；有活动 run 时服务端回 409 session_busy。
+ * （会话现在集中放在 `<AVID_HOME>/sessions/<工作区 id>/`，见设置页「会话存储」。）
  */
 export function deleteSession(sessionId: string): Promise<void> {
   return request(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })

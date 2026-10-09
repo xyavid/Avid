@@ -11,6 +11,7 @@ import os
 
 from index_cases import ALPHA, BETA, append_message, make_session, read_byte_range
 
+from avid.index import check as check_mod
 from avid.index import db as index_db
 from avid.index import queries, scanner
 
@@ -280,3 +281,104 @@ def test_entries_report_their_own_location(indexer, store):
     assert found is not None
     assert found["file_path"] == str(file)
     assert read_byte_range(file, int(found["byte_offset"]), int(found["byte_length"]))["id"] == entry_id
+
+
+# ---------------- 评审修复（2026-10-09）：游标与行归属的四个洞 ----------------
+
+
+def test_a_renamed_file_updates_its_path(indexer, store):
+    """改名/迁移后 file_path 必须跟着走：否则通知按旧路径找不到文件，新消息永远不进索引。"""
+    import os
+
+    file = make_session(store, session_id="s-rename", messages=({"role": "user", "content": "一"},))
+    indexer.index_all()
+    moved = file.with_name("renamed_" + file.name)
+    os.rename(file, moved)  # 保留 mtime：这正是迁移命令的日常路径
+
+    indexer.reconcile()
+
+    row = queries.get_session(indexer.conn, "s-rename")
+    assert row is not None and row.file_path == str(moved)
+
+    # 通知也要能找回来：拿旧路径根本读不到文件，得靠新的 file_path
+    append_message(moved, {"role": "assistant", "content": "二"})
+    indexer.notify("s-rename")
+    assert indexer.flush(3.0) is True
+    again = queries.get_session(indexer.conn, "s-rename")
+    assert again is not None and again.entry_count == 2
+
+
+def test_a_same_size_rewrite_is_rebuilt_not_absorbed(indexer, store):
+    """等长原地改写：长度看不出来，mtime 是唯一信号——不能在快路上把它刷新掉。"""
+    import os
+
+    file = make_session(store, session_id="s-rewrite", messages=({"role": "user", "content": "旧词儿"},))
+    indexer.index_all()
+    assert queries.search_entries(indexer.conn, "旧词儿")
+
+    body = file.read_text(encoding="utf-8").replace("旧词儿", "新词儿")  # 三个字换三个字
+    file.write_text(body, encoding="utf-8")
+    stat = file.stat()
+    os.utime(file, ns=(stat.st_atime_ns, stat.st_mtime_ns + 5_000_000_000))
+
+    indexer.reconcile()
+
+    assert queries.search_entries(indexer.conn, "新词儿"), "等长改写要被重扫"
+    assert queries.search_entries(indexer.conn, "旧词儿") == []
+    assert check_mod.check_index(indexer, roots=[store]).findings == ()
+
+
+def test_a_file_replaced_by_another_session_does_not_jam_the_index(indexer, store):
+    """同名文件被换成另一会话：file_path 的唯一约束必须被处理，否则整遍索引永久卡死。"""
+    file = make_session(store, session_id="s-old", messages=({"role": "user", "content": "老的"},))
+    indexer.index_all()
+    # 同一个路径上换一份别的会话（header 里是另一个 id）
+    other = make_session(store, session_id="s-new", messages=({"role": "user", "content": "新的"},))
+    file.write_bytes(file.read_bytes())  # 占位：确保路径不变
+    file.write_text(other.read_text(encoding="utf-8"), encoding="utf-8")
+    other.unlink()
+
+    report = indexer.reconcile()
+
+    assert report.failed == 0, report
+    assert queries.get_session(indexer.conn, "s-new") is not None
+    assert queries.get_session(indexer.conn, "s-old") is None
+    assert check_mod.check_index(indexer, roots=[store]).findings == ()
+
+
+def test_one_bad_session_does_not_stop_the_pass(indexer, store):
+    """一个会话的约束错误不该让整遍中止：排在它后面的健康会话必须照旧被索引。"""
+    import sqlite3 as sqlite
+
+    from avid.index import writer
+
+    make_session(store, session_id="a-bad", messages=({"role": "user", "content": "坏的"},))
+    make_session(store, session_id="z-good", messages=({"role": "user", "content": "好的"},))
+
+    real = writer.apply_scan
+
+    def explode(conn, session, scan):
+        if session.session_id == "a-bad":
+            raise sqlite.IntegrityError("模拟一个只属于这条会话的约束错误")
+        return real(conn, session, scan)
+
+    monkey = indexer.__class__.__module__
+    import avid.index.indexer as indexer_module
+
+    indexer_module.apply_scan = explode
+    try:
+        report = indexer.index_all()
+    finally:
+        indexer_module.apply_scan = real
+
+    assert report.failed == 1
+    assert queries.get_session(indexer.conn, "z-good") is not None
+    assert monkey  # 保留引用，避免 lint 把 import 清掉
+
+
+def test_list_sessions_limit_actually_limits(indexer, store):
+    for index in range(3):
+        make_session(store, session_id=f"s-limit-{index}", messages=({"role": "user", "content": "一"},))
+    indexer.index_all()
+
+    assert len(queries.list_sessions(indexer.conn, limit=2)) == 2

@@ -13,7 +13,7 @@ Avid 是一个自建的 agent 运行时（harness）：模型调用、工具执�
 - **现状**：模型调用 → 循环 → 8 个内置工具 + stdio MCP → 权限轻量化（毁灭级命令双确认 + 凭据拒读 + 跨平台沙箱 + 审计）→ hook 四事件 → 技能 → 上下文压缩 → 会话持久化 → 本地 Web 服务，端到端可用；浏览器界面随阶段 33 重建（纸本视觉对话界面 + 会话/工作区管理 + 设置），阶段 52–54 补齐：时间线逐段实时 + 收尾折成一行、文件类工具卡点开是差异/代码视图、右列按需打开（选择页 → 工作区文件 / 子智能体 / 临时对话 / 终端）、模型在输入区由用户自选（设置只提供候选列表）。
 - **阶段 35 重置**：包平铺到仓库根（`avid/`，无 src 层）；评测仪器（benchmarks）整体删除，评测另立阶段；docs 体系撤除，**代码与模块注释是唯一现状**。
 
-**仓库现状问谁**：不问文档，问代码——每个模块的职责、边界与不变量写在模块 docstring 与注释里；跨包边界由 `tests/test_web_boundaries.py` 的门禁（A1–A13）钉住，前端契约由 `test_wire_contract.py` / `test_event_contract.py` 双侧钉住。
+**仓库现状问谁**：不问文档，问代码——每个模块的职责、边界与不变量写在模块 docstring 与注释里；跨包边界由 `tests/test_web_boundaries.py` 的门禁（A1–A14）钉住，前端契约由 `test_wire_contract.py` / `test_event_contract.py` 双侧钉住。
 
 ### 1.1 常用命令
 
@@ -73,7 +73,8 @@ Web  POST /api/sessions/{id}/runs ─┴─► svc/runs.RunRegistry（线程 + �
   目录内按工作区 id 分子目录；归属只认 header 的 `workspaceId`。旧位置用
   `avid session migrate` 显式搬（先出清单再动手）。
 - 五步压缩阶梯在 `agent/compaction.py`，编排归 `ContextManager`（`agent/context.py`）。
-- 跨包依赖方向由 `tests/test_web_boundaries.py` 门禁钉住：循环与工具协议对策略层零运行时依赖（A13）。
+- 跨包依赖方向由 `tests/test_web_boundaries.py` 门禁钉住：循环与工具协议对策略层零运行时依赖（A13）；
+会话索引对会话层单向只读（A14：`session/` 不得 import `index/`，`index/` 不得依赖 services/web/agent/providers）。
 
 ### 1.3 关键子系统
 

@@ -54,6 +54,8 @@ export type SessionNavProps = {
   onSelectHit?: (hit: SearchHit) => void
   /** 查询词变化（装配层据此去查内容索引，自己做防抖）。 */
   onSearchQuery?: (query: string) => void
+  /** 内容检索那一路的提示：检索失败、或索引还落后（别让人以为搜全了）。 */
+  searchNotice?: string | null
   /** 新建在飞：按钮落 disabled，避免连点建出几个空会话。 */
   creating?: boolean
   /** 动作结果或失败原因，一句人话（删除不可逆，成功也要说话）。 */
@@ -72,6 +74,7 @@ export function SessionNav({
   contentSearching = false,
   onSelectHit,
   onSearchQuery,
+  searchNotice = null,
   creating = false,
   notice = null,
 }: SessionNavProps) {
@@ -135,11 +138,14 @@ export function SessionNav({
           ))
         )}
       </div>
-      {query.trim() !== '' && (contentSearching || contentHits.length > 0) && (
+      {query.trim() !== '' && (contentSearching || contentHits.length > 0 || searchNotice) && (
         <div className="border-t border-hair pt-a8">
           <p className="px-a8 font-ui text-micro text-ink-muted">
             {contentSearching ? '正在查内容…' : `内容命中 ${contentHits.length} 条`}
           </p>
+          {searchNotice && (
+            <p className="px-a8 font-ui text-micro text-ink-muted">{searchNotice}</p>
+          )}
           {contentHits.map((hit) => (
             <button
               key={`${hit.session_id}:${hit.entry_id}`}

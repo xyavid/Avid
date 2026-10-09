@@ -14,19 +14,21 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from ..session.errors import SessionStorageError
-from ..session.jsonl import HEADER_KIND, parse_header, parse_transaction
+from ..session.jsonl import parse_header, parse_transaction
 from ..session.types import (
     STORAGE_VERSION,
     CommittedEntry,
     CommittedValueSet,
 )
-from ..session.values import SESSION_NAME_NS
-from .extract import entry_text, one_line
+from ..session.values import COMPACTION_NS, SESSION_NAME_NS
+from .extract import compaction_text, entry_text, one_line
 from .types import ScannedEntry, ScanResult
+
+# 压缩摘要行在库里算一类自己的条目（不是 message/notice/error，也不是普通 value）。
+COMPACTION_TYPE = "compaction"
 
 
 def read_session_facts(path: Path) -> tuple[str, int, str | None, str | None]:
@@ -135,6 +137,24 @@ def scan_file(
                 entry_count += 1
             elif isinstance(record, CommittedValueSet) and record.namespace == SESSION_NAME_NS:
                 title = one_line(record.value) or title
+            elif isinstance(record, CommittedValueSet) and record.namespace == COMPACTION_NS:
+                # 压缩摘要不是条目（它只落在游标值里），但它是那段被压掉的历史的概括：
+                # 用确定性的派生 id 让它也能被检索到（重扫同一行得到同一个 id，不会重复）。
+                summary_text = compaction_text(record.value)
+                if summary_text:
+                    entries.append(
+                        ScannedEntry(
+                            entry_id=compaction_entry_id(record.key, record.seq),
+                            seq=record.seq,
+                            entry_type=COMPACTION_TYPE,
+                            role=None,
+                            timestamp=None,
+                            byte_offset=line_offset,
+                            byte_length=line_length,
+                            search_text=summary_text,
+                        )
+                    )
+                    entry_count += 1
 
     return ScanResult(
         session_id=session_id,
@@ -150,13 +170,9 @@ def scan_file(
     )
 
 
-def is_session_line(line: str) -> bool:
-    """True when a decoded line is a transaction (i.e. not the header); used by tests and checks."""
-    try:
-        payload = json.loads(line)
-    except ValueError:
-        return False
-    return not (isinstance(payload, dict) and payload.get("kind") == HEADER_KIND)
+def compaction_entry_id(key: str, seq: int) -> str:
+    """Deterministic id for a value row: rescanning the same line yields the same id."""
+    return f"value:{COMPACTION_NS}:{key}:{seq}"
 
 
-__all__ = ["is_session_line", "read_session_facts", "scan_file"]
+__all__ = ["COMPACTION_TYPE", "compaction_entry_id", "read_session_facts", "scan_file"]

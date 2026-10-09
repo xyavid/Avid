@@ -26,8 +26,9 @@ English · [中文](README.zh-CN.md)
   `/rewind` rolls back the conversation pointer and the files together. Every workspace's sessions
   share one directory (`~/.avid/sessions` by default, movable to another disk).
 - **Content search** — a local SQLite index (FTS5, trigram) over every session's text: find the
-  conversation where you said something, jump to the exact entry. The index is derived data —
-  delete it and it rebuilds from the JSONL files.
+  conversation where you said something, open it at that point (message hits are highlighted;
+  tool-output hits land in the same conversation). The index is derived data — delete it and it
+  rebuilds from the JSONL files.
 - **Model/provider abstraction** — BYOK across four protocols (OpenAI-compatible / Responses /
   Anthropic / Ollama); swapping a model never touches the core.
 - **Permissions** — everything runs by default; destructive commands ask first, host credentials are
@@ -80,7 +81,9 @@ All flags: `avid --help`, `avid web --help`, `avid workspace --help`, `avid sess
   workspace id (a workspace's name lives in the registry, not in the path). Default
   `~/.avid/sessions`; change it in Settings → Session storage or with `AVID_SESSIONS_DIR`.
   Changing it does not move existing sessions — `avid session migrate` prints what it would move
-  and then does it (`avid session dir` shows where they live now).
+  and then does it (`avid session dir` shows where they live now; after a move it also looks in the
+  previous directory recorded by the index, so nothing is stranded). Changing it is refused while a
+  run is in flight, because that run writes to the old location and must finish first.
 - **Search index**: `~/.avid/index/sessions.sqlite`, built from the session files and rebuilt
   automatically as they grow (a run's messages are indexed right after they are written).
   It is disposable: `avid index check` says what is stale or broken, `avid index rebuild`
