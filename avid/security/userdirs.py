@@ -25,6 +25,8 @@ from typing import Any, Literal
 AVID_HOME_ENV = "AVID_HOME"
 # Environment variable that relocates the session store; it wins over the settings file.
 SESSIONS_DIR_ENV = "AVID_SESSIONS_DIR"
+# Environment variable that relocates the derived index; it wins over the default below.
+INDEX_DIR_ENV = "AVID_INDEX_DIR"
 SETTINGS_FILE = "settings.json"
 
 # Stamped into the file so the on-disk shape is self-describing.
@@ -33,6 +35,9 @@ SETTINGS_VERSION = 1
 SESSIONS_DIR_KEY = "sessions_dir"
 # Relative to the Avid home, so AVID_HOME relocates the default store with everything else.
 DEFAULT_SESSIONS_DIRNAME = "sessions"
+# The derived index lives beside the settings, inside the same masked directory.
+DEFAULT_INDEX_DIRNAME = "index"
+INDEX_DB_FILENAME = "sessions.sqlite"
 
 
 def avid_home() -> Path:
@@ -111,15 +116,44 @@ def sessions_dir_source() -> Literal["env", "settings", "default"]:
     return "settings" if _configured_sessions_dir() is not None else "default"
 
 
+def default_index_dir() -> Path:
+    """Where the derived index sits when nothing overrides it; beside the settings file."""
+    return avid_home() / DEFAULT_INDEX_DIRNAME
+
+
+def index_dir() -> Path:
+    """The index directory: ``AVID_INDEX_DIR`` when set, otherwise the default."""
+    override = os.environ.get(INDEX_DIR_ENV)
+    if override and override.strip():
+        return Path(override).expanduser()
+    return default_index_dir()
+
+
+def index_dir_source() -> str:
+    """Which layer decided the index location: ``env`` or ``default``."""
+    override = os.environ.get(INDEX_DIR_ENV)
+    return "env" if override and override.strip() else "default"
+
+
+def index_path() -> Path:
+    """The SQLite file; derived data that can be deleted and rebuilt at any time."""
+    return index_dir() / INDEX_DB_FILENAME
+
+
 __all__ = [
     "AVID_HOME_ENV",
+    "INDEX_DIR_ENV",
     "SESSIONS_DIR_ENV",
     "SETTINGS_FILE",
     "SETTINGS_VERSION",
     "SESSIONS_DIR_KEY",
     "avid_home",
+    "default_index_dir",
     "default_sessions_dir",
     "home_dir",
+    "index_dir",
+    "index_dir_source",
+    "index_path",
     "read_settings",
     "sessions_dir",
     "sessions_dir_source",
