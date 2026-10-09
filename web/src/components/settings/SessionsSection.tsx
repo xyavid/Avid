@@ -99,23 +99,32 @@ export function SessionsSection() {
           placeholder="绝对路径，例如 /data/avid-sessions"
           aria-label="会话目录"
         />
-        <Button onClick={choose} disabled={!editable || busy}>
+        <Button
+          className="shrink-0 whitespace-nowrap"
+          onClick={choose}
+          disabled={!editable || busy}
+        >
           选择文件夹
         </Button>
       </div>
 
       <div className="mt-a8 flex items-center gap-a8">
-        <Button onClick={() => void save(draft)} disabled={!editable || busy || !changed}>
+        <Button
+          className="shrink-0 whitespace-nowrap"
+          onClick={() => void save(draft)}
+          disabled={!editable || busy || !changed}
+        >
           保存位置
         </Button>
         <Button
+          className="shrink-0 whitespace-nowrap"
           onClick={() => void save('')}
           disabled={!editable || busy || current?.source !== 'settings'}
         >
           恢复默认
         </Button>
         {current && current.source !== 'default' && (
-          <span className="font-ui text-micro text-ink-muted">默认：{current.default_dir}</span>
+          <span className="truncate font-ui text-micro text-ink-muted">默认：{current.default_dir}</span>
         )}
       </div>
 
