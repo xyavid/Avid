@@ -66,10 +66,12 @@ def test_concurrency_tables_are_a_partition_of_the_registry():
     （慢，但安全）；但**两张表都写**或**表里出现不存在的名字**说明分类在漂移——
     到时候没人知道某个工具到底安不安全，所以让它红在契约测试里。
     """
-    from avid.agent.tools.safety import CONCURRENCY_SAFE, EXCLUSIVE
+    from avid.agent.tools.safety import CONCURRENCY_SAFE, CONDITIONAL, EXCLUSIVE
 
     assert not (CONCURRENCY_SAFE & EXCLUSIVE), "同一个工具不能既安全又独占"
-    assert set(TOOL_IMPLS) == CONCURRENCY_SAFE | EXCLUSIVE
+    assert not (CONCURRENCY_SAFE & CONDITIONAL), "conditional 是第三种，不是 safe 的别名"
+    assert not (EXCLUSIVE & CONDITIONAL)
+    assert set(TOOL_IMPLS) == CONCURRENCY_SAFE | EXCLUSIVE | CONDITIONAL
 
 
 def test_concurrency_safe_tools_are_read_only_by_name():
@@ -78,20 +80,22 @@ def test_concurrency_safe_tools_are_read_only_by_name():
     真正判"会不会写"要靠人，这里只把最容易搞错的那几个钉住：写文件、跑命令、
     改任务/待办、派子 agent 全都在独占侧。
     """
-    from avid.agent.tools.safety import CONCURRENCY_SAFE, EXCLUSIVE
+    from avid.agent.tools.safety import CONCURRENCY_SAFE, CONDITIONAL, EXCLUSIVE
 
     assert {
         "write_file",
         "edit_file",
-        "bash",
         "todo_write",
         "subagent",
     } <= EXCLUSIVE
     assert {
         "read_file",
         "glob",
+        "grep_search",
         "load_skill",
     } <= CONCURRENCY_SAFE
+    # bash 是「按调用判」的那一档：只读命令可以并行，写命令仍然独占（阶段 58）。
+    assert "bash" in CONDITIONAL
 
 
 @pytest.mark.parametrize("item", TOOLS, ids=NAMES)
@@ -116,6 +120,7 @@ def test_expected_tools_are_registered():
         "bash",
         "edit_file",
         "glob",
+        "grep_search",
         "load_skill",
         "read_file",
         "subagent",

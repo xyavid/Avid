@@ -262,6 +262,9 @@ AGENT_SECURITY_EDGES: dict[str, set[str]] = {
     "avid/agent/hooks.py": {"security.permission"},
     # files 只取凭据闸门（sensitive_reason），不再有模式/审批默认值
     "avid/agent/tools/files.py": {"security.action"},
+    # shell 只取「这条命令是不是纯读」这个事实（is_read_only），用于决定它能不能和别的读
+    # 并行；裁决（能不能跑）仍然只在 security/engine，工具层拿不到、也不该拿。
+    "avid/agent/tools/shell.py": {"security.command_parse"},
 }
 SECURITY_FREE_AGENT = (
     "avid/agent/transcript.py",

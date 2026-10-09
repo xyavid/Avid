@@ -45,6 +45,7 @@ PLACEHOLDER_ARGS: dict[str, str] = {
     "write_file": '{"path": "a.txt", "content": "x"}',
     "edit_file": '{"path": "a.txt", "old_string": "a", "new_string": "b"}',
     "glob": '{"pattern": "*.py"}',
+    "grep_search": '{"pattern": "placeholder"}',
     "bash": '{"command": "echo hi"}',
     "todo_write": '{"todos": []}',
     "subagent": '{"tasks": [{"description": "子任务", "objective": "把这件事做完", '

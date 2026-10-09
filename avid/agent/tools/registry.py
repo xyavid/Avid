@@ -28,13 +28,17 @@ class ToolSpec:
     description: str
     parameters: dict[str, Any]
     impl: ToolImpl
-    #: "safe" = read-only and may share a segment; "exclusive" = a barrier that runs alone.
+    #: "safe" = read-only and may share a segment; "exclusive" = a barrier that runs alone;
+    #: "conditional" = decided per call by ``assess`` (may only be downgraded to safe).
     concurrency: str
     #: Whether the implementation accepts ``state=``; inferred from the signature by default.
     stateful: bool
     #: Whether this tool writes the user's files (阶段 54): 临时对话按它摘表。
     #: 只有「直接写盘」的工具算——bash 的写入由沙箱管（只读沙箱里它写不动）。
     writes: bool = False
+    #: Per-call concurrency verdict for "conditional" tools: (arguments, state) -> "safe" | "exclusive".
+    #: Anything but "safe", a raise, or a missing assessor means exclusive — the conservative side.
+    assess: Callable[[dict[str, Any], Any], str] | None = None
 
     def schema(self) -> dict[str, Any]:
         """Returns the function-calling envelope handed to the model."""
@@ -67,15 +71,25 @@ def tool(
     concurrency: str,
     stateful: bool | None = None,
     writes: bool = False,
+    assess: Callable[[dict[str, Any], Any], str] | None = None,
 ) -> Callable[[ToolImpl], ToolImpl]:
     """Declares one tool, with its schema next to its implementation.
 
     ``stateful`` defaults to inspecting the signature, where needing run state is already
     visible.
     """
-    if concurrency not in ("safe", "exclusive"):
+    if concurrency not in ("safe", "exclusive", "conditional"):
         raise TypeError(
-            f"工具 {name} 必须显式声明 concurrency='safe' 或 'exclusive'（拿不准就 exclusive）"
+            f"工具 {name} 必须显式声明 concurrency='safe'、'exclusive' 或 'conditional'"
+            "（拿不准就 exclusive）"
+        )
+    if concurrency == "conditional" and assess is None:
+        raise TypeError(f"工具 {name} 声明了 conditional，就必须给 assess(arguments, state)")
+    if concurrency != "conditional" and assess is not None:
+        raise TypeError(f"工具 {name} 只在自己是 conditional 时才给 assess")
+    if writes and concurrency == "conditional":
+        raise TypeError(
+            f"工具 {name} 会写文件，不能声明 conditional：降级是一处误判面，不开在写路径上"
         )
 
     def decorate(fn: ToolImpl) -> ToolImpl:
@@ -92,6 +106,7 @@ def tool(
                 concurrency=concurrency,
                 stateful=bool(inferred),
                 writes=writes,
+                assess=assess,
             )
         )
         return fn
@@ -107,6 +122,15 @@ def ensure_loaded() -> None:
     _LOADED = True
     from .. import todo  # noqa: F401  (todo_write lives in the agent layer)
     from . import files, search, shell, skill, subagent  # noqa: F401
+
+
+def by_name(name: str) -> ToolSpec | None:
+    """The declaration for one tool; None when it was never registered (callers treat that as unsafe)."""
+    ensure_loaded()
+    for item in _SPECS:
+        if item.name == name:
+            return item
+    return None
 
 
 def specs() -> tuple[ToolSpec, ...]:

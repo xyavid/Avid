@@ -67,6 +67,8 @@ MAX_FILE_BYTES = 2 * 1024 * 1024
         },
         "max_results": {
             "type": "integer",
+            "minimum": 1,
+            "maximum": HARD_RESULT_CAP,
             "description": f"最多返回多少条命中，默认 {MAX_RESULTS}，上限 {HARD_RESULT_CAP}。",
         },
     },

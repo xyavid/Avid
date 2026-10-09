@@ -21,6 +21,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any
 
+from ...security.command_parse import is_read_only
 from . import workspace
 from .registry import tool
 
@@ -81,6 +82,18 @@ def shell_argv(command: str, *, platform: str | None = None) -> list[str]:
         "-EncodedCommand",
         _encode_ps_command(_UTF8_PREFIX + command),
     ]
+
+
+def _assess_concurrency(arguments: dict[str, Any], state: Any) -> str:
+    """A provably read-only command may share a segment; anything else is a barrier.
+
+    bash 是这一档的第一个用户：`ls`/`git status`/`rg` 这类命令与别的读并行没有副作用，
+    但**写命令必须独占**（它可能和同批的读抢同一个文件）。判定交给安全层的
+    ``is_read_only``（建立在既有的 shell 解析事实上），拿不准就是独占。
+    """
+    _ = state
+    command = arguments.get("command")
+    return "safe" if isinstance(command, str) and is_read_only(command) else "exclusive"
 
 
 def _timeout(value: Any) -> int:
@@ -202,7 +215,8 @@ def kill_tree(process: subprocess.Popen, *, platform: str | None = None) -> None
     },
     required=("command",),
     # Spawns a process, so its working directory, timeout and output compete with the batch.
-    concurrency="exclusive",
+    concurrency="conditional",
+    assess=_assess_concurrency,
 )
 def bash(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     """Runs one command, returning combined stdout and stderr plus an exit marker."""

@@ -204,6 +204,8 @@ class ShellFacts:
 
     segments: tuple[tuple[str, ...], ...]
     capabilities: frozenset[str]
+    #: Program names with assignments/wrappers (env/timeout/sudo…) already stripped, basename-only.
+    programs: tuple[str, ...] = ()
     uncertain: bool = False  # true when the parser cannot prove the construct safe
     # 程序位出现了不认识的程序（且不是 $_ 管道属性访问）：脚本块扫描用它在
     # 「块内未知程序」与「块内未知参数词」之间做区分，前者传播、后者不传播。
@@ -302,15 +304,16 @@ def parse_shell(command: str, *, depth: int = 0) -> ShellFacts:
     """Splits a command into segments and derives capabilities, recursing into interpreters."""
     # Past the depth limit the command counts as an uncertain shell execution, never as safe.
     if depth > 6:
-        return ShellFacts((), frozenset({"shell_execute"}), True)
+        return ShellFacts((), frozenset({"shell_execute"}), uncertain=True)
     try:
         tokens = _lex(command)
     except ValueError:
         # Text shlex cannot tokenize is uncertain rather than silently empty and harmless.
-        return ShellFacts((), frozenset({"shell_execute"}), True)
+        return ShellFacts((), frozenset({"shell_execute"}), uncertain=True)
     segments: list[tuple[str, ...]] = []
     current: list[str] = []
     capabilities: set[str] = set()
+    programs: list[str] = []
     uncertain = False
     for token in tokens:
         if token in _SEPARATORS:
@@ -358,6 +361,7 @@ def parse_shell(command: str, *, depth: int = 0) -> ShellFacts:
         # Only the basename is compared, so /usr/bin/rm is treated as rm; Windows paths
         # carry backslash separators, so they are stripped the same way.
         program = words[0].rsplit("/", 1)[-1].rsplit("\\", 1)[-1].lower()
+        programs.append(program)
         args = words[1:]
         capabilities.add("process_spawn")
         # Secret file names are matched anywhere in the word because the path may carry a prefix.
@@ -501,5 +505,81 @@ def parse_shell(command: str, *, depth: int = 0) -> ShellFacts:
         uncertain |= child.uncertain
         capabilities.add("shell_execute")
     return ShellFacts(
-        tuple(segments), frozenset(capabilities), uncertain, unknown_program
+        tuple(segments),
+        frozenset(capabilities),
+        tuple(programs),
+        uncertain,
+        unknown_program,
     )
+
+
+# 能安全并行的程序名单：只放「读」这一件事的程序。sed/awk/find/echo 这类
+# 「默认读、带参数能写」的一律不收——判据要能一眼看懂，不靠参数组合的推理。
+_READ_ONLY_PROGRAMS = frozenset(
+    {
+        "ls",
+        "pwd",
+        "cat",
+        "head",
+        "tail",
+        "wc",
+        "stat",
+        "file",
+        "tree",
+        "du",
+        "df",
+        "which",
+        "rg",
+        "grep",
+        "diff",
+        "sort",
+        "uniq",
+        "cut",
+        "tr",
+        "nl",
+        "jq",
+        "basename",
+        "dirname",
+        "realpath",
+        "readlink",
+        "date",
+        "whoami",
+        "id",
+        "md5sum",
+        "sha1sum",
+        "sha256sum",
+        # git 只放进名单，具体子命令由既有能力表判：commit/push 会带 filesystem_write
+        # 或 network_connect，读动作不带——单一真相，不在这里再抄一份子命令名单。
+        "git",
+    }
+)
+
+# 只要沾上这些能力就不是「纯读」（process_spawn 人人都有，不在其中）。
+_UNSAFE_FOR_PARALLEL = frozenset(
+    {
+        "filesystem_write",
+        "filesystem_delete",
+        "network_connect",
+        "network_listen",
+        "shell_execute",
+        "privilege_escalation",
+        "device_access",
+        "external_side_effect",
+    }
+)
+
+
+def is_read_only(command: str) -> bool:
+    """Whether a shell command is provably pure reading, so it may share a parallel segment.
+
+    这不是权限判定（那条走 engine，判的是「能不能跑」）：这里只回答「能不能和别的读
+    并行」，所以拿不准一律 False——保守方向的代价只是少并行，反过来是把写混进并行段。
+    """
+    if not isinstance(command, str) or not command.strip():
+        return False
+    facts = parse_shell(command)
+    if facts.uncertain or not facts.programs:
+        return False
+    if facts.capabilities & _UNSAFE_FOR_PARALLEL:
+        return False
+    return all(program in _READ_ONLY_PROGRAMS for program in facts.programs)

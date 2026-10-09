@@ -31,7 +31,9 @@ def test_stateful_flag_matches_the_implementation_signature():
 
 def test_concurrency_is_total_and_explicit():
     for spec in specs():
-        assert spec.concurrency in ("safe", "exclusive"), spec.name
+        assert spec.concurrency in ("safe", "exclusive", "conditional"), spec.name
+        # conditional 必须带 assess；其余两档必须不带（声明期的规矩，见 registry.tool）
+        assert (spec.assess is None) == (spec.concurrency != "conditional"), spec.name
 
 
 def test_subagent_set_excludes_itself():

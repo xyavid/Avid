@@ -177,14 +177,41 @@ def _call_name(call: dict[str, Any]) -> str:
     return str((call.get("function") or {}).get("name", ""))
 
 
+def _call_arguments(call: dict[str, Any]) -> dict[str, Any]:
+    """Parsed arguments for the concurrency judgement; an unparseable blob reads as empty.
+
+    A malformed blob cannot be judged, and "cannot be judged" means exclusive — so an empty dict
+    is the right stand-in (an assessor sees no command and refuses).
+    """
+    raw = (call.get("function") or {}).get("arguments")
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str):
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def plan_segments(
-    tool_calls: list[dict[str, Any]], max_parallel: int
+    tool_calls: list[dict[str, Any]],
+    max_parallel: int,
+    *,
+    state: "RunState | None" = None,
 ) -> list[list[int]]:
-    """Split a batch into ordered segments: safe calls share one, exclusive calls stand alone."""
+    """Split a batch into ordered segments: safe calls share one, exclusive calls stand alone.
+
+    分类是**按调用**问的（`is_concurrency_safe(name, arguments, state)`）：工具可以声明
+    conditional，由自己的 assess 看参数决定这一次能不能并行。
+    """
     segments: list[list[int]] = []
     current: list[int] = []
     for index, call in enumerate(tool_calls):
-        if max_parallel > 1 and is_concurrency_safe(_call_name(call)):
+        if max_parallel > 1 and is_concurrency_safe(
+            _call_name(call), _call_arguments(call), state
+        ):
             current.append(index)
             continue
         if current:
@@ -242,7 +269,7 @@ def execute_batch(
             tool_call_id=str(tool_calls[index].get("id", "")), content=content
         )
 
-    for segment in plan_segments(tool_calls, limit):
+    for segment in plan_segments(tool_calls, limit, state=state):
         if state.cancelled:
             # Nothing is dispatched and the rest answer "not executed", keeping the batch complete.
             for index in segment:
