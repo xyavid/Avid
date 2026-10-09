@@ -263,3 +263,11 @@ def test_inputs_carry_images_like_any_other_message(bundle):
         entry for entry in entries if entry["type"] == "message" and entry["message"]["role"] == "user"
     )
     assert [part["type"] for part in user["message"]["content"]] == ["text", "image"]
+
+
+def test_an_unknown_session_is_not_an_empty_queue(bundle):
+    """打错的 id 不该看起来「队列是空的」。"""
+    client, _ = bundle(chat=ScriptedChat(make_turn("好")))
+
+    assert client.get("/api/sessions/nope/inputs").status_code == 404
+    assert submit(client, "nope", mode="after", prompt="x").status_code == 404

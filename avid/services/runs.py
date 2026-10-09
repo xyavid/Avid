@@ -428,6 +428,9 @@ class RunRegistry:
             return found
 
     def list_inputs(self, session_id: str) -> list[dict[str, Any]]:
+        # 没有这个会话就报 404，别给一个空队列：那会让打错的 id 看起来「队列是空的」。
+        if self.workspaces.find_session(session_id) is None:
+            raise SessionNotFound(f"没有这个会话：{session_id}")
         return [item.to_dict() for item in self.inbox(session_id).pending()]
 
     def drop_input(self, session_id: str, input_id: str) -> None:
