@@ -17,6 +17,7 @@ from .agent.state import RunState
 from .agent.tools import TOOLS, build_toolset, workspace
 from .agent.tools.mcp import McpManager
 from .index import SessionIndexer, queries
+from .index import check as index_check
 from .index.indexer import notifying, workspace_lookup
 from .providers.byok import resolve_chat
 from .providers.client import LLMError, ask, chat_completion
@@ -183,6 +184,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_workspace(argv[1:])
     if argv and argv[0] == "session":
         return _run_session_command(argv[1:])
+    if argv and argv[0] == "index":
+        return _run_index(argv[1:])
 
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -787,6 +790,70 @@ def _confirm(prompt: str) -> bool:
         return input(prompt).strip().lower() in {"y", "yes"}
     except EOFError:
         return False
+
+
+def build_index_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="avid index",
+        description="会话索引：校验它有没有落后/坏掉，需要时重建（都是本地操作，不调模型）",
+    )
+    actions = parser.add_subparsers(dest="action", required=True)
+
+    check = actions.add_parser("check", help="对比索引与磁盘上的会话文件，列出问题")
+    check.add_argument("--fix", action="store_true", help="按发现的问题就地修（清行/补索引/重建）")
+
+    rebuild = actions.add_parser("rebuild", help="重建索引（默认全量）")
+    rebuild.add_argument("--session", metavar="ID", help="只重建这个会话")
+
+    return parser
+
+
+def _run_index(argv: list[str]) -> int:
+    """Implements ``avid index``: check names the problems, --fix or rebuild repairs them."""
+    args = build_index_parser().parse_args(argv)
+    indexer = _session_indexer()
+    store = userdirs.sessions_dir()
+    try:
+        if args.action == "rebuild":
+            rebuilt = indexer.rebuild(args.session)
+            print(
+                f"已重建 {rebuilt.indexed} 个会话"
+                f"（跳过 {rebuilt.skipped} 个、失败 {rebuilt.failed} 个）"
+            )
+            return 0 if rebuilt.failed == 0 else 1
+
+        report = index_check.check_index(indexer, roots=[store])
+        print(
+            f"会话 {report.sessions} 个、条目 {report.entries} 条、"
+            f"库描述的是 {report.indexed_store or '（还没记过）'}"
+        )
+        if report.healthy:
+            print("没有问题。")
+            return 0
+        # 按症状分组打印：一次几百个「还没进过索引」逐条列会把终端刷满，但每类给几条样例
+        # 才能让人认出到底是哪一批坏了。
+        grouped: dict[str, list[index_check.Finding]] = {}
+        for finding in report.findings:
+            grouped.setdefault(finding.kind, []).append(finding)
+        for kind, items in grouped.items():
+            first = items[0]
+            hint = f"→ {first.fix}" if first.fix else "→ 需要人看一眼"
+            shown = f"（共 {len(items)} 条，如 {first.session_id or first.detail}）" if len(items) > 1 else ""
+            detail = first.detail if len(items) == 1 else first.detail
+            print(f"  [{kind}] {detail}{shown} {hint}")
+        if not args.fix:
+            print(f"--- 发现 {len(report.findings)} 条（要修就加 --fix）---", file=sys.stderr)
+            return 1
+        tally = index_check.apply_fixes(indexer, report)
+        print(
+            f"已修：补索引 {tally.reindexed}、重建 {tally.rebuilt}、"
+            f"清行 {tally.forgotten}、跳过 {tally.skipped}"
+        )
+        left = index_check.check_index(indexer, roots=[store])
+        print("修完再查一遍：" + ("没有问题。" if left.healthy else f"还剩 {len(left.findings)} 条"))
+        return 0 if left.healthy else 1
+    finally:
+        indexer.close()
 
 
 def build_web_parser() -> argparse.ArgumentParser:

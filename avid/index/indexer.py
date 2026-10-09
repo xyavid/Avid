@@ -153,6 +153,12 @@ class SessionIndexer:
         if worker is not None:
             worker.join(timeout)
 
+    def _record_store(self) -> None:
+        """Remember which session store this index describes; `check` compares it on the next run."""
+        roots = self.roots()
+        with self._lock:
+            record_store_root(self._conn, roots[0] if roots else userdirs.sessions_dir())
+
     def _is_stopped(self) -> bool:
         """Read the stop flag through a call: another thread sets it, so mypy must not narrow it."""
         with self._queue:
@@ -200,6 +206,7 @@ class SessionIndexer:
 
     def _drain(self, session_ids: Sequence[str]) -> None:
         """Index the given sessions, newest rows only; unknown ids are looked up once per batch."""
+        self._record_store()
         discovered: dict[str, Path] | None = None
         for session_id in session_ids:
             with self._lock:
@@ -262,6 +269,7 @@ class SessionIndexer:
 
     def index_session(self, session_id: str) -> IndexReport:
         """Index one known session by id, using the path recorded in the index."""
+        self._record_store()
         with self._lock:
             row = get_session(self._conn, session_id)
         if row is None:
@@ -282,8 +290,7 @@ class SessionIndexer:
     def _index_all_locked(self) -> IndexReport:
         found, notes = self.discover()
         report = IndexReport(details=notes)
-        with self._lock:
-            record_store_root(self._conn, self.roots()[0] if self.roots() else userdirs.sessions_dir())
+        self._record_store()
         for session_id, path in sorted(found.items()):
             try:
                 ok = self._index_one(session_id, path, force_full=False)
@@ -303,8 +310,8 @@ class SessionIndexer:
     def _reconcile_locked(self) -> IndexReport:
         found, notes = self.discover()
         report = IndexReport(details=notes)
+        self._record_store()
         with self._lock:
-            record_store_root(self._conn, self.roots()[0] if self.roots() else userdirs.sessions_dir())
             stale = sessions_needing_work(self._conn)
 
         targets = dict(found)
@@ -357,6 +364,7 @@ class SessionIndexer:
 
         found, notes = self.discover()
         report = IndexReport(details=notes)
+        self._record_store()
         for session_id, path in sorted(found.items()):
             try:
                 ok = self._index_one(session_id, path, force_full=True)

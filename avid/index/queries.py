@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 import sqlite3
 from collections.abc import Sequence
+from typing import Any
 
 from .db import row_to_dict
 from .types import (
@@ -271,7 +272,7 @@ def search_entries(
     return hits[:limit]
 
 
-def index_stats(conn: sqlite3.Connection) -> dict[str, object]:
+def index_stats(conn: sqlite3.Connection) -> dict[str, Any]:
     """Cheap facts for the CLI/`check`: rows, statuses and cursor lag."""
     sessions = count_sessions(conn)
     entries = int(conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0])
