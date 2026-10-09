@@ -85,6 +85,9 @@ class Config:
     # 本次运行选的推理强度（来自运行请求，取值必须在模型声明的档位列表里）；
     # None = 这次不带这个参数。
     reasoning_effort: str | None = None
+    # 模型声明里的图片能力：True / False / None（未声明）。只有 False 是硬约束——
+    # 带图的消息在起运行前就拒（阶段 59）；未声明则照发，由端点自己说话。
+    vision: bool | None = None
 
     @property
     def resolved_provider(self) -> str:

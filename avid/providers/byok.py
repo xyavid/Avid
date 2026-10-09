@@ -469,6 +469,7 @@ def config_from_provider(
         extra_body=dict(provider.extra_body) or None,
         max_output=model.max_output if model else None,
         reasoning_effort=effort,
+        vision=capabilities.vision,
     )
 
 

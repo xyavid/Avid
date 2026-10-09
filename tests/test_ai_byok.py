@@ -212,6 +212,32 @@ def test_rejects_chat_binding_without_tool_calling(byok_env):
 # ---------------- 解析 ----------------
 
 
+def test_vision_capability_rides_into_the_config(byok_env):
+    """图片能力与其它能力一样只是声明：解析时带进 Config，硬约束由调用方按消息判（阶段 59）。"""
+    _, sec = byok_env
+    sec.write_text(json.dumps({"blind": "sk"}), encoding="utf-8")
+    raw = {
+        "providers": [
+            {
+                "id": "blind",
+                "label": "x",
+                "protocol": "openai-compatible",
+                "base_url": "https://x.example/v1",
+                "models": [
+                    {"id": "no-image", "capabilities": {"vision": False}},
+                    {"id": "maybe", "capabilities": {}},
+                ],
+            }
+        ],
+        "bindings": {"chat": "blind/no-image"},
+    }
+    cfg = byok_env[0]
+    write_raw(cfg, raw)
+
+    assert resolve_chat().vision is False
+    assert resolve_chat(model="blind/maybe").vision is None
+
+
 def test_chat_binding_resolves_to_config(byok_env):
     set_secret("deepseek", "sk-live")
     save_byok(make_config())

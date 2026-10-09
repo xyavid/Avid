@@ -271,6 +271,20 @@ class RunRegistry:
         except attachments.AttachmentError as exc:
             raise AttachmentRejected(str(exc)) from exc
 
+        # 目标模型声明了不支持图片（阶段 55 的能力声明，阶段 59 接上）：在**起运行之前**拒。
+        # 发出去只会换来一个端点错误，而会话里会白留一条用户消息加一条失败记账。
+        # 模型没配好时不动声色：那条路径本来就有明确的失败文案，不在这里变成 400。
+        if attachments.image_count(content) > 0:
+            try:
+                config = resolve_chat(model=(model or "").strip() or None)
+            except ConfigError:
+                config = None
+            if config is not None and config.vision is False:
+                raise AttachmentRejected(
+                    "模型在「设置 → 模型」里声明了不支持图片输入（capabilities.vision = false）："
+                    "换一个声明支持的模型，或去掉图片再发"
+                )
+
         # 会话内命令（内核单点解析）：/<技能名> 把全文当作用户输入（正常运行），
         # /compact 与未知命令走 _run 的命令分支（不调模型，直接以文本收尾）。
         # 带图的消息不是命令："/" 开头的文字配一张截图，用户的意图是那条消息本身。

@@ -188,3 +188,31 @@ def test_a_stored_part_round_trips_through_the_vocabulary():
     part = image_part(PNG, name="shot.png")
     assert part["bytes"] == len(PNG)
     assert part["mime"] == "image/png"
+
+def test_a_model_declaring_no_vision_is_refused_before_the_run(bundle, tmp_path):
+    """模型声明 capabilities.vision=false 时，带图的消息在起运行前就拒（阶段 55 的声明，阶段 59 接上）。
+
+    发出去只会换来一个端点错误，会话里白留一条用户消息加一条失败记账。
+    """
+    import json
+    import os
+    from pathlib import Path
+
+    config_path = Path(os.environ["AVID_BYOK_CONFIG"])
+    raw = json.loads(config_path.read_text(encoding="utf-8"))
+    raw["providers"][0]["models"] = [{"id": "blind", "capabilities": {"vision": False}}]
+    raw["bindings"]["chat"] = "test/blind"
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    client, services = bundle(chat=ScriptedChat(make_turn("好")))
+    _, started = run_with_images(client, None, [{"name": "shot.png", "data": b64(PNG)}])
+
+    assert started.status_code == 400
+    assert started.json()["error"]["code"] == "invalid_attachment"
+    assert "vision" in started.json()["error"]["message"]
+    assert services.runs.active_runs() == []
+
+    # 纯文本不受这条声明影响（约束只落在带图的消息上）
+    session_id = create_session(client).json()["id"]
+    plain = client.post(f"/api/sessions/{session_id}/runs", json={"prompt": "就一句话"})
+    assert plain.status_code == 201, plain.text
