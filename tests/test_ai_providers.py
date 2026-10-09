@@ -13,13 +13,14 @@
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import json
 
 import httpx
 import pytest
 
-from avid.providers import anthropic, responses, transport
+from avid.providers import anthropic, openai_compat, responses, transport
 from avid.providers.client import ask, chat_completion, stream_completion
 from avid.providers.config import Config, ConfigError, window_for
 from avid.providers.protocol import LLMError, PromptTooLongError
@@ -667,3 +668,87 @@ class TestDispatch:
         with _mock(handler) as http:
             reply = ask(OPENAI_CONFIG, "hi", client=http)
         assert reply.text == "ok"
+
+
+# ---- 图片输入：parts → 各家运输形态（阶段 59） ----
+#
+# 存储形态是中立的（avid/attachments.py 的 part），wire 形状只在这三个模块里存在。
+# 这里钉两件事：每家翻对了形状；**没有任何一家静默丢图**（丢了就是模型的上下文缺一块）。
+
+_IMG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 24
+_IMG_B64 = base64.b64encode(_IMG_BYTES).decode("ascii")
+_IMG_PART = {"type": "image", "mime": "image/png", "name": "shot.png",
+             "bytes": len(_IMG_BYTES), "data": _IMG_B64}
+_PARTS_MESSAGE = {
+    "role": "user",
+    "content": [{"type": "text", "text": "看这个"}, _IMG_PART],
+}
+
+
+def test_openai_parts_become_image_url_blocks():
+    body = openai_compat.build_request(OPENAI_CONFIG, [_PARTS_MESSAGE])
+    assert body["messages"][0]["content"] == [
+        {"type": "text", "text": "看这个"},
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_IMG_B64}"}},
+    ]
+
+
+def test_openai_plain_text_messages_stay_untouched():
+    body = openai_compat.build_request(OPENAI_CONFIG, [{"role": "user", "content": "一句话"}])
+    assert body["messages"] == [{"role": "user", "content": "一句话"}]
+
+
+def test_anthropic_parts_become_base64_source_blocks():
+    out = anthropic.build_messages([_PARTS_MESSAGE])
+    assert out == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "看这个"},
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/png", "data": _IMG_B64},
+                },
+            ],
+        }
+    ]
+
+
+def test_anthropic_keeps_tool_results_and_a_following_image_message_apart():
+    # 「工具结果 + 用户补充带图」是最常见的组合：tool_result 块先在 buffer 里，
+    # 补充消息不能被吞掉、也不能把 tool_result 挤丢。
+    out = anthropic.build_messages(
+        [
+            {"role": "user", "content": "读 a.txt"},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "tc1", "type": "function",
+                 "function": {"name": "read_file", "arguments": '{"path": "a.txt"}'}}]},
+            {"role": "tool", "tool_call_id": "tc1", "content": "内容"},
+            _PARTS_MESSAGE,
+        ]
+    )
+    assert [message["role"] for message in out] == ["user", "assistant", "user", "user"]
+    assert out[2]["content"][0]["type"] == "tool_result"
+    assert out[3]["content"][0] == {"type": "text", "text": "看这个"}
+    assert out[3]["content"][1]["type"] == "image"
+
+
+def test_responses_parts_become_input_items():
+    request = responses.build_request(RESPONSES_CONFIG, [_PARTS_MESSAGE])
+    item = request["input"][0]
+    assert item["role"] == "user"
+    assert item["content"] == [
+        {"type": "input_text", "text": "看这个"},
+        {"type": "input_image", "image_url": f"data:image/png;base64,{_IMG_B64}"},
+    ]
+
+
+def test_no_protocol_silently_drops_the_image():
+    """三家的请求体里都必须出现那份 base64——丢图是静默的上下文缺失，不留痕。"""
+    bodies = {
+        "openai": openai_compat.build_request(OPENAI_CONFIG, [_PARTS_MESSAGE]),
+        "anthropic": anthropic.build_request(ANTHROPIC_CONFIG, [_PARTS_MESSAGE]),
+        "responses": responses.build_request(RESPONSES_CONFIG, [_PARTS_MESSAGE]),
+    }
+    for name, body in bodies.items():
+        assert _IMG_B64 in json.dumps(body, ensure_ascii=False), name

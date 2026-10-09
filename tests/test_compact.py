@@ -294,6 +294,17 @@ def test_render_conversation_keeps_roles_calls_and_tool_names():
     assert "[tool result: bash]\n1 passed" in text
 
 
+def test_render_conversation_marks_images_instead_of_dumping_base64():
+    """摘要请求里绝不能出现 base64：那是几百 KB 的无效输入，还按 token 计费。"""
+    from avid.attachments import image_part
+
+    part = image_part(b"\x89PNG\r\n\x1a\n" + b"\x00" * 4096, name="shot.png")
+    text = render_conversation([{"role": "user", "content": [{"type": "text", "text": "看这张"}, part]}])
+
+    assert "[user]\n看这张\n[图片 shot.png image/png 4KB]" in text
+    assert part["data"] not in text
+
+
 def test_create_prompt_carries_the_request_the_history_and_the_task(spill_root):
     chat = FakeChat()
 

@@ -6,17 +6,25 @@ import json
 from collections.abc import Iterable
 from typing import Any
 
+from ..attachments import content_chars, render_content_text
+
 
 class TranscriptError(ValueError):
     """A change was rejected because it would break the message structure."""
 
 
 def text_of(value: Any) -> str:
-    """Render a message field as text for estimation and persistence."""
+    """Render a message field as text for estimation and persistence.
+
+    分块内容（阶段 59）走 attachments 的渲染：文本按字面、图片只留一行标记——
+    base64 永不进摘要请求、也不进任何按字符算的地方。
+    """
     if value is None:
         return ""
     if isinstance(value, str):
         return value
+    if isinstance(value, list):
+        return render_content_text(value)
     return json.dumps(value, ensure_ascii=False, default=str)
 
 
@@ -51,8 +59,13 @@ _MESSAGE_OVERHEAD = 16
 
 
 def message_chars(message: dict[str, Any]) -> int:
-    """Estimate one message's character cost: content plus serialized tool_calls plus overhead."""
-    total = len(text_of(message.get("content"))) + _MESSAGE_OVERHEAD
+    """Estimate one message's character cost: content plus serialized tool_calls plus overhead.
+
+    图片按固定字符成本计（不是 base64 长度）：压缩触发线与用量环的货币是字符。
+    """
+    content = message.get("content")
+    body = content_chars(content) if isinstance(content, list) else len(text_of(content))
+    total = body + _MESSAGE_OVERHEAD
     calls = message.get("tool_calls")
     if calls:
         total += len(json.dumps(calls, ensure_ascii=False, default=str))

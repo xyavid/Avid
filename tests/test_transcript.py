@@ -197,6 +197,19 @@ def test_estimate_counts_content_and_tool_calls():
     ).estimate_chars()
 
 
+def test_an_image_message_costs_a_fixed_estimate_not_its_base64():
+    """图片的成本口径是固定值：base64 长度不是 token 量，按它计会把压缩阈值打爆。"""
+    from avid.attachments import IMAGE_CHAR_COST, image_part
+
+    part = image_part(b"\x89PNG\r\n\x1a\n" + b"\x00" * 200_000, name="big.png")
+    message = {"role": "user", "content": [{"type": "text", "text": "看"}, part]}
+    transcript = Transcript([message])
+
+    assert transcript.estimate_chars() < len(part["data"])
+    assert transcript.text_at(0) == "看\n[图片 big.png image/png 195KB]"
+    assert transcript.estimate_chars() >= IMAGE_CHAR_COST
+
+
 # ---------------- 成本量是增量维护的（P2-4） ----------------
 
 TOOL = {"role": "tool", "tool_call_id": "c1", "content": "z" * 300}

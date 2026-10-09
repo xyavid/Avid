@@ -353,3 +353,28 @@ def test_a_compaction_summary_is_searchable(indexer, store):
     assert hits[0].entry_type == "compaction"
     rows = queries.entries_of(indexer.conn, "s-compact")
     assert len([row for row in rows if row["type"] == "compaction"]) == 1
+
+
+def test_an_image_message_is_searchable_by_its_marker_but_not_its_bytes(indexer, store):
+    """图片进索引的是标记（文件名 + 类型 + 大小），不是 base64：搜得到「哪个会话有截图」，库也不会被撑爆。"""
+    from avid.attachments import image_part
+
+    part = image_part(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64, name="设计稿.png")
+    make_session(
+        store,
+        session_id="s-image",
+        messages=(
+            {"role": "user", "content": [{"type": "text", "text": "按这张调"}, part]},
+        ),
+    )
+    indexer.index_all()
+
+    assert [hit.session_id for hit in queries.search_entries(indexer.conn, "设计稿")] == ["s-image"]
+    assert [hit.session_id for hit in queries.search_entries(indexer.conn, "按这张调")] == ["s-image"]
+    stored = indexer.conn.execute(
+        "SELECT search_text FROM entries WHERE session_id = ?", ("s-image",)
+    ).fetchall()
+    assert len(stored) == 1
+    assert "[图片 设计稿.png image/png" in stored[0]["search_text"]
+    assert part["data"] not in stored[0]["search_text"]
+    assert part["data"][:24] not in stored[0]["search_text"]

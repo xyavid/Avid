@@ -8,6 +8,7 @@ import threading
 from collections.abc import Callable, Sequence
 from typing import Any, TypeVar
 
+from .. import attachments
 from .errors import (
     SessionBranchExistsError,
     SessionBusyError,
@@ -75,6 +76,11 @@ def validate_message(message: Any) -> None:
                 raise SessionInvalidMessageError(
                     "assistant 的每个 tool_call 都要有字符串 id"
                 )
+    # 分块内容（阶段 59）：形状与上限的唯一判据在 attachments——这里是写盘前的最后一道闸，
+    # 过了它，日志里的块就一定渲染得出来。
+    problems = attachments.check_content(message.get("content"))
+    if problems is not None:
+        raise SessionInvalidMessageError(f"消息内容不合法：{problems}")
     try:
         json.dumps(message, ensure_ascii=False)
     except (TypeError, ValueError) as exc:

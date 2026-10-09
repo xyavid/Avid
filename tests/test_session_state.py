@@ -143,6 +143,32 @@ def test_non_serializable_message_is_rejected():
         validate_message({"role": "user", "content": object()})
 
 
+def test_a_message_with_image_parts_passes_validation():
+    """图片是消息内容的一种形态（阶段 59）：形状与上限由 attachments 处判，会话层照收。"""
+    from avid.attachments import image_part
+
+    part = image_part(b"\x89PNG\r\n\x1a\n" + b"\x00" * 8, name="shot.png")
+    validate_message({"role": "user", "content": [{"type": "text", "text": "看"}, part]})
+
+
+def test_a_malformed_image_part_is_rejected_before_it_reaches_the_log():
+    with pytest.raises(SessionInvalidMessageError, match="字节数"):
+        validate_message(
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "mime": "image/png",
+                        "name": "x.png",
+                        "bytes": 999,
+                        "data": "aGk=",  # 2 字节，却声称 999
+                    }
+                ],
+            }
+        )
+
+
 # ---------------- 物化状态 ----------------
 
 

@@ -23,8 +23,10 @@ from .protocol import (
     PromptTooLongError,
     Turn,
     assistant_message,
+    content_parts,
     content_text,
     http_error,
+    image_data_url,
     iter_sse_events,
     prompt_too_long,
     usage_of,
@@ -41,7 +43,7 @@ def _input_items(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Translate chat-completions messages into Responses input items.
 
     工具结果与工具调用是 item 类型（function_call_output / function_call），
-    普通消息保持 role + 纯文本内容。
+    普通消息保持 role + 纯文本内容，带图时是 role + 输入块数组（input_text / input_image）。
     """
     items: list[dict[str, Any]] = []
     for message in messages:
@@ -70,8 +72,24 @@ def _input_items(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     }
                 )
             continue
-        items.append({"role": role, "content": str(message.get("content") or "")})
+        items.append({"role": role, "content": _user_content(message.get("content"))})
     return items
+
+
+def _user_content(raw: Any) -> Any:
+    """用户消息的内容：分块数组翻成 Responses 的输入块，纯文本保持原样（str）。"""
+    parts = content_parts(raw)
+    if parts is None:
+        return str(raw or "")
+    blocks: list[dict[str, Any]] = []
+    for part in parts:
+        if not isinstance(part, Mapping):
+            continue
+        if part.get("type") == "image":
+            blocks.append({"type": "input_image", "image_url": image_data_url(part)})
+        elif isinstance(part.get("text"), str):
+            blocks.append({"type": "input_text", "text": part["text"]})
+    return blocks
 
 
 def _tool_schemas(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:

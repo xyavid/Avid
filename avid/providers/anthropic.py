@@ -15,6 +15,7 @@ from .protocol import (
     PromptTooLongError,
     Turn,
     assistant_message,
+    content_parts,
     http_error,
     iter_sse_events,
     prompt_too_long,
@@ -113,13 +114,48 @@ def build_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         # Consecutive user messages are merged: Anthropic requires alternating roles.
         flush_results()
-        text = _text_of(message.get("content"))
-        if out and out[-1].get("role") == "user" and isinstance(out[-1]["content"], str):
-            out[-1]["content"] = out[-1]["content"] + "\n\n" + text
+        content = _user_content(message.get("content"))
+        if (
+            isinstance(content, str)
+            and out
+            and out[-1].get("role") == "user"
+            and isinstance(out[-1]["content"], str)
+        ):
+            out[-1]["content"] = out[-1]["content"] + "\n\n" + content
         else:
-            out.append({"role": "user", "content": text})
+            out.append({"role": "user", "content": content})
     flush_results()
     return out
+
+
+def _user_content(raw: Any) -> str | list[dict[str, Any]]:
+    """用户消息的内容：纯文本原样（保住既有的合并行为），分块数组翻成 Anthropic 的块。
+
+    图片走 source.type=base64（另两种是 url 与 file，这里没有可引用的稳定 URL）。
+    不认识的块跳过之前要先问一句「它有没有 text」——两家 provider 的响应块形状不同，
+    只有 text 的那种仍然按文本收。
+    """
+    parts = content_parts(raw)
+    if parts is None:
+        return _text_of(raw)
+    blocks: list[dict[str, Any]] = []
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        if part.get("type") == "image":
+            blocks.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": str(part.get("mime") or ""),
+                        "data": str(part.get("data") or ""),
+                    },
+                }
+            )
+        elif isinstance(part.get("text"), str):
+            blocks.append({"type": "text", "text": part["text"]})
+    return blocks
 
 
 def build_request(

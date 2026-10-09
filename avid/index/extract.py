@@ -3,6 +3,8 @@
 改这里等于改索引的**内容**（不是结构），所以规则写在模块头而不是散在 SQL 里：
 
 - `user` / `assistant` 正文全文进（这是人真正会搜的东西）；
+- **图片块只进一行标记**（文件名 / 类型 / 大小，阶段 59）：搜得到「哪个会话里有截图」，
+  但 base64 不进索引——体积与敏感面都不该被字节吃掉；
 - `assistant` 的 tool_calls 也进（参数里有路径与命令：搜得到「哪个会话动过 pyproject.toml」），
   每个调用的参数截断，避免一次把大段 JSON 灌进去；
 - `tool` 结果截前 2000 字符：够定位「哪个会话跑过这个命令」，不值得为全文付索引体积与
@@ -23,6 +25,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .. import attachments
+
 # One tool result, truncated; enough to find the session that ran a command.
 TOOL_TEXT_LIMIT = 2000
 # One tool call's arguments, truncated.
@@ -34,13 +38,12 @@ DISPLAY_CHARS = 120
 
 
 def _text_of(content: Any) -> str:
-    """Message content as searchable text: strings as-is, structured parts flattened, others ignored."""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):  # 分块内容（将来若出现图片等）只取其中的文本段
-        parts = [item.get("text") for item in content if isinstance(item, dict)]
-        return "\n".join(str(part) for part in parts if isinstance(part, str))
-    return ""
+    """Message content as searchable text: strings as-is, parts via the attachment vocabulary.
+
+    图片块渲染成一行标记（文件名 + 类型 + 大小）：既让「哪个会话里有截图」搜得到，
+    也保证 base64 不进索引。
+    """
+    return attachments.render_content_text(content)
 
 
 def _tool_calls_text(message: dict[str, Any]) -> str:

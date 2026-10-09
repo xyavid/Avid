@@ -18,8 +18,10 @@ from .protocol import (
     Reply,
     Turn,
     assistant_message,
+    content_parts,
     content_text,
     http_error,
+    image_data_url,
     iter_sse_events,
     prompt_too_long,
     usage_of,
@@ -39,6 +41,27 @@ def build_payload(config: Config, prompt: str) -> dict[str, Any]:
     return payload
 
 
+def _wire_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """分块内容翻成 /chat/completions 的块数组；纯文本消息原样透传（绝大多数请求走这条）。"""
+    return [_wire_message(message) for message in messages]
+
+
+def _wire_message(message: dict[str, Any]) -> dict[str, Any]:
+    parts = content_parts(message.get("content"))
+    if parts is None:
+        return message
+    blocks: list[dict[str, Any]] = []
+    for part in parts:
+        if not isinstance(part, Mapping):
+            continue
+        if part.get("type") == "image":
+            # 内联 data URL：这里没有可引用的稳定 URL，附件字节就在会话条目里。
+            blocks.append({"type": "image_url", "image_url": {"url": image_data_url(part)}})
+        elif isinstance(part.get("text"), str):
+            blocks.append({"type": "text", "text": part["text"]})
+    return {**message, "content": blocks}
+
+
 def build_request(
     config: Config,
     messages: list[dict[str, Any]],
@@ -50,7 +73,8 @@ def build_request(
     """Build the request body, prepending the system message without mutating the caller's list."""
     request: dict[str, Any] = {
         "model": config.model,
-        "messages": ([{"role": "system", "content": system}] if system else []) + list(messages),
+        "messages": ([{"role": "system", "content": system}] if system else [])
+        + _wire_messages(messages),
     }
     # A None max_tokens leaves the field out, so the provider decides the output cap.
     if max_tokens is not None:

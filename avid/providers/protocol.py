@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -102,6 +102,20 @@ def content_text(raw: Any) -> str:
             if isinstance(item, dict) and isinstance(item.get("text"), str)
         )
     return ""
+
+
+def content_parts(raw: Any) -> list[Any] | None:
+    """分块内容（阶段 59）：列表即内容数组，其余（str / None）返回 None 走纯文本路径。
+
+    存储形态是中立的（见 avid/attachments.py），翻成各家 wire 形状的事在三个适配器里。
+    元素按 Any 收：数组里出现什么由外部输入决定，逐块判型是适配器自己的事。
+    """
+    return raw if isinstance(raw, list) else None
+
+
+def image_data_url(part: Mapping[str, Any]) -> str:
+    """图片块 → data URL（OpenAI 与 Responses 两家都用它）。"""
+    return f"data:{part.get('mime')};base64,{part.get('data')}"
 
 
 def usage_of(data: Any) -> Usage:
