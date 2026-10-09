@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, suppress
 from typing import Any
 
+from .. import attachments
 from ..session import (
     DEFAULT_BRANCH,
     USAGE_NS,
@@ -350,14 +351,37 @@ class SessionService:
 
     @staticmethod
     def _entry_to_dict(entry: Any) -> dict[str, Any]:
+        # 线格式里图片块换成 ref（阶段 59）：字节走 attachment_bytes 那个端点，
+        # 条目页与 SSE 因此都不背 base64。
         return {
             "entry_id": entry.id,
             "parent_id": entry.parent_id,
             "seq": entry.seq,
             "timestamp": entry.timestamp,
             "type": entry.type,
-            "message": entry.message,
+            "message": None
+            if entry.message is None
+            else attachments.strip_message_bytes(entry.message),
         }
+
+    def attachment_bytes(self, session_id: str, entry_id: str, index: int) -> tuple[bytes, str]:
+        """一个图片块的原始字节与类型；定位靠 (条目, 块下标)。
+
+        字节的唯一出口，也是它唯一的来源——条目本身。不做内容寻址库：那会多出一份
+        可以丢的权威（GC、悬挂引用、迁移都要另写）。
+        """
+        with self._session(session_id) as session:
+            entry = session.get_entry(entry_id)
+            if entry is None or entry.message is None:
+                raise SessionReadError(f"会话 {session_id} 里没有条目 {entry_id}")
+            content = entry.message.get("content")
+            parts = content if isinstance(content, list) else []
+            part = parts[index] if 0 <= index < len(parts) else None
+            raw = attachments.image_bytes(part)
+            mime = part.get("mime") if isinstance(part, Mapping) else None
+        if raw is None:
+            raise InvalidRequest(f"条目 {entry_id} 的第 {index} 块不是图片（或字节已损坏）")
+        return raw, str(mime or "application/octet-stream")
 
     # Internals.
 

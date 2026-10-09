@@ -20,6 +20,7 @@ def start_run(request: Request, session_id: str, body: StartRunIn) -> dict:
     record = current_services(request).runs.start(
         session_id,
         body.prompt,
+        images=[image.model_dump() for image in body.images],
         auto_approve=body.auto_approve,
         branch=body.branch,
         full_ack=body.full_access_ack,

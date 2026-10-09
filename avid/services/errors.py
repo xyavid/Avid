@@ -98,6 +98,17 @@ class SessionReadError(ServiceError):
     status = 500
 
 
+class AttachmentRejected(ServiceError):
+    """一条图片附件不合法（类型 / 单图大小 / 张数 / base64）：客户端改完再发。
+
+    单独一类而不是并进 invalid_request：界面上的恢复动作不同——这条要么换图、
+    要么压缩，而不是改参数。
+    """
+
+    code = "invalid_attachment"
+    status = 400
+
+
 class WorkspaceExists(ServiceError):
     """The workspace to register is already listed, either bound to the process or registered."""
 
@@ -163,6 +174,7 @@ __all__ = [
     "ApprovalConflict",
     "ApprovalExpired",
     "ApprovalNotFound",
+    "AttachmentRejected",
     "BranchExists",
     "FileMissing",
     "FileNotDirectory",

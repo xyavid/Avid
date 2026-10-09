@@ -44,8 +44,10 @@ MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_IMAGES_PER_MESSAGE = 8
 #: 单条消息的图片合计：给 Anthropic 约 32MB 的单请求上限留出正文余量。
 MAX_TOTAL_BYTES = 16 * 1024 * 1024
-#: 线格式的 base64 长度上限（含 padding 与换行余量），用于 DTO 的粗筛。
-MAX_BASE64_CHARS = 4 * ((MAX_IMAGE_BYTES + 2) // 3) + 64
+#: 线格式的 base64 长度上限：**粗筛**，不是规则本身（规则是按字节判的单图上限）。
+#: 留 1MB 余量，好让「稍微超一点」的图走到 attachments 的 400（带中文原因），
+#: 而不是在 pydantic 那里变成一句 schema 不符。
+MAX_BASE64_CHARS = 4 * ((MAX_IMAGE_BYTES + 2) // 3) + 1_000_000
 #: 文件名的显示上限；它只用于标记与界面，不参与定位。
 MAX_NAME_CHARS = 200
 #: 图片的字符成本（≈1600 token）：压缩触发线与用量环的货币是「字符」。

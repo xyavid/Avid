@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .. import attachments
 from ..agent import commands as commands_module
 from ..agent.checkpoints import DirCheckpointSink, restore, restore_tally, rewind_target
 from ..agent.events import (
@@ -58,6 +59,7 @@ from ..session import (
 from ..session.types import ERROR_ENTRY, MESSAGE_ENTRY, NOTICE_ENTRY
 from .approvals import APPROVAL_TIMEOUT_SECONDS, ApprovalTable
 from .errors import (
+    AttachmentRejected,
     RunBusy,
     RunFinished,
     RunNotFound,
@@ -248,6 +250,7 @@ class RunRegistry:
         session_id: str,
         prompt: str,
         *,
+        images: list[dict[str, Any]] | None = None,
         auto_approve: bool = False,
         chat: Callable[..., Any] | None = None,
         branch: str = DEFAULT_BRANCH,
@@ -262,10 +265,17 @@ class RunRegistry:
             raise SessionNotFound(f"没有这个会话：{session_id}")
         workspace, metadata = found
 
+        # 图片在入口就收成内容块：形状与上限的唯一判据在 attachments，失败即 400（不进会话）。
+        try:
+            content = attachments.build_user_content(prompt, images or [])
+        except attachments.AttachmentError as exc:
+            raise AttachmentRejected(str(exc)) from exc
+
         # 会话内命令（内核单点解析）：/<技能名> 把全文当作用户输入（正常运行），
         # /compact 与未知命令走 _run 的命令分支（不调模型，直接以文本收尾）。
+        # 带图的消息不是命令："/" 开头的文字配一张截图，用户的意图是那条消息本身。
         command: str | None = None
-        if prompt.startswith("/"):
+        if prompt.startswith("/") and not images:
             match = commands_module.match_command(
                 prompt, skill_names=commands_module.skill_names(workspace_root=workspace.root)
             )
@@ -273,6 +283,7 @@ class RunRegistry:
                 body = commands_module.skill_text(match.name, workspace_root=workspace.root)
                 if body is not None:
                     prompt = body
+                    content = attachments.build_user_content(prompt, images or [])
             elif match is not None and match.kind == commands_module.KIND_COMMAND:
                 command = match.name
             elif match is not None:
@@ -322,7 +333,7 @@ class RunRegistry:
                 record,
                 workspace,
                 session,
-                prompt,
+                content,
                 auto_approve,
                 chat or self.chat,
                 branch,
@@ -701,7 +712,7 @@ class RunRegistry:
         record: RunRecord,
         workspace: Any,
         session: Any,
-        prompt: str,
+        content: str | list[dict[str, Any]],
         auto_approve: bool,
         chat: Callable[..., Any] | None,
         branch: str = DEFAULT_BRANCH,
@@ -711,6 +722,9 @@ class RunRegistry:
         # Permission shape and sandbox state go into run_started: a refresh rebuilds the view
         # from that event rather than from the in-memory record, so "was the sandbox off" stays
         # a visible fact.
+        # prompt 事件字段走文本渲染：带图的消息在这里变成「文本 + 图片标记」，
+        # 事件载荷不背 base64（图从读侧端点取）。
+        text = attachments.render_content_text(content)
         scratched = session.get_value(session_scratch()) is not None
         safety = build_run_security(
             full=full_ack,
@@ -725,7 +739,8 @@ class RunRegistry:
             record,
             RUN_STARTED,
             session_id=record.session_id,
-            prompt=prompt,
+            prompt=text,
+            images=attachments.image_count(content),
             auto_approve=auto_approve,
             workspace=workspace.id,
             workspace_root=workspace.root,
@@ -737,7 +752,8 @@ class RunRegistry:
             "run_start",
             session=record.session_id,
             workspace=workspace.id,
-            prompt_chars=len(prompt),
+            prompt_chars=len(text),
+            images=attachments.image_count(content),
         )
         # The recorder is built inside the try: if resolve_chat fails it never exists, and
         # _finish then has no usage to persist because record.recorder stays None.
@@ -748,7 +764,7 @@ class RunRegistry:
             record.recorder = recorder
             recorder.ensure_branch()
             history = messages_for_branch(session, recorder.branch)
-            messages = [*history, {"role": "user", "content": prompt}]
+            messages = [*history, {"role": "user", "content": content}]
 
             # 命令分支：不调模型，结果以一条 assistant 条目收尾（SSE 生命周期不变）。
             if record.command == "compact":
@@ -952,7 +968,12 @@ class RunRegistry:
                 type = _MESSAGE_EVENTS.get(str(message.get("role")), "")
             if not type:
                 return
-            payload: dict[str, Any] = {"entry_id": entry_id, "message": message}
+            payload: dict[str, Any] = {
+                "entry_id": entry_id,
+                # 线格式里图片块换成 ref（字节走读侧端点）：durable 事件会在重连时重放，
+                # 让一次重连搬几 MB 的 base64 不值得。
+                "message": attachments.strip_message_bytes(message),
+            }
             if label is not None:
                 # The one emission for reminder events: the loop's own only tags them, and the
                 # content is added here while the event type stays what consumers expect.

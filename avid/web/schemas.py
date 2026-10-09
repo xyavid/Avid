@@ -7,6 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..agent.events import TOOL_CALL_DENIED, TOOL_CALL_FINISHED, RunEvent
+from ..attachments import MAX_BASE64_CHARS
 
 # Tool failures come back as text, so three prefixes separate business, argument and environment errors.
 _FAILED_PREFIXES = ("错误：", "参数错误：")
@@ -427,12 +428,27 @@ class CreateBranchIn(BaseModel):
     at: str | None = Field(default=None, max_length=MAX_ID_CHARS)
 
 
+class ImageIn(BaseModel):
+    """一张待发送的图片：原始 base64 与可选文件名。
+
+    类型与上限由内核的 attachments 判（按字节判型、不信这里的声明）；这里的 max_length
+    只做粗筛，免得一个离谱的请求体先在 pydantic 里吃掉内存。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
+    data: str = Field(max_length=MAX_BASE64_CHARS)
+
+
 class StartRunIn(BaseModel):
     """Run request; full_access_ack=true 就是完全访问的授予凭据，没有别的模式可选。"""
 
     model_config = ConfigDict(extra="forbid")
 
     prompt: str = Field(max_length=MAX_PROMPT_CHARS)
+    # 随消息一起发的图片（阶段 59）：渲染进同一条用户消息，文本在前、图片按数组顺序在后。
+    images: list[ImageIn] = Field(default_factory=list)
     auto_approve: bool = False
     branch: str = Field(default="main", max_length=MAX_NAME_CHARS)
     # 本次运行的模型覆盖；缺省 = 按设置（.env + 界面覆盖层）解析。空串按缺省处理。
