@@ -54,6 +54,8 @@ export function toolLabel(name: string, args: string, root?: string | null): Too
       return { icon: 'pencil', verb: '编辑', target: or(relativeTo(text('path'), root)) }
     case 'glob':
       return { icon: 'search', verb: '查找', target: or(text('pattern')) }
+    case 'grep_search':
+      return { icon: 'search', verb: '搜索', target: or(text('pattern')) }
     case 'bash':
       return { icon: 'terminal', verb: '执行', target: or(firstLine(text('command'))) }
     case 'todo_write':

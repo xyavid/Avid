@@ -32,6 +32,10 @@ describe('toolLabel：动作 + 目标', () => {
     expect(toolLabel('write_file', JSON.stringify({ path: 'a.py' }), ROOT)).toMatchObject({ verb: '写入', target: 'a.py' })
     expect(toolLabel('edit_file', JSON.stringify({ path: 'a.py' }), ROOT)).toMatchObject({ verb: '编辑', target: 'a.py' })
     expect(toolLabel('glob', JSON.stringify({ pattern: '**/*.tsx' }), ROOT)).toMatchObject({ verb: '查找', target: '**/*.tsx' })
+    expect(toolLabel('grep_search', JSON.stringify({ pattern: '会话存储', path: 'src' }), ROOT)).toMatchObject({
+      verb: '搜索',
+      target: '会话存储',
+    })
     expect(toolLabel('todo_write', JSON.stringify({ todos: [{}, {}, {}] }), ROOT)).toMatchObject({ verb: '更新清单', target: '3 项' })
     expect(toolLabel('load_skill', JSON.stringify({ name: 'review' }), ROOT)).toMatchObject({ verb: '加载技能', target: 'review' })
   })
