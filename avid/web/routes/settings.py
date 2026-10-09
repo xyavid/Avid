@@ -10,13 +10,21 @@
 - DELETE /api/settings/byok：删配置与密钥两份文件（之后运行会报「还没有模型配置」）。
 
 生效路径：`resolve_chat` 每次运行都重读文件，保存后对下一条消息立即生效，无需重启。
+
+会话目录（阶段 56）另有两个端点：
+
+- GET /api/settings/sessions：会话目录的当前值、默认值与生效来源；
+- PUT /api/settings/sessions：改目录（就地建好、写 settings.json、解绑缓存仓库）。
+  只改「新会话写哪」，不搬已有会话——搬数据是 `avid session migrate` 的事。
+  环境变量 AVID_SESSIONS_DIR 在时界面只读（它赢过配置文件）。
 """
 
 from __future__ import annotations
 
 import contextlib
+from pathlib import Path
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Request, Response, status
 
 from ...providers import byok
 from ...providers.byok import (
@@ -28,6 +36,7 @@ from ...providers.byok import (
 )
 from ...providers.config import ConfigError
 from ...providers.verify import verify_provider
+from ...security import userdirs
 from ...services.errors import InvalidRequest
 from ..schemas import (
     ByokModel,
@@ -38,8 +47,11 @@ from ..schemas import (
     ByokTestIn,
     ByokTestOut,
     CapabilityFlags,
+    SessionsDirIn,
+    SessionsDirOut,
     VerifyStepOut,
 )
+from . import current_services
 
 router = APIRouter()
 
@@ -157,6 +169,61 @@ def delete_byok_settings() -> Response:
         with contextlib.suppress(FileNotFoundError):
             target.unlink()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+def _sessions_out() -> SessionsDirOut:
+    source = userdirs.sessions_dir_source()
+    return SessionsDirOut(
+        dir=str(userdirs.sessions_dir().expanduser()),
+        default_dir=str(userdirs.default_sessions_dir()),
+        source=source,
+        # 环境变量赢过文件：那两栏在界面上就是只读的，改文件也不生效。
+        editable=source != "env",
+    )
+
+
+def _prepare_sessions_dir(raw: str) -> Path:
+    """把界面给的路径变成可用的会话目录：要绝对路径，就地建好。"""
+    text = raw.strip()
+    path = Path(text).expanduser()
+    if not path.is_absolute():
+        raise InvalidRequest(f"要一个绝对路径：{text}")
+    if path.exists() and not path.is_dir():
+        raise InvalidRequest(f"这个路径上已经有一个文件：{path}")
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise InvalidRequest(f"建不出这个目录：{path}（{exc}）") from exc
+    return path.resolve()
+
+
+@router.get("/settings/sessions", response_model=SessionsDirOut)
+def get_sessions_settings() -> SessionsDirOut:
+    return _sessions_out()
+
+
+@router.put("/settings/sessions", response_model=SessionsDirOut)
+def put_sessions_settings(request: Request, body: SessionsDirIn) -> SessionsDirOut:
+    """只改「新会话写哪」：目录就地建好、写进设置文件、解绑缓存仓库；已有会话不动。"""
+    if userdirs.sessions_dir_source() == "env":
+        raise InvalidRequest(
+            f"环境变量 {userdirs.SESSIONS_DIR_ENV} 已经定了会话目录，写配置也不生效；"
+            "先去掉那个环境变量再在这里改。"
+        )
+    # None 值 = 删掉这个键（回落默认），所以这里允许 None。
+    patch: dict[str, str | None]
+    if body.dir.strip():
+        target = _prepare_sessions_dir(body.dir)
+        patch = {userdirs.SESSIONS_DIR_KEY: str(target)}
+    else:
+        patch = {userdirs.SESSIONS_DIR_KEY: None}
+    try:
+        userdirs.write_settings(patch)
+    except OSError as exc:
+        raise InvalidRequest(f"设置写不进 {userdirs.settings_path()}（{exc}）") from exc
+    # 仓库按工作区缓存着：不重新绑定的话，下一条消息还会写进旧目录。
+    current_services(request).workspaces.rebind()
+    return _sessions_out()
 
 
 __all__ = ["router"]

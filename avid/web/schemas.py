@@ -250,6 +250,23 @@ class ByokTestOut(BaseModel):
     steps: list[VerifyStepOut] = Field(default_factory=list)
 
 
+class SessionsDirOut(BaseModel):
+    """会话目录：当前值、默认值、生效来源；环境变量赢时 editable 为 false（界面只读）。"""
+
+    dir: str
+    default_dir: str
+    source: Literal["env", "settings", "default"]
+    editable: bool
+
+
+class SessionsDirIn(BaseModel):
+    """设置会话目录；空串表示恢复默认。只改配置，不搬已有会话。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    dir: str = Field(max_length=MAX_PATH_CHARS)
+
+
 class SessionSummary(BaseModel):
     id: str
     name: str | None = None

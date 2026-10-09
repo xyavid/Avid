@@ -2,6 +2,7 @@
  * 设置界面（报告 §7.5 的弹窗外壳：scrim 遮罩 + hana-scale-in 入场）：
  * - 模型段：BYOK 三层配置管理（阶段 34，见 ModelSection）——Provider / Model /
  *   Binding 全部由配置描述，密钥只入不出，保存后对下一条消息立即生效；
+ * - 会话存储段：会话目录在哪、由谁决定、怎么改（阶段 56，见 SessionsSection）；
  * - 外观段：模式三档（浅色 / 深色 / 跟随系统）+ 主题卡（暖纸 / 青夜）。
  * 关闭：右上 ✕ / Esc / 遮罩点击。
  */
@@ -14,6 +15,7 @@ import { Icon } from '../../ui/Icon'
 import { IconButton } from '../../ui/IconButton'
 import { Tabs } from '../../ui/Tabs'
 import { ModelSection } from './ModelSection'
+import { SessionsSection } from './SessionsSection'
 
 const MODE_LABELS: Record<string, string> = { light: '浅色', dark: '深色', auto: '跟随系统' }
 const LABEL_TO_MODE: Record<string, 'light' | 'dark' | 'auto'> = {
@@ -62,6 +64,14 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
             密钥只写入本机密钥文件，任何界面与日志都不会回传。
           </p>
           <ModelSection />
+        </section>
+
+        <section className="mt-a24">
+          <h3 className="font-ui text-hint font-medium text-ink-muted">会话存储</h3>
+          <p className="mt-a8 font-ui text-hint leading-[1.6] text-ink-muted">
+            所有工作区的会话集中放在这一个目录里（按工作区分子目录）。
+          </p>
+          <SessionsSection />
         </section>
 
         <section className="mt-a24">

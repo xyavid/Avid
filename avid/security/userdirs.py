@@ -19,7 +19,7 @@ import json
 import os
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 # Environment variable that relocates the user-level directory; tests use it for isolation.
 AVID_HOME_ENV = "AVID_HOME"
@@ -103,7 +103,7 @@ def sessions_dir() -> Path:
     return default_sessions_dir()
 
 
-def sessions_dir_source() -> str:
+def sessions_dir_source() -> Literal["env", "settings", "default"]:
     """Which layer decided the store: ``env``, ``settings`` or ``default``."""
     override = os.environ.get(SESSIONS_DIR_ENV)
     if override and override.strip():

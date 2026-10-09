@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+from support import create_session
 
 from avid.security import userdirs
 
@@ -89,3 +90,88 @@ def test_write_settings_merges_only_the_given_keys(home):
     userdirs.write_settings({})
 
     assert userdirs.read_settings()["sessions_dir"] == "/tmp/three"
+
+
+# ---------------- HTTP 面（设置页的那两个端点） ----------------
+
+
+@pytest.fixture
+def client(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from avid.services import Services
+    from avid.web import create_app
+
+    services = Services(workspace_root=tmp_path)
+    try:
+        yield TestClient(
+            create_app(services=services, static_dir=tmp_path / "unbuilt"),
+            base_url="http://127.0.0.1:8765",
+        )
+    finally:
+        services.close()
+
+
+def test_get_reports_the_default_store(client, home):
+    body = client.get("/api/settings/sessions").json()
+
+    assert body == {
+        "dir": str(home / "sessions"),
+        "default_dir": str(home / "sessions"),
+        "source": "default",
+        "editable": True,
+    }
+
+
+def test_put_moves_the_store_and_new_sessions_follow(client, tmp_path, home):
+    """改配置只影响「新会话写哪」：目录就地建好，随后建的会话落在新目录里。"""
+    target = tmp_path / "on-another-disk"
+    assert not target.exists()
+
+    saved = client.put("/api/settings/sessions", json={"dir": str(target)})
+
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["dir"] == str(target)
+    assert saved.json()["source"] == "settings"
+    assert target.is_dir()
+
+    created = create_session(client)
+    assert created.status_code == 201, created.text
+    workspace = created.json()["workspace"]["id"]
+    assert list((target / workspace).glob("*.jsonl"))
+    assert not (home / "sessions").exists()
+
+
+def test_put_an_empty_dir_restores_the_default(client, tmp_path, home):
+    custom = tmp_path / "custom"
+    client.put("/api/settings/sessions", json={"dir": str(custom)})
+
+    restored = client.put("/api/settings/sessions", json={"dir": ""})
+
+    assert restored.json() == {
+        "dir": str(home / "sessions"),
+        "default_dir": str(home / "sessions"),
+        "source": "default",
+        "editable": True,
+    }
+    assert "sessions_dir" not in userdirs.read_settings()
+
+
+def test_put_rejects_a_relative_path(client):
+    response = client.put("/api/settings/sessions", json={"dir": "relative/dir"})
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_request"
+    assert "绝对路径" in response.json()["error"]["message"]
+
+
+def test_put_refuses_while_the_environment_wins(client, tmp_path, monkeypatch):
+    monkeypatch.setenv(userdirs.SESSIONS_DIR_ENV, str(tmp_path / "from-env"))
+
+    read = client.get("/api/settings/sessions").json()
+    assert read["source"] == "env" and read["editable"] is False
+
+    written = client.put("/api/settings/sessions", json={"dir": str(tmp_path / "ignored")})
+    assert written.status_code == 400
+    assert userdirs.SESSIONS_DIR_ENV in written.json()["error"]["message"]
+    assert not (tmp_path / "ignored").exists()

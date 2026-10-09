@@ -57,6 +57,8 @@ from avid.web.schemas import (
     RunCreatedOut,
     RunOut,
     SessionDetail,
+    SessionsDirIn,
+    SessionsDirOut,
     SessionSummary,
     SkillOut,
     StreamInfo,
@@ -107,6 +109,9 @@ PAIRS: list[tuple[type, str]] = [
     (CapabilityFlags, "CapabilityFlags"),
     (ByokTestOut, "ByokTestResult"),
     (VerifyStepOut, "VerifyStep"),
+    # 会话目录（阶段 56）：来源可能是环境变量，那时 editable 为 false
+    (SessionsDirOut, "SessionsDir"),
+    (SessionsDirIn, "SessionsDirInput"),
     (StreamInfo, "StreamInfo"),
     (HealthOut, "Health"),
     (SkillOut, "Skill"),

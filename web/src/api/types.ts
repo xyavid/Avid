@@ -366,3 +366,19 @@ export interface ByokTestResult {
   ok: boolean
   steps: VerifyStep[]
 }
+
+/**
+ * GET /api/settings/sessions 的响应（阶段 56）：会话目录的当前值、默认值与生效来源。
+ * source 是 'env' 时 editable 为 false——环境变量赢过配置文件，界面只能看。
+ */
+export interface SessionsDir {
+  dir: string
+  default_dir: string
+  source: 'env' | 'settings' | 'default'
+  editable: boolean
+}
+
+/** PUT 载荷：空串 = 恢复默认。只改「新会话写哪」，不搬已有会话。 */
+export interface SessionsDirInput {
+  dir: string
+}

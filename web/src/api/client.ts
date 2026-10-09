@@ -24,6 +24,7 @@ import type {
   ScratchSession,
   SessionDetail,
   SessionSummary,
+  SessionsDir,
   WorkspaceSummary,
 } from './types'
 
@@ -276,4 +277,23 @@ export function testByokModel(
 /** 重置：删配置与密钥两份文件；之后运行会报「还没有模型配置」，直到重新保存。 */
 export function resetByokSettings(): Promise<void> {
   return request('/api/settings/byok', { method: 'DELETE' })
+}
+
+/**
+ * 会话目录（阶段 56）：改的是「新会话写哪」，不搬已有会话——搬数据是
+ * `avid session migrate` 的事。保存后服务端解绑缓存仓库，下一条消息起生效。
+ */
+
+/** 读会话目录与它的来源（来源是环境变量时界面只读）。 */
+export function getSessionsDir(): Promise<SessionsDir> {
+  return request('/api/settings/sessions')
+}
+
+/** 保存会话目录；空串恢复默认。目录由服务端就地建好，建不出就是 400。 */
+export function setSessionsDir(dir: string): Promise<SessionsDir> {
+  return request('/api/settings/sessions', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dir }),
+  })
 }
