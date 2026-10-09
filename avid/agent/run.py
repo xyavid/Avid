@@ -118,9 +118,18 @@ class Run:
         index, injected = trigger
         self._emit(transcript.as_messages()[index])
 
+        # 补充输入（阶段 60）：在「模型说完了」那一刻领到的一条，要留到下一轮的交付点。
+        pending_steers: list[dict[str, Any]] = []
+
         for round_index in itertools.count(1):
             state.round = round_index
             state.check_cancelled()  # 取消检查点 1：轮次开始前
+            # 补充输入的唯一交付点：每个 step 开始、compose 之前。上一轮的工具结果都已落地，
+            # 这里 append 结构一定安全；emit 走 on_message，落库仍只有 recorder 一个写者。
+            for message in [*pending_steers, *self._take_steers(state)]:
+                transcript.append(message)
+                self._emit(message)
+            pending_steers = []
             state.emit(RUN_STATUS, round=round_index, tokens=state.tokens, activity="model")
 
             request = ctx.compose(injected=injected)
@@ -147,6 +156,11 @@ class Run:
             )
 
             if not turn.tool_calls:
+                # 收尾之前先问一句「还有补充吗」：有就续轮，让下一轮的交付点带上它。
+                # 判据是「已接受但还没领走」，所以这里领到的不会被丢掉。
+                pending_steers = self._take_steers(state)
+                if pending_steers:
+                    continue
                 final = self._finish(state, transcript, turn)
                 if final is not None:
                     return final
@@ -171,6 +185,10 @@ class Run:
                 self._emit(message)
 
             if state.denial_streak >= spec.max_consecutive_denials:
+                # 连续被拒到要停：刚投的补充可能正是「换个做法」的指令，先让它说话。
+                pending_steers = self._take_steers(state)
+                if pending_steers:
+                    continue
                 halt = (
                     f"（运行已停止：连续 {state.denial_streak} 次工具调用被权限策略拒绝，"
                     "期间没有一次通过。请向用户说明需要哪个目标或哪条命令的授权，"
@@ -224,6 +242,13 @@ class Run:
     def _emit(self, message: dict[str, Any]) -> None:
         if self.on_message is not None:
             self.on_message(message)
+
+    def _take_steers(self, state: RunState) -> list[dict[str, Any]]:
+        """领取待并入下一步的补充输入（阶段 60）；没有通道就是空列表。"""
+        probe = state.steers
+        if probe is None:
+            return []
+        return [dict(message) for message in probe()]
 
     def _note_prompt_parts(self, state: RunState, request: ComposedRequest) -> None:
         state.record_prompt_parts(

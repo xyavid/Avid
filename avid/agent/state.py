@@ -26,6 +26,9 @@ if TYPE_CHECKING:  # Annotations only: these two are never imported at run time.
     from ..security.permission import AskQuestion, AskUser
     from .tools.mcp import McpManager
 
+#: 补充输入的领取通道：() -> 待并入的消息列表（阶段 60）。
+SteerProbe = Callable[[], "list[dict[str, Any]]"]
+
 # Abort the run after this many consecutive denials; any allowed call resets the streak.
 MAX_CONSECUTIVE_DENIALS = 5
 
@@ -95,6 +98,11 @@ class RunState:
     #: 与 ``ask``（毁灭级确认的 bool 通道）分开：那条路是安全裁决，这条是普通问答，
     #: 混在一起会让「允许/拒绝」的语义漏进工具层。
     question: AskQuestion | None = None
+
+    #: 补充输入的领取通道（阶段 60）：返回待并入下一步的用户消息（按投递顺序），空列表 = 没有。
+    #: 与 cancel 一样是「另一条线程写、这里读」，但它是**拉**不是推——领取发生在运行线程里，
+    #: 所以落库仍只有一个写者（recorder）。只在轮次边界调用（见 run.py 的交付点）。
+    steers: SteerProbe | None = None
 
     # Event observer; None means this run has no subscriber, as on the CLI path.
     observer: RunObserver | None = None
@@ -182,6 +190,7 @@ class RunState:
         auto_approve: bool = False,
         ask: AskUser | None = None,
         question: AskQuestion | None = None,
+        steers: SteerProbe | None = None,
         observer: RunObserver | None = None,
         permission_mode: str | None = None,
         ledger: ApprovalLedger | None = None,
@@ -207,6 +216,7 @@ class RunState:
             auto_approve=auto_approve,
             ask=ask,
             question=question,
+            steers=steers,
             observer=observer,
             permission_mode=PERMISSION_FULL if is_full else PERMISSION_NORMAL,
             security=security

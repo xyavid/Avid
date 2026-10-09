@@ -20,7 +20,7 @@ import { useState } from 'react'
 import type { ReactNode } from 'react'
 
 import { attachmentUrl } from '../../api/client'
-import type { TimelineImage, TimelineItem } from '../../state/timeline'
+import type { TimelineImage, TimelineItem, TimelinePending } from '../../state/timeline'
 import { cx } from '../../ui/cx'
 import { itemKey, subagentSteps, turnGroups } from '../../state/timeline'
 import { AssistantMessage } from './AssistantMessage'
@@ -52,6 +52,8 @@ export type TimelineProps = {
   focusEntry?: string | null
   /** 会话 id：落库图片的地址由它拼（阶段 59）；null = 不画落库图。 */
   sessionId?: string | null
+  /** 撤销一条待办输入（阶段 60）；缺省则不画撤销钮。 */
+  onDropInput?: (inputId: string) => void
 }
 
 /**
@@ -112,6 +114,14 @@ type Ctx = {
   actions: Map<number, TurnAction>
   /** 会话 id：落库图片的地址由它 + (条目, 块下标) 拼（阶段 59）；null = 还没选定会话。 */
   sessionId: string | null
+  /** 撤销一条还没被领取的待办输入（阶段 60）；缺省则不画撤销钮。 */
+  onDropInput?: (inputId: string) => void
+}
+
+/** 待办输入的一句话状态：收下 ≠ 已进模型上下文。 */
+function pendingLabel(pending: TimelinePending): string {
+  if (pending.missed) return '没赶上，已排队'
+  return pending.mode === 'now' ? '插入中 · 下一个 step' : '排队中 · 下一轮'
 }
 
 /** 段落里的图片 → 气泡要的 (src, 名字)：本地草稿用 object URL，落库条目拼读侧端点。 */
@@ -143,6 +153,27 @@ function itemNodes(list: TimelineItem[], offset: number, ctx: Ctx): ReactNode[] 
           data-entry={item.entryId ?? undefined}
           data-focus={item.entryId === ctx.focusEntry ? 'true' : undefined}
         >
+          {item.pending && (
+            <p
+              className="mb-a4 flex items-center justify-end gap-a6 font-ui text-hint text-ink-muted"
+              data-testid="pending-input"
+              data-input={item.pending.inputId}
+              data-missed={item.pending.missed ? 'true' : undefined}
+            >
+              {pendingLabel(item.pending)}
+              {item.pending.images > 0 && <span>（{item.pending.images} 张图）</span>}
+              {ctx.onDropInput && (
+                <button
+                  type="button"
+                  onClick={() => ctx.onDropInput?.(item.pending!.inputId)}
+                  aria-label="撤销这条补充"
+                  className="text-ink-muted transition-colors duration-fast ease-out hover:text-ink"
+                >
+                  撤销
+                </button>
+              )}
+            </p>
+          )}
           <UserBubble images={bubbleImages(item.images, ctx.sessionId)}>{item.text}</UserBubble>
           <MessageActions text={item.text} className="justify-end" />
         </div>
@@ -234,6 +265,7 @@ export function Timeline({
   onOpenSubagents,
   focusEntry = null,
   sessionId = null,
+  onDropInput,
 }: TimelineProps) {
   // 手动展开的轮：折叠是默认，点开的那几轮记在这儿（切换会话/刷新即回到默认）。
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set())
@@ -263,6 +295,7 @@ export function Timeline({
       head: { pending: true },
       actions: turnActions(group.items),
       sessionId,
+      onDropInput,
     }
     const from = group.user === null ? 0 : 1
 

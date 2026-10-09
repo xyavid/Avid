@@ -25,6 +25,7 @@ import {
   getMeta,
   listBranches,
   listEntries,
+  listInputs,
   listSessions,
   listWorkspaces,
   pickFolder,
@@ -35,7 +36,13 @@ import { ApprovalBar } from '../../components/chat/ApprovalBar'
 import { Composer } from '../../components/chat/Composer'
 import { Timeline } from '../../components/chat/Timeline'
 import type { TimelineItem } from '../../state/timeline'
-import { itemsFromEntries, mergeItems, subagentRuns, timelineSignature } from '../../state/timeline'
+import {
+  itemsFromEntries,
+  mergeItems,
+  mergePendingInputs,
+  subagentRuns,
+  timelineSignature,
+} from '../../state/timeline'
 import { useRunChoice } from '../../state/runModel'
 import { useRunStream } from '../../state/useRunStream'
 import { useDock } from '../../state/dock'
@@ -250,11 +257,17 @@ export function ConversationPage() {
     // seq + 1 正好把命中那条放在这一页的新端，「加载更早」照旧往回接。
     const anchor = jump?.sessionId === selectedId ? jump.seq + 1 : undefined
     listEntries(selectedId, { branch, limit: 50, cursorSeq: anchor })
-      .then((page) => {
+      .then(async (page) => {
         if (!alive) return
-        setHistory(itemsFromEntries([...page.entries].reverse()))
+        const items = itemsFromEntries([...page.entries].reverse())
+        setHistory(items)
         setEarlier({ hasMore: page.has_more, cursor: page.next_cursor })
         setError(null)  // 这一次读成功了：把上一次的错误屏收掉
+        // 待办输入（阶段 60）：队列在服务端，刷新后照旧看得见「排队中」。
+        const queued = await listInputs(selectedId).catch(() => [])
+        if (alive && queued.length > 0) {
+          setHistory((cur) => mergePendingInputs(cur ?? items, queued))
+        }
       })
       .catch((e: unknown) => {
         if (alive) {
@@ -545,6 +558,7 @@ export function ConversationPage() {
             liveTail={liveHere}
             onBranch={(id) => void branchFrom(id)}
             onOpenSubagents={() => dock.select('subagents')}
+            onDropInput={(inputId) => void live.dropInput(inputId)}
             focusEntry={focusEntryId}
           />
         )}
@@ -684,6 +698,8 @@ export function ConversationPage() {
             byokModels={meta?.capabilities.models ?? []}
             usage={shownUsage}
             onSend={(text, images) => void live.send(text, full, run.model, branch, run.effort, images)}
+            onQueue={(text, images) => void live.submit(text, 'after', images)}
+            onInsert={(text, images) => void live.submit(text, 'now', images)}
             onStop={() => void live.stop()}
           />
         </div>

@@ -3,8 +3,9 @@
  * 裸 textarea（自动增高，封顶约 8 行后内滚）+ 左侧权限/模型 + 右侧发送/停止钮。
  * Enter 发送，Shift+Enter 换行；**IME 合成中的 Enter 不发送**（中文输入法
  * 选词回车是组词，不是提交——纸本中文界面的硬约束）。
- * 运行中（busy）输入保持可编辑（先写好下一条），只禁发送（钮变停止）；
- * 停止是协作式的，终态以事件为准。
+ * 运行中（busy）输入保持可编辑：**Enter = 排队**（等下一 turn，默认动作——忙时输入多数是
+ * 「不急的下一件事」），要改当前这件工作就点「插入」（进当前 run 的下一个 step）；停止钮
+ * 一直在，取消是协作式的、终态以事件为准（阶段 60）。
  * 权限胶囊反映这次运行是否完全访问（默认 / 完全访问两态），发送时随
  * StartRunInput 提交（full 由 hook 附 full_access_ack）。
  *
@@ -41,6 +42,10 @@ export type ComposerProps = {
   /** 运行中：发送禁用（钮变停止），输入仍可编辑。 */
   busy?: boolean
   onSend: (text: string, images: DraftImage[]) => void
+  /** 忙时排队（等下一 turn）；缺省则不画这个钮（老调用方保持原样）。 */
+  onQueue?: (text: string, images: DraftImage[]) => void
+  /** 忙时插入（进当前 run 的下一个 step）；缺省则不画这个钮。 */
+  onInsert?: (text: string, images: DraftImage[]) => void
   onStop: () => void
   /** 本次运行的模型（providerId/modelId）；null = 还没选——那时发不出去，也不替用户猜。 */
   model?: string | null
@@ -60,6 +65,8 @@ export function Composer({
   disabled = false,
   busy = false,
   onSend,
+  onQueue,
+  onInsert,
   onStop,
   model = null,
   onChangeModel,
@@ -76,9 +83,10 @@ export function Composer({
   const areaRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   // 没选模型就不发车：显式带上模型，不由服务端的 chat 绑定替用户决定。
-  // 只有图没有文字也能发（那张图本身就是要说的话）。
+  // 只有图没有文字也能发（那张图本身就是要说的话）；**忙不是禁止投递**——
+  // 忙时的两个动作（排队 / 插入）走的是另一条通道（阶段 60）。
   const canSend =
-    !disabled && !busy && (text.trim().length > 0 || images.length > 0) && model !== null
+    !disabled && (text.trim().length > 0 || images.length > 0) && model !== null
 
   const addFiles = async (files: File[]) => {
     setImageError(null)
@@ -110,9 +118,15 @@ export function Composer({
     })
   }
 
-  const submit = () => {
+  const submit = (action: 'send' | 'queue' | 'insert' = 'send') => {
     if (!canSend) return
-    onSend(text.trim(), images)
+    // 忙时没有排队通道就什么都不做：起第二个 run 会被服务端拒（一个会话同时只有一个 run），
+    // 把它压在这里比发一个必然失败的请求诚实。
+    if (busy && action === 'send') return
+    const text_ = text.trim()
+    if (action === 'queue') onQueue?.(text_, images)
+    else if (action === 'insert') onInsert?.(text_, images)
+    else onSend(text_, images)
     setText('')
     setImages([])
     setImageError(null)
@@ -166,7 +180,8 @@ export function Composer({
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey && !composingRef.current) {
               e.preventDefault()
-              submit()
+              // 忙时 Enter 是排队（默认动作）；空闲时 Enter 就是发车。
+              submit(busy && onQueue ? 'queue' : 'send')
             }
           }}
           onCompositionStart={() => {
@@ -175,7 +190,11 @@ export function Composer({
           onCompositionEnd={() => {
             composingRef.current = false
           }}
-          placeholder={busy ? '运行中…输入可以先写好' : '说点什么…（Enter 发送，Shift+Enter 换行）'}
+          placeholder={
+            busy
+              ? '运行中…Enter 排队等下一轮，「插入」进下一个 step'
+              : '说点什么…（Enter 发送，Shift+Enter 换行）'
+          }
           aria-label="消息输入"
           disabled={disabled}
           className={BARE_AREA}
@@ -216,9 +235,27 @@ export function Composer({
             <ContextRing usage={usage} />
           </div>
           {busy ? (
-            <StopButton onClick={onStop} />
+            <div className="flex items-center gap-a8">
+              {onQueue && (
+                <ActionButton
+                  icon="send"
+                  label="排队"
+                  disabled={!canSend}
+                  onClick={() => submit('queue')}
+                />
+              )}
+              {onInsert && (
+                <ActionButton
+                  icon="plus"
+                  label="插入"
+                  disabled={!canSend}
+                  onClick={() => submit('insert')}
+                />
+              )}
+              <StopButton onClick={onStop} />
+            </div>
           ) : (
-            <SendButton disabled={!canSend} onClick={submit} />
+            <SendButton disabled={!canSend} onClick={() => submit('send')} />
           )}
         </div>
       </div>

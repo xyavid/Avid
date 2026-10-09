@@ -446,9 +446,12 @@ class StartRunIn(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    prompt: str = Field(max_length=MAX_PROMPT_CHARS)
+    prompt: str = Field(default="", max_length=MAX_PROMPT_CHARS)
     # 随消息一起发的图片（阶段 59）：渲染进同一条用户消息，文本在前、图片按数组顺序在后。
     images: list[ImageIn] = Field(default_factory=list)
+    # 领取一条排队输入去起 run（阶段 60）：内容与开关取自那条输入，客户端的 prompt/images
+    # 在这条路径上被忽略（队列项自带投递时的意图，不重发、也就不会漂移）。
+    from_input: str | None = Field(default=None, max_length=MAX_ID_CHARS)
     auto_approve: bool = False
     branch: str = Field(default="main", max_length=MAX_NAME_CHARS)
     # 本次运行的模型覆盖；缺省 = 按设置（.env + 界面覆盖层）解析。空串按缺省处理。
@@ -456,6 +459,52 @@ class StartRunIn(BaseModel):
     # 本次运行的推理强度：必须在所选模型声明的档位列表里（内核按列表校验）。空串按缺省处理。
     reasoning_effort: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
     full_access_ack: bool = False
+
+
+class InputIn(BaseModel):
+    """一条补充输入（阶段 60）。
+
+    ``mode`` 决定它最早什么时候生效：``now`` = 最早可能被处理的时刻（活动 run 的下一个 step，
+    空闲就直接起一个 run），``after`` = 等下一 turn。``client_id`` 是幂等键：前端因超时重发时
+    不该产生第二条。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["now", "after"] = "after"
+    prompt: str = Field(default="", max_length=MAX_PROMPT_CHARS)
+    images: list[ImageIn] = Field(default_factory=list)
+    client_id: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
+    model: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
+    reasoning_effort: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
+    branch: str = Field(default="main", max_length=MAX_NAME_CHARS)
+    full_access_ack: bool = False
+    auto_approve: bool = False
+
+
+class InputOut(BaseModel):
+    """一条待办输入：正文预览 + 图片张数（字节走会话侧的读端点）。"""
+
+    input_id: str
+    mode: str
+    text: str = ""
+    images: int = 0
+    client_id: str | None = None
+    created_at: int = 0
+    missed: bool = False
+
+
+class InputListOut(BaseModel):
+    inputs: list[InputOut]
+
+
+class InputAcceptedOut(BaseModel):
+    """投递结果：``kind=run`` 表示这就起了一个 run（去接它的流），``input`` 表示留在队里。"""
+
+    kind: str
+    input_id: str | None = None
+    run_id: str | None = None
+    mode: str
 
 
 class RunCreatedOut(BaseModel):

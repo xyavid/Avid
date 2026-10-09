@@ -22,6 +22,7 @@ from .routes import (
     approvals,
     events,
     files,
+    inputs,
     meta,
     runs,
     search,
@@ -198,7 +199,19 @@ def create_app(
             ),
         )
 
-    for module in (meta, search, sessions, runs, approvals, events, workspaces, settings, terminal, files):
+    for module in (
+        meta,
+        search,
+        sessions,
+        runs,
+        inputs,
+        approvals,
+        events,
+        workspaces,
+        settings,
+        terminal,
+        files,
+    ):
         app.include_router(module.router, prefix="/api")
 
     @app.api_route(

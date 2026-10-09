@@ -60,12 +60,14 @@ from ..session.types import ERROR_ENTRY, MESSAGE_ENTRY, NOTICE_ENTRY
 from .approvals import APPROVAL_TIMEOUT_SECONDS, ApprovalTable
 from .errors import (
     AttachmentRejected,
+    InvalidRequest,
     RunBusy,
     RunFinished,
     RunNotFound,
     SessionNotFound,
     SessionReadError,
 )
+from .inbox import MODE_AFTER, MODE_NOW, MODES, SessionInbox
 from .workspaces import WorkspaceService
 
 logger = logging.getLogger("avid.services.runs")
@@ -95,6 +97,12 @@ _MESSAGE_EVENTS = {
     "assistant": ASSISTANT_MESSAGE,
     "tool": TOOL_RESULT_MESSAGE,
 }
+
+
+def _str_param(item: Any, name: str) -> str | None:
+    """排队项里的一项字符串开关；空串按没给处理（与 StartRunIn 的口径一致）。"""
+    value = item.params.get(name)
+    return value if isinstance(value, str) and value.strip() else None
 
 
 @dataclass
@@ -203,6 +211,9 @@ class RunRegistry:
         self.max_events = max(1, max_events)
         self._runs: dict[str, RunRecord] = {}
         self._active: dict[str, str] = {}
+        # 会话级 Inbox（阶段 60）：已接收、还没被采纳的输入。run 结束不清空——排队项
+        # 本来就跨 turn；空队且没有活动 run 的会在 _sweep 里回收。
+        self._inboxes: dict[str, SessionInbox] = {}
         self._lock = threading.RLock()
         self._sessions: dict[str, Any] = {}  # run_id -> session handle held during the run
         # One handle lock per session: the session layer allows a single handle while the read
@@ -213,6 +224,25 @@ class RunRegistry:
         # count reaches zero and the session has no active run: two live locks would break the
         # one-handle-per-session exclusion.
         self._session_lock_users: dict[str, int] = {}
+
+    @staticmethod
+    def _ensure_vision(content: Any, model: str | None) -> None:
+        """目标模型声明了不支持图片（阶段 55 的能力声明，阶段 59 接上）：**起运行之前**就拒。
+
+        发出去只会换来一个端点错误，而会话里会白留一条用户消息加一条失败记账。
+        模型没配好时不动声色：那条路径本来就有明确的失败文案，不在这里变成 400。
+        """
+        if attachments.image_count(content) == 0:
+            return
+        try:
+            config = resolve_chat(model=(model or "").strip() or None)
+        except ConfigError:
+            return
+        if config.vision is False:
+            raise AttachmentRejected(
+                "模型在「设置 → 模型」里声明了不支持图片输入（capabilities.vision = false）："
+                "换一个声明支持的模型，或去掉图片再发"
+            )
 
     @contextmanager
     def session_lock(self, session_id: str):
@@ -248,9 +278,10 @@ class RunRegistry:
     def start(
         self,
         session_id: str,
-        prompt: str,
+        prompt: str = "",
         *,
         images: list[dict[str, Any]] | None = None,
+        content: str | list[dict[str, Any]] | None = None,
         auto_approve: bool = False,
         chat: Callable[..., Any] | None = None,
         branch: str = DEFAULT_BRANCH,
@@ -266,24 +297,13 @@ class RunRegistry:
         workspace, metadata = found
 
         # 图片在入口就收成内容块：形状与上限的唯一判据在 attachments，失败即 400（不进会话）。
-        try:
-            content = attachments.build_user_content(prompt, images or [])
-        except attachments.AttachmentError as exc:
-            raise AttachmentRejected(str(exc)) from exc
-
-        # 目标模型声明了不支持图片（阶段 55 的能力声明，阶段 59 接上）：在**起运行之前**拒。
-        # 发出去只会换来一个端点错误，而会话里会白留一条用户消息加一条失败记账。
-        # 模型没配好时不动声色：那条路径本来就有明确的失败文案，不在这里变成 400。
-        if attachments.image_count(content) > 0:
+        # 调用方已经造好内容（排队项 / 输入通道）时不再重造。
+        if content is None:
             try:
-                config = resolve_chat(model=(model or "").strip() or None)
-            except ConfigError:
-                config = None
-            if config is not None and config.vision is False:
-                raise AttachmentRejected(
-                    "模型在「设置 → 模型」里声明了不支持图片输入（capabilities.vision = false）："
-                    "换一个声明支持的模型，或去掉图片再发"
-                )
+                content = attachments.build_user_content(prompt, images or [])
+            except attachments.AttachmentError as exc:
+                raise AttachmentRejected(str(exc)) from exc
+            self._ensure_vision(content, model)
 
         # 会话内命令（内核单点解析）：/<技能名> 把全文当作用户输入（正常运行），
         # /compact 与未知命令走 _run 的命令分支（不调模型，直接以文本收尾）。
@@ -395,6 +415,122 @@ class RunRegistry:
             record.condition.notify_all()
         logger.info("请求取消 %s", run_id)
         return record
+
+    # ---- 输入通道（阶段 60）----
+
+    def inbox(self, session_id: str) -> SessionInbox:
+        """这个会话的待办输入表（没有就建一张）。"""
+        with self._lock:
+            found = self._inboxes.get(session_id)
+            if found is None:
+                found = SessionInbox(session_id)
+                self._inboxes[session_id] = found
+            return found
+
+    def list_inputs(self, session_id: str) -> list[dict[str, Any]]:
+        return [item.to_dict() for item in self.inbox(session_id).pending()]
+
+    def drop_input(self, session_id: str, input_id: str) -> None:
+        """撤销一条尚未领取的输入。"""
+        if not self.inbox(session_id).remove(input_id):
+            raise InvalidRequest(
+                f"这条输入已经不在队里了：{input_id}（可能已被取走，或已被撤销）"
+            )
+
+    def submit_input(
+        self,
+        session_id: str,
+        *,
+        mode: str,
+        prompt: str = "",
+        images: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        effort: str | None = None,
+        branch: str = DEFAULT_BRANCH,
+        full_ack: bool = False,
+        auto_approve: bool = False,
+        client_id: str | None = None,
+    ) -> dict[str, Any]:
+        """收一条输入：**最早可能被处理的时刻**是它唯一的语义，两种 mode 只是上限不同。
+
+        ``now`` 有活动 run 就在它的下一个 step 边界交付；空闲就直接起一个 run。
+        ``after`` 留到下一 turn，由客户端在终态之后领取。返回 ``kind`` 告诉客户端
+        它属于哪一类：``run`` = 这就起了一个 run（去接它的流），``input`` = 留在队里。
+        """
+        if mode not in MODES:
+            raise InvalidRequest(f"mode 只能是 {' / '.join(MODES)}，收到 {mode!r}")
+        if self.workspaces.find_session(session_id) is None:
+            raise SessionNotFound(f"没有这个会话：{session_id}")
+        try:
+            content = attachments.build_user_content(prompt, images or [])
+        except attachments.AttachmentError as exc:
+            raise AttachmentRejected(str(exc)) from exc
+        if not attachments.render_content_text(content).strip() and not attachments.image_count(content):
+            raise InvalidRequest("这条输入是空的：写点什么，或者带一张图")
+        self._ensure_vision(content, model)
+
+        params = {
+            "model": model,
+            "effort": effort,
+            "branch": branch,
+            "full_ack": full_ack,
+            "auto_approve": auto_approve,
+        }
+        inbox = self.inbox(session_id)
+        if mode == MODE_NOW and self.active_run_id(session_id) is None:
+            # 空闲：语义就是「现在就做」，直接起一个 run（客户端不用自己处理
+            # 「我以为是忙的、其实刚跑完」这个竞态）。输了竞态就退回队列。
+            try:
+                record = self.start(
+                    session_id,
+                    content=content,
+                    model=model,
+                    effort=effort,
+                    branch=branch,
+                    full_ack=full_ack,
+                    auto_approve=auto_approve,
+                )
+            except RunBusy:
+                item = inbox.add(
+                    mode=MODE_AFTER, content=content, params=params, client_id=client_id
+                )
+                return {"kind": "input", "input_id": item.input_id, "run_id": None, "mode": MODE_AFTER}
+            return {"kind": "run", "input_id": None, "run_id": record.run_id, "mode": MODE_NOW}
+        item = inbox.add(
+            mode=mode, content=content, params=params, client_id=client_id
+        )
+        return {"kind": "input", "input_id": item.input_id, "run_id": None, "mode": item.mode}
+
+    def start_queued(self, session_id: str, input_id: str) -> RunRecord:
+        """领取一条排队输入并起 run；起不来就放回队里（不变量：被接受的输入永不消失）。"""
+        item = self.inbox(session_id).take_for_run(input_id)
+        if item is None:
+            raise InvalidRequest(
+                f"这条排队输入已经不在队里了：{input_id}"
+                "（可能已被另一个标签页取走，或已被撤销）"
+            )
+        try:
+            return self.start(
+                session_id,
+                content=item.content,
+                model=_str_param(item, "model"),
+                effort=_str_param(item, "effort"),
+                branch=_str_param(item, "branch") or DEFAULT_BRANCH,
+                full_ack=bool(item.params.get("full_ack")),
+                auto_approve=bool(item.params.get("auto_approve")),
+            )
+        except Exception:
+            self.inbox(session_id).restore(item)
+            raise
+
+    def _take_steers(self, record: RunRecord) -> list[dict[str, Any]]:
+        """run 线程在轮次边界领取补充输入；id 挂在 record.injected 上，落库时带出去。"""
+        messages: list[dict[str, Any]] = []
+        for item in self.inbox(record.session_id).take_steers():
+            message: dict[str, Any] = {"role": "user", "content": item.content}
+            record.injected[id(message)] = f"steer:{item.input_id}"
+            messages.append(message)
+        return messages
 
     # ---- Event emission and subscription ----
 
@@ -844,6 +980,8 @@ class RunRegistry:
                 ask=record.approvals.request if record.approvals is not None else None,
                 # 同一条待决表、同一个界面槽：模型的提问也在这里挂起等人。
                 question=record.approvals.ask if record.approvals is not None else None,
+                # 补充输入（阶段 60）：运行线程在轮次边界来领，领取即离队、落库走 recorder。
+                steers=lambda: self._take_steers(record),
                 observer=lambda event: self._observe(record, event),
                 full=full_ack,
                 workspace_root=workspace.root,
@@ -973,13 +1111,15 @@ class RunRegistry:
             # Identify before persisting: injected nudges are stored as notices so the UI does
             # not render them as words the user spoke, since their text comes from a hook.
             label = record.injected.pop(id(message), None)
+            nudge = label == "nudge"
             entry_id = recorder.on_message(
-                message, entry_type=NOTICE_ENTRY if label is not None else MESSAGE_ENTRY
+                message, entry_type=NOTICE_ENTRY if nudge else MESSAGE_ENTRY
             )
-            if label == "nudge":
-                type = STOP_NUDGE
-            else:
-                type = _MESSAGE_EVENTS.get(str(message.get("role")), "")
+            type = (
+                STOP_NUDGE
+                if nudge
+                else _MESSAGE_EVENTS.get(str(message.get("role")), "")
+            )
             if not type:
                 return
             payload: dict[str, Any] = {
@@ -988,10 +1128,13 @@ class RunRegistry:
                 # 让一次重连搬几 MB 的 base64 不值得。
                 "message": attachments.strip_message_bytes(message),
             }
-            if label is not None:
+            if nudge:
                 # The one emission for reminder events: the loop's own only tags them, and the
                 # content is added here while the event type stays what consumers expect.
                 payload["content"] = str(message.get("content") or "")
+            elif label is not None and label.startswith("steer:"):
+                # 补充输入：客户端据此把「排队中」那段换成落库条目（不靠文字配对）。
+                payload["input_id"] = label.split(":", 1)[1]
             self.emit(record, type, **payload)
 
         return notifying(self.indexer, sink, record.session_id)
@@ -1016,6 +1159,9 @@ class RunRegistry:
         # previous run's figures. The write is slow (session write plus fsync), so it happens
         # before any state flips, as in the block below.
         self._persist_usage(record)
+        # 封闸：这个 run 不会再领补充输入了。没赶上的降级为排队项（标 missed），
+        # 照旧留在队里——「被接受的输入永不消失」这条不变量就在这里落地。
+        self.inbox(record.session_id).downgrade_steers()
         with record.condition:
             # Status and terminal event change inside one critical section. Subscribers decide
             # whether more events are coming from record.terminal under the same condition, so
@@ -1087,6 +1233,13 @@ class RunRegistry:
                 and session_id not in self._active
             ]:
                 del self._session_locks[session_id]
+            # 空队且没有活动 run 的会话不再留表：排队项跨 turn，但不跨「没人要它」。
+            for session_id in [
+                session_id
+                for session_id, inbox in self._inboxes.items()
+                if session_id not in self._active and inbox.empty()
+            ]:
+                del self._inboxes[session_id]
         if victims:
             logger.info("回收 %d 条已结束的运行记录", len(victims))
 

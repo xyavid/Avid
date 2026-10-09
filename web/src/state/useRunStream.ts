@@ -18,12 +18,21 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { answerApproval, cancelRun, decideApproval, getRun, startRun } from '../api/client'
+import {
+  answerApproval,
+  cancelRun,
+  decideApproval,
+  dropInput,
+  getRun,
+  listInputs,
+  startRun,
+  submitInput,
+} from '../api/client'
 import { subscribeRun } from '../api/events'
 import type { UsageReport } from '../api/types'
 import type { RunPermission } from '../events/types'
 import type { TimelineEvent, TimelineItem } from './timeline'
-import { appendUser, applyEvent, subagentTag } from './timeline'
+import { appendPending, appendUser, applyEvent, dropPending, subagentTag } from './timeline'
 import type { DraftImage } from './imagePrep'
 
 export type RunPhase = 'idle' | 'starting' | 'running' | 'settling' | 'error'
@@ -244,6 +253,7 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
           }
           setPhase('settling')
           onSettled()
+          void drainNextTurn()
           return
         }
         default: {
@@ -365,6 +375,75 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
     [sessionId, settle, subscribe],
   )
 
+  /** 终态之后接着跑队里的下一条（阶段 60）：服务端不自己起 run，衔接由客户端做。 */
+  const drainNextTurn = useCallback(async () => {
+    if (!sessionId) return
+    try {
+      const items = await listInputs(sessionId)
+      const next = items.find((item) => item.mode === 'after')
+      if (next === undefined) return
+      const created = await startRun(sessionId, { from_input: next.input_id })
+      attach(created.run_id)
+    } catch {
+      // 抢输了（另一个标签页取走）或服务端不在：下次终态或刷新再试，不在这里喊
+    }
+  }, [sessionId, attach])
+
+  /**
+   * 投一条补充输入（阶段 60）：`after` = 排队等下一 turn（忙时的默认动作），
+   * `now` = 最早可能被处理的时刻（插入当前 run 的下一个 step；空闲就直接起一个 run）。
+   * 收下 ≠ 已进模型上下文：留队的那条先画成「待办」段落，落库那一刻才换成条目。
+   */
+  const submit = useCallback(
+    async (text: string, mode: 'now' | 'after', images: DraftImage[] = []) => {
+      if (!sessionId) return
+      setError(null)
+      const clientId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+      try {
+        const accepted = await submitInput(sessionId, {
+          mode,
+          prompt: text,
+          client_id: clientId,
+          ...(images.length
+            ? { images: images.map((image) => ({ name: image.name, data: image.data })) }
+            : {}),
+        })
+        if (accepted.kind === 'run' && accepted.run_id !== null) {
+          // 空闲：服务端这就起了一个 run，去接它的流（历史 + 这条消息由事件重放给出）
+          attach(accepted.run_id)
+          return
+        }
+        const inputId = accepted.input_id ?? clientId
+        setItems((cur) =>
+          appendPending(cur, {
+            inputId,
+            mode: accepted.mode,
+            missed: false,
+            images: images.length,
+            text,
+          }),
+        )
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e))
+      }
+    },
+    [attach, sessionId],
+  )
+
+  /** 撤销一条还没被领取的待办输入。 */
+  const dropInputById = useCallback(
+    async (inputId: string) => {
+      if (!sessionId) return
+      try {
+        await dropInput(sessionId, inputId)
+        setItems((cur) => dropPending(cur, inputId))
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e))
+      }
+    },
+    [sessionId],
+  )
+
   const stop = useCallback(async () => {
     const id = runIdRef.current
     if (id) await cancelRun(id).catch(() => {})
@@ -396,6 +475,8 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
     usage,
     error,
     send,
+    submit,
+    dropInput: dropInputById,
     stop,
     decide,
     answer,

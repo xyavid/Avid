@@ -10,7 +10,18 @@ import { describe, expect, it } from 'vitest'
 
 import type { Entry } from '../../api/types'
 import type { TimelineEvent, TimelineItem } from '../timeline'
-import { appendUser, applyEvent, itemsFromEntries, mergeItems, subagentRuns, subagentSteps, turnGroups } from '../timeline'
+import {
+  appendPending,
+  appendUser,
+  applyEvent,
+  dropPending,
+  itemsFromEntries,
+  mergeItems,
+  mergePendingInputs,
+  subagentRuns,
+  subagentSteps,
+  turnGroups,
+} from '../timeline'
 
 function entry(seq: number, message: Record<string, unknown>, type = 'message'): Entry {
   return { entry_id: `e${seq}`, parent_id: null, seq, timestamp: seq, type, message }
@@ -498,5 +509,56 @@ describe('图片消息（阶段 59）', () => {
     expect(draft[0]!.kind === 'user' && draft[0]!.images).toEqual([
       { source: 'local', url: 'blob:x', name: 'a.png' },
     ])
+  })
+})
+
+describe('待办输入（阶段 60）：收下 ≠ 已进模型上下文', () => {
+  const pending = { inputId: 'in_1', mode: 'after', missed: false, images: 0, text: '下一件事' }
+
+  it('收下的补充先是一段「待办」，同一 input_id 不重复画', () => {
+    const once = appendPending([], pending)
+    const twice = appendPending(once, pending)
+
+    expect(once).toHaveLength(1)
+    expect(twice).toBe(once)
+    expect(once[0]).toMatchObject({ kind: 'user', entryId: null, text: '下一件事' })
+    expect(once[0]!.kind === 'user' && once[0]!.pending).toEqual({
+      inputId: 'in_1',
+      mode: 'after',
+      missed: false,
+      images: 0,
+    })
+  })
+
+  it('落库那一刻按 input_id 就地收编（位置不跳，标记消失）', () => {
+    const items = appendPending(
+      [{ kind: 'assistant', entryId: 'e1', text: '在跑', streaming: false, ts: 1 }],
+      { ...pending, mode: 'now' },
+    )
+    const after = applyEvent(
+      items,
+      ev('user_message', 9, { entry_id: 'e2', input_id: 'in_1', message: { role: 'user', content: '下一件事' } }),
+    )
+
+    expect(after).toHaveLength(2)
+    expect(after[1]).toMatchObject({ kind: 'user', entryId: 'e2', text: '下一件事', ts: 9 })
+    expect(after[1]!.kind === 'user' && after[1]!.pending).toBeUndefined()
+  })
+
+  it('撤销把它从列表里拿走', () => {
+    const items = appendPending([], pending)
+
+    expect(dropPending(items, 'in_1')).toEqual([])
+    expect(dropPending(items, 'in_other')).toBe(items)
+  })
+
+  it('刷新后把服务端的待办输入画回来', () => {
+    const merged = mergePendingInputs([], [
+      { input_id: 'in_1', mode: 'after', text: '排队一', images: 1, missed: false },
+      { input_id: 'in_2', mode: 'after', text: '没赶上', images: 0, missed: true },
+    ])
+
+    expect(merged.map((item) => item.kind === 'user' && item.text)).toEqual(['排队一', '没赶上'])
+    expect(merged[1]!.kind === 'user' && merged[1]!.pending).toMatchObject({ missed: true })
   })
 })

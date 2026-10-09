@@ -412,3 +412,24 @@ export interface SearchResult {
   hits: SearchHit[]
   behind: number
 }
+
+/** 一条待办输入（阶段 60）：已经收下、还没进模型上下文的消息。 */
+export interface PendingInput {
+  input_id: string
+  /** now = 最早可能被处理的时刻（活动 run 的下一个 step）；after = 等下一 turn。 */
+  mode: string
+  text: string
+  images: number
+  client_id: string | null
+  created_at: number
+  /** 从 now 降级来的（run 在它被领取前结束了）：界面照实说「没赶上」。 */
+  missed: boolean
+}
+
+/** 投递结果：kind=run 表示这就起了一个 run（去接它的流），input 表示留在队里。 */
+export interface InputAccepted {
+  kind: string
+  input_id: string | null
+  run_id: string | null
+  mode: string
+}

@@ -75,8 +75,28 @@ export type TimelineImage =
       mime: string
     }
 
+/**
+ * 一条**还没被采纳**的输入（阶段 60）挂在用户段落上：它已经收下了，但还没进模型上下文。
+ * 落库那一刻（事件带 input_id）这个标记消失，段落变成普通的用户消息。
+ */
+export type TimelinePending = {
+  inputId: string
+  mode: string
+  /** 从「插入」降级成排队的（run 在它被领取前就结束了）。 */
+  missed: boolean
+  /** 待办输入里的图片张数：字节要等落库后才取得到（读端点按条目定位）。 */
+  images: number
+}
+
 export type TimelineItem =
-  | { kind: 'user'; entryId: string | null; text: string; images?: TimelineImage[]; ts: MessageTs }
+  | {
+      kind: 'user'
+      entryId: string | null
+      text: string
+      images?: TimelineImage[]
+      pending?: TimelinePending
+      ts: MessageTs
+    }
   /** 运行失败的记账（阶段 55）：内核把它落成 error 条目，人或刷新都看得见，模型看不见。 */
   | { kind: 'error'; entryId: string | null; text: string }
   | { kind: 'assistant'; entryId: string | null; text: string; streaming: boolean; ts: MessageTs }
@@ -183,6 +203,62 @@ export function appendUser(
     ...items,
     { kind: 'user', entryId: null, text, ...(images.length ? { images } : {}), ts: Date.now() },
   ]
+}
+
+/** 收下一条待办输入（投递成功、还没落库）：同一 input_id 只画一段。 */
+export function appendPending(
+  items: TimelineItem[],
+  input: { inputId: string; mode: string; missed: boolean; images: number; text: string },
+): TimelineItem[] {
+  if (items.some((item) => item.kind === 'user' && item.pending?.inputId === input.inputId)) {
+    return items
+  }
+  return [
+    ...items,
+    {
+      kind: 'user',
+      entryId: null,
+      text: input.text,
+      pending: {
+        inputId: input.inputId,
+        mode: input.mode,
+        missed: input.missed,
+        images: input.images,
+      },
+      ts: Date.now(),
+    },
+  ]
+}
+
+/** 撤销一条待办输入（服务端确认后调用）：把那段拿走。 */
+export function dropPending(items: TimelineItem[], inputId: string): TimelineItem[] {
+  const has = items.some((item) => item.kind === 'user' && item.pending?.inputId === inputId)
+  if (!has) return items
+  return items.filter((item) => !(item.kind === 'user' && item.pending?.inputId === inputId))
+}
+
+/** 打开会话时把服务端的待办输入画回来（刷新后仍然看得见「排队中」）。 */
+export function mergePendingInputs(
+  items: TimelineItem[],
+  inputs: {
+    input_id: string
+    mode: string
+    text: string
+    images: number
+    missed: boolean
+  }[],
+): TimelineItem[] {
+  let merged = items
+  for (const input of inputs) {
+    merged = appendPending(merged, {
+      inputId: input.input_id,
+      mode: input.mode,
+      missed: input.missed,
+      images: input.images,
+      text: input.text,
+    })
+  }
+  return merged
 }
 
 /** 贴底跟随的签名：段落数 + 内容量。它变化 = 有新东西落进列表。 */
@@ -448,6 +524,14 @@ function applyUserMessage(items: TimelineItem[], event: TimelineEvent, data: Rec
   }
   // 乐观气泡（发送时先画的那个）就地收编，不再多出一条。带图时按文字配对——
   // 事件里没有客户端 id，而「同一段文字 + 紧随其后」已经足够认出来（图片是随它发的）。
+  // 待办输入落库：按 input_id 就地收编（那条段落本来就在列表里，位置也不该跳）
+  const inputId = str(data.input_id)
+  if (inputId) {
+    const at = items.findIndex(
+      (item) => item.kind === 'user' && item.pending?.inputId === inputId,
+    )
+    if (at >= 0) return replace(items, at, next)
+  }
   const last = items.at(-1)
   if (last?.kind === 'user' && last.entryId === null && last.text === text) {
     return replace(items, items.length - 1, next)

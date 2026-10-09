@@ -18,7 +18,9 @@ import type {
   EntryPage,
   FileContent,
   FileList,
+  InputAccepted,
   Meta,
+  PendingInput,
   Run,
   RunCreated,
   ScratchSession,
@@ -210,8 +212,21 @@ export type ImageUpload = {
   data: string
 }
 
-export type StartRunInput = {
+export type InputRequest = {
+  /** now = 最早可能被处理的时刻（忙时插进当前 run 的下一个 step，空闲就直接起 run）。 */
+  mode: 'now' | 'after'
   prompt: string
+  images?: ImageUpload[]
+  /** 幂等键：前端因超时重发同一条时不该产生第二条。 */
+  client_id?: string
+  model?: string
+  reasoning_effort?: string
+  branch?: string
+  full_access_ack?: boolean
+}
+
+export type StartRunInput = {
+  prompt?: string
   /** 随这条消息发的图片；文本在前、图片按数组顺序在后（阶段 59）。 */
   images?: ImageUpload[]
   /** 这次运行接在哪条链尾上；缺省 = main。 */  branch?: string
@@ -221,6 +236,8 @@ export type StartRunInput = {
   reasoning_effort?: string
   /** `true` = 完全访问（跳过毁灭级确认、关沙箱）；唯一的授权凭据，没有模式字段。 */
   full_access_ack?: boolean
+  /** 领取一条排队输入去起 run：内容与开关取自那条输入，prompt/images 被忽略（阶段 60）。 */
+  from_input?: string
 }
 
 /** 一张落库图片的字节地址：读侧端点按 (会话, 条目, 块下标) 定位。 */
@@ -235,6 +252,30 @@ export function startRun(sessionId: string, input: StartRunInput): Promise<RunCr
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
   })
+}
+
+/** 投一条补充输入（阶段 60）：响应告诉它落在哪一类——起了 run，还是留在队里。 */
+export function submitInput(sessionId: string, input: InputRequest): Promise<InputAccepted> {
+  return request(`/api/sessions/${encodeURIComponent(sessionId)}/inputs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+}
+
+/** 这个会话还没被采纳的输入（刷新后据此把「排队中」的段落画回来）。 */
+export function listInputs(sessionId: string): Promise<PendingInput[]> {
+  return request<{ inputs: PendingInput[] }>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/inputs`,
+  ).then((body) => body.inputs)
+}
+
+/** 撤销一条尚未领取的输入（204）。 */
+export function dropInput(sessionId: string, inputId: string): Promise<void> {
+  return request(
+    `/api/sessions/${encodeURIComponent(sessionId)}/inputs/${encodeURIComponent(inputId)}`,
+    { method: 'DELETE' },
+  )
 }
 
 export function getRun(runId: string): Promise<Run> {

@@ -181,3 +181,52 @@ describe('Composer 的图片草稿（阶段 59）', () => {
     expect(send.disabled).toBe(true)
   })
 })
+
+describe('Composer 忙时的两个动作（阶段 60）', () => {
+  // 忙时的占位文案会变（说的是排队与插入），所以按可访问名取输入框。
+  const busyInput = () => screen.getByLabelText('消息输入') as HTMLTextAreaElement
+
+  function renderBusy() {
+    const onSend = vi.fn()
+    const onQueue = vi.fn()
+    const onInsert = vi.fn()
+    render(
+      <Composer
+        full={false}
+        onToggleFull={() => {}}
+        model="stub/a"
+        busy
+        onSend={onSend}
+        onQueue={onQueue}
+        onInsert={onInsert}
+        onStop={() => {}}
+      />,
+    )
+    return { onSend, onQueue, onInsert }
+  }
+
+  it('Enter 是排队（默认动作），不是立即发送', () => {
+    const { onSend, onQueue } = renderBusy()
+    fireEvent.change(busyInput(), { target: { value: '下一件事' } })
+    fireEvent.keyDown(busyInput(), { key: 'Enter' })
+
+    expect(onQueue).toHaveBeenCalledWith('下一件事', [])
+    expect(onSend).not.toHaveBeenCalled()
+  })
+
+  it('「插入」把它送进当前 run 的下一个 step', () => {
+    const { onInsert } = renderBusy()
+    fireEvent.change(busyInput(), { target: { value: '先别改代码' } })
+    fireEvent.click(screen.getByRole('button', { name: '插入' }))
+
+    expect(onInsert).toHaveBeenCalledWith('先别改代码', [])
+  })
+
+  it('排队与插入都在，停止也还在（三条路各自说得清）', () => {
+    renderBusy()
+
+    expect(screen.getByRole('button', { name: '排队' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '插入' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '停止' })).toBeTruthy()
+  })
+})

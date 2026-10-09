@@ -462,3 +462,45 @@ describe('用户消息里的图片（阶段 59）', () => {
     expect(screen.queryByAltText('shot.png')).toBeNull()
   })
 })
+
+describe('待办输入在时间线上的样子（阶段 60）', () => {
+  it('排队 / 插入 / 没赶上各有自己的说法，并能撤销', () => {
+    const onDropInput = vi.fn()
+    render(
+      <Timeline
+        onDropInput={onDropInput}
+        items={[
+          {
+            kind: 'user',
+            entryId: null,
+            text: '下一件事',
+            ts: 1,
+            pending: { inputId: 'in_1', mode: 'after', missed: false, images: 0 },
+          },
+          {
+            kind: 'user',
+            entryId: null,
+            text: '先别改代码',
+            ts: 2,
+            pending: { inputId: 'in_2', mode: 'now', missed: false, images: 0 },
+          },
+          {
+            kind: 'user',
+            entryId: null,
+            text: '没赶上的',
+            ts: 3,
+            pending: { inputId: 'in_3', mode: 'after', missed: true, images: 2 },
+          },
+        ]}
+      />,
+    )
+
+    expect(screen.getByText('排队中 · 下一轮')).toBeTruthy()
+    expect(screen.getByText('插入中 · 下一个 step')).toBeTruthy()
+    expect(screen.getByText('没赶上，已排队')).toBeTruthy()
+    expect(screen.getByText('（2 张图）')).toBeTruthy()
+
+    fireEvent.click(screen.getAllByRole('button', { name: '撤销这条补充' })[1]!)
+    expect(onDropInput).toHaveBeenCalledWith('in_2')
+  })
+})
