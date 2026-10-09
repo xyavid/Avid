@@ -204,8 +204,16 @@ export function deleteWorkspace(id: string): Promise<void> {
   return request(`/api/workspaces/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
+/** 一条待发送的图片：原始 base64（不带 data: 前缀）与可选文件名。 */
+export type ImageUpload = {
+  name?: string | null
+  data: string
+}
+
 export type StartRunInput = {
   prompt: string
+  /** 随这条消息发的图片；文本在前、图片按数组顺序在后（阶段 59）。 */
+  images?: ImageUpload[]
   /** 这次运行接在哪条链尾上；缺省 = main。 */  branch?: string
   /** 本次运行的模型覆盖；缺省 = 按设置解析（.env + 界面覆盖层）。 */
   model?: string
@@ -213,6 +221,11 @@ export type StartRunInput = {
   reasoning_effort?: string
   /** `true` = 完全访问（跳过毁灭级确认、关沙箱）；唯一的授权凭据，没有模式字段。 */
   full_access_ack?: boolean
+}
+
+/** 一张落库图片的字节地址：读侧端点按 (会话, 条目, 块下标) 定位。 */
+export function attachmentUrl(sessionId: string, entryId: string, index: number): string {
+  return `/api/sessions/${encodeURIComponent(sessionId)}/entries/${encodeURIComponent(entryId)}/attachments/${index}`
 }
 
 /** 发起一次运行（201 → RunCreated）。 */

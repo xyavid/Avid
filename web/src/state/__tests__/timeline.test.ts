@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { Entry } from '../../api/types'
 import type { TimelineEvent, TimelineItem } from '../timeline'
-import { applyEvent, itemsFromEntries, mergeItems, subagentRuns, subagentSteps, turnGroups } from '../timeline'
+import { appendUser, applyEvent, itemsFromEntries, mergeItems, subagentRuns, subagentSteps, turnGroups } from '../timeline'
 
 function entry(seq: number, message: Record<string, unknown>, type = 'message'): Entry {
   return { entry_id: `e${seq}`, parent_id: null, seq, timestamp: seq, type, message }
@@ -447,5 +447,56 @@ describe('turnGroups：一次回话的分组与折叠判定', () => {
     expect(first[0]!.key).toBe('entry:e1')
     expect(again[0]!.key).toBe('entry:e1')
     expect(head[0]!.key).toBe('entry:e2')
+  })
+})
+
+describe('图片消息（阶段 59）', () => {
+  const imagePart = { type: 'image', mime: 'image/png', name: 'shot.png', bytes: 120, index: 1 }
+
+  it('条目里的图片块收成 stored 引用，文本仍进 text', () => {
+    const items = itemsFromEntries([
+      entry(1, { role: 'user', content: [{ type: 'text', text: '看这个' }, imagePart] }),
+    ])
+
+    expect(items[0]).toMatchObject({ kind: 'user', entryId: 'e1', text: '看这个' })
+    expect(items[0]!.kind === 'user' && items[0]!.images).toEqual([
+      { source: 'stored', entryId: 'e1', index: 1, name: 'shot.png', bytes: 120, mime: 'image/png' },
+    ])
+  })
+
+  it('只有图没有文字也成一段（不该被「文字为空」吞掉）', () => {
+    const items = itemsFromEntries([entry(1, { role: 'user', content: [imagePart] })])
+
+    expect(items).toHaveLength(1)
+    expect(items[0]!.kind === 'user' && items[0]!.text).toBe('')
+    expect(items[0]!.kind === 'user' && items[0]!.images).toHaveLength(1)
+  })
+
+  it('没有图的用户消息不带 images 字段（老形态零变化）', () => {
+    const items = itemsFromEntries([entry(1, { role: 'user', content: '一句话' })])
+
+    expect(items[0]!.kind === 'user' && items[0]!.images).toBeUndefined()
+  })
+
+  it('user_message 事件把图片收编成同形的 stored 引用（收编那条乐观段）', () => {
+    const optimistic = appendUser([], '看这个', [{ source: 'local', url: 'blob:x', name: 'shot.png' }])
+    const items = applyEvent(
+      optimistic,
+      ev('user_message', 7, { entry_id: 'e9', message: { role: 'user', content: [{ type: 'text', text: '看这个' }, imagePart] } }),
+    )
+
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ kind: 'user', entryId: 'e9', ts: 7 })
+    expect(items[0]!.kind === 'user' && items[0]!.images).toEqual([
+      { source: 'stored', entryId: 'e9', index: 1, name: 'shot.png', bytes: 120, mime: 'image/png' },
+    ])
+  })
+
+  it('本地草稿段先带 object URL，落库后换成条目引用', () => {
+    const draft = appendUser([], '', [{ source: 'local', url: 'blob:x', name: 'a.png' }])
+
+    expect(draft[0]!.kind === 'user' && draft[0]!.images).toEqual([
+      { source: 'local', url: 'blob:x', name: 'a.png' },
+    ])
   })
 })

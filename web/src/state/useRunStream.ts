@@ -24,6 +24,7 @@ import type { UsageReport } from '../api/types'
 import type { RunPermission } from '../events/types'
 import type { TimelineEvent, TimelineItem } from './timeline'
 import { appendUser, applyEvent, subagentTag } from './timeline'
+import type { DraftImage } from './imagePrep'
 
 export type RunPhase = 'idle' | 'starting' | 'running' | 'settling' | 'error'
 
@@ -302,19 +303,33 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
       model?: string | null,
       branch?: string,
       effort?: string | null,
+      images: DraftImage[] = [],
     ) => {
       if (!sessionId) return
       setPhase('starting')
       setError(null)
       discardPendingDeltas()
       // 换会话就另起一条：上一条会话的段落不跟着走。
-      setItems((cur) => (sessionRef.current === sessionId ? appendUser(cur, prompt) : appendUser([], prompt)))
+      const optimistic = images.map((image) => ({
+        source: 'local' as const,
+        url: image.url,
+        name: image.name,
+      }))
+      setItems((cur) =>
+        sessionRef.current === sessionId
+          ? appendUser(cur, prompt, optimistic)
+          : appendUser([], prompt, optimistic),
+      )
       setAttachedSession(sessionId)
       setApprovals([])
       setRunPermission(null)
       try {
         const created = await startRun(sessionId, {
           prompt,
+          // 没有图就不带这个字段：纯文本请求的载荷与旧行为逐字一致
+          ...(images.length
+            ? { images: images.map((image) => ({ name: image.name, data: image.data })) }
+            : {}),
           // 只在选了覆盖时才带 model：不带 = 服务端按设置解析（与旧行为逐字一致）
           ...(model ? { model } : {}),
           // 同理只在选了档位时才带：不带 = 这次请求不发这个参数

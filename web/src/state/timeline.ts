@@ -58,8 +58,25 @@ export type SubagentStep = {
  */
 export type MessageTs = number | null
 
+/**
+ * 用户消息里的一张图（阶段 59）。
+ *
+ * 本地草稿带 object URL（还没落库，服务端取不到）；落库条目带 (entryId, 下标)——
+ * 读侧端点的地址由**视图**拼，这里不碰 URL 形状（`api/` 才是端点形状的所在地）。
+ */
+export type TimelineImage =
+  | { source: 'local'; url: string; name: string | null }
+  | {
+      source: 'stored'
+      entryId: string
+      index: number
+      name: string | null
+      bytes: number | null
+      mime: string
+    }
+
 export type TimelineItem =
-  | { kind: 'user'; entryId: string | null; text: string; ts: MessageTs }
+  | { kind: 'user'; entryId: string | null; text: string; images?: TimelineImage[]; ts: MessageTs }
   /** 运行失败的记账（阶段 55）：内核把它落成 error 条目，人或刷新都看得见，模型看不见。 */
   | { kind: 'error'; entryId: string | null; text: string }
   | { kind: 'assistant'; entryId: string | null; text: string; streaming: boolean; ts: MessageTs }
@@ -108,6 +125,38 @@ function messageContent(value: unknown): string {
   return value === undefined || value === null ? '' : JSON.stringify(value)
 }
 
+/** 用户消息内容 → (正文, 图片)：纯文本原样；分块数组里文本段拼正文、图片段收成引用。
+ *
+ *  两条路径（事件流 / 重读会话）必须给出**同形**的段落，所以解析只此一处——
+ *  图片块在两边的形状由服务端保证一致（读侧都是不带字节的 ref）。
+ */
+export function userContent(
+  content: unknown,
+  entryId: string | null,
+): { text: string; images: TimelineImage[] } {
+  if (!Array.isArray(content)) return { text: messageContent(content), images: [] }
+  const texts: string[] = []
+  const images: TimelineImage[] = []
+  content.forEach((part, index) => {
+    if (part === null || typeof part !== 'object') return
+    const block = part as Record<string, unknown>
+    if (block.type === 'image') {
+      if (entryId === null) return // 没有条目就没有可读地址，等 user_message 收编
+      images.push({
+        source: 'stored',
+        entryId,
+        index,
+        name: typeof block.name === 'string' ? block.name : null,
+        bytes: typeof block.bytes === 'number' ? block.bytes : null,
+        mime: typeof block.mime === 'string' ? block.mime : '',
+      })
+      return
+    }
+    if (typeof block.text === 'string' && block.text) texts.push(block.text)
+  })
+  return { text: texts.join('\n'), images }
+}
+
 /** 去重身份：有身份的段落（落库消息、工具调用）在两条路径里指向同一件事。 */
 function identity(item: TimelineItem): string | null {
   if (item.kind === 'tool') return `tool:${item.callId}`
@@ -123,9 +172,17 @@ export function itemKey(item: TimelineItem, index: number): string {
 }
 
 /** 发送时的乐观用户段：`user_message` 事件到达后就地收编，不再多出一条。
- *  读数先用本地时钟占位（服务端与本机是同一台），事件到达即换成服务端那份。 */
-export function appendUser(items: TimelineItem[], text: string): TimelineItem[] {
-  return [...items, { kind: 'user', entryId: null, text, ts: Date.now() }]
+ *  读数先用本地时钟占位（服务端与本机是同一台），事件到达即换成服务端那份。
+ *  带图时图还是本地草稿（object URL）——收编时 `applyUserMessage` 换成条目引用。 */
+export function appendUser(
+  items: TimelineItem[],
+  text: string,
+  images: TimelineImage[] = [],
+): TimelineItem[] {
+  return [
+    ...items,
+    { kind: 'user', entryId: null, text, ...(images.length ? { images } : {}), ts: Date.now() },
+  ]
 }
 
 /** 贴底跟随的签名：段落数 + 内容量。它变化 = 有新东西落进列表。 */
@@ -198,8 +255,16 @@ export function itemsFromEntries(entries: Entry[]): TimelineItem[] {
     const message = entry.message as MessagePayload
     const role = str(message.role)
     if (role === 'user') {
-      const text = messageContent(message.content)
-      if (text) items.push({ kind: 'user', entryId: entry.entry_id, text, ts: entry.timestamp })
+      const { text, images } = userContent(message.content, entry.entry_id)
+      if (text || images.length > 0) {
+        items.push({
+          kind: 'user',
+          entryId: entry.entry_id,
+          text,
+          ...(images.length ? { images } : {}),
+          ts: entry.timestamp,
+        })
+      }
       continue
     }
     if (role === 'assistant') {
@@ -371,15 +436,23 @@ function applyRunFailed(items: TimelineItem[], data: Record<string, unknown>): T
 function applyUserMessage(items: TimelineItem[], event: TimelineEvent, data: Record<string, unknown>): TimelineItem[] {
   const entryId = str(data.entry_id)
   const message = data.message as MessagePayload | undefined
-  const text = messageContent(message?.content)
-  if (!entryId || !text) return items
+  const { text, images } = userContent(message?.content, entryId || null)
+  if (!entryId || (!text && images.length === 0)) return items
   if (items.some((item) => item.kind === 'user' && item.entryId === entryId)) return items
-  // 乐观气泡（发送时先画的那个）就地收编，不再多出一条。
+  const next: TimelineItem = {
+    kind: 'user',
+    entryId,
+    text,
+    ...(images.length ? { images } : {}),
+    ts: event.ts,
+  }
+  // 乐观气泡（发送时先画的那个）就地收编，不再多出一条。带图时按文字配对——
+  // 事件里没有客户端 id，而「同一段文字 + 紧随其后」已经足够认出来（图片是随它发的）。
   const last = items.at(-1)
   if (last?.kind === 'user' && last.entryId === null && last.text === text) {
-    return replace(items, items.length - 1, { ...last, entryId, ts: event.ts })
+    return replace(items, items.length - 1, next)
   }
-  return [...items, { kind: 'user', entryId, text, ts: event.ts }]
+  return [...items, next]
 }
 
 function applyAssistantMessage(

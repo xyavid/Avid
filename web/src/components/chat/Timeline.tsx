@@ -19,7 +19,8 @@
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 
-import type { TimelineItem } from '../../state/timeline'
+import { attachmentUrl } from '../../api/client'
+import type { TimelineImage, TimelineItem } from '../../state/timeline'
 import { cx } from '../../ui/cx'
 import { itemKey, subagentSteps, turnGroups } from '../../state/timeline'
 import { AssistantMessage } from './AssistantMessage'
@@ -29,6 +30,7 @@ import { ToolCard } from './ToolCard'
 import { TurnSummary } from './TurnSummary'
 import { toolDetail } from './toolDetail'
 import { toolLabel } from './toolLabel'
+import type { UserBubbleImage } from './UserBubble'
 import { UserBubble } from './UserBubble'
 
 export type TimelineProps = {
@@ -48,6 +50,8 @@ export type TimelineProps = {
    * 它可能不在当前这一页里——那种情况下由装配层改成从那条开始取页，所以这里只管画。
    */
   focusEntry?: string | null
+  /** 会话 id：落库图片的地址由它拼（阶段 59）；null = 不画落库图。 */
+  sessionId?: string | null
 }
 
 /**
@@ -106,6 +110,18 @@ type Ctx = {
   head: { pending: boolean }
   /** 整轮的动作面（复制 / 分支），按段落在组内的下标索引进来的。 */
   actions: Map<number, TurnAction>
+  /** 会话 id：落库图片的地址由它 + (条目, 块下标) 拼（阶段 59）；null = 还没选定会话。 */
+  sessionId: string | null
+}
+
+/** 段落里的图片 → 气泡要的 (src, 名字)：本地草稿用 object URL，落库条目拼读侧端点。 */
+function bubbleImages(images: TimelineImage[] | undefined, sessionId: string | null): UserBubbleImage[] {
+  if (!images || images.length === 0) return []
+  return images.flatMap((image) => {
+    if (image.source === 'local') return [{ src: image.url, name: image.name }]
+    if (sessionId === null) return [] // 没有会话就没有可读地址：宁可不画，也不画破图
+    return [{ src: attachmentUrl(sessionId, image.entryId, image.index), name: image.name }]
+  })
 }
 
 /** 段落 → 节点。`list` 是折叠判定后要画的那一段（可能是整轮，也可能只有过程），
@@ -127,7 +143,7 @@ function itemNodes(list: TimelineItem[], offset: number, ctx: Ctx): ReactNode[] 
           data-entry={item.entryId ?? undefined}
           data-focus={item.entryId === ctx.focusEntry ? 'true' : undefined}
         >
-          <UserBubble>{item.text}</UserBubble>
+          <UserBubble images={bubbleImages(item.images, ctx.sessionId)}>{item.text}</UserBubble>
           <MessageActions text={item.text} className="justify-end" />
         </div>
       )
@@ -217,6 +233,7 @@ export function Timeline({
   liveTail = false,
   onOpenSubagents,
   focusEntry = null,
+  sessionId = null,
 }: TimelineProps) {
   // 手动展开的轮：折叠是默认，点开的那几轮记在这儿（切换会话/刷新即回到默认）。
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set())
@@ -245,6 +262,7 @@ export function Timeline({
       onOpenSubagents,
       head: { pending: true },
       actions: turnActions(group.items),
+      sessionId,
     }
     const from = group.user === null ? 0 : 1
 

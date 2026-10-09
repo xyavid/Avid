@@ -540,6 +540,7 @@ export function ConversationPage() {
         {hasItems && (
           <Timeline
             items={shown}
+            sessionId={selectedId}
             workspaceRoot={selected?.workspace?.root ?? null}
             liveTail={liveHere}
             onBranch={(id) => void branchFrom(id)}
@@ -682,7 +683,7 @@ export function ConversationPage() {
             onChangeEffort={run.chooseEffort}
             byokModels={meta?.capabilities.models ?? []}
             usage={shownUsage}
-            onSend={(text) => void live.send(text, full, run.model, branch, run.effort)}
+            onSend={(text, images) => void live.send(text, full, run.model, branch, run.effort, images)}
             onStop={() => void live.stop()}
           />
         </div>

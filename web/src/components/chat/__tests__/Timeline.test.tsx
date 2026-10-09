@@ -399,3 +399,66 @@ describe('Timeline（段落 → 对话列）', () => {
     expect(screen.getByText('已替换 a.py 中的 1 处文本')).toBeTruthy()
   })
 })
+
+describe('用户消息里的图片（阶段 59）', () => {
+  it('落库的图渲染成读侧端点的地址（会话 + 条目 + 块下标）', () => {
+    render(
+      <Timeline
+        sessionId="s-1"
+        items={[
+          {
+            kind: 'user',
+            entryId: 'e1',
+            text: '看这个',
+            ts: 1,
+            images: [
+              { source: 'stored', entryId: 'e1', index: 1, name: 'shot.png', bytes: 120, mime: 'image/png' },
+            ],
+          },
+        ]}
+      />,
+    )
+
+    const img = screen.getByAltText('shot.png') as HTMLImageElement
+    expect(img.getAttribute('src')).toBe('/api/sessions/s-1/entries/e1/attachments/1')
+  })
+
+  it('本地草稿的图用 object URL（还没落库，服务端取不到）', () => {
+    render(
+      <Timeline
+        sessionId="s-1"
+        items={[
+          {
+            kind: 'user',
+            entryId: null,
+            text: '',
+            ts: 1,
+            images: [{ source: 'local', url: 'blob:local', name: 'a.png' }],
+          },
+        ]}
+      />,
+    )
+
+    expect((screen.getByAltText('a.png') as HTMLImageElement).getAttribute('src')).toBe('blob:local')
+  })
+
+  it('没有会话 id 时不画破图（宁可不画）', () => {
+    render(
+      <Timeline
+        items={[
+          {
+            kind: 'user',
+            entryId: 'e1',
+            text: '看这个',
+            ts: 1,
+            images: [
+              { source: 'stored', entryId: 'e1', index: 1, name: 'shot.png', bytes: 120, mime: 'image/png' },
+            ],
+          },
+        ]}
+      />,
+    )
+
+    expect(screen.queryByAltText('shot.png')).toBeNull()
+  })
+})
