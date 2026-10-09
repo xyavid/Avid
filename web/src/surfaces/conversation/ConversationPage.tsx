@@ -667,6 +667,7 @@ export function ConversationPage() {
                 approvals={live.approvals}
                 busy={false}
                 onDecide={(id, decision) => void live.decide(id, decision)}
+                onAnswer={(id, text) => void live.answer(id, text)}
               />
             </div>
           )}

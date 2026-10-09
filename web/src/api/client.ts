@@ -233,6 +233,15 @@ export function cancelRun(runId: string): Promise<CancelResult> {
   return request(`/api/runs/${encodeURIComponent(runId)}/cancel`, { method: 'POST' })
 }
 
+/** 幂等答复一次提问；answer 是文本（选择题也走同一条）。 */
+export function answerApproval(runId: string, approvalId: string, answer: string): Promise<unknown> {
+  return request(`/api/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ answer }),
+  })
+}
+
 /** 幂等答复一次审批；decision: 'allow' | 'deny'。 */
 export function decideApproval(runId: string, approvalId: string, decision: 'allow' | 'deny'): Promise<unknown> {
   return request(`/api/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}`, {

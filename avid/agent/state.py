@@ -23,7 +23,7 @@ from .skills import SkillLoader, default_skills_dir
 from .todo import TodoList
 
 if TYPE_CHECKING:  # Annotations only: these two are never imported at run time.
-    from ..security.permission import AskUser
+    from ..security.permission import AskQuestion, AskUser
     from .tools.mcp import McpManager
 
 # Abort the run after this many consecutive denials; any allowed call resets the streak.
@@ -91,6 +91,10 @@ class RunState:
 
     # Approval callback injection point; None falls back to the default stdin-based prompter.
     ask: AskUser | None = None
+    #: 模型主动提问的通道（阶段 58）：(question, options) -> 答案；None = 没有通道或没人答。
+    #: 与 ``ask``（毁灭级确认的 bool 通道）分开：那条路是安全裁决，这条是普通问答，
+    #: 混在一起会让「允许/拒绝」的语义漏进工具层。
+    question: AskQuestion | None = None
 
     # Event observer; None means this run has no subscriber, as on the CLI path.
     observer: RunObserver | None = None
@@ -177,6 +181,7 @@ class RunState:
         *,
         auto_approve: bool = False,
         ask: AskUser | None = None,
+        question: AskQuestion | None = None,
         observer: RunObserver | None = None,
         permission_mode: str | None = None,
         ledger: ApprovalLedger | None = None,
@@ -201,6 +206,7 @@ class RunState:
         return cls(
             auto_approve=auto_approve,
             ask=ask,
+            question=question,
             observer=observer,
             permission_mode=PERMISSION_FULL if is_full else PERMISSION_NORMAL,
             security=security

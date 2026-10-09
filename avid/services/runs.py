@@ -812,6 +812,8 @@ class RunRegistry:
             state = RunState.for_run(
                 auto_approve=auto_approve,
                 ask=record.approvals.request if record.approvals is not None else None,
+                # 同一条待决表、同一个界面槽：模型的提问也在这里挂起等人。
+                question=record.approvals.ask if record.approvals is not None else None,
                 observer=lambda event: self._observe(record, event),
                 full=full_ack,
                 workspace_root=workspace.root,

@@ -181,7 +181,12 @@ export interface Approval {
   reason: string
   created_at: number
   expires_at: number
+  /** 'approval' 等裁决（decision）、'question' 等回答（answer）——同一张表、同一个界面槽。 */
+  kind: string
+  /** 选择题的选项（空 = 自由回答）。 */
+  options: string[]
   decision: string | null
+  answer: string | null
   resolved_at: number | null
   resolved_reason: string | null
 }

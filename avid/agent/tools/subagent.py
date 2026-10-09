@@ -119,6 +119,7 @@ def run_subagent(
     auto_approve: bool = False,
     chat: Callable[..., Any] | None = None,
     ask: Any = None,
+    question: Any = None,
     permission_mode: str | None = None,
     ledger: Any = None,
     security: Any = None,
@@ -145,6 +146,7 @@ def run_subagent(
     child_state = RunState.for_run(
         auto_approve=auto_approve,
         ask=ask,
+        question=question,
         observer=observer,
         permission_mode=permission_mode,
         ledger=ledger,
@@ -301,6 +303,8 @@ def subagent(
     # state and passed explicitly, since implicit state does not follow a child to its thread.
     auto_approve = state.auto_approve
     ask = state.ask
+    # 提问通道也继承：子 agent 缺信息时问的是同一个人（挂起在父运行的那张待决表上）。
+    question = getattr(state, "question", None)
     permission_mode = state.permission_mode
     scratch = state.scratch
     ledger = state.ledger
@@ -368,6 +372,7 @@ def subagent(
                 config=config,
                 auto_approve=auto_approve,
                 ask=ask,
+                question=question,
                 permission_mode=permission_mode,
                 ledger=ledger,
                 security=security,

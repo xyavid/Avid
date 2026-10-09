@@ -18,7 +18,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { cancelRun, decideApproval, getRun, startRun } from '../api/client'
+import { answerApproval, cancelRun, decideApproval, getRun, startRun } from '../api/client'
 import { subscribeRun } from '../api/events'
 import type { UsageReport } from '../api/types'
 import type { RunPermission } from '../events/types'
@@ -33,7 +33,27 @@ const PARENT_KEY = ''
 /** 一截待刷的流式增量：文本 + 首片到达的时间 + 它的来源（null = 父运行）。 */
 type PendingDelta = { text: string; ts: number; tag: { task: string; index: number } | null }
 
-export type LiveApproval = { approvalId: string; tool: string; arguments: string; reason: string }
+/** 一条待决项：kind='approval' 等裁决、'question' 等回答（两者共用同一个界面槽）。 */
+export type LiveApproval = {
+  approvalId: string
+  kind: 'approval' | 'question'
+  tool: string
+  arguments: string
+  reason: string
+  /** 选择题的选项（空 = 自由回答）。 */
+  options: string[]
+}
+
+/** 事件里的 arguments 可能是字符串也可能是对象：都念成人看的样子，别显示 [object Object]。 */
+function argumentsText(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (value === null || value === undefined) return ''
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
 
 /** 事件帧：只读这四处；`ts` 用来算思考段的时长。 */
 type EventFrame = { type: string; ts: number; data?: Record<string, unknown> }
@@ -194,9 +214,11 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
             ...a,
             {
               approvalId: String(data.approval_id ?? ''),
+              kind: data.kind === 'question' ? 'question' : 'approval',
               tool: String(data.tool ?? ''),
-              arguments: String(data.arguments ?? ''),
+              arguments: argumentsText(data.arguments),
               reason: String(data.reason ?? ''),
+              options: Array.isArray(data.options) ? data.options.map((item) => String(item)) : [],
             },
           ])
           return
@@ -342,6 +364,13 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
     [],
   )
 
+  /** 回答一次提问：与裁决共用端点，载荷换 answer。 */
+  const answer = useCallback(async (approvalId: string, text: string) => {
+    const id = runIdRef.current
+    if (!id) return
+    await answerApproval(id, approvalId, text).catch(() => {})
+  }, [])
+
   return {
     phase,
     runId,
@@ -354,6 +383,7 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
     send,
     stop,
     decide,
+    answer,
     attach,
     settle,
   }

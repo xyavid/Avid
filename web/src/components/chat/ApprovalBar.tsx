@@ -15,18 +15,79 @@ export type ApprovalBarProps = {
   approvals: LiveApproval[]
   busy: boolean
   onDecide: (approvalId: string, decision: 'allow' | 'deny') => void
+  /** 回答一次提问（选择题点按钮与自由输入都走这里）。 */
+  onAnswer: (approvalId: string, text: string) => void
 }
 
-export function ApprovalBar({ approvals, busy, onDecide }: ApprovalBarProps) {
+export function ApprovalBar({ approvals, busy, onDecide, onAnswer }: ApprovalBarProps) {
   // 已点过「允许」、等第二次确认的审批 id；审批出列后自动失效，不留悬挂状态。
   const [confirming, setConfirming] = useState<string | null>(null)
+  // 自由回答的草稿，按待决 id 存：多个问题同时挂着时互不串台。
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
   if (approvals.length === 0) return null
   const confirmingId =
     confirming !== null && approvals.some((a) => a.approvalId === confirming) ? confirming : null
 
+  const question = (a: LiveApproval) => (
+    <div key={a.approvalId} className="flex flex-col gap-a8">
+      <div className="flex items-center gap-a8">
+        <span className="shrink-0 text-accent">
+          <Icon name="message-square" size={14} />
+        </span>
+        <span className="font-ui text-ui font-medium text-ink">问你一句</span>
+      </div>
+      <p className="font-ui text-ui leading-[1.7] text-ink">{a.reason}</p>
+      <div className="flex flex-wrap gap-a8">
+        {a.options.map((option) => (
+          <button
+            key={option}
+            type="button"
+            disabled={busy}
+            onClick={() => onAnswer(a.approvalId, option)}
+            className="rounded-sm border-hairline border-hair px-[11px] py-[4px] font-ui text-hint text-accent transition-colors duration-fast ease-out hover:bg-accent-light disabled:opacity-40"
+          >
+            {option}
+          </button>
+        ))}
+      </div>
+      <div className="flex items-center gap-a8">
+        <input
+          value={drafts[a.approvalId] ?? ''}
+          onChange={(e) => setDrafts((cur) => ({ ...cur, [a.approvalId]: e.target.value }))}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (drafts[a.approvalId] ?? '').trim()) {
+              onAnswer(a.approvalId, (drafts[a.approvalId] ?? '').trim())
+            }
+          }}
+          disabled={busy}
+          placeholder={a.options.length > 0 ? '或者自己写一个答案…' : '输入回答…'}
+          aria-label="回答"
+          className="h-control min-w-0 flex-1 rounded-sm border-hairline border-hair bg-card px-a8 font-ui text-ui text-ink focus:border-accent focus:outline-none disabled:opacity-40"
+        />
+        <button
+          type="button"
+          disabled={busy || !(drafts[a.approvalId] ?? '').trim()}
+          onClick={() => onAnswer(a.approvalId, (drafts[a.approvalId] ?? '').trim())}
+          className="shrink-0 rounded-sm border-transparent bg-accent px-[15px] py-[6px] font-ui text-ui font-medium text-card transition-colors duration-fast ease-out disabled:opacity-40"
+        >
+          回答
+        </button>
+      </div>
+    </div>
+  )
+
   return (
     <div className="flex flex-col gap-a8">
-      {approvals.map((a) => (
+      {approvals.map((a) =>
+        a.kind === 'question' ? (
+          <div
+            key={a.approvalId}
+            className="rounded-md border-hairline border-hair bg-card p-a12 shadow-soft"
+            style={{ animation: 'hana-rise var(--duration-slow) var(--ease-out)' }}
+          >
+            {question(a)}
+          </div>
+        ) : (
         <div
           key={a.approvalId}
           className="rounded-md border-hairline border-hair bg-card p-a12 shadow-soft"
@@ -92,7 +153,8 @@ export function ApprovalBar({ approvals, busy, onDecide }: ApprovalBarProps) {
             </div>
           )}
         </div>
-      ))}
+        ),
+      )}
     </div>
   )
 }

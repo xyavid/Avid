@@ -15,8 +15,10 @@ English · [中文](README.zh-CN.md)
 
 ## What it does
 
-- **Tool use** — built-in tools for reading, writing and editing files, globbing, running shell
-  commands and tracking todos, plus MCP tools the workspace declares; every call is validated first.
+- **Tool use** — built-in tools for reading, writing and editing files, globbing and grepping
+  (structured `path:line:text` hits), running shell commands and tracking todos, plus MCP tools the
+  workspace declares and `ask_user` when only you know the answer; every call is validated first.
+  Read-only calls in one step run in parallel; writes and shell commands stay exclusive.
 - **Subagents** — independent subtasks run in parallel, each handed a structured task brief.
 - **Skills** — reusable instructions (`SKILL.md`): the catalog shows one line, the full text loads
   when it applies.

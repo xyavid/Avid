@@ -1,4 +1,8 @@
-"""Approval endpoints: list the pending items and answer one of them."""
+"""Approval endpoints: list the pending items and answer one of them.
+
+一张表两种待决：毁灭级裁决（decision: allow/deny）与模型的提问（answer: 文本）。
+列表与答复都走同一对端点——界面只需要一个「等你说话」的槽。
+"""
 
 from __future__ import annotations
 
@@ -33,7 +37,14 @@ def answer_approval(
 
         raise ApprovalNotFound(f"运行没有待决审批：{run_id}")
 
-    result = record.approvals.resolve(approval_id, body.decision)
+    if body.answer is not None:
+        result = record.approvals.answer(approval_id, body.answer)
+    elif body.decision is not None:
+        result = record.approvals.resolve(approval_id, body.decision)
+    else:
+        from ...services.errors import InvalidRequest
+
+        raise InvalidRequest("要回什么？裁决给 decision，提问给 answer")
     return {
         "accepted": result.accepted,
         "decision": result.decision,

@@ -12,6 +12,7 @@ import json
 import logging
 import sys
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -128,6 +129,11 @@ def _default_root() -> str:
     from ..agent.tools import workspace
 
     return str(workspace.WORKSPACE_ROOT)
+
+
+#: 提问通道的形状：问题 + 可选项（空 = 自由文本）→ 答案；None 表示没人作答。
+#: 放在 security 层只是因为 AskUser 在这里——它本身不含任何策略。
+AskQuestion = Callable[[str, tuple[str, ...]], "str | None"]
 
 
 def build_run_security(

@@ -7,6 +7,7 @@ import logging
 import socket
 import sqlite3
 import sys
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -62,6 +63,32 @@ AGENT_TOOL_HELP = "（" + " / ".join(item["function"]["name"] for item in TOOLS)
 
 def _local_time(timestamp_ms: int) -> str:
     return datetime.fromtimestamp(timestamp_ms / 1000).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _terminal_question() -> Callable[[str, tuple[str, ...]], str | None]:
+    """终端问答通道：交互时把问题打到 stderr 并读一行；非交互（没有 TTY）返回 None。
+
+    「没答」是一个明确的结果（工具会据此让模型降级），不是错误——所以这里不打日志、
+    不抛异常，只是安静地交不出答案。
+    """
+
+    def ask(question: str, options: tuple[str, ...] = ()) -> str | None:
+        if not sys.stdin.isatty():
+            return None
+        print(f"\n❓ {question}", file=sys.stderr)
+        for index, option in enumerate(options, start=1):
+            print(f"  {index}. {option}", file=sys.stderr)
+        try:
+            raw = input("回答（直接回车＝不回答）: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return None
+        if not raw:
+            return None
+        if options and raw.isdigit() and 1 <= int(raw) <= len(options):
+            return options[int(raw) - 1]
+        return raw
+
+    return ask
 
 
 def _session_indexer() -> SessionIndexer | None:
@@ -231,6 +258,7 @@ def main(argv: list[str] | None = None) -> int:
                 auto_approve=args.yes,
                 full=args.allow_full_access,
                 workspace_root=target.root,
+                question=_terminal_question(),
             )
         except (WorkspaceNotFound, WorkspaceInvalid) as exc:
             print(f"工作区错误：{exc}", file=sys.stderr)
@@ -334,6 +362,7 @@ def _run_session(args: argparse.Namespace, config, state: RunState | None = None
                     auto_approve=args.yes,
                     full=args.allow_full_access,
                     workspace_root=target.root,
+                    question=_terminal_question(),
                 ),
                 on_message=notifying(indexer, recorder.on_message, session.metadata.id),
                 on_compaction=recorder.record_compaction,
@@ -465,6 +494,7 @@ def _interactive(args: argparse.Namespace, config) -> int:
                 auto_approve=args.yes,
                 full=args.allow_full_access,
                 workspace_root=target.root,
+                question=_terminal_question(),
             )
             state.checkpoint = checkpoint
             _start_mcp(state)

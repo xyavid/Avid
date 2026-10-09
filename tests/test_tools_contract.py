@@ -117,6 +117,7 @@ def test_timeout_parameter_matches_the_enforced_cap():
 
 def test_expected_tools_are_registered():
     assert sorted(NAMES) == [
+        "ask_user",
         "bash",
         "edit_file",
         "glob",

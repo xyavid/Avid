@@ -58,6 +58,9 @@ Web  POST /api/sessions/{id}/runs ─┴─► svc/runs.RunRegistry（线程 + �
                                 └ 工具 handler（agent/tools/*，含 MCP 包装）
        on_message ─► SessionRecorder ─► <会话目录>/<工作区 id>/*.jsonl（durable 真相；默认 ~/.avid/sessions）
        on_event   ─► RunRegistry 缓冲 ─► SSE ─► 浏览器消费方（React 前端 web/）
+       ── 待决（阶段 58）：一张表两种 kind —— 毁灭级裁决（allow/deny）与模型的提问
+          （ask_user 的 question/options → answer）；同一组端点、同一个界面槽，超时对提问
+          是「没答」（模型据此降级），对审批是「拒绝」
        ── 旁路（可丢的派生层，阶段 57）：装配层在提交成功后 notify(session_id)
           ─► avid/index 的队列（同会话合并） ─► 增量扫描 JSONL ─► ~/.avid/index/sessions.sqlite
           ─► GET /api/search 与 `avid session search` 读它；列表仍以 JSONL 为准
@@ -87,7 +90,7 @@ Web  POST /api/sessions/{id}/runs ─┴─► svc/runs.RunRegistry（线程 + �
 | 会话索引 | `avid/index/`：`db`（SQLite 连接 + user_version 迁移）、`scanner`（字节→行→记录，带行偏移）、`extract`（哪段文本进 search_text）、`writer`（条目与游标同事务）、`indexer`（发现/增量/补齐/重建 + 通知队列）、`queries`（读侧与 FTS 检索）、`check`（校验与修） | JSONL 之上的派生查询层，可删可重建 |
 | 应用服务 | `services/`：`runs` 运行注册表与重放缓冲、`approvals` 待决表、`sessions` 读视图、`workspaces`、`workspace_registry`（含会话目录的 `sessions_root`）、`session_migration`（旧布局一次性搬迁）、`picker` | 内核的第二个调用方 |
 | 传输适配 | `web/`：FastAPI 路由 + pydantic DTO + SSE 编帧 + 静态资源 | 线格式的唯一所有者 |
-| 工具 | `agent/tools/`：`registry` 单点声明、`files`/`shell`/`subagent`/`skill`/`mcp`、`validate` 参数校验 | 8 个内置工具 + 该工作区声明的 MCP 工具 |
+| 工具 | `agent/tools/`：`registry` 单点声明（name/description/schema/concurrency/writes 全在一处）、`files`/`search`/`shell`/`subagent`/`interaction`/`skill`/`mcp`、`safety`（并发判定）、`validate` 参数校验 | 10 个内置工具 + 该工作区声明的 MCP 工具 |
 | 工作区 | `workspaces.py` + `~/.avid/workspaces.json` | 用户级注册表（索引，非权威） |
 | 前端 | `web/`（React 18 + Vite + pnpm）：`api/types.ts` 与 `events/types.ts` 契约种子、`styles/tokens.css` 纸本 token 层、`markdown/` 自研渲染、`surfaces/` 页面 | 浏览器侧全部代码；交付走 `copy:dist` 进 `avid/web/static/` |
 
@@ -104,7 +107,8 @@ Web  POST /api/sessions/{id}/runs ─┴─► svc/runs.RunRegistry（线程 + �
 
 | 要改什么 | 动哪里 |
 |---|---|
-| 新增工具 | 在实现函数上挂 `@tool(...)`——`agent/tools/registry.py` 是单点，其余表全部派生 |
+| 新增工具 | 在实现函数上挂 `@tool(...)`——`agent/tools/registry.py` 是单点（schema、并发档、writes 全在这一处），其余表全部派生 |
+| 改并发档 / 判据 | `@tool(concurrency=…)` 三档：`safe`（只读，可并行）/ `exclusive`（屏障）/ `conditional`（配 `assess(arguments, state)`，**只能把默认独占降成并行**）；bash 的只读判定在 `security/command_parse.is_read_only`，判据表与用例同在 `tests/test_tool_concurrency.py` |
 | 新增会话内命令 | `agent/commands.py` 的 COMMANDS 加名字 + 执行分支（CLI 与 Web 自动继承解析）|
 | 新增模型协议 | `providers/` 加一个实现模块 + `__init__.py` 的 PROVIDERS 一条表项，对循环返回**同形** `Turn` |
 | 新增一类上下文 | `ContextManager.register_source(kind, fn)` 一行（`agent/context.py`） |

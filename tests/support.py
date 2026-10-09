@@ -52,6 +52,7 @@ PLACEHOLDER_ARGS: dict[str, str] = {
     '"scope": "avid/agent", "context": "无", "constraints": "不要改文件", '
     '"deliverable": "结论摘要"}]}',
     "load_skill": '{"name": "demo"}',
+    "ask_user": '{"question": "选哪个？", "options": ["甲", "乙"]}',
 }
 
 

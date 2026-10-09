@@ -449,13 +449,22 @@ class RunCreatedOut(BaseModel):
 
 
 class ApprovalOut(BaseModel):
+    """一条待决项：kind 决定它是裁决（approval）还是提问（question）。
+
+    两者共用一张表和同一个界面槽（运行卡住了、等你说句话），所以也共用这条 DTO：
+    提问多给 options 与 answer，审批多给 decision。
+    """
+
     approval_id: str
     tool: str
     arguments: dict[str, Any]
     reason: str
     created_at: int
     expires_at: int
+    kind: str = "approval"
+    options: list[str] = Field(default_factory=list)
     decision: str | None = None
+    answer: str | None = None
     resolved_at: int | None = None
     resolved_reason: str | None = None
 
@@ -488,7 +497,12 @@ class ApprovalListOut(BaseModel):
 
 
 class AnswerApprovalIn(BaseModel):
-    decision: Literal["allow", "deny"]
+    """裁决给 decision，提问给 answer——二选一，都给或都不给都是 422。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["allow", "deny"] | None = None
+    answer: str | None = Field(default=None, max_length=MAX_PROMPT_CHARS)
 
 
 class AnswerApprovalOut(BaseModel):
