@@ -15,8 +15,11 @@ from ..agent.events import (
 )
 from ..agent.skills import SkillLoader, default_skills_dir
 from ..agent.tools import TOOLS, workspace
+from ..index import SessionIndexer
+from ..index.indexer import workspace_lookup
 from ..providers.byok import byok_model_candidates, resolve_chat
 from ..providers.config import ConfigError
+from ..security import userdirs
 from ..security.sandbox import default_backend_summary
 from ..session import JsonlSessionRepo
 from .approvals import APPROVAL_TIMEOUT_SECONDS
@@ -130,6 +133,20 @@ class Services:
         self.workspaces = WorkspaceService(
             self.registry, default=default, default_sessions_root=sessions_root
         )
+        # 会话索引：本进程写自己的会话、索引自己的会话；启动后先在后台补齐（运行不等它）。
+        # root= 直传了具体会话库路径时只索引那一个目录——那是那个接缝的语义。
+        def _roots() -> list[Path]:
+            return [Path(sessions_root)] if sessions_root is not None else [userdirs.sessions_dir()]
+
+        self.indexer = SessionIndexer(
+            roots=_roots,
+            lookup_workspace=workspace_lookup(
+                lambda: (
+                    (item.id, item.root, item.name) for item in self.workspaces.known_workspaces()
+                )
+            ),
+        )
+        self.indexer.start()
         self.root = (
             self.workspaces.sessions_root(default) if default is not None else None
         )
@@ -142,6 +159,7 @@ class Services:
             retention_seconds=retention_seconds,
             max_runs=max_runs,
             max_events=max_events,
+            indexer=self.indexer,
         )
         self.sessions = SessionService(self.workspaces, self.runs)
         # The stream budget is process-wide because it protects a process-wide resource.
@@ -229,6 +247,7 @@ class Services:
             return []
 
     def close(self) -> None:
+        self.indexer.stop()
         self.workspaces.close()
 
 

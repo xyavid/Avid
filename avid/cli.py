@@ -16,6 +16,8 @@ from .agent.spec import RunSpec
 from .agent.state import RunState
 from .agent.tools import TOOLS, build_toolset, workspace
 from .agent.tools.mcp import McpManager
+from .index import SessionIndexer
+from .index.indexer import notifying, workspace_lookup
 from .providers.byok import resolve_chat
 from .providers.client import LLMError, ask, chat_completion
 from .providers.config import Config, ConfigError
@@ -56,6 +58,17 @@ AGENT_TOOL_HELP = "（" + " / ".join(item["function"]["name"] for item in TOOLS)
 
 def _local_time(timestamp_ms: int) -> str:
     return datetime.fromtimestamp(timestamp_ms / 1000).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _session_indexer() -> SessionIndexer:
+    """会话运行的索引器：只索引本进程写的会话（全库补齐留给 `avid web` 与 `avid index check`）。"""
+    registry = WorkspaceRegistry()
+    return SessionIndexer(
+        roots=lambda: [userdirs.sessions_dir()],
+        lookup_workspace=workspace_lookup(
+            lambda: ((ws.id, ws.root, ws.name) for ws in registry.list(include_hidden=True))
+        ),
+    )
 
 
 def _resolve_workspace(selection: str | None) -> Workspace:
@@ -294,6 +307,7 @@ def _run_session(args: argparse.Namespace, config, state: RunState | None = None
             session.set_name(args.session_name)
 
         recorder = SessionRecorder(session)
+        indexer = _session_indexer()
         history = messages_for_branch(session, recorder.branch)
         recorder.ensure_branch()
         messages = [*history, {"role": "user", "content": args.prompt}]
@@ -307,7 +321,7 @@ def _run_session(args: argparse.Namespace, config, state: RunState | None = None
                     full=args.allow_full_access,
                     workspace_root=target.root,
                 ),
-                on_message=recorder.on_message,
+                on_message=notifying(indexer, recorder.on_message, session.metadata.id),
                 on_compaction=recorder.record_compaction,
             ).run().text
         except LLMError as exc:
@@ -318,6 +332,8 @@ def _run_session(args: argparse.Namespace, config, state: RunState | None = None
         print(f"会话错误：{exc}", file=sys.stderr)
         return 1
     finally:
+        # 索引队列排空再走：终端这一轮的消息不该等到下次才被搜到。
+        indexer.stop()
         if session is not None and not session.closed:
             session.close()
         repo.close()
@@ -370,6 +386,7 @@ def _interactive(args: argparse.Namespace, config) -> int:
         if args.session_name:
             session.set_name(args.session_name)
         recorder = SessionRecorder(session)
+        indexer = _session_indexer()
         recorder.ensure_branch()
         # 写前快照随会话接线：files 工具覆盖前把原内容落进本会话的检查点目录，
         # 落点跟随分支 tip 条目。sink 全程复用（seq 单调递增，目录不冲突）。
@@ -446,7 +463,7 @@ def _interactive(args: argparse.Namespace, config) -> int:
                     messages,
                     RunSpec.resolve(config=config, tools=schemas, registry=impls),
                     state=state,
-                    on_message=recorder.on_message,
+                    on_message=notifying(indexer, recorder.on_message, session.metadata.id),
                     on_compaction=recorder.record_compaction,
                 ).run()
             except LLMError as exc:
@@ -457,6 +474,7 @@ def _interactive(args: argparse.Namespace, config) -> int:
             print(outcome.text)
             print(f"--- {outcome.reason} ---", file=sys.stderr)
     finally:
+        indexer.stop()
         if session is not None and not session.closed:
             session.close()
         repo.close()

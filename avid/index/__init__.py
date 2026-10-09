@@ -15,7 +15,7 @@ from .db import (
     schema_version,
     transaction,
 )
-from .indexer import SessionIndexer, workspace_id_from_path
+from .indexer import SessionIndexer, notifying, workspace_id_from_path
 from .queries import (
     count_sessions,
     entries_of,
@@ -66,6 +66,7 @@ __all__ = [
     "index_stats",
     "list_sessions",
     "migrate",
+    "notifying",
     "open_db",
     "schema_version",
     "search_entries",

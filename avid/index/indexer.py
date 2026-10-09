@@ -18,8 +18,10 @@ from __future__ import annotations
 import logging
 import sqlite3
 import threading
-from collections.abc import Callable, Sequence
+import time
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
+from typing import Any
 
 from ..security import userdirs
 from ..session import now_ms
@@ -49,6 +51,12 @@ logger = logging.getLogger("avid.index.indexer")
 WORKSPACE_DIR_PREFIX = "w-"
 # How many per-session failures a report spells out before it just counts them.
 MAX_REPORTED_DETAILS = 10
+# 通知落定窗口：一次运行会连着提交好几条消息，等这么一小会儿能把它们并成一遍。
+NOTIFY_SETTLE_SECONDS = 0.2
+# 等队列排空的上限；到点没排空不算错（索引落后是允许的），只是如实说「还落后」。
+DEFAULT_FLUSH_SECONDS = 2.0
+# 工作区名册的缓存窗口：名字是显示事实，改了要跟得上，但不必每个会话读一次注册表。
+WORKSPACE_LOOKUP_TTL_SECONDS = 5.0
 
 
 def workspace_id_from_path(path: Path) -> str | None:
@@ -77,6 +85,15 @@ class SessionIndexer:
         self._roots = roots or (lambda: [userdirs.sessions_dir()])
         self._lookup_workspace = lookup_workspace
         self._now = now
+        # 通知队列：同会话合并（集合），一遍处理一批。_busy 让 flush 能等到这一遍结束。
+        self._queue = threading.Condition()
+        self._pending: set[str] = set()
+        self._busy = False
+        self._worker: threading.Thread | None = None
+        self._stopped = False
+        self._bootstrap = False
+        # 整遍互斥：后台补齐与前台 check/rebuild 不会同时跑（库是同一个连接）。
+        self._pass_lock = threading.Lock()
 
     # Lifecycle.
 
@@ -85,10 +102,117 @@ class SessionIndexer:
         return self._conn
 
     def close(self) -> None:
+        self.stop(flush=False)
         with self._lock:
             if self._owns_conn:
                 self._conn.close()
                 self._owns_conn = False
+
+    # Notification: the assembly layer says "this session has new rows".
+    #
+    # 这里只入队，不索引、不等待、不抛异常：通知丢了由下次 reconcile 兜底，索引跟不上
+    # 绝不能拖住运行。写会话的进程自己把这一遍跑掉（CLI 与 Web 各是一个进程）。
+
+    def notify(self, session_id: str) -> None:
+        self.start(initial_reconcile=False)
+        with self._queue:
+            self._pending.add(session_id)
+            self._queue.notify_all()
+
+    def start(self, *, initial_reconcile: bool = True) -> None:
+        """Start the background worker; with ``initial_reconcile`` it catches up missed work first."""
+        with self._queue:
+            if initial_reconcile:
+                self._bootstrap = True
+            if self._worker is not None:
+                self._queue.notify_all()
+                return
+            self._stopped = False
+            self._worker = threading.Thread(target=self._work, name="avid-index", daemon=True)
+            self._worker.start()
+
+    def flush(self, timeout: float = DEFAULT_FLUSH_SECONDS) -> bool:
+        """Wait for the queue to drain; False means it is still behind (never an error)."""
+        deadline = time.monotonic() + timeout
+        with self._queue:
+            while self._pending or self._busy:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._queue.wait(remaining)
+            return True
+
+    def stop(self, *, flush: bool = True, timeout: float = DEFAULT_FLUSH_SECONDS) -> None:
+        """Drain (unless told not to) and stop the worker; safe to call more than once."""
+        if flush:
+            self.flush(timeout)
+        with self._queue:
+            worker, self._worker = self._worker, None
+            self._stopped = True
+            self._queue.notify_all()
+        if worker is not None:
+            worker.join(timeout)
+
+    def _is_stopped(self) -> bool:
+        """Read the stop flag through a call: another thread sets it, so mypy must not narrow it."""
+        with self._queue:
+            return self._stopped
+
+    def pending(self) -> int:
+        """How many sessions are waiting for a pass; the CLI prints it after a run."""
+        with self._queue:
+            return len(self._pending)
+
+    def _work(self) -> None:
+        """The worker loop: one catch-up pass first, then drain whatever gets notified."""
+        with self._queue:
+            bootstrap, self._bootstrap = self._bootstrap, False
+        if bootstrap:
+            try:
+                self.reconcile()
+            except (sqlite3.Error, OSError) as exc:
+                logger.warning("启动补齐没能跑完（索引落后没关系）：%s", exc)
+        while True:
+            with self._queue:
+                stopped = self._is_stopped()
+                if stopped:
+                    return
+                if not self._pending:
+                    self._queue.wait(NOTIFY_SETTLE_SECONDS)
+                    if self._is_stopped():
+                        return
+                    if not self._pending:
+                        continue
+                # 落定窗口：这期间进来的通知并进同一遍。
+                self._queue.wait(NOTIFY_SETTLE_SECONDS)
+                batch = sorted(self._pending)
+                self._pending.clear()
+                self._busy = True
+            try:
+                with self._pass_lock:
+                    self._drain(batch)
+            except (sqlite3.Error, OSError) as exc:
+                logger.warning("索引这一遍失败（索引落后没关系）：%s", exc)
+            finally:
+                with self._queue:
+                    self._busy = False
+                    self._queue.notify_all()
+
+    def _drain(self, session_ids: Sequence[str]) -> None:
+        """Index the given sessions, newest rows only; unknown ids are looked up once per batch."""
+        discovered: dict[str, Path] | None = None
+        for session_id in session_ids:
+            with self._lock:
+                row = get_session(self._conn, session_id)
+            if row is not None:
+                path: Path | None = Path(row.file_path)
+            else:
+                if discovered is None:
+                    discovered, _ = self.discover()
+                path = discovered.get(session_id)
+            if path is None or not path.exists():
+                continue
+            self._index_one(session_id, path, force_full=False)
 
     # Discovery.
 
@@ -152,6 +276,10 @@ class SessionIndexer:
 
     def index_all(self) -> IndexReport:
         """Discover every session file and bring each one up to date."""
+        with self._pass_lock:
+            return self._index_all_locked()
+
+    def _index_all_locked(self) -> IndexReport:
         found, notes = self.discover()
         report = IndexReport(details=notes)
         with self._lock:
@@ -169,6 +297,10 @@ class SessionIndexer:
 
     def reconcile(self) -> IndexReport:
         """Startup catch-up: new files, stale cursors, and rows whose files are gone."""
+        with self._pass_lock:
+            return self._reconcile_locked()
+
+    def _reconcile_locked(self) -> IndexReport:
         found, notes = self.discover()
         report = IndexReport(details=notes)
         with self._lock:
@@ -204,10 +336,12 @@ class SessionIndexer:
                     report = report.merged(IndexReport(removed=1))
         return report
 
-    def rebuild(
-        self, session_id: str | None = None
-    ) -> IndexReport:
+    def rebuild(self, session_id: str | None = None) -> IndexReport:
         """Re-read session files from byte zero; one id, or everything when none is given."""
+        with self._pass_lock:
+            return self._rebuild_locked(session_id)
+
+    def _rebuild_locked(self, session_id: str | None) -> IndexReport:
         if session_id is not None:
             with self._lock:
                 row = get_session(self._conn, session_id)
@@ -319,6 +453,53 @@ class SessionIndexer:
         return (None, None) if found is None else found
 
 
+def workspace_lookup(
+    loader: Callable[[], Iterable[tuple[str, str | None, str | None]]],
+    *,
+    ttl: float = WORKSPACE_LOOKUP_TTL_SECONDS,
+    clock: Callable[[], float] = time.monotonic,
+) -> Callable[[str], tuple[str | None, str | None] | None]:
+    """Build ``id -> (root, name)`` from a loader, refreshed after a short window.
+
+    The names are display facts taken from the registry, so they may change while a process runs
+    (rename, register, hide); a短 TTL keeps the index from showing a stale name forever, without
+    reading the registry once per indexed session.
+    """
+    table: dict[str, tuple[str | None, str | None]] = {}
+    loaded_at = float("-inf")
+
+    def lookup(workspace_id: str) -> tuple[str | None, str | None] | None:
+        nonlocal loaded_at
+        now = clock()
+        if now - loaded_at > ttl:
+            table.clear()
+            for item_id, root, name in loader():
+                table[item_id] = (root, name)
+            loaded_at = now
+        return table.get(workspace_id)
+
+    return lookup
+
+
+def notifying(
+    indexer: "SessionIndexer | None", sink: Callable[..., Any], session_id: str
+) -> Callable[..., Any]:
+    """Wrap a commit callback so a successful append also wakes the index.
+
+    The index is never awaited and never raises through this path: a lost notification is caught
+    by the next ``reconcile()``, and an index that cannot keep up must not fail a run.
+    """
+    if indexer is None:
+        return sink
+
+    def wrapped(*args: Any, **kwargs: Any) -> Any:
+        result = sink(*args, **kwargs)
+        indexer.notify(session_id)
+        return result
+
+    return wrapped
+
+
 def _previous_from(row: IndexedSession) -> ScanResult:
     """Carry the session-level facts across an incremental scan (the header is only at offset 0)."""
     return ScanResult(
@@ -343,4 +524,14 @@ def _under(path: Path, root: Path) -> bool:
     return True
 
 
-__all__ = ["MAX_REPORTED_DETAILS", "WORKSPACE_DIR_PREFIX", "SessionIndexer", "workspace_id_from_path"]
+__all__ = [
+    "DEFAULT_FLUSH_SECONDS",
+    "MAX_REPORTED_DETAILS",
+    "NOTIFY_SETTLE_SECONDS",
+    "WORKSPACE_DIR_PREFIX",
+    "SessionIndexer",
+    "WORKSPACE_LOOKUP_TTL_SECONDS",
+    "notifying",
+    "workspace_id_from_path",
+    "workspace_lookup",
+]

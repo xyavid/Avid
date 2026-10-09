@@ -39,6 +39,7 @@ from ..agent.spec import RunSpec
 from ..agent.state import RunState
 from ..agent.tools import TOOLS, build_toolset, without_writers
 from ..agent.tools.mcp import McpManager
+from ..index.indexer import SessionIndexer, notifying
 from ..providers.byok import resolve_chat
 from ..providers.client import LLMError, chat_completion, stream_completion
 from ..providers.config import ConfigError
@@ -185,8 +186,11 @@ class RunRegistry:
         retention_seconds: float = TERMINAL_RETENTION_SECONDS,
         max_runs: int = MAX_RETAINED_RUNS,
         max_events: int = MAX_EVENT_BUFFER,
+        indexer: SessionIndexer | None = None,
     ) -> None:
         self.workspaces = workspaces
+        # 会话写成功之后通知它（索引可以落后；None 表示这个进程不索引）。
+        self.indexer = indexer
         self.chat = chat
         # The tool registry is injectable so tests can stub bash; empty means the real one.
         self.tool_registry = tool_registry
@@ -948,7 +952,7 @@ class RunRegistry:
                 payload["content"] = str(message.get("content") or "")
             self.emit(record, type, **payload)
 
-        return sink
+        return notifying(self.indexer, sink, record.session_id)
 
     def _finish(self, record: RunRecord, type: str, **data: Any) -> None:
         status = (
@@ -1063,10 +1067,19 @@ class RunRegistry:
         if recorder is None:  # pragma: no cover - a failure before assembly has no session yet
             return None
         try:
-            return recorder.on_message({"role": "assistant", "content": text}, entry_type=ERROR_ENTRY)
+            entry_id = recorder.on_message(
+                {"role": "assistant", "content": text}, entry_type=ERROR_ENTRY
+            )
         except SessionError:  # 记账失败不能盖掉真正的失败原因
             logger.warning("运行 %s 的失败没能写进会话", record.run_id, exc_info=True)
             return None
+        self._notify_index(record.session_id)
+        return entry_id
+
+    def _notify_index(self, session_id: str) -> None:
+        """Tell the index this session has new rows; the index is never awaited from here."""
+        if self.indexer is not None:
+            self.indexer.notify(session_id)
 
     # ---- Session lookup ----
 

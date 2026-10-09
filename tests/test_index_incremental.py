@@ -1,92 +1,18 @@
 """索引器：发现、元数据、条目定位与增量游标。
 
-会话文件用真仓库写（JsonlSessionRepo + SessionRecorder），所以索引面对的就是真实格式；
-断言落在「读回原文」这条性质上，而不只是行数对不对。
+夹具与造会话的帮手在 index_cases.py；断言尽量落在「读回原文」这条性质上，
+而不只是行数对不对。
 """
 
 from __future__ import annotations
 
 import json
-from pathlib import Path
+import os
 
-import pytest
+from index_cases import ALPHA, BETA, append_message, make_session, read_byte_range
 
 from avid.index import db as index_db
 from avid.index import queries, scanner
-from avid.index.indexer import SessionIndexer
-from avid.session import JsonlSessionRepo, SessionRecorder
-from avid.session.values import session_name
-
-ALPHA, BETA = "w-alpha", "w-beta"
-WORKSPACES = {ALPHA: ("/ws/alpha", "alpha"), BETA: ("/ws/beta", "beta")}
-
-
-@pytest.fixture
-def store(tmp_path) -> Path:
-    root = tmp_path / "sessions"
-    for workspace in WORKSPACES:
-        (root / workspace).mkdir(parents=True)
-    return root
-
-
-@pytest.fixture
-def indexer(store, tmp_path):
-    conn = index_db.open_db(tmp_path / "index.sqlite")
-    instance = SessionIndexer(
-        conn=conn,
-        roots=lambda: [store],
-        lookup_workspace=lambda wid: WORKSPACES.get(wid),
-        now=lambda: 1_700_000_000_000,
-    )
-    try:
-        yield instance
-    finally:
-        instance.close()
-        conn.close()
-
-
-def make_session(
-    store: Path,
-    *,
-    workspace: str | None = ALPHA,
-    session_id: str | None = None,
-    messages: tuple[dict, ...] = (),
-    name: str | None = None,
-) -> Path:
-    """Write a real session under the store; returns its file."""
-    directory = store / (workspace or "unowned")
-    repo = JsonlSessionRepo(directory, workspace=workspace)
-    try:
-        session = repo.create(id=session_id)
-        recorder = SessionRecorder(session)
-        for message in messages:
-            recorder.on_message(message)
-        if name is not None:
-            session.set_value(session_name(), name)
-        glob = f"*_{session.metadata.id}.jsonl"
-    finally:
-        repo.close()
-    return next(directory.glob(glob))
-
-
-def append_message(path: Path, message: dict, *, workspace: str | None = ALPHA) -> None:
-    """Append one more committed entry to an existing session file."""
-    repo = JsonlSessionRepo(path.parent, workspace=workspace)
-    try:
-        session = repo.open(next(item for item in repo.list() if item.id in path.name))
-        SessionRecorder(session, branch="main").on_message(message)
-    finally:
-        repo.close()
-
-
-def read_byte_range(path: Path, offset: int, length: int) -> dict:
-    """The jump the index promises: byte range → the original record, parsed by the store's own codec."""
-    with path.open("rb") as handle:
-        handle.seek(offset)
-        raw = handle.read(length).decode("utf-8")
-    payload = json.loads(raw.strip())
-    return payload if isinstance(payload, dict) else payload[0]
-
 
 # ---------------- P2：会话元数据
 
@@ -142,7 +68,6 @@ def test_list_sessions_orders_by_updated_and_filters_by_workspace(indexer, store
     indexer.index_all()
 
     # 把 alpha 那个文件改新一点（mtime 就是 updated_at 的来源）。
-    import os
 
     stat = older.stat()
     os.utime(older, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10_000_000_000))
