@@ -21,8 +21,9 @@ AVID_HOME_ENV = userdirs.AVID_HOME_ENV
 REGISTRY_FILE = "workspaces.json"
 # Stamped into every file so the on-disk shape is self-describing.
 REGISTRY_VERSION = 1
-# Session stores live under each workspace root, so losing the registry loses no session.
-SESSION_DIR = ".avid/sessions"
+# Session stores live in one shared directory, one subdirectory per workspace id (阶段 56）。
+# The id is a digest of the resolved path, so a store survives a renamed or unregistered
+# workspace; losing the registry loses the names, never the sessions.
 
 # Fallback display name for a root that has no directory name of its own (the filesystem root).
 _UNNAMED = "workspace"
@@ -244,6 +245,11 @@ class WorkspaceRegistry:
 
 
 def sessions_root(workspace: Workspace | str) -> Path:
-    """Returns the session store of a workspace, which always sits under its own root."""
-    root = workspace.root if isinstance(workspace, Workspace) else str(workspace)
-    return Path(root) / SESSION_DIR
+    """The workspace's store inside the shared session directory, keyed by its stable id.
+
+    A plain path is accepted too and resolves to the same place as the registered workspace
+    would: the id is derived from the resolved path, not from the registry entry.
+    """
+    if isinstance(workspace, Workspace):
+        return userdirs.sessions_dir() / workspace.id
+    return userdirs.sessions_dir() / derive_id(workspace)

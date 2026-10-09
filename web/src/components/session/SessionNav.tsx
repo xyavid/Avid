@@ -1,6 +1,10 @@
 /**
  * 侧栏会话区（参考图）：标题行（「会话」+ 新建）+ 搜索框（30px 高，报告 §7.2）
- * + 会话列表 + 结果提示行。
+ * + 会话列表 + 内容命中 + 结果提示行。
+ *
+ * 搜索框是**双路**的（阶段 57）：本地按名字过滤（即时，不花一次请求），同时把词交给
+ * 装配层去查内容索引（内容命中由 `contentHits` 传进来）——两条结果分开展示，因为
+ * 「名字里有」和「聊过这个」是两件事。组件仍然只发意图：查询词、选中项都回调出去。
  * 列表按 created_at 降序；标题取会话名，缺名显示「未命名会话」；
  * 流式中的会话（active_run_id 非空）带呼吸点——真实状态，不是装饰。
  * 分组（置顶/今天/昨天）等后端有置顶概念后再立——现在拍平，不造假分组。
@@ -11,7 +15,7 @@
 
 import { useState } from 'react'
 
-import type { SessionSummary } from '../../api/types'
+import type { SearchHit, SessionSummary } from '../../api/types'
 import { Icon } from '../../ui/Icon'
 import { Input } from '../../ui/Input'
 import { useAutoHideScroll } from '../../ui/useAutoHideScroll'
@@ -42,6 +46,16 @@ export type SessionNavProps = {
   onRenameSession?: (id: string, name: string) => void
   /** 删除（组件内已先确认）；不给则该动作不渲染。 */
   onDeleteSession?: (id: string) => void
+  /** 内容检索的结果（装配层去查索引）；空数组 = 没有内容命中。 */
+  contentHits?: SearchHit[]
+  /** 内容命中还在查：给一行「正在查…」，别让人以为没结果。 */
+  contentSearching?: boolean
+  /** 内容命中里点了一条：装配层负责切会话并跳到那条条目。 */
+  onSelectHit?: (hit: SearchHit) => void
+  /** 查询词变化（装配层据此去查内容索引，自己做防抖）。 */
+  onSearchQuery?: (query: string) => void
+  /** 内容检索那一路的提示：检索失败、或索引还落后（别让人以为搜全了）。 */
+  searchNotice?: string | null
   /** 新建在飞：按钮落 disabled，避免连点建出几个空会话。 */
   creating?: boolean
   /** 动作结果或失败原因，一句人话（删除不可逆，成功也要说话）。 */
@@ -56,6 +70,11 @@ export function SessionNav({
   onCreateSession,
   onRenameSession,
   onDeleteSession,
+  contentHits = [],
+  contentSearching = false,
+  onSelectHit,
+  onSearchQuery,
+  searchNotice = null,
   creating = false,
   notice = null,
 }: SessionNavProps) {
@@ -87,7 +106,10 @@ export function SessionNav({
       <Input
         bare
         value={query}
-        onChange={(e) => setQuery(e.target.value)}
+        onChange={(e) => {
+          setQuery(e.target.value)
+          onSearchQuery?.(e.target.value)
+        }}
         placeholder="搜索会话…"
         aria-label="搜索会话"
         className="h-[30px] rounded-sm bg-overlay-light px-a8"
@@ -116,6 +138,32 @@ export function SessionNav({
           ))
         )}
       </div>
+      {query.trim() !== '' && (contentSearching || contentHits.length > 0 || searchNotice) && (
+        <div className="border-t border-hair pt-a8">
+          <p className="px-a8 font-ui text-micro text-ink-muted">
+            {contentSearching ? '正在查内容…' : `内容命中 ${contentHits.length} 条`}
+          </p>
+          {searchNotice && (
+            <p className="px-a8 font-ui text-micro text-ink-muted">{searchNotice}</p>
+          )}
+          {contentHits.map((hit) => (
+            <button
+              key={`${hit.session_id}:${hit.entry_id}`}
+              type="button"
+              data-hit={hit.entry_id}
+              onClick={() => onSelectHit?.(hit)}
+              className="mt-a4 block w-full rounded-sm px-a8 py-a4 text-left transition-colors duration-fast ease-out hover:bg-overlay-light"
+            >
+              <span className="font-ui text-micro text-ink-muted">
+                {hit.title ?? '未命名会话'} · {hit.role ?? hit.entry_type}
+              </span>
+              <span className="mt-a2 line-clamp-2 block font-ui text-hint text-ink">
+                {hit.snippet}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
       {notice && <p className="px-a8 font-ui text-micro text-ink-light">{notice}</p>}
     </div>
   )

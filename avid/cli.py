@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import socket
+import sqlite3
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -16,15 +17,22 @@ from .agent.spec import RunSpec
 from .agent.state import RunState
 from .agent.tools import TOOLS, build_toolset, workspace
 from .agent.tools.mcp import McpManager
+from .index import SessionIndexer, queries
+from .index import check as index_check
+from .index import db as index_db
+from .index.indexer import notifying, workspace_lookup
+from .index.writer import indexed_store_root
 from .providers.byok import resolve_chat
 from .providers.client import LLMError, ask, chat_completion
 from .providers.config import Config, ConfigError
 from .providers.usage import Usage, hit_ratio
+from .security import userdirs
 from .security.permission import (
     PERMISSION_FULL,
     PERMISSION_NORMAL,
     RunSecurity,
 )
+from .services.session_migration import apply_migration, plan_migration
 from .services.workspace_registry import (
     Workspace,
     WorkspaceError,
@@ -54,6 +62,25 @@ AGENT_TOOL_HELP = "（" + " / ".join(item["function"]["name"] for item in TOOLS)
 
 def _local_time(timestamp_ms: int) -> str:
     return datetime.fromtimestamp(timestamp_ms / 1000).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _session_indexer() -> SessionIndexer | None:
+    """会话运行的索引器：只索引本进程写的会话（全库补齐留给 `avid web` 与 `avid index check`）。
+
+    建不起来（索引目录写不了、盘满）就返回 None：索引是可丢的派生层，终端里跑一轮会话
+    不该因为一个可选的加速层起不来而失败。调用方见 None 就跳过通知与检索。
+    """
+    registry = WorkspaceRegistry()
+    try:
+        return SessionIndexer(
+            roots=lambda: [userdirs.sessions_dir()],
+            lookup_workspace=workspace_lookup(
+                lambda: ((ws.id, ws.root, ws.name) for ws in registry.list(include_hidden=True))
+            ),
+        )
+    except (sqlite3.Error, OSError) as exc:
+        print(f"警告：索引不可用，这一轮不做索引（会话不受影响）：{exc}", file=sys.stderr)
+        return None
 
 
 def _resolve_workspace(selection: str | None) -> Workspace:
@@ -166,6 +193,10 @@ def main(argv: list[str] | None = None) -> int:
         return _run_web(argv[1:])
     if argv and argv[0] == "workspace":
         return _run_workspace(argv[1:])
+    if argv and argv[0] == "session":
+        return _run_session_command(argv[1:])
+    if argv and argv[0] == "index":
+        return _run_index(argv[1:])
 
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -290,6 +321,7 @@ def _run_session(args: argparse.Namespace, config, state: RunState | None = None
             session.set_name(args.session_name)
 
         recorder = SessionRecorder(session)
+        indexer = _session_indexer()
         history = messages_for_branch(session, recorder.branch)
         recorder.ensure_branch()
         messages = [*history, {"role": "user", "content": args.prompt}]
@@ -303,7 +335,7 @@ def _run_session(args: argparse.Namespace, config, state: RunState | None = None
                     full=args.allow_full_access,
                     workspace_root=target.root,
                 ),
-                on_message=recorder.on_message,
+                on_message=notifying(indexer, recorder.on_message, session.metadata.id),
                 on_compaction=recorder.record_compaction,
             ).run().text
         except LLMError as exc:
@@ -314,6 +346,9 @@ def _run_session(args: argparse.Namespace, config, state: RunState | None = None
         print(f"会话错误：{exc}", file=sys.stderr)
         return 1
     finally:
+        # 索引队列排空再走：终端这一轮的消息不该等到下次才被搜到（索引不可用时 indexer 为 None）。
+        if indexer is not None:
+            indexer.stop()
         if session is not None and not session.closed:
             session.close()
         repo.close()
@@ -366,6 +401,7 @@ def _interactive(args: argparse.Namespace, config) -> int:
         if args.session_name:
             session.set_name(args.session_name)
         recorder = SessionRecorder(session)
+        indexer = _session_indexer()
         recorder.ensure_branch()
         # 写前快照随会话接线：files 工具覆盖前把原内容落进本会话的检查点目录，
         # 落点跟随分支 tip 条目。sink 全程复用（seq 单调递增，目录不冲突）。
@@ -442,7 +478,7 @@ def _interactive(args: argparse.Namespace, config) -> int:
                     messages,
                     RunSpec.resolve(config=config, tools=schemas, registry=impls),
                     state=state,
-                    on_message=recorder.on_message,
+                    on_message=notifying(indexer, recorder.on_message, session.metadata.id),
                     on_compaction=recorder.record_compaction,
                 ).run()
             except LLMError as exc:
@@ -453,6 +489,8 @@ def _interactive(args: argparse.Namespace, config) -> int:
             print(outcome.text)
             print(f"--- {outcome.reason} ---", file=sys.stderr)
     finally:
+        if indexer is not None:
+            indexer.stop()
         if session is not None and not session.closed:
             session.close()
         repo.close()
@@ -606,6 +644,279 @@ def _run_workspace(argv: list[str]) -> int:
     except WorkspaceError as exc:
         print(f"工作区错误：{exc}", file=sys.stderr)
         return 1
+
+
+def build_session_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="avid session",
+        description="会话目录：看它在哪，以及把旧布局里的会话搬进来",
+    )
+    actions = parser.add_subparsers(dest="action", required=True)
+
+    actions.add_parser("dir", help="打印当前会话目录与它的来源")
+
+    migrate = actions.add_parser(
+        "migrate",
+        help="把旧布局（<工作区根>/.avid/sessions）里的会话搬进会话目录",
+    )
+    migrate.add_argument(
+        "--from",
+        dest="from_dir",
+        metavar="DIR",
+        help="额外扫一个目录：集中目录（下面按工作区 id 分子目录）或平铺目录",
+    )
+    migrate.add_argument("--yes", action="store_true", help="不再问一次，直接搬")
+
+    search = actions.add_parser("search", help="按内容检索会话（本地索引，不调模型）")
+    search.add_argument("query", help="要搜的词；多个词按 AND，两字中文词走扫描")
+    search.add_argument("--workspace", metavar="PATH|ID", help="只搜这个工作区")
+    search.add_argument("--session", metavar="ID", help="只搜这个会话")
+    search.add_argument("--limit", type=int, default=20, help="最多给几条（默认 20）")
+    search.add_argument("--open", action="store_true", help="直接续接第一条命中的会话")
+
+    return parser
+
+
+def _run_session_command(argv: list[str]) -> int:
+    """Implements ``avid session``: 会话目录的只读查询与一次性搬迁，都不唤起模型。"""
+    args = build_session_parser().parse_args(argv)
+    if args.action == "dir":
+        return _session_dir_report()
+    if args.action == "search":
+        return _session_search(args)
+    return _session_migrate(args)
+
+
+def _known_roots() -> list[str]:
+    """会去扫旧会话目录的工作区根：注册表里的（含墓碑）+ 当前目录。"""
+    roots = [ws.root for ws in WorkspaceRegistry().list(include_hidden=True)]
+    current = str(Path(workspace.WORKSPACE_ROOT).resolve())
+    if current not in roots:
+        roots.append(current)
+    return roots
+
+
+def _session_dir_report() -> int:
+    store = userdirs.sessions_dir()
+    source = userdirs.sessions_dir_source()
+    decided = {
+        "env": f"环境变量 {userdirs.SESSIONS_DIR_ENV}",
+        "settings": str(userdirs.settings_path()),
+        "default": "默认位置",
+    }[source]
+    print(f"{store}\t来源：{decided}")
+    if source != "default":
+        print(f"默认位置：{userdirs.default_sessions_dir()}", file=sys.stderr)
+    # 旧位置还有会话时提一句：否则用户会以为会话丢了。
+    plan = plan_migration(roots=_known_roots(), store=store)
+    if plan.moves:
+        print(
+            f"另有 {len(plan.moves)} 个会话还在旧位置，"
+            "用 `avid session migrate` 搬进来（先看清单再决定）",
+            file=sys.stderr,
+        )
+    return 0
+
+
+def _recorded_store_root() -> str | None:
+    """索引里记着「上一份会话目录」（改位置时留下的线索）——迁移的第四种来源。
+
+    读不到（没有库、库坏了、目录不可用）就返回 None：索引是可丢的派生层，
+    它读不出来不该拦住迁移。库不存在时不去创建它（只读的提示不该有副作用）。
+    """
+    if not userdirs.index_path().exists():
+        return None
+    try:
+        conn = index_db.open_db()
+        try:
+            return indexed_store_root(conn)
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError):
+        return None
+
+
+def _session_migrate(args: argparse.Namespace) -> int:
+    from_dir = args.from_dir
+    if from_dir is None:
+        recorded = _recorded_store_root()
+        current = str(userdirs.sessions_dir())
+        if recorded is not None and recorded != current:
+            # 改过会话目录之后，README 指的「用 avid session migrate 搬」才走得通：
+            # 旧目录既不在注册表里也不在 cwd，只有索引记得它。
+            print(f"（另外去索引记着的旧会话目录找一遍：{recorded}）", file=sys.stderr)
+            from_dir = recorded
+    plan = plan_migration(roots=_known_roots(), from_dir=from_dir)
+    if not plan.moves:
+        print("没有可搬的会话。")
+    else:
+        print(f"会话目录：{plan.store}")
+        print(f"要搬 {len(plan.moves)} 个会话：")
+        for move in plan.moves:
+            print(f"  {move.source} → {move.target}")
+        if not args.yes and not _confirm("现在搬？[y/N] "):
+            print("没搬（清单可以重看一遍再决定）。", file=sys.stderr)
+            return 1
+        tally = apply_migration(plan)
+        print(
+            f"已搬 {len(tally.moved)} 个，跳过 {len(tally.skipped)} 个，"
+            f"清掉 {len(tally.removed_dirs)} 个空的旧目录"
+        )
+        for skip in tally.skipped:
+            print(f"  跳过 {skip.source}：{skip.reason}", file=sys.stderr)
+        return 0
+    for skip in plan.skips:
+        print(f"  跳过 {skip.source}：{skip.reason}", file=sys.stderr)
+    return 0
+
+
+def _workspace_id_of(selection: str | None) -> str | None:
+    """--workspace 收 id 或路径（库里存的是 id）：与其他子命令的「PATH|ID」口径一致。"""
+    if not selection:
+        return None
+    found = WorkspaceRegistry().find(selection)
+    return selection if found is None else found.id
+
+
+def _session_search(args: argparse.Namespace) -> int:
+    """按内容检索：先把索引补到最新（一遍 reconcile），再查，再按命中给人话。"""
+    indexer = _session_indexer()
+    if indexer is None:
+        print("索引不可用（原因见上面的警告）；会话本身不受影响。", file=sys.stderr)
+        return 2
+    try:
+        try:
+            indexer.reconcile()
+            hits = queries.search_entries(
+                indexer.conn,
+                args.query,
+                session_id=args.session,
+                workspace_id=_workspace_id_of(args.workspace),
+                limit=max(1, args.limit),
+            )
+            behind = queries.index_stats(indexer.conn)["behind"]
+        except sqlite3.Error as exc:
+            print(f"索引暂时用不了（{exc}）；会话本身不受影响，稍后再试。", file=sys.stderr)
+            return 2
+    finally:
+        indexer.close()
+
+    if not hits:
+        print("没有命中。")
+        if behind:
+            print(f"（索引还落后 {behind} 个会话，稍后再跑一次可能就有了）", file=sys.stderr)
+        return 0
+
+    for hit in hits:
+        where = hit.workspace_name or hit.workspace_id or "未归属"
+        print(
+            f"{_local_time(hit.timestamp or 0)}  {where}  {hit.title or '未命名会话'}"
+            f"  [{hit.role or hit.entry_type}]"
+        )
+        print(f"    {hit.snippet}")
+        print(f"    会话 {hit.session_id}  条目 {hit.entry_id}  seq {hit.seq}")
+    print(f"--- 命中 {len(hits)} 条 ---", file=sys.stderr)
+    if behind:
+        print(f"（索引还落后 {behind} 个会话）", file=sys.stderr)
+
+    if args.open:
+        try:
+            config = resolve_chat()
+        except ConfigError as exc:
+            print(f"配置错误：{exc}", file=sys.stderr)
+            return 2
+        # 用根路径而不是 id：注册表里被摘掉的（墓碑）会话照样打得开（`find` 默认看不见墓碑）。
+        found = WorkspaceRegistry().find(hits[0].workspace_id or "", include_hidden=True)
+        return _interactive(
+            argparse.Namespace(
+                workspace=(found.root if found is not None else hits[0].workspace_id),
+                session=hits[0].session_id,
+                new_session=False,
+                session_name=None,
+                yes=False,
+                allow_full_access=False,
+            ),
+            config,
+        )
+    return 0
+
+
+def _confirm(prompt: str) -> bool:
+    """Terminal yes/no; a closed stdin answers no, so a pipe can never approve a destructive step."""
+    try:
+        return input(prompt).strip().lower() in {"y", "yes"}
+    except EOFError:
+        return False
+
+
+def build_index_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="avid index",
+        description="会话索引：校验它有没有落后/坏掉，需要时重建（都是本地操作，不调模型）",
+    )
+    actions = parser.add_subparsers(dest="action", required=True)
+
+    check = actions.add_parser("check", help="对比索引与磁盘上的会话文件，列出问题")
+    check.add_argument("--fix", action="store_true", help="按发现的问题就地修（清行/补索引/重建）")
+
+    rebuild = actions.add_parser("rebuild", help="重建索引（默认全量）")
+    rebuild.add_argument("--session", metavar="ID", help="只重建这个会话")
+
+    return parser
+
+
+def _run_index(argv: list[str]) -> int:
+    """Implements ``avid index``: check names the problems, --fix or rebuild repairs them."""
+    args = build_index_parser().parse_args(argv)
+    indexer = _session_indexer()
+    if indexer is None:
+        print("索引不可用（原因见上面的警告）。", file=sys.stderr)
+        return 2
+    store = userdirs.sessions_dir()
+    try:
+        if args.action == "rebuild":
+            rebuilt = indexer.rebuild(args.session)
+            print(
+                f"已重建 {rebuilt.indexed} 个会话"
+                f"（跳过 {rebuilt.skipped} 个、失败 {rebuilt.failed} 个）"
+            )
+            return 0 if rebuilt.failed == 0 else 1
+
+        try:
+            report = index_check.check_index(indexer, roots=[store])
+        except sqlite3.Error as exc:
+            print(f"索引库暂时用不了（{exc}）；修不了就先删掉它：rm -rf {userdirs.index_dir()}", file=sys.stderr)
+            return 2
+        print(
+            f"会话 {report.sessions} 个、条目 {report.entries} 条、"
+            f"库描述的是 {report.indexed_store or '（还没记过）'}"
+        )
+        if report.healthy:
+            print("没有问题。")
+            return 0
+        # 按症状分组打印：一次几百个「还没进过索引」逐条列会把终端刷满，但每类给几条样例
+        # 才能让人认出到底是哪一批坏了。
+        grouped: dict[str, list[index_check.Finding]] = {}
+        for finding in report.findings:
+            grouped.setdefault(finding.kind, []).append(finding)
+        for kind, items in grouped.items():
+            first = items[0]
+            hint = f"→ {first.fix}" if first.fix else "→ 需要人看一眼"
+            shown = f"（共 {len(items)} 条，如 {first.session_id or first.detail}）" if len(items) > 1 else ""
+            print(f"  [{kind}] {first.detail}{shown} {hint}")
+        if not args.fix:
+            print(f"--- 发现 {len(report.findings)} 条（要修就加 --fix）---", file=sys.stderr)
+            return 1
+        tally = index_check.apply_fixes(indexer, report)
+        print(
+            f"已修：补索引 {tally.reindexed}、重建 {tally.rebuilt}、"
+            f"清行 {tally.forgotten}、跳过 {tally.skipped}"
+        )
+        left = index_check.check_index(indexer, roots=[store])
+        print("修完再查一遍：" + ("没有问题。" if left.healthy else f"还剩 {len(left.findings)} 条"))
+        return 0 if left.healthy else 1
+    finally:
+        indexer.close()
 
 
 def build_web_parser() -> argparse.ArgumentParser:

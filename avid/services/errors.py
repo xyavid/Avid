@@ -61,6 +61,13 @@ class BranchExists(ServiceError):
     status = 409
 
 
+class SearchUnavailable(ServiceError):
+    """The derived index cannot be used in this process; sessions themselves are unaffected."""
+
+    code = "search_unavailable"
+    status = 503
+
+
 class InvalidRequest(ServiceError):
     code = "invalid_request"
     status = 400

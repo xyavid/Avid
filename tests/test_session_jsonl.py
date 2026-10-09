@@ -968,3 +968,124 @@ def test_a_symlinked_foreign_session_is_invisible_to_this_repo(tmp_path):
         mine.delete(smuggled)
     mine.close()
     foreign_repo.close()
+
+
+# ---------------- 列表热路径：不变的事实记住，符号链接才判落点 ----------------
+#
+# 侧栏每次刷新都要列全部会话。实测（579 个会话 / 7.0 MB）里 repo.list() 要 46 ms，
+# 其中只有 8 ms 是真在 I/O：其余是每文件两次 realpath 与一次重复的 header 解析。
+# 下面两条把「只在必要时做」钉住——它们是热路径的护栏，红了说明开销又回去了。
+
+
+def test_listing_twice_parses_each_header_once(tmp_path, monkeypatch):
+    from avid.session import jsonl as jsonl_module
+
+    repo = make_repo(tmp_path)
+    for index in range(3):
+        repo.create(id=f"s-{index}").close()
+    reads: list[str] = []
+    real = jsonl_module.read_header
+
+    def spy(path):
+        reads.append(str(path))
+        return real(path)
+
+    monkeypatch.setattr(jsonl_module, "read_header", spy)
+
+    first = repo.list()
+    assert len(first) == 3
+    assert len(reads) == 3
+
+    repo.list()
+
+    assert len(reads) == 3  # 第二次一个 header 都不该再读
+    repo.close()
+
+
+def test_listing_does_not_resolve_every_entry(tmp_path, monkeypatch):
+    """落点判定只对符号链接有意义：普通文件不必走 realpath。"""
+    repo = make_repo(tmp_path)
+    for index in range(3):
+        repo.create(id=f"s-{index}").close()
+    resolved: list[str] = []
+    real = Path.resolve
+
+    def spy(self, *args, **kwargs):
+        resolved.append(str(self))
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", spy)
+
+    repo.list()
+
+    per_entry = [item for item in resolved if item.endswith(".jsonl")]
+    assert per_entry == [], per_entry
+    repo.close()
+
+
+def test_a_changed_file_refreshes_its_remembered_facts(tmp_path):
+    import os
+
+    repo = make_repo(tmp_path)
+    repo.create(id="s-fact").close()
+    before = repo.list()[0]
+
+    path = before.path
+    stamp = path.stat()
+    os.utime(path, ns=(stamp.st_atime_ns, stamp.st_mtime_ns + 5_000_000_000))
+
+    after = repo.list()[0]
+
+    assert after.modified_at == before.modified_at + 5000
+    repo.close()
+
+
+def test_a_deleted_file_drops_out_of_the_next_listing(tmp_path):
+    repo = make_repo(tmp_path)
+    repo.create(id="s-gone").close()
+    kept = repo.create(id="s-keep")
+    kept.close()
+
+    next(item for item in repo.list() if item.id == "s-gone").path.unlink()
+
+    assert [item.id for item in repo.list()] == ["s-keep"]
+    repo.close()
+
+
+def test_an_unreadable_file_is_not_remembered_as_unreadable(tmp_path):
+    """失败的解析结果不进缓存：文件补好之后，下一次列表要能看见它。"""
+    repo = make_repo(tmp_path)
+    repo.create(id="s-ok").close()
+    broken = tmp_path / "half.jsonl"
+    broken.write_text('{"kind": "header"', encoding="utf-8")
+
+    assert [item.id for item in repo.list()] == ["s-ok"]
+
+    tick = clock()
+    broken.write_text(
+        encode_header(
+            JsonlHeader(id="s-fixed", storage_version=1, created_at=tick())
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert sorted(item.id for item in repo.list()) == ["s-fixed", "s-ok"]
+    repo.close()
+
+
+def test_deleted_sessions_do_not_stay_remembered(tmp_path):
+    """长驻进程（Web 服务）里只删不建：删掉的会话不该在缓存里留记忆，列表顺手回收。"""
+    repo = make_repo(tmp_path)
+    repo.create(id="s-keep").close()
+    dropped = repo.create(id="s-drop")
+    dropped.close()
+    repo.list()
+    assert len(repo._metadata) == 2
+
+    next(item for item in repo.list() if item.id == "s-drop").path.unlink()
+    repo.list()
+
+    assert [name for name in repo._metadata if "s-drop" in name] == []
+    assert len(repo._metadata) == 1
+    repo.close()

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import sqlite3
 import threading
 import time
 from pathlib import Path
@@ -15,12 +17,15 @@ from ..agent.events import (
 )
 from ..agent.skills import SkillLoader, default_skills_dir
 from ..agent.tools import TOOLS, workspace
+from ..index import SessionIndexer
+from ..index.indexer import workspace_lookup
 from ..providers.byok import byok_model_candidates, resolve_chat
 from ..providers.config import ConfigError
+from ..security import userdirs
 from ..security.sandbox import default_backend_summary
 from ..session import JsonlSessionRepo
 from .approvals import APPROVAL_TIMEOUT_SECONDS
-from .errors import TooManyStreams
+from .errors import SessionBusy, TooManyStreams
 from .picker import available_backend
 from .runs import (
     MAX_EVENT_BUFFER,
@@ -32,6 +37,8 @@ from .runs import (
 from .sessions import SessionService
 from .workspace_registry import WorkspaceRegistry
 from .workspaces import WorkspaceService, bound_workspace, single_workspace
+
+logger = logging.getLogger("avid.services")
 
 # Bump on a breaking wire change; clients branch on the feature table, not on this number.
 API_VERSION = 1
@@ -57,6 +64,8 @@ FEATURES: dict[str, int] = {
     "workspace_delete": 1,
     # Branches carry a usage snapshot reported in one shared schema.
     "usage": 1,
+    # 内容检索（阶段 57）：本地索引 + FTS5，端点 GET /api/search。
+    "search": 1,
 }
 
 # Ceiling on concurrently open event streams; subscribers beyond it are rejected, not queued.
@@ -118,17 +127,39 @@ class Services:
         """
         self.registry = registry or WorkspaceRegistry()
         if root is not None:
+            # An explicit store path is used verbatim: the bound workspace keeps its sessions there.
             default = single_workspace(root)
             sessions_root: Path | None = Path(root)
         elif workspace_root is not None:
             default = bound_workspace(workspace_root)
-            sessions_root = None  # None means the store is derived as <root>/.avid/sessions.
+            sessions_root = None  # None = the shared session directory plus this workspace's id.
         else:
             default = bound_workspace(workspace.WORKSPACE_ROOT)
             sessions_root = None
         self.workspaces = WorkspaceService(
             self.registry, default=default, default_sessions_root=sessions_root
         )
+        # 会话索引：本进程写自己的会话、索引自己的会话；启动后先在后台补齐（运行不等它）。
+        # root= 直传了具体会话库路径时只索引那一个目录——那是那个接缝的语义。
+        def _roots() -> list[Path]:
+            return [Path(sessions_root)] if sessions_root is not None else [userdirs.sessions_dir()]
+
+        # 索引是可丢的派生层：建不起来（盘满/目录只读/库坏了）就整体停用，
+        # 绝不能连累会话读写与运行——搜索会明确报「索引不可用」。
+        try:
+            self.indexer: SessionIndexer | None = SessionIndexer(
+                roots=_roots,
+                lookup_workspace=workspace_lookup(
+                    lambda: (
+                        (item.id, item.root, item.name)
+                        for item in self.workspaces.known_workspaces()
+                    )
+                ),
+            )
+            self.indexer.start()
+        except (sqlite3.Error, OSError) as exc:
+            logger.warning("索引不可用，本进程停用索引（会话不受影响）：%s", exc)
+            self.indexer = None
         self.root = (
             self.workspaces.sessions_root(default) if default is not None else None
         )
@@ -141,6 +172,7 @@ class Services:
             retention_seconds=retention_seconds,
             max_runs=max_runs,
             max_events=max_events,
+            indexer=self.indexer,
         )
         self.sessions = SessionService(self.workspaces, self.runs)
         # The stream budget is process-wide because it protects a process-wide resource.
@@ -227,7 +259,24 @@ class Services:
             # 配置文件坏了也要让界面能加载——错误文案会在设置面板里暴露。
             return []
 
+    def rebind_session_store(self) -> None:
+        """Re-derive the repositories after the session directory moved.
+
+        活动 run 期间**拒绝**：run 手里的会话句柄是从按工作区缓存的仓库里开的，而解绑会关掉
+        那些仓库（连同句柄）。关掉之后这次运行的下一次提交抛 SessionClosed，模型那条回复
+        就永远不落盘——丢的不是索引，是对话。所以先让它跑完再来改设置。
+        """
+        busy = self.runs.active_runs()
+        if busy:
+            raise SessionBusy(
+                "还有运行在跑，先等它结束再改会话目录"
+                f"（进行中：{'、'.join(busy)}）。这次运行写的是老位置，改到这里不影响它。"
+            )
+        self.workspaces.rebind()
+
     def close(self) -> None:
+        if self.indexer is not None:
+            self.indexer.stop()
         self.workspaces.close()
 
 

@@ -15,7 +15,7 @@ from support import ScriptedChat, create_session, make_turn
 from avid.services import Services
 from avid.services import picker as picker_module
 from avid.services.picker import PickerFailed, PickerUnavailable, pick_directory
-from avid.services.workspace_registry import WorkspaceRegistry
+from avid.services.workspace_registry import WorkspaceRegistry, sessions_root
 from avid.web import create_app
 
 # ---------------- 后端 ----------------
@@ -240,7 +240,7 @@ def test_new_workspace_is_usable_for_a_session_right_away(bundle, picked):
 
     assert session.status_code == 201, session.text
     assert session.json()["workspace"]["id"] == created["id"]
-    assert list((picked / ".avid" / "sessions").glob("*.jsonl"))
+    assert list(sessions_root(picked).glob("*.jsonl"))
 
 
 def test_meta_exposes_the_picker_backend(bundle, monkeypatch):

@@ -16,6 +16,7 @@ from ..session import (
     SessionExistsError,
     SessionInvalidIdError,
     SessionMetadata,
+    SessionRecorder,
     SessionUnknownTargetError,
     messages_for_branch,
     session_scratch,
@@ -205,11 +206,11 @@ class SessionService:
         new_id = str(created["id"])
         try:
             with self._session(new_id) as scratch:
-                branch = scratch.branch(DEFAULT_BRANCH) or scratch.create_branch(
-                    DEFAULT_BRANCH, None
-                )
+                # 走 recorder（会话包的唯一写入者）而不是自己 append：拷贝的也是会话内容，
+                # 旁路会绕过那段契约（A11 门禁现在真扫 services，这条是它逼出来的）。
+                recorder = SessionRecorder(scratch)
                 for message in messages:
-                    branch.append_message(message)
+                    recorder.on_message(message)
                 scratch.set_value(session_scratch(), {"source": source_id})
         except SessionError as exc:
             # 建一半的临时会话不能留：它没有标记，会被当成普通会话留在列表里
@@ -218,6 +219,7 @@ class SessionService:
                 with suppress(SessionError):
                     self.workspaces.repo_for(found[0]).delete(found[1])
             raise SessionReadError(f"临时会话创建失败：{exc}") from exc
+        self.runs.notify_index(new_id)
         view = self.get(new_id)
         view["copied_messages"] = len(messages)
         return view
@@ -226,6 +228,8 @@ class SessionService:
         """Rename a session and return its refreshed view."""
         with self._session(session_id) as session:
             session.set_name(name)
+        # 名字是索引里的显示事实：不改它，检索结果会一直报旧名字。
+        self.runs.notify_index(session_id)
         return self.get(session_id)
 
     def delete(self, session_id: str) -> None:
@@ -242,6 +246,8 @@ class SessionService:
             except SessionError as exc:
                 raise SessionReadError(f"销毁会话失败：{exc}") from exc
             self.workspaces.forget_session(session_id)
+        # 会话没了，索引里那一行也得走：检出「文件已消失」的是索引器自己（它按发现结果判定）。
+        self.runs.notify_index(session_id)
 
     # Branches.
 

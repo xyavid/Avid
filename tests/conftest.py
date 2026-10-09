@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -85,3 +86,35 @@ def sandbox(tmp_path, monkeypatch):
     """
     monkeypatch.setattr(workspace, "WORKSPACE_ROOT", tmp_path)
     return tmp_path
+
+
+@pytest.fixture
+def store(tmp_path) -> Path:
+    """一个会话目录，底下两个工作区子目录（w-alpha / w-beta）。"""
+    root = tmp_path / "sessions"
+    for name in ("w-alpha", "w-beta"):
+        (root / name).mkdir(parents=True)
+    return root
+
+
+@pytest.fixture
+def indexer(store, tmp_path):
+    """接在 store 上的索引器，库落在临时目录；用例结束前把 worker 停掉。"""
+    from index_cases import WORKSPACES
+
+    from avid.index import SessionIndexer
+    from avid.index import db as index_db
+
+    conn = index_db.open_db(tmp_path / "index.sqlite")
+    instance = SessionIndexer(
+        conn=conn,
+        roots=lambda: [store],
+        lookup_workspace=lambda wid: WORKSPACES.get(wid),
+        now=lambda: 1_700_000_000_000,
+    )
+    try:
+        yield instance
+    finally:
+        instance.stop(flush=False)
+        instance.close()
+        conn.close()

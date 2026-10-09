@@ -9,12 +9,18 @@ const getByokSettings = vi.fn()
 const saveByokSettings = vi.fn()
 const resetByokSettings = vi.fn()
 const testByokModel = vi.fn()
+const getSessionsDir = vi.fn()
+const setSessionsDir = vi.fn()
+const pickFolder = vi.fn()
 
 vi.mock('../../../api/client', () => ({
   getByokSettings: (...a: unknown[]) => getByokSettings(...a),
   saveByokSettings: (...a: unknown[]) => saveByokSettings(...a),
   resetByokSettings: (...a: unknown[]) => resetByokSettings(...a),
   testByokModel: (...a: unknown[]) => testByokModel(...a),
+  getSessionsDir: (...a: unknown[]) => getSessionsDir(...a),
+  setSessionsDir: (...a: unknown[]) => setSessionsDir(...a),
+  pickFolder: (...a: unknown[]) => pickFolder(...a),
 }))
 
 const EMPTY: ByokSettings = {
@@ -63,6 +69,14 @@ beforeEach(() => {
       { step: 'tool', ok: true, detail: '模型正确返回了工具调用' },
     ],
   })
+  getSessionsDir.mockReset().mockResolvedValue({
+    dir: '/home/user/.avid/sessions',
+    default_dir: '/home/user/.avid/sessions',
+    source: 'default',
+    editable: true,
+  })
+  setSessionsDir.mockReset()
+  pickFolder.mockReset().mockResolvedValue({ path: null })
 })
 afterEach(cleanup)
 

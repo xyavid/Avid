@@ -234,6 +234,7 @@ class WorkspaceService:
     # Repositories and session ownership.
 
     def sessions_root(self, workspace: Workspace) -> Path:
+        """Where this workspace's sessions live: the caller-supplied path, else the shared store."""
         if (
             self.default is not None
             and workspace.id == self.default.id
@@ -241,6 +242,10 @@ class WorkspaceService:
         ):
             return self.default_sessions_root
         return sessions_root(workspace)
+
+    def rebind(self) -> None:
+        """Re-derive every repository after the session directory moved; cached handles go stale."""
+        self.close()
 
     def repo_for(self, workspace: Workspace) -> JsonlSessionRepo:
         repo = self._repos.get(workspace.id)
@@ -317,12 +322,16 @@ def bound_workspace(root: str | Path) -> Workspace:
 
 
 def single_workspace(root: str | Path) -> Workspace:
-    """Workspace derived from a session store path, either the standard layout or a plain one."""
+    """Workspace derived from a session store path, either the legacy layout or a plain one.
+
+    集中存储后目录树里已经没有工作区根可推（``<会话目录>/<工作区 id>`` 只有 id），
+    所以 ``root=`` 的调用方是用传进来的路径给这个绑定工作地点命名；旧路径
+    ``<工作区根>/.avid/sessions`` 仍然按老规矩剥回它的工作区根。
+    """
     from .workspace_registry import derive_id
 
     sessions = Path(root).resolve()
     parts = sessions.parts
-    # The standard layout ends in .avid/sessions; otherwise the path is the workspace root itself.
     if len(parts) >= 3 and parts[-2:] == (".avid", "sessions"):
         base = sessions.parent.parent
     else:

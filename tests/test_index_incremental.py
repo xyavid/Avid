@@ -1,0 +1,384 @@
+"""索引器：发现、元数据、条目定位与增量游标。
+
+夹具与造会话的帮手在 index_cases.py；断言尽量落在「读回原文」这条性质上，
+而不只是行数对不对。
+"""
+
+from __future__ import annotations
+
+import json
+import os
+
+from index_cases import ALPHA, BETA, append_message, make_session, read_byte_range
+
+from avid.index import check as check_mod
+from avid.index import db as index_db
+from avid.index import queries, scanner
+
+# ---------------- P2：会话元数据
+
+
+def test_index_all_records_session_metadata(indexer, store):
+    file = make_session(
+        store,
+        session_id="s-alpha-1",
+        messages=(
+            {"role": "user", "content": "先看看 pyproject.toml"},
+            {"role": "assistant", "content": "项目名是 Avid"},
+        ),
+        name="看项目名",
+    )
+
+    report = indexer.index_all()
+
+    assert (report.indexed, report.failed) == (1, 0)
+    row = queries.get_session(indexer.conn, "s-alpha-1")
+    assert row is not None
+    assert row.file_path == str(file)
+    assert row.workspace_id == ALPHA
+    assert row.workspace_root == "/ws/alpha"
+    assert row.workspace_name == "alpha"
+    assert row.title == "看项目名"
+    assert row.first_user_text == "先看看 pyproject.toml"
+    assert row.entry_count == 2
+    assert row.index_status == "ok"
+    assert row.indexed_bytes == row.file_size
+    assert row.created_at is not None and row.updated_at is not None
+
+
+def test_workspace_falls_back_to_the_directory_name(indexer, store):
+    """header 里没有 workspaceId 的老文件，按它所在的目录归属。"""
+    make_session(store, workspace=ALPHA, session_id="s-nohdr")
+
+    # 抹掉 header 里的 workspaceId，模拟阶段 56 之前写下的文件。
+    file = next((store / ALPHA).glob("*_s-nohdr.jsonl"))
+    lines = file.read_text(encoding="utf-8").splitlines(keepends=True)
+    header = json.loads(lines[0])
+    header.pop("workspaceId")
+    file.write_text(json.dumps(header, ensure_ascii=False) + "\n" + "".join(lines[1:]), encoding="utf-8")
+
+    indexer.index_all()
+
+    row = queries.get_session(indexer.conn, "s-nohdr")
+    assert row is not None and row.workspace_id == ALPHA
+
+
+def test_list_sessions_orders_by_updated_and_filters_by_workspace(indexer, store):
+    older = make_session(store, workspace=ALPHA, session_id="s-a", messages=({"role": "user", "content": "一"},))
+    make_session(store, workspace=BETA, session_id="s-b", messages=({"role": "user", "content": "二"},))
+    indexer.index_all()
+
+    # 把 alpha 那个文件改新一点（mtime 就是 updated_at 的来源）。
+
+    stat = older.stat()
+    os.utime(older, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10_000_000_000))
+
+    indexer.reconcile()  # 再跑一遍：这一遍才会把新的 mtime 记成 updated_at
+
+    everything = queries.list_sessions(indexer.conn)
+    assert [row.session_id for row in everything] == ["s-a", "s-b"]
+    only_beta = queries.list_sessions(indexer.conn, workspace_id=BETA)
+    assert [row.session_id for row in only_beta] == ["s-b"]
+    assert queries.sessions_by_workspace(indexer.conn) == {ALPHA: 1, BETA: 1}
+
+
+def test_the_index_survives_a_restart(indexer, store, tmp_path):
+    make_session(store, session_id="s-restart", messages=({"role": "user", "content": "还在吗"},))
+    indexer.index_all()
+    indexer.conn.close()
+
+    again = index_db.open_db(tmp_path / "index.sqlite")
+    try:
+        row = queries.get_session(again, "s-restart")
+        assert row is not None and row.entry_count == 1
+        assert queries.count_sessions(again) == 1
+    finally:
+        again.close()
+
+
+def test_a_file_that_is_not_a_session_is_skipped_not_fatal(indexer, store):
+    (store / ALPHA / "notes.jsonl").write_text("这不是会话文件\n", encoding="utf-8")
+    make_session(store, session_id="s-good", messages=({"role": "user", "content": "好"},))
+
+    report = indexer.index_all()
+
+    assert report.indexed == 1
+    assert any("notes.jsonl" in detail for detail in report.details)
+    assert queries.get_session(indexer.conn, "s-good") is not None
+
+
+def test_an_unknown_storage_version_is_not_guessed(indexer, store):
+    file = make_session(store, session_id="s-future", messages=({"role": "user", "content": "未来"},))
+    lines = file.read_text(encoding="utf-8").splitlines(keepends=True)
+    header = json.loads(lines[0])
+    header["storageVersion"] = 99
+    file.write_text(json.dumps(header) + "\n" + "".join(lines[1:]), encoding="utf-8")
+
+    indexer.index_all()
+
+    row = queries.get_session(indexer.conn, "s-future")
+    assert row is not None and row.index_status == "unsupported"
+    assert "storageVersion=99" in (row.last_error or "")
+
+
+# ---------------- P3：条目定位与增量游标
+
+
+def test_entries_land_with_line_offsets_that_read_back(indexer, store):
+    file = make_session(
+        store,
+        session_id="s-locate",
+        messages=(
+            {"role": "user", "content": "第一个问题"},
+            {"role": "assistant", "content": "第一个回答"},
+        ),
+    )
+    indexer.index_all()
+
+    rows = queries.entries_of(indexer.conn, "s-locate")
+    assert [row["seq"] for row in rows] == sorted(row["seq"] for row in rows)
+    assert [row["role"] for row in rows] == ["user", "assistant"]
+
+    for row in rows:
+        record = read_byte_range(file, int(row["byte_offset"]), int(row["byte_length"]))
+        assert record["id"] == row["entry_id"]
+        assert record["seq"] == row["seq"]
+    assert "\n" not in json.dumps(record)
+
+
+def test_the_second_pass_starts_at_the_cursor(indexer, store, monkeypatch):
+    file = make_session(store, session_id="s-incremental", messages=({"role": "user", "content": "一"},))
+    indexer.index_all()
+    first_size = file.stat().st_size
+
+    offsets: list[int] = []
+    real = scanner.scan_file
+
+    def spy(path, *, start_offset=0, previous=None):
+        offsets.append(start_offset)
+        return real(path, start_offset=start_offset, previous=previous)
+
+    monkeypatch.setattr("avid.index.indexer.scan_file", spy)
+    append_message(file, {"role": "assistant", "content": "二"})
+    indexer.reconcile()
+
+    assert offsets == [first_size], offsets
+    row = queries.get_session(indexer.conn, "s-incremental")
+    assert row is not None and row.entry_count == 2
+    assert row.indexed_bytes == file.stat().st_size
+
+
+def test_a_torn_tail_waits_for_the_rest_of_the_line(indexer, store):
+    file = make_session(store, session_id="s-torn", messages=({"role": "user", "content": "完整"},))
+    indexer.index_all()
+    complete = file.stat().st_size
+
+    with file.open("ab") as handle:
+        handle.write(b'{"kind": "entry", "seq": 2, "timestamp": 1, "id": "half')
+
+    indexer.reconcile()
+    row = queries.get_session(indexer.conn, "s-torn")
+    assert row is not None
+    assert row.entry_count == 1  # 半条不算数
+    assert row.indexed_bytes == complete  # 游标停在残片之前
+
+    with file.open("ab") as handle:  # 残片补齐（换行收尾）
+        handle.write(
+            '", "type": "message", "message": {"role": "assistant", "content": "补上了"}}\n'.encode()
+        )
+
+    indexer.reconcile()
+    row = queries.get_session(indexer.conn, "s-torn")
+    assert row is not None and row.entry_count == 2
+    assert row.indexed_bytes == file.stat().st_size
+
+
+def test_a_shortened_file_is_rebuilt_from_scratch(indexer, store):
+    """文件变短 = 被截断或被换掉：游标越界，整篇重扫（不猜缺了什么）。"""
+    file = make_session(
+        store,
+        session_id="s-short",
+        messages=(
+            {"role": "user", "content": "一"},
+            {"role": "assistant", "content": "二"},
+            {"role": "user", "content": "三"},
+        ),
+    )
+    indexer.index_all()
+    assert queries.get_session(indexer.conn, "s-short").entry_count == 3
+
+    lines = file.read_text(encoding="utf-8").splitlines(keepends=True)
+    file.write_text("".join(lines[:3]), encoding="utf-8")  # header + 两次提交
+
+    indexer.reconcile()
+
+    row = queries.get_session(indexer.conn, "s-short")
+    assert row is not None
+    assert row.entry_count == 2
+    assert row.indexed_bytes == file.stat().st_size
+    assert row.index_status == "ok"
+    # 一次消息提交写一行 = [entry, tip 值]（两个写共用一行的字节区间），
+    # 所以条目 seq 是隔一个的：1、3、5…；截掉最后一行正好留下前两条。
+    assert [item["seq"] for item in queries.entries_of(indexer.conn, "s-short")] == [1, 3]
+
+
+def test_a_deleted_file_is_forgotten(indexer, store):
+    file = make_session(store, session_id="s-gone", messages=({"role": "user", "content": "删我"},))
+    make_session(store, session_id="s-keep", messages=({"role": "user", "content": "留我"},))
+    indexer.index_all()
+
+    file.unlink()
+    report = indexer.reconcile()
+
+    assert report.removed == 1
+    assert queries.get_session(indexer.conn, "s-gone") is None
+    assert queries.entries_of(indexer.conn, "s-gone") == []  # 级联删掉了
+    assert queries.get_session(indexer.conn, "s-keep") is not None
+
+
+def test_indexing_twice_does_not_duplicate_rows(indexer, store):
+    make_session(store, session_id="s-twice", messages=({"role": "user", "content": "一"},))
+    indexer.index_all()
+    indexer.index_all()
+
+    row = queries.get_session(indexer.conn, "s-twice")
+    assert row is not None and row.entry_count == 1
+    assert len(queries.entries_of(indexer.conn, "s-twice")) == 1
+
+
+def test_rebuild_replaces_instead_of_appending(indexer, store):
+    make_session(
+        store,
+        session_id="s-rebuild",
+        messages=({"role": "user", "content": "一"}, {"role": "assistant", "content": "二"}),
+    )
+    indexer.index_all()
+
+    report = indexer.rebuild("s-rebuild")
+
+    assert report.indexed == 1
+    assert len(queries.entries_of(indexer.conn, "s-rebuild")) == 2
+    row = queries.get_session(indexer.conn, "s-rebuild")
+    assert row is not None and row.entry_count == 2
+
+
+def test_rebuild_by_id_can_discover_a_session_the_index_never_saw(indexer, store):
+    make_session(store, session_id="s-late", messages=({"role": "user", "content": "晚到"},))
+
+    report = indexer.rebuild("s-late")
+
+    assert report.indexed == 1
+    assert queries.get_session(indexer.conn, "s-late") is not None
+
+
+def test_entries_report_their_own_location(indexer, store):
+    file = make_session(store, session_id="s-point", messages=({"role": "user", "content": "定位我"},))
+    indexer.index_all()
+    entry_id = queries.entries_of(indexer.conn, "s-point")[0]["entry_id"]
+
+    found = queries.entry_location(indexer.conn, "s-point", str(entry_id))
+
+    assert found is not None
+    assert found["file_path"] == str(file)
+    assert read_byte_range(file, int(found["byte_offset"]), int(found["byte_length"]))["id"] == entry_id
+
+
+# ---------------- 评审修复（2026-10-09）：游标与行归属的四个洞 ----------------
+
+
+def test_a_renamed_file_updates_its_path(indexer, store):
+    """改名/迁移后 file_path 必须跟着走：否则通知按旧路径找不到文件，新消息永远不进索引。"""
+    import os
+
+    file = make_session(store, session_id="s-rename", messages=({"role": "user", "content": "一"},))
+    indexer.index_all()
+    moved = file.with_name("renamed_" + file.name)
+    os.rename(file, moved)  # 保留 mtime：这正是迁移命令的日常路径
+
+    indexer.reconcile()
+
+    row = queries.get_session(indexer.conn, "s-rename")
+    assert row is not None and row.file_path == str(moved)
+
+    # 通知也要能找回来：拿旧路径根本读不到文件，得靠新的 file_path
+    append_message(moved, {"role": "assistant", "content": "二"})
+    indexer.notify("s-rename")
+    assert indexer.flush(3.0) is True
+    again = queries.get_session(indexer.conn, "s-rename")
+    assert again is not None and again.entry_count == 2
+
+
+def test_a_same_size_rewrite_is_rebuilt_not_absorbed(indexer, store):
+    """等长原地改写：长度看不出来，mtime 是唯一信号——不能在快路上把它刷新掉。"""
+    import os
+
+    file = make_session(store, session_id="s-rewrite", messages=({"role": "user", "content": "旧词儿"},))
+    indexer.index_all()
+    assert queries.search_entries(indexer.conn, "旧词儿")
+
+    body = file.read_text(encoding="utf-8").replace("旧词儿", "新词儿")  # 三个字换三个字
+    file.write_text(body, encoding="utf-8")
+    stat = file.stat()
+    os.utime(file, ns=(stat.st_atime_ns, stat.st_mtime_ns + 5_000_000_000))
+
+    indexer.reconcile()
+
+    assert queries.search_entries(indexer.conn, "新词儿"), "等长改写要被重扫"
+    assert queries.search_entries(indexer.conn, "旧词儿") == []
+    assert check_mod.check_index(indexer, roots=[store]).findings == ()
+
+
+def test_a_file_replaced_by_another_session_does_not_jam_the_index(indexer, store):
+    """同名文件被换成另一会话：file_path 的唯一约束必须被处理，否则整遍索引永久卡死。"""
+    file = make_session(store, session_id="s-old", messages=({"role": "user", "content": "老的"},))
+    indexer.index_all()
+    # 同一个路径上换一份别的会话（header 里是另一个 id）
+    other = make_session(store, session_id="s-new", messages=({"role": "user", "content": "新的"},))
+    file.write_bytes(file.read_bytes())  # 占位：确保路径不变
+    file.write_text(other.read_text(encoding="utf-8"), encoding="utf-8")
+    other.unlink()
+
+    report = indexer.reconcile()
+
+    assert report.failed == 0, report
+    assert queries.get_session(indexer.conn, "s-new") is not None
+    assert queries.get_session(indexer.conn, "s-old") is None
+    assert check_mod.check_index(indexer, roots=[store]).findings == ()
+
+
+def test_one_bad_session_does_not_stop_the_pass(indexer, store):
+    """一个会话的约束错误不该让整遍中止：排在它后面的健康会话必须照旧被索引。"""
+    import sqlite3 as sqlite
+
+    from avid.index import writer
+
+    make_session(store, session_id="a-bad", messages=({"role": "user", "content": "坏的"},))
+    make_session(store, session_id="z-good", messages=({"role": "user", "content": "好的"},))
+
+    real = writer.apply_scan
+
+    def explode(conn, session, scan):
+        if session.session_id == "a-bad":
+            raise sqlite.IntegrityError("模拟一个只属于这条会话的约束错误")
+        return real(conn, session, scan)
+
+    monkey = indexer.__class__.__module__
+    import avid.index.indexer as indexer_module
+
+    indexer_module.apply_scan = explode
+    try:
+        report = indexer.index_all()
+    finally:
+        indexer_module.apply_scan = real
+
+    assert report.failed == 1
+    assert queries.get_session(indexer.conn, "z-good") is not None
+    assert monkey  # 保留引用，避免 lint 把 import 清掉
+
+
+def test_list_sessions_limit_actually_limits(indexer, store):
+    for index in range(3):
+        make_session(store, session_id=f"s-limit-{index}", messages=({"role": "user", "content": "一"},))
+    indexer.index_all()
+
+    assert len(queries.list_sessions(indexer.conn, limit=2)) == 2

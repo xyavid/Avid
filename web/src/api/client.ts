@@ -22,8 +22,10 @@ import type {
   Run,
   RunCreated,
   ScratchSession,
+  SearchResult,
   SessionDetail,
   SessionSummary,
+  SessionsDir,
   WorkspaceSummary,
 } from './types'
 
@@ -126,6 +128,7 @@ export function renameSession(sessionId: string, name: string): Promise<SessionD
 /**
  * 删除会话（204 无正文）。这会**销毁磁盘上的会话记录文件**——与「从项目列表移除、
  * 会话文件还在」的工作区删除不同，删完不可恢复；有活动 run 时服务端回 409 session_busy。
+ * （会话现在集中放在 `<AVID_HOME>/sessions/<工作区 id>/`，见设置页「会话存储」。）
  */
 export function deleteSession(sessionId: string): Promise<void> {
   return request(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
@@ -276,4 +279,38 @@ export function testByokModel(
 /** 重置：删配置与密钥两份文件；之后运行会报「还没有模型配置」，直到重新保存。 */
 export function resetByokSettings(): Promise<void> {
   return request('/api/settings/byok', { method: 'DELETE' })
+}
+
+/**
+ * 会话目录（阶段 56）：改的是「新会话写哪」，不搬已有会话——搬数据是
+ * `avid session migrate` 的事。保存后服务端解绑缓存仓库，下一条消息起生效。
+ */
+
+/** 读会话目录与它的来源（来源是环境变量时界面只读）。 */
+export function getSessionsDir(): Promise<SessionsDir> {
+  return request('/api/settings/sessions')
+}
+
+/** 保存会话目录；空串恢复默认。目录由服务端就地建好，建不出就是 400。 */
+export function setSessionsDir(dir: string): Promise<SessionsDir> {
+  return request('/api/settings/sessions', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dir }),
+  })
+}
+
+/**
+ * 内容检索（阶段 57）：走本地索引（SQLite + FTS5），不调模型。
+ * 索引只服务检索——列表仍以 JSONL 为准，所以这个接口可能落后（响应里的 behind）。
+ */
+export function searchEntries(
+  query: string,
+  opts: { workspace?: string | null; session?: string | null; limit?: number } = {},
+): Promise<SearchResult> {
+  const params = new URLSearchParams({ q: query })
+  if (opts.workspace) params.set('workspace', opts.workspace)
+  if (opts.session) params.set('session', opts.session)
+  if (opts.limit !== undefined) params.set('limit', String(opts.limit))
+  return request(`/api/search?${params.toString()}`)
 }
