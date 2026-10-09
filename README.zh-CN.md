@@ -19,6 +19,7 @@
 - **技能** —— 一段可复用的操作说明（`SKILL.md`）：目录里只有描述，命中即载入全文。
 - **上下文管理** —— 分区装配 + 压缩成结构化检查点，事实与假设分开记，长时间任务不掉线。
 - **会话持久化** —— 对话与状态落盘，带分支与变更线；`/rewind` 可回滚对话指针与文件。
+  所有工作区的会话集中在一个目录里（默认 `~/.avid/sessions`，可以搬到别的盘）。
 - **模型配置** —— BYOK，四种协议（OpenAI 兼容 / Responses / Anthropic / Ollama）换着用，换模型不动内核。
 - **权限** —— 默认直接执行；毁灭级命令先确认，宿主凭据拒读，可选沙箱与审计。
 
@@ -42,7 +43,7 @@ pnpm -C web install && pnpm -C web run copy:dist
 ```
 
 想在任何目录直接敲 `avid`，把它装成命令：`uv tool install --editable ".[web]"`。
-全部参数见 `avid --help`、`avid web --help`、`avid workspace --help`。
+全部参数见 `avid --help`、`avid web --help`、`avid workspace --help`、`avid session --help`。
 
 ## 概念
 
@@ -59,7 +60,21 @@ pnpm -C web install && pnpm -C web run copy:dist
   （明文密钥，0600）。用界面「设置 → 模型」维护，或手编这两份文件；没配就发送消息会提示缺什么。
 - **确认与授权**：非交互场景用 `--yes` 代答毁灭级确认；`--allow-full-access` 跳过确认并关沙箱
   （凭据拒读仍然生效）。
+- **会话存储**：所有工作区的会话集中在一个目录里，按工作区 id 分子目录（工作区的名字在注册表里，
+  不在路径上）。默认 `~/.avid/sessions`；改位置用界面「设置 → 会话存储」或环境变量
+  `AVID_SESSIONS_DIR`。改位置**不搬已有会话**——搬是 `avid session migrate` 的事（它先打印
+  清单再动手；`avid session dir` 告诉你会话现在在哪）。
 - **环境变量**：可选，日常运行不需要。
+
+| 变量 | 含义 |
+|---|---|
+| `AVID_HOME` | 整个用户级目录的落点（设置、注册表、会话、审计），默认 `~/.avid` |
+| `AVID_SESSIONS_DIR` | 把会话目录放到别处（优先于设置文件里的值） |
+| `AVID_AUDIT_DIR` | 把审计 JSONL 单独放到一个目录 |
+| `AVID_MAX_PARALLEL_TOOL_CALLS` | 每步并行工具调用数，默认 10 |
+| `AVID_MODEL_INFO` | 设为 `off` 就不去问 provider 要模型窗口 |
+| `AVID_SANDBOX_BIN` | 换一个 bwrap 可执行文件（诊断 / 打包） |
+| `AVID_ALLOWED_HOSTS` | Web 服务额外信任的域名（局域网部署） |
 
 
 ## 开发

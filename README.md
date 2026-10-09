@@ -23,7 +23,8 @@ English · [中文](README.zh-CN.md)
 - **Context management** — assembled in blocks and compacted into a structured checkpoint that keeps
   verified facts apart from hypotheses, so long tasks stay coherent.
 - **Session persistence** — conversations and state live on disk, with branches and a change line;
-  `/rewind` rolls back the conversation pointer and the files together.
+  `/rewind` rolls back the conversation pointer and the files together. Every workspace's sessions
+  share one directory (`~/.avid/sessions` by default, movable to another disk).
 - **Model/provider abstraction** — BYOK across four protocols (OpenAI-compatible / Responses /
   Anthropic / Ollama); swapping a model never touches the core.
 - **Permissions** — everything runs by default; destructive commands ask first, host credentials are
@@ -49,7 +50,7 @@ pnpm -C web install && pnpm -C web run copy:dist
 ```
 
 To have `avid` on your PATH anywhere: `uv tool install --editable ".[web]"`.
-All flags: `avid --help`, `avid web --help`, `avid workspace --help`.
+All flags: `avid --help`, `avid web --help`, `avid workspace --help`, `avid session --help`.
 
 ## Concepts
 
@@ -70,11 +71,17 @@ All flags: `avid --help`, `avid web --help`, `avid workspace --help`.
   in the UI, or by hand; with nothing configured, sending a message says what is missing.
 - **Approvals**: `--yes` answers the destructive-command prompt in non-interactive runs;
   `--allow-full-access` skips the prompt and the sandbox (credential refusal still applies).
+- **Session storage**: one directory holds every workspace's sessions, one subdirectory per
+  workspace id (a workspace's name lives in the registry, not in the path). Default
+  `~/.avid/sessions`; change it in Settings → Session storage or with `AVID_SESSIONS_DIR`.
+  Changing it does not move existing sessions — `avid session migrate` prints what it would move
+  and then does it (`avid session dir` shows where they live now).
 - **Environment variables**: all optional, not needed for day-to-day use.
 
 | Variable | Meaning |
 |---|---|
-| `AVID_HOME` | move the user-level directory (sessions, audit), default `~/.avid` |
+| `AVID_HOME` | move the user-level directory (settings, registry, sessions, audit), default `~/.avid` |
+| `AVID_SESSIONS_DIR` | put the session directory somewhere else (wins over the settings file) |
 | `AVID_AUDIT_DIR` | put the audit JSONL in its own directory |
 | `AVID_MAX_PARALLEL_TOOL_CALLS` | parallel tool calls per step, default 10 |
 | `AVID_MODEL_INFO` | `off` disables probing the provider for the model window |
