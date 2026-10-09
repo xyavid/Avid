@@ -2,7 +2,7 @@
 
 这一组用例覆盖阶段 18 的 Web 侧验收：**归属可查询**（会话列表带 workspace）、
 **新建必须先选**（多工作区模式下缺 workspace 是 400）、**归属可持久化**
-（会话落在该工作区的 .avid/sessions 下、header 里带着 workspaceId）。
+（会话落在共享会话目录里该工作区的子目录下、header 里带着 workspaceId）。
 阶段 51 后权限只有一个运行级取值：默认 normal，`full_access_ack` 是完全访问凭据。
 """
 
@@ -12,7 +12,7 @@ import pytest
 from support import ScriptedChat, make_turn
 
 from avid.services import Services
-from avid.services.workspace_registry import WorkspaceRegistry
+from avid.services.workspace_registry import WorkspaceRegistry, sessions_root
 from avid.web import create_app
 
 
@@ -122,8 +122,8 @@ def test_register_then_create_a_session_in_that_workspace(client, sandbox, tmp_p
     assert detail["workspace"]["id"] == workspace["id"]
     assert detail["workspace"]["root"] == workspace["root"]
 
-    # 归属可持久化：会话文件真的落在那个工作区的会话库里，header 带 workspaceId。
-    files = list((project / ".avid" / "sessions").glob("*.jsonl"))
+    # 归属可持久化：会话文件真的落在专用会话目录里那个工作区的子目录下，header 带 workspaceId。
+    files = list(sessions_root(project).glob("*.jsonl"))
     assert len(files) == 1
     assert f'"workspaceId": "{workspace["id"]}"' in files[0].read_text(encoding="utf-8")
 
@@ -152,7 +152,7 @@ def test_delete_a_workspace_keeps_its_sessions_listed(client, tmp_path):
     # 归属仍是那个 id：前端按"候选里找不到它"把这条会话归进未归属组。
     assert listed[0]["workspace"]["id"] == ws["id"]
     assert client.get(f"/api/sessions/{session['id']}").status_code == 200
-    assert (project / ".avid" / "sessions").exists()
+    assert sessions_root(project).exists()
 
 
 def test_delete_the_bound_workspace_is_refused(client):
@@ -287,10 +287,10 @@ def test_startup_writes_nothing_to_the_registry(tmp_path):
         assert [ws["id"] for ws in listed] == [services.workspaces.default.id]
         assert listed[0]["is_default"] is True
 
-        # 未登记但可解析：显式指定它的 id 就能建会话，会话落在它自己的会话库里。
+        # 未登记但可解析：显式指定它的 id 就能建会话，会话落在共享会话目录里它的那个子目录下。
         created = services.sessions.create(workspace=listed[0]["id"])
         assert created["workspace"]["id"] == listed[0]["id"]
-        assert list((home / ".avid" / "sessions").glob("*.jsonl"))
+        assert list(sessions_root(home).glob("*.jsonl"))
         assert not registry_file.exists()  # 建会话也不写注册表
     finally:
         services.close()

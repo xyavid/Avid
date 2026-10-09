@@ -118,11 +118,12 @@ class Services:
         """
         self.registry = registry or WorkspaceRegistry()
         if root is not None:
+            # An explicit store path is used verbatim: the bound workspace keeps its sessions there.
             default = single_workspace(root)
             sessions_root: Path | None = Path(root)
         elif workspace_root is not None:
             default = bound_workspace(workspace_root)
-            sessions_root = None  # None means the store is derived as <root>/.avid/sessions.
+            sessions_root = None  # None = the shared session directory plus this workspace's id.
         else:
             default = bound_workspace(workspace.WORKSPACE_ROOT)
             sessions_root = None

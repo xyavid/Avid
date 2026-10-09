@@ -13,7 +13,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from .userdirs import avid_home
+from .userdirs import avid_home, sessions_dir
 
 logger = logging.getLogger("avid.security.sandbox")
 
@@ -328,9 +328,15 @@ class SandboxSpec:
             flag = "--bind" if access == "rw" else "--ro-bind"
             argv += [flag, path, path]
 
+        deferred: list[str] = []
+
         for directory in self.mask_dirs:
             # A workspace inside the masked directory wins, so this mask is skipped.
             if workdir and _contains(directory, workdir):
+                continue
+            # A mask inside the workspace is deferred: the workspace bind below would cover it.
+            if workdir and _contains(workdir, directory):
+                deferred.append(directory)
                 continue
             if Path(directory).is_dir():
                 argv += ["--tmpfs", directory]
@@ -348,6 +354,10 @@ class SandboxSpec:
         # 这里少一次读写重挂就是只读）。
         if workdir:
             argv += ["--ro-bind" if self.read_only else "--bind", workdir, workdir]
+        # Deferred masks sit inside the workspace, so they must be re-applied after that bind.
+        for directory in deferred:
+            if Path(directory).is_dir():
+                argv += ["--tmpfs", directory]
         # 网络不隔离（阶段 51 轻量化）：网络命令直接跑，不在沙箱里断网。
         # Unshare every namespace that could leak host state and start from an empty environment.
         argv += [
@@ -521,6 +531,18 @@ def _masks(
             notes.append(f"工作区位于 {item} 内，跳过该掩蔽")
             continue
         files.append(str(Path(expanded).resolve()))
+
+    # 会话文件就是对话历史本身，agent 的工具不该读自己的记录（阶段 56：会话搬出工作区后
+    # 这条才成立）。默认位置已被上面的 ~/.avid 覆盖，配置到别处时这一条生效。
+    store = str(sessions_dir().expanduser().resolve())
+    if root and _contains(store, root):
+        notes.append(f"工作区位于会话目录内（{store}），跳过该掩蔽")
+    elif any(_contains(item, store) for item in dirs):
+        pass
+    else:
+        if root and _contains(str(Path(root).expanduser().resolve()), store):
+            notes.append(f"会话目录在工作区内（{store}）：掩蔽在工作区挂载之后生效")
+        dirs.append(store)
     return tuple(dirs), tuple(files)
 
 

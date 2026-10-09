@@ -2,7 +2,7 @@
 
 端到端跑真 CLI：只把模型换成 ``FakeChat``（替换 ``cli.agent_loop`` 注入），
 循环、会话、文件落盘都是真的。工作区根目录被换成 tmp_path，会话因此写在
-临时目录下的 ``.avid/sessions/``。
+AVID_HOME（conftest 指到临时目录）下的 ``sessions/<工作区 id>/``。
 """
 
 from __future__ import annotations
@@ -80,8 +80,16 @@ def model(monkeypatch) -> Model:
     return Model(monkeypatch)
 
 
+def session_dir(root: Path) -> Path:
+    """会话目录（阶段 56）：专用目录下按工作区 id 分的那个子目录，不在工作区里。"""
+    from avid.services.workspace_registry import sessions_root
+    from avid.services.workspaces import bound_workspace
+
+    return sessions_root(bound_workspace(root))
+
+
 def session_files(root: Path) -> list[Path]:
-    return sorted((root / ".avid" / "sessions").glob("*.jsonl"))
+    return sorted(session_dir(root).glob("*.jsonl"))
 
 
 def session_id(stderr: str) -> str:
@@ -167,7 +175,7 @@ def test_plain_agent_run_does_not_create_sessions(sandbox, model, capsys):
     model.answer("答")
     assert cli.main(["--agent", "问"]) == 0
     capsys.readouterr()
-    assert not (sandbox / ".avid" / "sessions").exists()
+    assert not session_dir(sandbox).exists()
 
 
 # ---------------- 列举与销毁 ----------------

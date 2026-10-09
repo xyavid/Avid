@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
+from avid.security import userdirs
 from avid.services.workspace_registry import (
     AVID_HOME_ENV,
     WorkspaceError,
@@ -206,13 +208,20 @@ def test_registry_file_shape(registry, workspace_dir):
     assert payload["workspaces"][0]["root"] == str(workspace_dir.resolve())
 
 
-def test_sessions_root_is_inside_the_workspace(registry, workspace_dir):
+def test_sessions_root_is_the_shared_store_keyed_by_workspace_id(registry, workspace_dir):
+    """阶段 56：会话集中在一个专用目录下，按工作区 id 分子目录——不再是工作区里的 .avid/sessions。"""
     workspace = registry.add(workspace_dir)
 
-    assert sessions_root(workspace) == workspace_dir.resolve() / ".avid/sessions"
-    assert sessions_root(str(workspace_dir)) == (
-        workspace_dir.resolve() / ".avid/sessions"
-    )
+    assert sessions_root(workspace) == userdirs.sessions_dir() / workspace.id
+    # 未登记的目录按路径摘要拿到同一个 id，因此落点一致。
+    assert sessions_root(str(workspace_dir)) == userdirs.sessions_dir() / workspace.id
+    assert not Path(workspace.root, ".avid", "sessions").exists()
+
+
+def test_sessions_root_follows_a_configured_store(tmp_path, monkeypatch, workspace_dir):
+    monkeypatch.setenv(userdirs.SESSIONS_DIR_ENV, str(tmp_path / "on-another-disk"))
+
+    assert sessions_root(workspace_dir) == tmp_path / "on-another-disk" / derive_id(workspace_dir)
 
 
 def test_avid_home_overrides_the_user_directory(monkeypatch, tmp_path):

@@ -228,6 +228,54 @@ def test_masks_are_skipped_when_the_workspace_lives_inside_them(tmp_path, home):
     assert any("跳过该掩蔽" in note for note in spec.notes)
 
 
+def test_sessions_store_is_masked_wherever_it_is_configured(tmp_path, home, monkeypatch):
+    """会话文件就是对话历史，agent 的工具不该读自己的记录（阶段 56）。"""
+    store = tmp_path / "somewhere" / "avid-sessions"
+    monkeypatch.setenv("AVID_SESSIONS_DIR", str(store))
+
+    spec = build_spec(policy="workspace", root=str(tmp_path / "ws"), home=home, probe=WORKING)
+
+    assert str(store) in spec.mask_dirs
+
+
+def test_default_sessions_store_under_the_avid_home_is_not_masked_twice(tmp_path, monkeypatch):
+    """生产形态：默认会话目录就住在 ~/.avid 里，那条掩蔽已经盖住它，不重复挂一次。"""
+    monkeypatch.setenv("AVID_HOME", str(tmp_path / "host-home" / ".avid"))
+
+    spec = build_spec(
+        policy="workspace", root=str(tmp_path / "ws"), home=tmp_path / "host-home", probe=WORKING
+    )
+
+    assert str(tmp_path / "host-home" / ".avid") in spec.mask_dirs
+    assert str(tmp_path / "host-home" / ".avid" / "sessions") not in spec.mask_dirs
+
+
+def test_sessions_store_inside_the_workspace_is_masked_after_the_workspace_bind(
+    tmp_path, home, monkeypatch
+):
+    """工作区内的会话目录要挂在工作区之后：不然那次绑定会把掩蔽盖掉。"""
+    root = tmp_path / "ws"
+    store = root / "sessions"
+    store.mkdir(parents=True)
+    monkeypatch.setenv("AVID_SESSIONS_DIR", str(store))
+
+    spec = build_spec(policy="workspace", root=str(root), home=home, probe=WORKING)
+    built = argv(spec, ["bash", "-c", "ls"])
+
+    bind_at = next(
+        index
+        for index in range(len(built) - 2)
+        if built[index] == "--bind" and built[index + 1] == str(root)
+    )
+    mask_at = next(
+        index
+        for index in range(len(built) - 1)
+        if built[index] == "--tmpfs" and built[index + 1] == str(store)
+    )
+    assert mask_at > bind_at
+    assert any("在工作区内" in note for note in spec.notes)
+
+
 def test_grants_are_mounted_and_masked_targets_are_refused(tmp_path, home):
     outside = tmp_path / "outside.txt"
     outside.write_text("x", encoding="utf-8")
@@ -339,6 +387,27 @@ def _run(spec: SandboxSpec, script: str, **kwargs) -> subprocess.CompletedProces
 def test_real_run_cannot_read_the_masked_credentials(real_spec, home):
     done = _run(real_spec, f"cat {home}/.ssh/id_rsa 2>&1; ls -A {home}/.ssh | wc -l")
     assert "PRIVATE" not in done.stdout
+    assert done.stdout.strip().endswith("0")
+
+
+def test_real_run_cannot_read_the_session_store(tmp_path, home, monkeypatch):
+    """真跑：会话文件在沙箱里既读不到也列不出——工具视野里没有自己的对话历史。"""
+    found = probe_backend()
+    if not found.available:
+        pytest.skip(f"这台机器上没有可用的 bwrap：{found.reason}")
+    root = tmp_path / "ws"
+    root.mkdir()
+    store = tmp_path / "avid-sessions"
+    store.mkdir()
+    (store / "2026-10-09T00-00-00-000_s-1.jsonl").write_text(
+        '{"kind": "header", "id": "s-1"}\n', encoding="utf-8"
+    )
+    monkeypatch.setenv("AVID_SESSIONS_DIR", str(store))
+    spec = build_spec(policy="workspace", root=str(root), home=home, probe=found)
+
+    done = _run(spec, f"cat {store}/*.jsonl 2>&1; ls -A {store} | wc -l")
+
+    assert '"kind": "header"' not in done.stdout
     assert done.stdout.strip().endswith("0")
 
 

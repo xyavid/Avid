@@ -63,7 +63,6 @@ from .errors import (
     SessionNotFound,
     SessionReadError,
 )
-from .workspace_registry import SESSION_DIR
 from .workspaces import WorkspaceService
 
 logger = logging.getLogger("avid.services.runs")
@@ -1081,7 +1080,6 @@ __all__ = [
     "MAX_EVENT_BUFFER",
     "MAX_RETAINED_RUNS",
     "REPLAY_BUFFER_SIZE",
-    "SESSION_DIR",
     "RunRecord",
     "RunRegistry",
 ]
