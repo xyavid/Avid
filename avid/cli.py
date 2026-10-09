@@ -20,11 +20,13 @@ from .providers.byok import resolve_chat
 from .providers.client import LLMError, ask, chat_completion
 from .providers.config import Config, ConfigError
 from .providers.usage import Usage, hit_ratio
+from .security import userdirs
 from .security.permission import (
     PERMISSION_FULL,
     PERMISSION_NORMAL,
     RunSecurity,
 )
+from .services.session_migration import apply_migration, plan_migration
 from .services.workspace_registry import (
     Workspace,
     WorkspaceError,
@@ -166,6 +168,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_web(argv[1:])
     if argv and argv[0] == "workspace":
         return _run_workspace(argv[1:])
+    if argv and argv[0] == "session":
+        return _run_session_command(argv[1:])
 
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -606,6 +610,102 @@ def _run_workspace(argv: list[str]) -> int:
     except WorkspaceError as exc:
         print(f"工作区错误：{exc}", file=sys.stderr)
         return 1
+
+
+def build_session_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="avid session",
+        description="会话目录：看它在哪，以及把旧布局里的会话搬进来",
+    )
+    actions = parser.add_subparsers(dest="action", required=True)
+
+    actions.add_parser("dir", help="打印当前会话目录与它的来源")
+
+    migrate = actions.add_parser(
+        "migrate",
+        help="把旧布局（<工作区根>/.avid/sessions）里的会话搬进会话目录",
+    )
+    migrate.add_argument(
+        "--from",
+        dest="from_dir",
+        metavar="DIR",
+        help="额外扫一个目录：集中目录（下面按工作区 id 分子目录）或平铺目录",
+    )
+    migrate.add_argument("--yes", action="store_true", help="不再问一次，直接搬")
+
+    return parser
+
+
+def _run_session_command(argv: list[str]) -> int:
+    """Implements ``avid session``: 会话目录的只读查询与一次性搬迁，都不唤起模型。"""
+    args = build_session_parser().parse_args(argv)
+    if args.action == "dir":
+        return _session_dir_report()
+    return _session_migrate(args)
+
+
+def _known_roots() -> list[str]:
+    """会去扫旧会话目录的工作区根：注册表里的（含墓碑）+ 当前目录。"""
+    roots = [ws.root for ws in WorkspaceRegistry().list(include_hidden=True)]
+    current = str(Path(workspace.WORKSPACE_ROOT).resolve())
+    if current not in roots:
+        roots.append(current)
+    return roots
+
+
+def _session_dir_report() -> int:
+    store = userdirs.sessions_dir()
+    source = userdirs.sessions_dir_source()
+    decided = {
+        "env": f"环境变量 {userdirs.SESSIONS_DIR_ENV}",
+        "settings": str(userdirs.settings_path()),
+        "default": "默认位置",
+    }[source]
+    print(f"{store}\t来源：{decided}")
+    if source != "default":
+        print(f"默认位置：{userdirs.default_sessions_dir()}", file=sys.stderr)
+    # 旧位置还有会话时提一句：否则用户会以为会话丢了。
+    plan = plan_migration(roots=_known_roots(), store=store)
+    if plan.moves:
+        print(
+            f"另有 {len(plan.moves)} 个会话还在旧位置，"
+            "用 `avid session migrate` 搬进来（先看清单再决定）",
+            file=sys.stderr,
+        )
+    return 0
+
+
+def _session_migrate(args: argparse.Namespace) -> int:
+    plan = plan_migration(roots=_known_roots(), from_dir=args.from_dir)
+    if not plan.moves:
+        print("没有可搬的会话。")
+    else:
+        print(f"会话目录：{plan.store}")
+        print(f"要搬 {len(plan.moves)} 个会话：")
+        for move in plan.moves:
+            print(f"  {move.source} → {move.target}")
+        if not args.yes and not _confirm("现在搬？[y/N] "):
+            print("没搬（清单可以重看一遍再决定）。", file=sys.stderr)
+            return 1
+        tally = apply_migration(plan)
+        print(
+            f"已搬 {len(tally.moved)} 个，跳过 {len(tally.skipped)} 个，"
+            f"清掉 {len(tally.removed_dirs)} 个空的旧目录"
+        )
+        for skip in tally.skipped:
+            print(f"  跳过 {skip.source}：{skip.reason}", file=sys.stderr)
+        return 0
+    for skip in plan.skips:
+        print(f"  跳过 {skip.source}：{skip.reason}", file=sys.stderr)
+    return 0
+
+
+def _confirm(prompt: str) -> bool:
+    """Terminal yes/no; a closed stdin answers no, so a pipe can never approve a destructive step."""
+    try:
+        return input(prompt).strip().lower() in {"y", "yes"}
+    except EOFError:
+        return False
 
 
 def build_web_parser() -> argparse.ArgumentParser:

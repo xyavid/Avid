@@ -126,6 +126,18 @@ def parse_header(line: str) -> JsonlHeader:
     )
 
 
+def read_header(path: Path) -> JsonlHeader:
+    """Parses the first line only; listing, deletion and migration share it so they cannot diverge."""
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            first = handle.readline()
+    except OSError as exc:
+        raise SessionStorageError(f"会话文件读不了：{path}（{exc}）") from exc
+    if not first.endswith("\n"):
+        raise SessionStorageError(f"会话文件缺少完整 header：{path}")
+    return parse_header(first.rstrip("\n"))
+
+
 def encode_write(write: CommittedWrite) -> dict[str, object]:
     if isinstance(write, CommittedEntry):
         entry = write.entry
@@ -879,15 +891,7 @@ class JsonlSessionRepo:
 
     @staticmethod
     def _header_of(path: Path) -> JsonlHeader:
-        """Parses the first line only; listing and deletion share it so they cannot diverge."""
-        try:
-            with path.open("r", encoding="utf-8") as handle:
-                first = handle.readline()
-        except OSError as exc:
-            raise SessionStorageError(f"会话文件读不了：{path}（{exc}）") from exc
-        if not first.endswith("\n"):
-            raise SessionStorageError(f"会话文件缺少完整 header：{path}")
-        return parse_header(first.rstrip("\n"))
+        return read_header(path)
 
     def _read_metadata(self, path: Path) -> JsonlSessionMetadata | None:
         try:

@@ -500,3 +500,93 @@ def test_interactive_rewind_restores_files_and_moves_the_tip_back(
     finally:
         repo.close()
 
+
+
+# ---------------- 会话目录与旧布局迁移（阶段 56） ----------------
+
+
+def legacy_session_file(root: Path, session_id: str = "s-legacy") -> Path:
+    """在旧布局（<工作区根>/.avid/sessions）里造一个真会话。"""
+    from avid.services.workspace_registry import derive_id
+    from avid.session import JsonlSessionRepo
+
+    repo = JsonlSessionRepo(root / ".avid" / "sessions", workspace=derive_id(root))
+    try:
+        repo.create(id=session_id)
+    finally:
+        repo.close()
+    return next((root / ".avid" / "sessions").glob(f"*_{session_id}.jsonl"))
+
+
+def test_session_dir_reports_the_store_and_its_source(sandbox, capsys):
+    from avid.security import userdirs
+
+    assert cli.main(["session", "dir"]) == 0
+
+    out = capsys.readouterr().out
+    assert str(userdirs.sessions_dir()) in out
+    assert "默认位置" in out
+
+
+def test_session_dir_hints_at_sessions_left_in_the_old_layout(sandbox, capsys):
+    legacy_session_file(sandbox)
+
+    assert cli.main(["session", "dir"]) == 0
+
+    assert "旧位置" in capsys.readouterr().err
+
+
+def test_session_migrate_moves_them_and_listing_still_finds_them(sandbox, capsys):
+    """搬完还能按 id 列出来——迁移不是搬走就找不到了。"""
+    legacy_session_file(sandbox)
+
+    assert cli.main(["session", "migrate", "--yes"]) == 0
+
+    out = capsys.readouterr().out
+    assert "已搬 1 个" in out and "清掉 1 个空的旧目录" in out
+    assert not (sandbox / ".avid" / "sessions").exists()
+    assert len(session_files(sandbox)) == 1
+
+    assert cli.main(["--list-sessions"]) == 0
+    assert "s-legacy" in capsys.readouterr().out
+
+
+def test_session_migrate_asks_before_touching_anything(sandbox, capsys, monkeypatch):
+    file = legacy_session_file(sandbox)
+    prompts: list[str] = []
+
+    def answer(prompt: str = "") -> str:
+        prompts.append(prompt)
+        return "n"
+
+    monkeypatch.setattr("builtins.input", answer)
+
+    assert cli.main(["session", "migrate"]) == 1
+
+    assert file.exists()
+    assert any("现在搬？" in prompt for prompt in prompts)
+    assert "没搬" in capsys.readouterr().err
+
+
+def test_session_migrate_with_nothing_to_do_is_not_an_error(sandbox, capsys):
+    assert cli.main(["session", "migrate", "--yes"]) == 0
+    assert "没有可搬的会话" in capsys.readouterr().out
+
+
+def test_session_migrate_takes_a_store_root_through_from(sandbox, capsys, tmp_path):
+    """`--from` 指一个旧的集中目录：按下面的工作区 id 子目录认归属。"""
+    from avid.services.workspace_registry import derive_id
+    from avid.session import JsonlSessionRepo
+
+    old = tmp_path / "old-store"
+    owner = derive_id(sandbox)
+    repo = JsonlSessionRepo(old / owner, workspace=None)
+    try:
+        repo.create(id="s-old-store")
+    finally:
+        repo.close()
+
+    assert cli.main(["session", "migrate", "--from", str(old), "--yes"]) == 0
+
+    assert "已搬 1 个" in capsys.readouterr().out
+    assert len(session_files(sandbox)) == 1
