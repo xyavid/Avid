@@ -118,14 +118,13 @@ class Run:
         index, injected = trigger
         self._emit(transcript.as_messages()[index])
 
-        # 补充输入（阶段 60）：在「模型说完了」那一刻领到的一条，要留到下一轮的交付点。
+        # Steers picked up at the "model is done" gate wait for the next round's delivery point.
         pending_steers: list[dict[str, Any]] = []
 
         for round_index in itertools.count(1):
             state.round = round_index
             state.check_cancelled()  # 取消检查点 1：轮次开始前
-            # 补充输入的唯一交付点：每个 step 开始、compose 之前。上一轮的工具结果都已落地，
-            # 这里 append 结构一定安全；emit 走 on_message，落库仍只有 recorder 一个写者。
+            # Sole delivery point for steers: before compose() each step, where appending is safe.
             for message in [*pending_steers, *self._take_steers(state)]:
                 transcript.append(message)
                 self._emit(message)
@@ -156,8 +155,7 @@ class Run:
             )
 
             if not turn.tool_calls:
-                # 收尾之前先问一句「还有补充吗」：有就续轮，让下一轮的交付点带上它。
-                # 判据是「已接受但还没领走」，所以这里领到的不会被丢掉。
+                # Before finishing: a steer continues the loop so it goes out next round.
                 pending_steers = self._take_steers(state)
                 if pending_steers:
                     continue
@@ -185,7 +183,7 @@ class Run:
                 self._emit(message)
 
             if state.denial_streak >= spec.max_consecutive_denials:
-                # 连续被拒到要停：刚投的补充可能正是「换个做法」的指令，先让它说话。
+                # Denial halt: a fresh steer may redirect the approach, so let it speak first.
                 pending_steers = self._take_steers(state)
                 if pending_steers:
                     continue
@@ -244,7 +242,7 @@ class Run:
             self.on_message(message)
 
     def _take_steers(self, state: RunState) -> list[dict[str, Any]]:
-        """领取待并入下一步的补充输入（阶段 60）；没有通道就是空列表。"""
+        """Pull steers to merge into the next step; empty list when there is no channel."""
         probe = state.steers
         if probe is None:
             return []

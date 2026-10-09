@@ -1,9 +1,8 @@
-"""图片输入的端点边界（阶段 59）。
+"""Image-input endpoint boundaries; every item in the failure list has a case.
 
-隔离测试先列失败清单（§6），每条都有用例：
-  ① 客户端声明的类型是假的（送 BMP 说是 PNG）；② base64 坏了；③ 单图超限；
-  ④ 图片没进会话（消息形态变了）；⑤ 读侧把 base64 一起吐给浏览器（条目页 / SSE）；
-  ⑥ 字节端点拿不回原字节、或拿错下标；⑦ 纯文本消息的形态被改了（老会话兼容）。
+  ① a lying declared type (BMP sent as PNG); ② broken base64; ③ an image over the per-image cap;
+  ④ the image never reaches the session (message shape changed); ⑤ the read side leaks base64 to the browser (entry page / SSE);
+  ⑥ the byte endpoint returns the wrong bytes or the wrong index; ⑦ a text-only message's shape changes (old sessions).
 """
 
 from __future__ import annotations
@@ -27,7 +26,7 @@ def b64(data: bytes) -> str:
 
 
 def user_entry(page: dict) -> dict:
-    """条目页默认最新在前；这里要的是那条用户消息（带图的那条）。"""
+    """The entry page is newest-first; this picks the user message (the one carrying images)."""
     return next(
         entry
         for entry in page["entries"]
@@ -166,12 +165,12 @@ def test_broken_base64_is_rejected(bundle):
 
 def test_an_oversized_image_is_rejected_before_the_run_starts(bundle):
     client, services = bundle(chat=ScriptedChat(make_turn("好")))
-    big = PNG + b"\x00" * (MAX_IMAGE_BYTES - len(PNG) + 1)  # 刚好超一点：要拿到那条中文原因
+    big = PNG + b"\x00" * (MAX_IMAGE_BYTES - len(PNG) + 1)  # just over the cap, to hit this exact error
     _, started = run_with_images(client, None, [{"name": "huge.png", "data": b64(big)}])
 
     assert started.status_code == 400
     assert started.json()["error"]["code"] == "invalid_attachment"
-    assert services.runs.active_runs() == []  # 被拒的输入不该留下一个 run
+    assert services.runs.active_runs() == []  # a refused input must not leave a run behind
 
 
 def test_too_many_images_are_rejected(bundle):
@@ -184,16 +183,13 @@ def test_too_many_images_are_rejected(bundle):
 
 
 def test_a_stored_part_round_trips_through_the_vocabulary():
-    """用例自己造块时走同一条词汇：ref 的下标与字节端点定位的是同一块。"""
+    """A hand-built part uses the same vocabulary, so the ref index and the byte endpoint resolve to the same part."""
     part = image_part(PNG, name="shot.png")
     assert part["bytes"] == len(PNG)
     assert part["mime"] == "image/png"
 
 def test_a_model_declaring_no_vision_is_refused_before_the_run(bundle, tmp_path):
-    """模型声明 capabilities.vision=false 时，带图的消息在起运行前就拒（阶段 55 的声明，阶段 59 接上）。
-
-    发出去只会换来一个端点错误，会话里白留一条用户消息加一条失败记账。
-    """
+    """With capabilities.vision=false, image messages are refused before the run starts; sending would only earn an endpoint error and a stray user entry plus a failed record."""
     import json
     import os
     from pathlib import Path
@@ -212,7 +208,7 @@ def test_a_model_declaring_no_vision_is_refused_before_the_run(bundle, tmp_path)
     assert "vision" in started.json()["error"]["message"]
     assert services.runs.active_runs() == []
 
-    # 纯文本不受这条声明影响（约束只落在带图的消息上）
+    # Plain text is unaffected: the restriction only applies to messages carrying images
     session_id = create_session(client).json()["id"]
     plain = client.post(f"/api/sessions/{session_id}/runs", json={"prompt": "就一句话"})
     assert plain.status_code == 201, plain.text

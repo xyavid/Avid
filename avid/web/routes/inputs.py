@@ -1,8 +1,7 @@
-"""补充输入的端点（阶段 60）：投一条、看队列、撤销一条。
+"""Supplemental-input endpoints: submit one, list the queue, drop one.
 
-语义只有一句话：**最早可能被处理的时刻**。``mode=now`` 落在活动 run 的下一个 step，
-空闲就直接起一个 run；``mode=after`` 等下一 turn。队列本身是进程内存态（见
-`avid/services/inbox.py` 的三条不变量），落哪一条、什么时候落，由 run 线程说了算。
+The only semantics is the earliest moment an input may be handled; the queue itself is process
+memory owned by the run thread (invariants in `avid/services/inbox.py`).
 """
 
 from __future__ import annotations
@@ -21,7 +20,7 @@ router = APIRouter()
     status_code=status.HTTP_201_CREATED,
 )
 def submit_input(request: Request, session_id: str, body: InputIn) -> dict:
-    """收下一条输入；`kind=run` 表示这就起了一个 run（去接它的流），`input` 表示留在队里。"""
+    """Accept one input; ``kind`` reports whether a run started (``run``) or it is queued."""
     return current_services(request).runs.submit_input(
         session_id,
         mode=body.mode,
@@ -38,13 +37,13 @@ def submit_input(request: Request, session_id: str, body: InputIn) -> dict:
 
 @router.get("/sessions/{session_id}/inputs", response_model=InputListOut)
 def list_inputs(request: Request, session_id: str) -> dict:
-    """这个会话还没被采纳的输入（刷新后据此把「排队中」的段落画回来）。"""
+    """Inputs of this session not yet taken up; a refresh redraws queued segments from them."""
     return {"inputs": current_services(request).runs.list_inputs(session_id)}
 
 
 @router.delete("/sessions/{session_id}/inputs/{input_id}", status_code=status.HTTP_204_NO_CONTENT)
 def drop_input(request: Request, session_id: str, input_id: str) -> None:
-    """撤销一条**尚未领取**的输入；已经领走的那条是会话里的事实，撤不动。"""
+    """Drop an input not yet claimed; a claimed one is a fact of the session and stays."""
     current_services(request).runs.drop_input(session_id, input_id)
 
 

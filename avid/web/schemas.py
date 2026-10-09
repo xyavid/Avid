@@ -429,10 +429,8 @@ class CreateBranchIn(BaseModel):
 
 
 class ImageIn(BaseModel):
-    """一张待发送的图片：原始 base64 与可选文件名。
-
-    类型与上限由内核的 attachments 判（按字节判型、不信这里的声明）；这里的 max_length
-    只做粗筛，免得一个离谱的请求体先在 pydantic 里吃掉内存。
+    """One outbound image — raw base64 plus an optional name — screened by max_length here only;
+    attachments decides type and limits from the bytes, not from the declarations.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -447,10 +445,9 @@ class StartRunIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     prompt: str = Field(default="", max_length=MAX_PROMPT_CHARS)
-    # 随消息一起发的图片（阶段 59）：渲染进同一条用户消息，文本在前、图片按数组顺序在后。
+    # Images sent with the message: same user message, text first, then images in array order.
     images: list[ImageIn] = Field(default_factory=list)
-    # 领取一条排队输入去起 run（阶段 60）：内容与开关取自那条输入，客户端的 prompt/images
-    # 在这条路径上被忽略（队列项自带投递时的意图，不重发、也就不会漂移）。
+    # Claim a queued input: its content and switches win, so prompt/images here are ignored.
     from_input: str | None = Field(default=None, max_length=MAX_ID_CHARS)
     auto_approve: bool = False
     branch: str = Field(default="main", max_length=MAX_NAME_CHARS)
@@ -462,11 +459,9 @@ class StartRunIn(BaseModel):
 
 
 class InputIn(BaseModel):
-    """一条补充输入（阶段 60）。
-
-    ``mode`` 决定它最早什么时候生效：``now`` = 最早可能被处理的时刻（活动 run 的下一个 step，
-    空闲就直接起一个 run），``after`` = 等下一 turn。``client_id`` 是幂等键：前端因超时重发时
-    不该产生第二条。
+    """One supplemental input: ``client_id`` is the idempotency key for client retries, and
+    ``mode`` is the earliest moment it may take effect — ``now`` (next step of the active run,
+    or a run when idle) or ``after`` (the next turn).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -483,7 +478,7 @@ class InputIn(BaseModel):
 
 
 class InputOut(BaseModel):
-    """一条待办输入：正文预览 + 图片张数（字节走会话侧的读端点）。"""
+    """One pending input: text preview and image count; bytes come from the read endpoint."""
 
     input_id: str
     mode: str
@@ -499,7 +494,7 @@ class InputListOut(BaseModel):
 
 
 class InputAcceptedOut(BaseModel):
-    """投递结果：``kind=run`` 表示这就起了一个 run（去接它的流），``input`` 表示留在队里。"""
+    """Result: ``kind=run`` means a run just started (stream it); ``input`` stays queued."""
 
     kind: str
     input_id: str | None = None

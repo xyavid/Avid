@@ -1,7 +1,6 @@
-"""Inbox 的用例：两种 mode、原子领取、降级、撤销、幂等。
+"""SessionInbox tests: two modes, atomic claims, downgrade, removal, and idempotency.
 
-先于实现编写（§6）。这一层是纯内存表，所以用例盯的是**边界**而不是流程：
-谁能在什么时候拿走哪一条、拿不走时它去哪、以及「被接受的输入永不消失」这条不变量。
+The invariant under test is that an accepted input never disappears: who may take which entry, when, and where an unclaimed one goes.
 """
 
 from __future__ import annotations
@@ -12,7 +11,7 @@ from avid.services.inbox import SessionInbox
 
 
 def add(inbox, content="看一眼", mode="after", client_id=None, **params):
-    """投一条输入；params 是它起 run 时要用的开关。"""
+    """Submit one input; params are the switches to use when it starts a run."""
     return inbox.add(mode=mode, content=content, params=params, client_id=client_id)
 
 
@@ -41,7 +40,7 @@ def test_steers_are_taken_in_submission_order():
     taken = inbox.take_steers()
 
     assert [entry.input_id for entry in taken] == [first.input_id, second.input_id]
-    # 领取即离队：队里只剩那条排队的（已领走的东西留在会话条目里，不留在队里）
+    # Claiming removes from the queue: only the parked item stays (claimed ones live on as session entries)
     assert [entry.content for entry in inbox.pending()] == ["排队的"]
 
 
@@ -60,13 +59,13 @@ def test_a_queued_item_is_claimed_atomically():
     queued = add(inbox, "下一件事", mode="after")
 
     assert inbox.take_for_run(queued.input_id) is not None
-    # 第二个标签页同抢：拿不到，也不会拿到半条
+    # A second tab racing for it gets nothing, not a half-claimed entry
     assert inbox.take_for_run(queued.input_id) is None
     assert inbox.pending() == []
 
 
 def test_take_for_run_also_works_for_a_steer_that_found_no_run():
-    """空闲时投的 now：客户端拿它去起一个 run（语义是「最早可能被处理的时刻」）。"""
+    """A now posted while idle is claimed by the client to start a run."""
     inbox = SessionInbox("s-1")
     now = add(inbox, "现在就做", mode="now")
 
@@ -74,7 +73,7 @@ def test_take_for_run_also_works_for_a_steer_that_found_no_run():
 
 
 def test_downgrade_turns_unclaimed_steers_into_the_next_turn():
-    """run 结束前没赶上的插入不报「未送达」，而是降级为排队项——不变量是不消失。"""
+    """A steer that missed the run is downgraded to a queued item, not reported undelivered — accepted input never disappears."""
     inbox = SessionInbox("s-1")
     kept = add(inbox, "本来就排队", mode="after")
     delivered = add(inbox, "已经领走", mode="now")
@@ -86,10 +85,10 @@ def test_downgrade_turns_unclaimed_steers_into_the_next_turn():
     assert [entry.input_id for entry in downgraded] == [missed.input_id]
     assert downgraded[0].mode == "after"
     assert downgraded[0].missed is True
-    # 已在队里的排队项保持原样（不重复标记）
+    # Already-queued items are left alone (not flagged twice)
     kept_entry = next(entry for entry in inbox.pending() if entry.input_id == kept.input_id)
     assert kept_entry.missed is False
-    # 已领走的那条不在降级名单里，也不在队里
+    # The claimed entry is neither downgraded nor back in the queue
     assert all(entry.input_id != delivered.input_id for entry in inbox.pending())
 
 
@@ -100,12 +99,12 @@ def test_removing_only_touches_an_unclaimed_item():
     inbox.take_steers()
 
     assert inbox.remove(queued.input_id) is True
-    assert inbox.remove(queued.input_id) is False  # 第二次没有可撤销的东西
-    assert inbox.remove(taken.input_id) is False  # 已经领取的不归撤销管
+    assert inbox.remove(queued.input_id) is False  # nothing left to remove on the second call
+    assert inbox.remove(taken.input_id) is False  # claimed items are out of removal's reach
 
 
 def test_the_same_client_id_is_not_accepted_twice():
-    """前端因超时重发同一条：返回同一条，不产生第二条。"""
+    """A client resending the same id after a timeout gets the same entry, not a second one."""
     inbox = SessionInbox("s-1")
     first = add(inbox, "发一次", client_id="c-9")
     again = add(inbox, "发一次", client_id="c-9")
@@ -151,7 +150,7 @@ def test_only_the_two_documented_modes_are_accepted(mode):
 
 
 def test_a_failed_claim_can_be_put_back_at_the_head():
-    """起 run 失败时把刚领走的那条放回队首：输入不消失，顺序也不乱。"""
+    """A failed run start puts the claimed item back at the head: nothing is lost and the order holds."""
     inbox = SessionInbox("s-1")
     first = add(inbox, "先来", mode="after")
     second = add(inbox, "后来", mode="after")
@@ -161,6 +160,6 @@ def test_a_failed_claim_can_be_put_back_at_the_head():
     inbox.restore(claimed)
 
     assert [entry.input_id for entry in inbox.pending()] == [second.input_id, first.input_id]
-    # 已经在队里的不会被插出重复
+    # Restoring an item already queued does not duplicate it
     inbox.restore(claimed)
     assert len(inbox.pending()) == 2

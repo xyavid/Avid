@@ -1,14 +1,6 @@
-"""附件词汇（avid/attachments.py）的单元测试：先于实现编写（§6 约定）。
+"""Unit tests for the attachment vocabulary (avid/attachments.py): sniffing by magic bytes, the three caps, one-line rendering, fixed cost, and the read-side wire ref.
 
-这个模块是「图片附件」的唯一规则处，所以用例按规则分类，而不是按函数：
-
-* 判型：只看字节（魔数），不看客户端声明；
-* 上限：单图字节 / 单条张数 / 单条合计，三档都在入口挡住；
-* 渲染：任何路径把内容变成文本，图片只留一行标记，base64 永不出现；
-* 成本：按固定字符成本计入（base64 长度不是 token 量）；
-* 线格式：读侧 ref 去掉字节但保留显示事实，纯文本消息原样返回。
-
-图片字节用真的 PNG/JPEG/WebP/GIF 头拼出来（不引 Pillow，也不依赖外部文件）。
+Image bytes are assembled from real PNG/JPEG/WebP/GIF headers (no Pillow, no fixture files).
 """
 
 from __future__ import annotations
@@ -20,7 +12,7 @@ import pytest
 from avid import attachments
 from avid.attachments import AttachmentError
 
-# 四种允许格式的最小可判头部（只看魔数，后面补零即可）。
+# Minimal recognizable headers for the four allowed formats (magic bytes, then zero padding).
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
 JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 32
 GIF = b"GIF89a" + b"\x00" * 32
@@ -35,7 +27,7 @@ def wire_image(data: bytes = PNG, name: str | None = "shot.png") -> dict:
     return {"name": name, "data": b64(data)}
 
 
-# ---- 判型 ----
+# ---- sniffing ----
 
 
 def test_sniff_mime_recognizes_the_four_allowed_types():
@@ -48,11 +40,11 @@ def test_sniff_mime_recognizes_the_four_allowed_types():
 def test_sniff_mime_rejects_unknown_bytes():
     assert attachments.sniff_mime(b"not an image at all") is None
     assert attachments.sniff_mime(b"") is None
-    # RIFF 家族的近亲（WebP 之外）不能混进来
+    # RIFF-family siblings other than WebP must not slip through
     assert attachments.sniff_mime(b"RIFF" + (40).to_bytes(4, "little") + b"WAVE") is None
 
 
-# ---- 构造 ----
+# ---- construction ----
 
 
 def test_image_part_carries_mime_size_and_base64():
@@ -85,7 +77,7 @@ def test_image_part_rejects_a_foreign_type():
         attachments.image_part(b"BM" + b"\x00" * 32, name="bmp.bmp")
 
 
-# ---- 组装一条用户内容 ----
+# ---- assembling one user message ----
 
 
 def test_build_user_content_keeps_plain_text_as_a_string():
@@ -113,7 +105,7 @@ def test_build_user_content_rejects_more_than_the_image_cap():
 
 
 def test_build_user_content_rejects_a_total_over_the_cap():
-    # 每张都在单图上限内，但合起来超过单条上限
+    # Each image is under the per-image cap, but the total exceeds the message cap
     each = attachments.MAX_IMAGE_BYTES
     count = attachments.MAX_TOTAL_BYTES // each + 1
     payload = PNG + b"\x00" * (each - len(PNG))
@@ -132,7 +124,7 @@ def test_build_user_content_rejects_an_empty_payload():
         attachments.build_user_content("空的", [{"name": "x.png", "data": ""}])
 
 
-# ---- 落盘前的形状校验 ----
+# ---- shape validation before the log ----
 
 
 def test_check_content_accepts_strings_parts_and_none():
@@ -166,7 +158,7 @@ def test_check_content_rejects_a_text_part_without_text():
     assert message is not None
 
 
-# ---- 渲染成文本（摘要、索引、hook 共用） ----
+# ---- rendering to text (summary, index, hooks) ----
 
 
 def test_render_content_text_passes_plain_strings_through():
@@ -179,11 +171,11 @@ def test_render_content_text_marks_images_without_base64():
     assert "看这个" in text
     assert "shot.png" in text and "image/png" in text
     assert part["data"] not in text
-    assert len(text) < 200  # 标记是一行，不是把字节摊开
+    assert len(text) < 200  # the marker is one line, not the bytes spread out
 
 
 def test_render_content_text_accepts_foreign_text_parts():
-    # 有些 provider 的响应块是 output_text 之类；取 text 字段，别渲染成标记
+    # Some providers return output_text-style blocks; take the text field instead of rendering a marker
     assert attachments.render_content_text([{"type": "output_text", "text": "模型说的话"}]) == "模型说的话"
 
 
@@ -191,7 +183,7 @@ def test_render_content_text_ignores_unknown_parts_silently():
     assert attachments.render_content_text([{"type": "weird", "payload": 1}]) == ""
 
 
-# ---- 成本口径 ----
+# ---- cost ----
 
 
 def test_content_chars_counts_text_literally():
@@ -203,10 +195,10 @@ def test_content_chars_counts_an_image_at_the_fixed_cost():
     part = attachments.image_part(PNG + b"\x00" * 100_000)
     cost = attachments.content_chars([{"type": "text", "text": "短"}, part])
     assert cost == 1 + attachments.IMAGE_CHAR_COST
-    assert cost < part["bytes"]  # base64 长度绝不出现在成本里
+    assert cost < part["bytes"]  # base64 length never appears in the cost
 
 
-# ---- 线格式：读侧 ref ----
+# ---- wire: read-side ref ----
 
 
 def test_ref_of_drops_bytes_but_keeps_display_facts():
@@ -241,7 +233,7 @@ def test_strip_message_bytes_replaces_image_parts_with_refs():
     assert wire["content"][1]["index"] == 1
     assert wire["content"][2]["index"] == 2
     assert "data" not in wire["content"][1]
-    # 原消息不变：ref 是给线的投影，不是就地改写
+    # The source message is untouched: a ref is a projection for the wire, not an in-place rewrite
     assert "data" in message["content"][1]
 
 

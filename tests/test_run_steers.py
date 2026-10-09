@@ -1,10 +1,6 @@
-"""补充输入的交付点（阶段 60）：只在轮次边界领取，落成一条普通用户消息。
+"""Where steers are delivered: only at step boundaries, landing as an ordinary user message.
 
-先于实现编写（§6）。盯四件事：
-① 只在 step 边界交付（工具结果之后、下一个模型请求之前，结构安全）；
-② 「模型说完了」那一刻也先问一句「还有补充吗」——有就继续跑；
-③ 没有通道时行为与从前逐字一致；
-④ 取消优先于补充（检查点先跑，被取消的 run 不会先把新消息吃进来）。
+Pins four contracts: delivery only between tool results and the next model request; a pending steer keeps a finishing run alive; runs without a channel behave exactly as before; and cancellation wins over a pending steer.
 """
 
 from __future__ import annotations
@@ -24,7 +20,7 @@ STEER = {"role": "user", "content": "先别改代码，解释根因"}
 
 
 def drive(*turns, registry=None, steers=None, messages=None):
-    """跑一份脚本；steers 是「还没被领走的补充」批次列表，每次领取给一批。"""
+    """Run a script; steers is the list of pending batches, one batch handed out per take."""
     base = messages if messages is not None else [dict(USER)]
     messages_run = [dict(m) for m in base]
     emitted: list[dict] = []
@@ -41,27 +37,27 @@ def drive(*turns, registry=None, steers=None, messages=None):
 
 
 def test_a_steer_is_delivered_at_the_next_step_boundary():
-    """工具批跑着的时候投的补充：等这批落地，在下一个模型请求之前进去。"""
+    """A steer posted while a tool batch runs lands after the results and before the next model request."""
     outcome, messages, emitted, requests = drive(
         make_turn("", [tool_call("read_file")]),
         make_turn("好"),
         registry={"read_file": lambda arguments, **kwargs: "内容"},
-        steers=[[], [dict(STEER)]],  # 第一轮边界还没有；读完文件后的边界才有
+        steers=[[], [dict(STEER)]],  # nothing at the first boundary yet; it arrives only after the file read
     )
 
     assert outcome.text == "好"
-    # 结构安全：工具结果先落地，补充接在它后面，再是下一轮的模型请求
+    # Structurally safe: tool results land first, the steer follows, then the next model request
     assert [message["role"] for message in messages] == ["user", "assistant", "tool", "user", "assistant"]
     assert messages[3] == STEER
-    # 第二个请求里能看到它（真正进了模型上下文；末尾那条是每轮重建的 tail 便签）
+    # Visible in the second request (really in the model context; the last message is the rebuilt tail note)
     assert requests[1]["messages"][3] == STEER
     assert requests[1]["messages"][-1]["content"].startswith("[上下文]")
-    # 落库出口（on_message）也看到它：这就是它变成会话条目的那一步
+    # The on_message sink sees it too: that is how it becomes a session entry
     assert STEER in emitted
 
 
 def test_a_steer_already_waiting_is_delivered_before_the_first_call():
-    """起 run 与投递撞在一起（客户端以为空闲）：它进第一批，模型第一次请求就看得到。"""
+    """A steer racing with run start enters the first batch and is visible to the first model request."""
     _outcome, messages, _emitted, requests = drive(
         make_turn("好"),
         steers=[[dict(STEER)]],
@@ -73,7 +69,7 @@ def test_a_steer_already_waiting_is_delivered_before_the_first_call():
 
 
 def test_a_steer_keeps_a_finishing_run_alive():
-    """模型说「我说完了」，但边界上还有补充：先别收尾。"""
+    """A steer waiting at the boundary keeps a finishing run alive instead of closing it."""
     outcome, messages, _emitted, requests = drive(
         make_turn("第一版答复"),
         make_turn("按补充改过"),
@@ -113,7 +109,7 @@ def test_without_a_channel_nothing_changes():
 
 
 def test_cancellation_wins_over_a_pending_steer():
-    """取消是另外一条通道：检查点先跑，被取消的 run 不会先把补充吃进来。"""
+    """The cancellation checkpoint runs first, so a cancelled run never consumes the pending steer."""
     delivered: list[dict] = []
 
     def take() -> list[dict]:

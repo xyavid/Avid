@@ -42,7 +42,7 @@ def build_payload(config: Config, prompt: str) -> dict[str, Any]:
 
 
 def _wire_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """分块内容翻成 /chat/completions 的块数组；纯文本消息原样透传（绝大多数请求走这条）。"""
+    """Translate content parts into /chat/completions blocks; plain-text messages pass through."""
     return [_wire_message(message) for message in messages]
 
 
@@ -55,7 +55,7 @@ def _wire_message(message: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(part, Mapping):
             continue
         if part.get("type") == "image":
-            # 内联 data URL：这里没有可引用的稳定 URL，附件字节就在会话条目里。
+            # Inline data URL: no stable URL to reference, and the bytes sit in the entry.
             blocks.append({"type": "image_url", "image_url": {"url": image_data_url(part)}})
         elif isinstance(part.get("text"), str):
             blocks.append({"type": "text", "text": part["text"]})

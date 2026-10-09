@@ -105,16 +105,13 @@ def content_text(raw: Any) -> str:
 
 
 def content_parts(raw: Any) -> list[Any] | None:
-    """分块内容（阶段 59）：列表即内容数组，其余（str / None）返回 None 走纯文本路径。
-
-    存储形态是中立的（见 avid/attachments.py），翻成各家 wire 形状的事在三个适配器里。
-    元素按 Any 收：数组里出现什么由外部输入决定，逐块判型是适配器自己的事。
-    """
+    """Content array when raw is a list, otherwise None; part shapes are neutral and each adapter
+    translates them to its wire form."""
     return raw if isinstance(raw, list) else None
 
 
 def image_data_url(part: Mapping[str, Any]) -> str:
-    """图片块 → data URL（OpenAI 与 Responses 两家都用它）。"""
+    """Image part to a data URL; the openai and responses adapters share this."""
     return f"data:{part.get('mime')};base64,{part.get('data')}"
 
 

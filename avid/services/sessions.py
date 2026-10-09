@@ -351,8 +351,7 @@ class SessionService:
 
     @staticmethod
     def _entry_to_dict(entry: Any) -> dict[str, Any]:
-        # 线格式里图片块换成 ref（阶段 59）：字节走 attachment_bytes 那个端点，
-        # 条目页与 SSE 因此都不背 base64。
+        # Image parts become refs on the wire: bytes come from the attachment_bytes endpoint.
         return {
             "entry_id": entry.id,
             "parent_id": entry.parent_id,
@@ -365,10 +364,8 @@ class SessionService:
         }
 
     def attachment_bytes(self, session_id: str, entry_id: str, index: int) -> tuple[bytes, str]:
-        """一个图片块的原始字节与类型；定位靠 (条目, 块下标)。
-
-        字节的唯一出口，也是它唯一的来源——条目本身。不做内容寻址库：那会多出一份
-        可以丢的权威（GC、悬挂引用、迁移都要另写）。
+        """Raw bytes and mime of one image part, addressed by (entry, part index); the entry is
+        the only source and this the only exit, so no content-addressed store is kept.
         """
         with self._session(session_id) as session:
             entry = session.get_entry(entry_id)

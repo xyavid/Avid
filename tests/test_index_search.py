@@ -356,7 +356,7 @@ def test_a_compaction_summary_is_searchable(indexer, store):
 
 
 def test_an_image_message_is_searchable_by_its_marker_but_not_its_bytes(indexer, store):
-    """图片进索引的是标记（文件名 + 类型 + 大小），不是 base64：搜得到「哪个会话有截图」，库也不会被撑爆。"""
+    """Only the marker (name + mime + size) is indexed, not base64: screenshots are findable without bloating the index."""
     from avid.attachments import image_part
 
     part = image_part(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64, name="设计稿.png")

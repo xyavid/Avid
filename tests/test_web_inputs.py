@@ -1,10 +1,9 @@
-"""补充输入的端点（阶段 60）：投一条 / 看队列 / 撤销 / 领取起 run。
+"""Endpoints for follow-up input: submit, list, drop, and claim-to-run; every item in the failure list has a case.
 
-隔离测试先列失败清单（§6），每条都有用例：
-  ① 空闲投 now 该直接起 run（不是排队）；② 忙时投 now 该在下一个 step 交付；
-  ③ run 结束前没赶上的 now 该降级为排队（不能消失）；④ 重复 client_id 只收一条；
-  ⑤ 领取是原子的（第二次领取报错，不是静默无事）；⑥ 空输入拒绝；
-  ⑦ 撤销只动未领取的；⑧ 排队项自带开关（领取时不必重发）。
+  ① now while idle starts a run right away (not queued); ② now while busy is delivered at the next step;
+  ③ a now that missed the run is downgraded to queued (never disappears); ④ a duplicate client_id is accepted once;
+  ⑤ claiming is atomic (a second claim errors instead of silently doing nothing); ⑥ empty input is refused;
+  ⑦ removal touches only unclaimed items; ⑧ a queued item carries its own switches (no re-send needed).
 """
 
 from __future__ import annotations
@@ -50,7 +49,7 @@ def inputs_of(client, session_id) -> list[dict]:
     return client.get(f"/api/sessions/{session_id}/inputs").json()["inputs"]
 
 
-# ---------------- 投递与两种 mode ----------------
+# ---------------- submission and the two modes ----------------
 
 
 def test_after_parks_the_input_for_the_next_turn(bundle):
@@ -78,7 +77,7 @@ def test_now_while_idle_starts_a_run_right_away(bundle):
     assert body["kind"] == "run" and body["run_id"] is not None
     run_id = body["run_id"]
     assert wait_for(lambda: client.get(f"/api/runs/{run_id}").json()["status"] == "finished")
-    # 它不是一个排队项：内容已经作为这条 run 的输入落进了会话
+    # Not a queued item: the content entered the session as this run's input
     assert inputs_of(client, session_id) == []
     entries = client.get(f"/api/sessions/{session_id}/entries").json()["entries"]
     assert any(
@@ -90,7 +89,7 @@ def test_now_while_idle_starts_a_run_right_away(bundle):
 
 
 def test_now_while_busy_is_delivered_at_the_next_step(bundle):
-    """工具批跑着的时候投的补充：不该等这一轮结束，而是下一个模型请求之前进去。"""
+    """A steer sent while a tool batch runs is delivered before the next model request, not after the turn."""
     def slow_bash(arguments, **kwargs):
         time.sleep(0.4)
         return "命令跑完了"
@@ -121,7 +120,7 @@ def test_now_while_busy_is_delivered_at_the_next_step(bundle):
         "mode": "now",
     }
     assert wait_for(lambda: client.get(f"/api/runs/{run_id}").json()["status"] == "finished", 10)
-    # 第二个模型请求里看得到它，而且是在工具结果之后
+    # Visible in the second model request, after the tool results
     second = chat.requests[1]["messages"]
     texts = [message.get("content") for message in second if message.get("role") == "user"]
     assert "先别改代码" in texts
@@ -129,10 +128,7 @@ def test_now_while_busy_is_delivered_at_the_next_step(bundle):
 
 
 def test_a_steer_that_missed_the_run_becomes_queued(bundle):
-    """没赶上的 now 降级为排队项并标 missed——被接受的输入不消失。
-
-    用取消来造这个窗口：取消检查点在轮次开头（领取之前），所以这条补充一定没被领走。
-    """
+    """A now that missed the run is queued and flagged missed (accepted input never disappears); cancellation opens the window because the checkpoint runs before steering is claimed."""
     def slow_bash(arguments, **kwargs):
         time.sleep(0.4)
         return "命令跑完了"
@@ -161,7 +157,7 @@ def test_a_steer_that_missed_the_run_becomes_queued(bundle):
     assert queued[0]["mode"] == "after" and queued[0]["missed"] is True
 
 
-# ---------------- 幂等、撤销、领取 ----------------
+# ---------------- idempotency, removal, claiming ----------------
 
 
 def test_the_same_client_id_is_not_accepted_twice(bundle):
@@ -196,7 +192,7 @@ def test_a_queued_input_is_claimed_once(bundle):
 
 
 def test_a_queued_input_carries_its_own_switches(bundle):
-    """排队项自带投递时的意图：领取时不必重发，也就不会漂移。"""
+    """A queued item carries the switches from submission, so claiming never re-sends or drifts."""
     client, _ = bundle(chat=ScriptedChat(make_turn("好")))
     session_id = create_session(client).json()["id"]
     item = submit(
@@ -219,7 +215,7 @@ def test_dropping_a_queued_input(bundle):
 
     assert client.delete(f"/api/sessions/{session_id}/inputs/{item['input_id']}").status_code == 204
     assert inputs_of(client, session_id) == []
-    # 再撤一次：它已经不在了（不是静默成功）
+    # Dropping again fails because it is gone (not a silent success)
     assert client.delete(f"/api/sessions/{session_id}/inputs/{item['input_id']}").status_code == 400
 
 
@@ -239,12 +235,12 @@ def test_an_unknown_mode_is_rejected(bundle):
 
     response = submit(client, session_id, mode="someday", prompt="以后")
 
-    assert response.status_code == 422  # DTO 的 Literal 先拦
+    assert response.status_code == 422  # the DTO Literal rejects it first
     assert inputs_of(client, session_id) == []
 
 
 def test_inputs_carry_images_like_any_other_message(bundle):
-    """补充输入与首条消息共用同一条内容链路（阶段 59 的 parts 在这里同样成立）。"""
+    """Follow-up input shares the first message's content path, so image parts work here too."""
     import base64
 
     client, _ = bundle(chat=ScriptedChat(make_turn("看到了")))
@@ -266,7 +262,7 @@ def test_inputs_carry_images_like_any_other_message(bundle):
 
 
 def test_an_unknown_session_is_not_an_empty_queue(bundle):
-    """打错的 id 不该看起来「队列是空的」。"""
+    """A mistyped session id must not look like an empty queue."""
     client, _ = bundle(chat=ScriptedChat(make_turn("好")))
 
     assert client.get("/api/sessions/nope/inputs").status_code == 404

@@ -50,9 +50,9 @@ export type TimelineProps = {
    * 它可能不在当前这一页里——那种情况下由装配层改成从那条开始取页，所以这里只管画。
    */
   focusEntry?: string | null
-  /** 会话 id：落库图片的地址由它拼（阶段 59）；null = 不画落库图。 */
+  /** Session id used to compose stored-image URLs; null = stored images are not drawn. */
   sessionId?: string | null
-  /** 撤销一条待办输入（阶段 60）；缺省则不画撤销钮。 */
+  /** Drop a pending input; omit to hide the drop button. */
   onDropInput?: (inputId: string) => void
 }
 
@@ -112,24 +112,23 @@ type Ctx = {
   head: { pending: boolean }
   /** 整轮的动作面（复制 / 分支），按段落在组内的下标索引进来的。 */
   actions: Map<number, TurnAction>
-  /** 会话 id：落库图片的地址由它 + (条目, 块下标) 拼（阶段 59）；null = 还没选定会话。 */
+  /** Session id for composing stored-image URLs; null = no session selected yet. */
   sessionId: string | null
-  /** 撤销一条还没被领取的待办输入（阶段 60）；缺省则不画撤销钮。 */
+  /** Drop an unclaimed pending input; omit to hide the drop button. */
   onDropInput?: (inputId: string) => void
 }
 
-/** 待办输入的一句话状态：收下 ≠ 已进模型上下文。 */
 function pendingLabel(pending: TimelinePending): string {
   if (pending.missed) return '没赶上，已排队'
   return pending.mode === 'now' ? '插入中 · 下一个 step' : '排队中 · 下一轮'
 }
 
-/** 段落里的图片 → 气泡要的 (src, 名字)：本地草稿用 object URL，落库条目拼读侧端点。 */
+/** Item images → bubble (src, name): object URLs for drafts, the read endpoint for stored ones. */
 function bubbleImages(images: TimelineImage[] | undefined, sessionId: string | null): UserBubbleImage[] {
   if (!images || images.length === 0) return []
   return images.flatMap((image) => {
     if (image.source === 'local') return [{ src: image.url, name: image.name }]
-    if (sessionId === null) return [] // 没有会话就没有可读地址：宁可不画，也不画破图
+    if (sessionId === null) return [] // no session, no readable URL: skip rather than draw broken
     return [{ src: attachmentUrl(sessionId, image.entryId, image.index), name: image.name }]
   })
 }

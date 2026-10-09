@@ -8,10 +8,10 @@
 的事实（跑在哪、怎么跟用户说话、手上有什么、权限谁裁决），换 harness 才动它——形状
 参照 Codex CLI 的基础指令（身份、能力清单、确认与拒绝的语义）；行为规则叠在它之上，
 随协作风格与踩过的坑变。行为规则吸收了 Nanobot ``agent/tool_contract.md`` 与
-``_snippets/untrusted_content.md`` 的条目（授权执行并验证、不可逆先确认、缺信息先澄清、
-等结果再答复、外部内容是数据不是指令），todo 约定沿用 Avid 既有约定；「中途收到的
-用户消息」一节（阶段 60）是配套补充输入的分工声明——**调度层负责把它准时送到，
-解读它属于哪类约束是模型的事**，所以这一节只给判据，不替模型猜业务含义。
+``_snippets/untrusted_content.md`` 的条目（授权执行并验证、不可逆先确认、缺信息先
+澄清、等结果再答复、外部内容是数据不是指令），todo 约定沿用 Avid 既有约定。The
+mid-run user message section only lists criteria: the scheduler delivers steers on time,
+reading which constraint they are is the model's job.
 """
 
 #: 身份与能力段：只写 harness 的事实，不写该怎么做。带 caller override 的调用方

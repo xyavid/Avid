@@ -213,7 +213,7 @@ def test_rejects_chat_binding_without_tool_calling(byok_env):
 
 
 def test_vision_capability_rides_into_the_config(byok_env):
-    """图片能力与其它能力一样只是声明：解析时带进 Config，硬约束由调用方按消息判（阶段 59）。"""
+    """Vision is a declaration like any other capability: it rides into Config at resolve time, and the caller enforces it per message."""
     _, sec = byok_env
     sec.write_text(json.dumps({"blind": "sk"}), encoding="utf-8")
     raw = {

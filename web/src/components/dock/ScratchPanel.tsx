@@ -109,7 +109,7 @@ export function ScratchPanel({ sourceSessionId, workspaceRoot, model, effort }: 
     const text = draft.trim()
     if (text === '' || sessionId === null || model === null) return
     setDraft('')
-    // 临时对话的输入口只收文字（阶段 59）：图片入口在主对话的输入区，这里不铺第二套。
+    // The scratch composer takes text only: the image entry lives in the main composer.
     void live.send(text, false, model, 'main', effort)
   }, [draft, effort, live, model, sessionId])
 

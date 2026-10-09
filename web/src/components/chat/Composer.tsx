@@ -3,15 +3,14 @@
  * 裸 textarea（自动增高，封顶约 8 行后内滚）+ 左侧权限/模型 + 右侧发送/停止钮。
  * Enter 发送，Shift+Enter 换行；**IME 合成中的 Enter 不发送**（中文输入法
  * 选词回车是组词，不是提交——纸本中文界面的硬约束）。
- * 运行中（busy）输入保持可编辑：**Enter = 排队**（等下一 turn，默认动作——忙时输入多数是
- * 「不急的下一件事」），要改当前这件工作就点「插入」（进当前 run 的下一个 step）；停止钮
- * 一直在，取消是协作式的、终态以事件为准（阶段 60）。
+ * While busy the input stays editable: Enter = queue for the next turn, "insert" targets the
+ * current run's next step; stop is cooperative, the terminal state comes from events.
  * 权限胶囊反映这次运行是否完全访问（默认 / 完全访问两态），发送时随
  * StartRunInput 提交（full 由 hook 附 full_access_ack）。
  *
- * 图片（阶段 59）：粘贴 / 拖拽 / 回形针三条入口都汇到 `addFiles`，草稿是 chip，
- * 发送时随文本一起出去。超限的图由 `prepareImage` 在本地缩小并在 chip 上标出来
- * （服务端只校验不重编码——内核运行期依赖只有 httpx）。只有图没有文字也能发。
+ * Images: paste / drop / paperclip funnel into `addFiles`; chips are the draft and go out with
+ * the text (images alone count). Over-limit images are downscaled by `prepareImage`; the server
+ * only validates.
  */
 
 import { useRef, useState } from 'react'
@@ -42,9 +41,9 @@ export type ComposerProps = {
   /** 运行中：发送禁用（钮变停止），输入仍可编辑。 */
   busy?: boolean
   onSend: (text: string, images: DraftImage[]) => void
-  /** 忙时排队（等下一 turn）；缺省则不画这个钮（老调用方保持原样）。 */
+  /** Queue for the next turn while busy; omit to hide the button. */
   onQueue?: (text: string, images: DraftImage[]) => void
-  /** 忙时插入（进当前 run 的下一个 step）；缺省则不画这个钮。 */
+  /** Insert into the current run's next step while busy; omit to hide the button. */
   onInsert?: (text: string, images: DraftImage[]) => void
   onStop: () => void
   /** 本次运行的模型（providerId/modelId）；null = 还没选——那时发不出去，也不替用户猜。 */
@@ -83,8 +82,7 @@ export function Composer({
   const areaRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   // 没选模型就不发车：显式带上模型，不由服务端的 chat 绑定替用户决定。
-  // 只有图没有文字也能发（那张图本身就是要说的话）；**忙不是禁止投递**——
-  // 忙时的两个动作（排队 / 插入）走的是另一条通道（阶段 60）。
+  // Images alone count; busy is not a block — queue/insert go through a separate path.
   const canSend =
     !disabled && (text.trim().length > 0 || images.length > 0) && model !== null
 
@@ -120,8 +118,7 @@ export function Composer({
 
   const submit = (action: 'send' | 'queue' | 'insert' = 'send') => {
     if (!canSend) return
-    // 忙时没有排队通道就什么都不做：起第二个 run 会被服务端拒（一个会话同时只有一个 run），
-    // 把它压在这里比发一个必然失败的请求诚实。
+    // No queue channel while busy: a second run would be rejected (one run per session).
     if (busy && action === 'send') return
     const text_ = text.trim()
     if (action === 'queue') onQueue?.(text_, images)
@@ -180,7 +177,7 @@ export function Composer({
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey && !composingRef.current) {
               e.preventDefault()
-              // 忙时 Enter 是排队（默认动作）；空闲时 Enter 就是发车。
+              // Enter queues while busy, sends when idle.
               submit(busy && onQueue ? 'queue' : 'send')
             }
           }}
@@ -263,7 +260,7 @@ export function Composer({
   )
 }
 
-/** 一张待发送的图：缩略图 + 文件名 + 大小；超限压过的照实标出来。 */
+/** A draft image chip: thumbnail, name and size; downscaled ones are marked. */
 function ImageChip({ image, onRemove }: { image: DraftImage; onRemove: () => void }) {
   return (
     <span
@@ -294,7 +291,7 @@ function IconButton({ onClick, label }: { onClick: () => void; label: string }) 
   )
 }
 
-/** 回形针：打开系统文件选择器（粘贴与拖拽是另外两条入口）。 */
+/** Paperclip: opens the file picker; paste and drop are the other two entry points. */
 function AttachButton({ disabled, onClick }: { disabled: boolean; onClick: () => void }) {
   return (
     <button

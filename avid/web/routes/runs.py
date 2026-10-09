@@ -18,7 +18,7 @@ router = APIRouter()
 def start_run(request: Request, session_id: str, body: StartRunIn) -> dict:
     """Starts a run on the chosen branch and returns before the work finishes.
 
-    `from_input` 领取一条排队输入：内容与开关取自那条输入，客户端的 prompt/images 被忽略。
+    With ``from_input`` the queued input's content and switches win; prompt/images are ignored.
     """
     services = current_services(request)
     if body.from_input is not None:

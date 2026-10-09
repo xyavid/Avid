@@ -413,20 +413,20 @@ export interface SearchResult {
   behind: number
 }
 
-/** 一条待办输入（阶段 60）：已经收下、还没进模型上下文的消息。 */
+/** A pending input: accepted, not yet in the model context. */
 export interface PendingInput {
   input_id: string
-  /** now = 最早可能被处理的时刻（活动 run 的下一个 step）；after = 等下一 turn。 */
+  /** now = next step of the active run; after = next turn. */
   mode: string
   text: string
   images: number
   client_id: string | null
   created_at: number
-  /** 从 now 降级来的（run 在它被领取前结束了）：界面照实说「没赶上」。 */
+  /** Downgraded from now because its run ended before claiming it. */
   missed: boolean
 }
 
-/** 投递结果：kind=run 表示这就起了一个 run（去接它的流），input 表示留在队里。 */
+/** Submit result: kind=run means a run started (attach to its stream), input means it stayed queued. */
 export interface InputAccepted {
   kind: string
   input_id: string | null

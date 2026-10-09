@@ -206,18 +206,18 @@ export function deleteWorkspace(id: string): Promise<void> {
   return request(`/api/workspaces/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
-/** 一条待发送的图片：原始 base64（不带 data: 前缀）与可选文件名。 */
+/** An image to send: raw base64 (no data: prefix) and an optional name. */
 export type ImageUpload = {
   name?: string | null
   data: string
 }
 
 export type InputRequest = {
-  /** now = 最早可能被处理的时刻（忙时插进当前 run 的下一个 step，空闲就直接起 run）。 */
+  /** now = next step of the active run, or a fresh run when idle; after = next turn. */
   mode: 'now' | 'after'
   prompt: string
   images?: ImageUpload[]
-  /** 幂等键：前端因超时重发同一条时不该产生第二条。 */
+  /** Idempotency key: a client retry must not create a duplicate input. */
   client_id?: string
   model?: string
   reasoning_effort?: string
@@ -227,7 +227,7 @@ export type InputRequest = {
 
 export type StartRunInput = {
   prompt?: string
-  /** 随这条消息发的图片；文本在前、图片按数组顺序在后（阶段 59）。 */
+  /** Images sent with this message: text blocks first, images in array order after. */
   images?: ImageUpload[]
   /** 这次运行接在哪条链尾上；缺省 = main。 */  branch?: string
   /** 本次运行的模型覆盖；缺省 = 按设置解析（.env + 界面覆盖层）。 */
@@ -236,11 +236,11 @@ export type StartRunInput = {
   reasoning_effort?: string
   /** `true` = 完全访问（跳过毁灭级确认、关沙箱）；唯一的授权凭据，没有模式字段。 */
   full_access_ack?: boolean
-  /** 领取一条排队输入去起 run：内容与开关取自那条输入，prompt/images 被忽略（阶段 60）。 */
+  /** Claim a queued input to start a run from: prompt/images are ignored, content comes from it. */
   from_input?: string
 }
 
-/** 一张落库图片的字节地址：读侧端点按 (会话, 条目, 块下标) 定位。 */
+/** Byte URL of a stored image: the read endpoint addresses it by (session, entry, block index). */
 export function attachmentUrl(sessionId: string, entryId: string, index: number): string {
   return `/api/sessions/${encodeURIComponent(sessionId)}/entries/${encodeURIComponent(entryId)}/attachments/${index}`
 }
@@ -254,7 +254,7 @@ export function startRun(sessionId: string, input: StartRunInput): Promise<RunCr
   })
 }
 
-/** 投一条补充输入（阶段 60）：响应告诉它落在哪一类——起了 run，还是留在队里。 */
+/** Submit a supplemental input; the response says whether it started a run or stayed queued. */
 export function submitInput(sessionId: string, input: InputRequest): Promise<InputAccepted> {
   return request(`/api/sessions/${encodeURIComponent(sessionId)}/inputs`, {
     method: 'POST',
@@ -263,14 +263,14 @@ export function submitInput(sessionId: string, input: InputRequest): Promise<Inp
   })
 }
 
-/** 这个会话还没被采纳的输入（刷新后据此把「排队中」的段落画回来）。 */
+/** Inputs of this session not yet taken into model context. */
 export function listInputs(sessionId: string): Promise<PendingInput[]> {
   return request<{ inputs: PendingInput[] }>(
     `/api/sessions/${encodeURIComponent(sessionId)}/inputs`,
   ).then((body) => body.inputs)
 }
 
-/** 撤销一条尚未领取的输入（204）。 */
+/** Drop an unclaimed input (204). */
 export function dropInput(sessionId: string, inputId: string): Promise<void> {
   return request(
     `/api/sessions/${encodeURIComponent(sessionId)}/inputs/${encodeURIComponent(inputId)}`,

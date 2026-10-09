@@ -263,7 +263,7 @@ export function ConversationPage() {
         setHistory(items)
         setEarlier({ hasMore: page.has_more, cursor: page.next_cursor })
         setError(null)  // 这一次读成功了：把上一次的错误屏收掉
-        // 待办输入（阶段 60）：队列在服务端，刷新后照旧看得见「排队中」。
+        // Pending inputs: the queue lives server-side, so queued items survive a reload.
         const queued = await listInputs(selectedId).catch(() => [])
         if (alive && queued.length > 0) {
           setHistory((cur) => mergePendingInputs(cur ?? items, queued))

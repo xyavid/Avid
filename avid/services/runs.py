@@ -100,7 +100,7 @@ _MESSAGE_EVENTS = {
 
 
 def _str_param(item: Any, name: str) -> str | None:
-    """排队项里的一项字符串开关；空串按没给处理（与 StartRunIn 的口径一致）。"""
+    """One string switch from a queued item; an empty string counts as absent, as in StartRunIn."""
     value = item.params.get(name)
     return value if isinstance(value, str) and value.strip() else None
 
@@ -211,8 +211,7 @@ class RunRegistry:
         self.max_events = max(1, max_events)
         self._runs: dict[str, RunRecord] = {}
         self._active: dict[str, str] = {}
-        # 会话级 Inbox（阶段 60）：已接收、还没被采纳的输入。run 结束不清空——排队项
-        # 本来就跨 turn；空队且没有活动 run 的会在 _sweep 里回收。
+        # Per-session Inbox: inputs accepted but not yet taken up; queued items span turns.
         self._inboxes: dict[str, SessionInbox] = {}
         self._lock = threading.RLock()
         self._sessions: dict[str, Any] = {}  # run_id -> session handle held during the run
@@ -227,10 +226,8 @@ class RunRegistry:
 
     @staticmethod
     def _ensure_vision(content: Any, model: str | None) -> None:
-        """目标模型声明了不支持图片（阶段 55 的能力声明，阶段 59 接上）：**起运行之前**就拒。
-
-        发出去只会换来一个端点错误，而会话里会白留一条用户消息加一条失败记账。
-        模型没配好时不动声色：那条路径本来就有明确的失败文案，不在这里变成 400。
+        """Reject before the run starts when the target model declares no image support;
+        unresolved config stays silent, since that path has its own error message.
         """
         if attachments.image_count(content) == 0:
             return
@@ -296,8 +293,7 @@ class RunRegistry:
             raise SessionNotFound(f"没有这个会话：{session_id}")
         workspace, metadata = found
 
-        # 图片在入口就收成内容块：形状与上限的唯一判据在 attachments，失败即 400（不进会话）。
-        # 调用方已经造好内容（排队项 / 输入通道）时不再重造。
+        # Image bytes become content blocks here; attachments alone judges the shapes and limits.
         if content is None:
             try:
                 content = attachments.build_user_content(prompt, images or [])
@@ -307,7 +303,7 @@ class RunRegistry:
 
         # 会话内命令（内核单点解析）：/<技能名> 把全文当作用户输入（正常运行），
         # /compact 与未知命令走 _run 的命令分支（不调模型，直接以文本收尾）。
-        # 带图的消息不是命令："/" 开头的文字配一张截图，用户的意图是那条消息本身。
+        # A message with images is never a command, even when it starts with "/".
         command: str | None = None
         if prompt.startswith("/") and not images:
             match = commands_module.match_command(
@@ -416,10 +412,10 @@ class RunRegistry:
         logger.info("请求取消 %s", run_id)
         return record
 
-    # ---- 输入通道（阶段 60）----
+    # ---- Input channel ----
 
     def inbox(self, session_id: str) -> SessionInbox:
-        """这个会话的待办输入表（没有就建一张）。"""
+        """The session's pending-input table, created on first use."""
         with self._lock:
             found = self._inboxes.get(session_id)
             if found is None:
@@ -428,13 +424,13 @@ class RunRegistry:
             return found
 
     def list_inputs(self, session_id: str) -> list[dict[str, Any]]:
-        # 没有这个会话就报 404，别给一个空队列：那会让打错的 id 看起来「队列是空的」。
+        # Unknown session is a 404, not an empty queue: a typo must not look like nothing queued.
         if self.workspaces.find_session(session_id) is None:
             raise SessionNotFound(f"没有这个会话：{session_id}")
         return [item.to_dict() for item in self.inbox(session_id).pending()]
 
     def drop_input(self, session_id: str, input_id: str) -> None:
-        """撤销一条尚未领取的输入。"""
+        """Drop an input that has not been taken up yet."""
         if not self.inbox(session_id).remove(input_id):
             raise InvalidRequest(
                 f"这条输入已经不在队里了：{input_id}（可能已被取走，或已被撤销）"
@@ -454,11 +450,10 @@ class RunRegistry:
         auto_approve: bool = False,
         client_id: str | None = None,
     ) -> dict[str, Any]:
-        """收一条输入：**最早可能被处理的时刻**是它唯一的语义，两种 mode 只是上限不同。
+        """Accept one input; ``kind`` says whether a run started (``run``) or it stays queued.
 
-        ``now`` 有活动 run 就在它的下一个 step 边界交付；空闲就直接起一个 run。
-        ``after`` 留到下一 turn，由客户端在终态之后领取。返回 ``kind`` 告诉客户端
-        它属于哪一类：``run`` = 这就起了一个 run（去接它的流），``input`` = 留在队里。
+        ``now`` delivers at the next step boundary of the active run, or starts a run when idle;
+        ``after`` waits for the next turn, claimed by the client after a terminal state.
         """
         if mode not in MODES:
             raise InvalidRequest(f"mode 只能是 {' / '.join(MODES)}，收到 {mode!r}")
@@ -481,8 +476,7 @@ class RunRegistry:
         }
         inbox = self.inbox(session_id)
         if mode == MODE_NOW and self.active_run_id(session_id) is None:
-            # 空闲：语义就是「现在就做」，直接起一个 run（客户端不用自己处理
-            # 「我以为是忙的、其实刚跑完」这个竞态）。输了竞态就退回队列。
+            # Idle means "do it now": start it now; losing the RunBusy race falls back to the queue.
             try:
                 record = self.start(
                     session_id,
@@ -505,7 +499,8 @@ class RunRegistry:
         return {"kind": "input", "input_id": item.input_id, "run_id": None, "mode": item.mode}
 
     def start_queued(self, session_id: str, input_id: str) -> RunRecord:
-        """领取一条排队输入并起 run；起不来就放回队里（不变量：被接受的输入永不消失）。"""
+        """Claim a queued input and start a run; a failure restores it because an accepted input
+        never vanishes."""
         item = self.inbox(session_id).take_for_run(input_id)
         if item is None:
             raise InvalidRequest(
@@ -527,7 +522,8 @@ class RunRegistry:
             raise
 
     def _take_steers(self, record: RunRecord) -> list[dict[str, Any]]:
-        """run 线程在轮次边界领取补充输入；id 挂在 record.injected 上，落库时带出去。"""
+        """The run thread claims steers at turn boundaries; ids ride on record.injected for the
+        sink to label each message when it persists."""
         messages: list[dict[str, Any]] = []
         for item in self.inbox(record.session_id).take_steers():
             message: dict[str, Any] = {"role": "user", "content": item.content}
@@ -875,8 +871,7 @@ class RunRegistry:
         # Permission shape and sandbox state go into run_started: a refresh rebuilds the view
         # from that event rather than from the in-memory record, so "was the sandbox off" stays
         # a visible fact.
-        # prompt 事件字段走文本渲染：带图的消息在这里变成「文本 + 图片标记」，
-        # 事件载荷不背 base64（图从读侧端点取）。
+        # The prompt event field is text: image messages render to text plus markers, never base64.
         text = attachments.render_content_text(content)
         scratched = session.get_value(session_scratch()) is not None
         safety = build_run_security(
@@ -983,7 +978,7 @@ class RunRegistry:
                 ask=record.approvals.request if record.approvals is not None else None,
                 # 同一条待决表、同一个界面槽：模型的提问也在这里挂起等人。
                 question=record.approvals.ask if record.approvals is not None else None,
-                # 补充输入（阶段 60）：运行线程在轮次边界来领，领取即离队、落库走 recorder。
+                # Steers: claimed by the run thread at turn boundaries; claiming dequeues them.
                 steers=lambda: self._take_steers(record),
                 observer=lambda event: self._observe(record, event),
                 full=full_ack,
@@ -1127,8 +1122,7 @@ class RunRegistry:
                 return
             payload: dict[str, Any] = {
                 "entry_id": entry_id,
-                # 线格式里图片块换成 ref（字节走读侧端点）：durable 事件会在重连时重放，
-                # 让一次重连搬几 MB 的 base64 不值得。
+                # Image parts become refs: durable events replay on reconnect, so no base64 in them.
                 "message": attachments.strip_message_bytes(message),
             }
             if nudge:
@@ -1136,7 +1130,7 @@ class RunRegistry:
                 # content is added here while the event type stays what consumers expect.
                 payload["content"] = str(message.get("content") or "")
             elif label is not None and label.startswith("steer:"):
-                # 补充输入：客户端据此把「排队中」那段换成落库条目（不靠文字配对）。
+                # Steers: input_id lets the client swap the queued segment for the persisted entry.
                 payload["input_id"] = label.split(":", 1)[1]
             self.emit(record, type, **payload)
 
@@ -1162,8 +1156,7 @@ class RunRegistry:
         # previous run's figures. The write is slow (session write plus fsync), so it happens
         # before any state flips, as in the block below.
         self._persist_usage(record)
-        # 封闸：这个 run 不会再领补充输入了。没赶上的降级为排队项（标 missed），
-        # 照旧留在队里——「被接受的输入永不消失」这条不变量就在这里落地。
+        # Gate shut: missed steers become queued items marked missed (accepted inputs never vanish).
         self.inbox(record.session_id).downgrade_steers()
         with record.condition:
             # Status and terminal event change inside one critical section. Subscribers decide
@@ -1236,7 +1229,7 @@ class RunRegistry:
                 and session_id not in self._active
             ]:
                 del self._session_locks[session_id]
-            # 空队且没有活动 run 的会话不再留表：排队项跨 turn，但不跨「没人要它」。
+            # No table for an idle session with an empty queue: items span turns, not abandonment.
             for session_id in [
                 session_id
                 for session_id, inbox in self._inboxes.items()

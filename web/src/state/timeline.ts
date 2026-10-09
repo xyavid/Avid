@@ -59,10 +59,8 @@ export type SubagentStep = {
 export type MessageTs = number | null
 
 /**
- * 用户消息里的一张图（阶段 59）。
- *
- * 本地草稿带 object URL（还没落库，服务端取不到）；落库条目带 (entryId, 下标)——
- * 读侧端点的地址由**视图**拼，这里不碰 URL 形状（`api/` 才是端点形状的所在地）。
+ * An image in a user message: a local draft (object URL, not yet persisted) or a stored
+ * entry ref (entryId, block index). URL shape lives in `api/`; the view composes it.
  */
 export type TimelineImage =
   | { source: 'local'; url: string; name: string | null }
@@ -76,15 +74,15 @@ export type TimelineImage =
     }
 
 /**
- * 一条**还没被采纳**的输入（阶段 60）挂在用户段落上：它已经收下了，但还没进模型上下文。
- * 落库那一刻（事件带 input_id）这个标记消失，段落变成普通的用户消息。
+ * A not-yet-adopted input attached to a user item: accepted, not yet in the model context.
+ * The mark clears when the entry lands (the event carries `input_id`).
  */
 export type TimelinePending = {
   inputId: string
   mode: string
-  /** 从「插入」降级成排队的（run 在它被领取前就结束了）。 */
+  /** Downgraded from 'now' to 'after' because its run ended before claiming it. */
   missed: boolean
-  /** 待办输入里的图片张数：字节要等落库后才取得到（读端点按条目定位）。 */
+  /** Image count: bytes are only reachable after the entry lands. */
   images: number
 }
 
@@ -145,11 +143,8 @@ function messageContent(value: unknown): string {
   return value === undefined || value === null ? '' : JSON.stringify(value)
 }
 
-/** 用户消息内容 → (正文, 图片)：纯文本原样；分块数组里文本段拼正文、图片段收成引用。
- *
- *  两条路径（事件流 / 重读会话）必须给出**同形**的段落，所以解析只此一处——
- *  图片块在两边的形状由服务端保证一致（读侧都是不带字节的 ref）。
- */
+/** User message content → (text, images): text parts join the body, image parts become refs.
+ *  The single parse point, so the event stream and the session reload produce identical items. */
 export function userContent(
   content: unknown,
   entryId: string | null,
@@ -161,7 +156,7 @@ export function userContent(
     if (part === null || typeof part !== 'object') return
     const block = part as Record<string, unknown>
     if (block.type === 'image') {
-      if (entryId === null) return // 没有条目就没有可读地址，等 user_message 收编
+      if (entryId === null) return // no entry, no readable URL: waits for the user_message event
       images.push({
         source: 'stored',
         entryId,
@@ -193,7 +188,7 @@ export function itemKey(item: TimelineItem, index: number): string {
 
 /** 发送时的乐观用户段：`user_message` 事件到达后就地收编，不再多出一条。
  *  读数先用本地时钟占位（服务端与本机是同一台），事件到达即换成服务端那份。
- *  带图时图还是本地草稿（object URL）——收编时 `applyUserMessage` 换成条目引用。 */
+ *  Draft images stay local (object URL) until `applyUserMessage` folds in the entry ref. */
 export function appendUser(
   items: TimelineItem[],
   text: string,
@@ -205,7 +200,7 @@ export function appendUser(
   ]
 }
 
-/** 收下一条待办输入（投递成功、还没落库）：同一 input_id 只画一段。 */
+/** Accept a pending input (submit succeeded, not yet persisted): one item per inputId. */
 export function appendPending(
   items: TimelineItem[],
   input: { inputId: string; mode: string; missed: boolean; images: number; text: string },
@@ -230,14 +225,14 @@ export function appendPending(
   ]
 }
 
-/** 撤销一条待办输入（服务端确认后调用）：把那段拿走。 */
+/** Remove a pending input item; called once the server confirms the drop. */
 export function dropPending(items: TimelineItem[], inputId: string): TimelineItem[] {
   const has = items.some((item) => item.kind === 'user' && item.pending?.inputId === inputId)
   if (!has) return items
   return items.filter((item) => !(item.kind === 'user' && item.pending?.inputId === inputId))
 }
 
-/** 打开会话时把服务端的待办输入画回来（刷新后仍然看得见「排队中」）。 */
+/** Draw the server's pending inputs back in when a session opens, so they survive a reload. */
 export function mergePendingInputs(
   items: TimelineItem[],
   inputs: {
@@ -522,9 +517,8 @@ function applyUserMessage(items: TimelineItem[], event: TimelineEvent, data: Rec
     ...(images.length ? { images } : {}),
     ts: event.ts,
   }
-  // 乐观气泡（发送时先画的那个）就地收编，不再多出一条。带图时按文字配对——
-  // 事件里没有客户端 id，而「同一段文字 + 紧随其后」已经足够认出来（图片是随它发的）。
-  // 待办输入落库：按 input_id 就地收编（那条段落本来就在列表里，位置也不该跳）
+  // 乐观气泡（发送时先画的那个）就地收编，不再多出一条。
+  // Images pair by text (the event carries no client id); pending inputs fold in by input_id.
   const inputId = str(data.input_id)
   if (inputId) {
     const at = items.findIndex(

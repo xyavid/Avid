@@ -129,12 +129,8 @@ def build_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _user_content(raw: Any) -> str | list[dict[str, Any]]:
-    """用户消息的内容：纯文本原样（保住既有的合并行为），分块数组翻成 Anthropic 的块。
-
-    图片走 source.type=base64（另两种是 url 与 file，这里没有可引用的稳定 URL）。
-    不认识的块跳过之前要先问一句「它有没有 text」——两家 provider 的响应块形状不同，
-    只有 text 的那种仍然按文本收。
-    """
+    """User content as text (keeps the merge above) or Anthropic blocks; images go out inline
+    base64 because there is no stable URL to reference."""
     parts = content_parts(raw)
     if parts is None:
         return _text_of(raw)

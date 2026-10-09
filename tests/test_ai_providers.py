@@ -670,10 +670,10 @@ class TestDispatch:
         assert reply.text == "ok"
 
 
-# ---- 图片输入：parts → 各家运输形态（阶段 59） ----
+# ---- image input: parts to each provider's wire shape ----
 #
-# 存储形态是中立的（avid/attachments.py 的 part），wire 形状只在这三个模块里存在。
-# 这里钉两件事：每家翻对了形状；**没有任何一家静默丢图**（丢了就是模型的上下文缺一块）。
+# The stored part is provider-neutral (avid/attachments.py); wire shapes exist only in these three modules.
+# Pins that each provider translates the shape correctly and that none of them silently drops the image.
 
 _IMG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 24
 _IMG_B64 = base64.b64encode(_IMG_BYTES).decode("ascii")
@@ -715,8 +715,6 @@ def test_anthropic_parts_become_base64_source_blocks():
 
 
 def test_anthropic_keeps_tool_results_and_a_following_image_message_apart():
-    # 「工具结果 + 用户补充带图」是最常见的组合：tool_result 块先在 buffer 里，
-    # 补充消息不能被吞掉、也不能把 tool_result 挤丢。
     out = anthropic.build_messages(
         [
             {"role": "user", "content": "读 a.txt"},
@@ -744,7 +742,7 @@ def test_responses_parts_become_input_items():
 
 
 def test_no_protocol_silently_drops_the_image():
-    """三家的请求体里都必须出现那份 base64——丢图是静默的上下文缺失，不留痕。"""
+    """All three request bodies must carry the base64: a dropped image is silent context loss."""
     bodies = {
         "openai": openai_compat.build_request(OPENAI_CONFIG, [_PARTS_MESSAGE]),
         "anthropic": anthropic.build_request(ANTHROPIC_CONFIG, [_PARTS_MESSAGE]),

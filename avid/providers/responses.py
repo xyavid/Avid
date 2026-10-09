@@ -43,7 +43,7 @@ def _input_items(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Translate chat-completions messages into Responses input items.
 
     工具结果与工具调用是 item 类型（function_call_output / function_call），
-    普通消息保持 role + 纯文本内容，带图时是 role + 输入块数组（input_text / input_image）。
+    普通消息保持 role + 纯文本内容。With images the content is an input-block array.
     """
     items: list[dict[str, Any]] = []
     for message in messages:
@@ -77,7 +77,7 @@ def _input_items(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _user_content(raw: Any) -> Any:
-    """用户消息的内容：分块数组翻成 Responses 的输入块，纯文本保持原样（str）。"""
+    """User content: content parts become Responses input blocks, plain text stays a str."""
     parts = content_parts(raw)
     if parts is None:
         return str(raw or "")

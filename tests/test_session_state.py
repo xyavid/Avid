@@ -144,7 +144,7 @@ def test_non_serializable_message_is_rejected():
 
 
 def test_a_message_with_image_parts_passes_validation():
-    """图片是消息内容的一种形态（阶段 59）：形状与上限由 attachments 处判，会话层照收。"""
+    """Image parts are one valid message shape; shape and caps are attachments' job, the session layer accepts them as-is."""
     from avid.attachments import image_part
 
     part = image_part(b"\x89PNG\r\n\x1a\n" + b"\x00" * 8, name="shot.png")
@@ -162,7 +162,7 @@ def test_a_malformed_image_part_is_rejected_before_it_reaches_the_log():
                         "mime": "image/png",
                         "name": "x.png",
                         "bytes": 999,
-                        "data": "aGk=",  # 2 字节，却声称 999
+                        "data": "aGk=",  # 2 bytes, yet claims 999
                     }
                 ],
             }

@@ -14,11 +14,7 @@ class TranscriptError(ValueError):
 
 
 def text_of(value: Any) -> str:
-    """Render a message field as text for estimation and persistence.
-
-    分块内容（阶段 59）走 attachments 的渲染：文本按字面、图片只留一行标记——
-    base64 永不进摘要请求、也不进任何按字符算的地方。
-    """
+    """Render a message field as text for estimation and persistence."""
     if value is None:
         return ""
     if isinstance(value, str):
@@ -59,10 +55,7 @@ _MESSAGE_OVERHEAD = 16
 
 
 def message_chars(message: dict[str, Any]) -> int:
-    """Estimate one message's character cost: content plus serialized tool_calls plus overhead.
-
-    图片按固定字符成本计（不是 base64 长度）：压缩触发线与用量环的货币是字符。
-    """
+    """Estimate one message's character cost: content plus serialized tool_calls plus overhead."""
     content = message.get("content")
     body = content_chars(content) if isinstance(content, list) else len(text_of(content))
     total = body + _MESSAGE_OVERHEAD

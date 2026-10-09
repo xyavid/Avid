@@ -26,7 +26,7 @@ if TYPE_CHECKING:  # Annotations only: these two are never imported at run time.
     from ..security.permission import AskQuestion, AskUser
     from .tools.mcp import McpManager
 
-#: 补充输入的领取通道：() -> 待并入的消息列表（阶段 60）。
+#: Steer channel: () -> messages to merge into the next step, in delivery order.
 SteerProbe = Callable[[], "list[dict[str, Any]]"]
 
 # Abort the run after this many consecutive denials; any allowed call resets the streak.
@@ -99,9 +99,7 @@ class RunState:
     #: 混在一起会让「允许/拒绝」的语义漏进工具层。
     question: AskQuestion | None = None
 
-    #: 补充输入的领取通道（阶段 60）：返回待并入下一步的用户消息（按投递顺序），空列表 = 没有。
-    #: 与 cancel 一样是「另一条线程写、这里读」，但它是**拉**不是推——领取发生在运行线程里，
-    #: 所以落库仍只有一个写者（recorder）。只在轮次边界调用（见 run.py 的交付点）。
+    #: Steer channel, pulled by the run thread at turn boundaries; recorder stays the only writer.
     steers: SteerProbe | None = None
 
     # Event observer; None means this run has no subscriber, as on the CLI path.

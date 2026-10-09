@@ -1,30 +1,9 @@
-"""图片附件：唯一一份词汇与规则。
+"""The single vocabulary and rule set for image parts in message content.
 
-图片是**消息内容**的一种分块（part），不是另一种消息。所以这里只管三件事，
-而且只管这三件：
-
-1. **形状**：`{"type": "image", "mime", "name"?, "bytes", "data"(base64)}`。
-   存储形态是中立的——`image_url` / `source.base64` / `input_image` 这些 wire 形状
-   只活在 `providers/` 的三个适配器里，换 provider 不动历史。
-2. **合法性**：按字节判型（不看客户端声明），三档上限（单图 / 单条张数 / 单条合计）。
-   入口（web 路由）与会话落盘前（`session.validate_message`）各过一道——
-   最后一道在写盘之前，所以日志里永远没有渲染不出来的块。
-3. **退化**：把内容渲染成文本（摘要、索引、hook 共用），以及把消息投影成线格式
-   （图片块换成 ref，字节另走端点）。
-
-两条口径值得单独记下来，因为它们是**成本与检索**的地基：
-
-- 图片在「字符」口径下按固定成本计（``IMAGE_CHAR_COST``）。base64 长度是字节的
-  4/3，与 token 量没有关系；按它计，一张 1568px 截图（约 40 万 base64 字符）会把
-  压缩阈值直接打爆，而它在模型那边只值约 1600 token。
-- 渲染出的是一行标记（含文件名与类型），既让「哪个会话里有截图」搜得到，
-  又保证 base64 永不进摘要请求与索引。
-
-纯文本消息**不变成数组**（`content` 仍是 str）：老会话零迁移，绝大多数路径零分支。
-
-为什么不做服务端重编码：那要引 Pillow（内核运行期依赖只有 httpx 这条线要守），
-而客户端本来就拿得到原图。缩放交给浏览器在超限时做，服务端只判合法性；
-真出现「某家只收 JPEG」这类硬约束时，再在 prepare 层加转换——那时它才有依据。
+Part shape is ``{"type": "image", "mime", "bytes", "data"(base64), "name"?}``; MIME comes from
+magic bytes, never the client's claim. Plain text content stays a str; an image renders as one
+marker line at a fixed character cost, so base64 never reaches summaries or the index, and bytes
+are only validated, never re-encoded (the kernel's runtime deps stay httpx-only).
 """
 
 from __future__ import annotations
@@ -35,47 +14,45 @@ import re
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-#: 三家协议都认的图片类型；不在表里的一律拒（含 svg：它是脚本载体，不是图片）。
+#: Types all three protocols accept; anything else is rejected (svg is a script carrier).
 ALLOWED_MIMES = ("image/png", "image/jpeg", "image/webp", "image/gif")
 
-#: 单图上限：够放一张未压缩的手机照片，同时不把一条会话行撑到几十 MB。
+#: One image: fits an uncompressed phone photo without pushing a session line to tens of MB.
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
-#: 单条消息的图片张数：再多就该分几条发（也避免一次请求把上下文挤满）。
+#: Images per message: more than this should be several messages.
 MAX_IMAGES_PER_MESSAGE = 8
-#: 单条消息的图片合计：给 Anthropic 约 32MB 的单请求上限留出正文余量。
+#: Per-message image total: leaves body room under Anthropic's ~32MB request cap.
 MAX_TOTAL_BYTES = 16 * 1024 * 1024
-#: 线格式的 base64 长度上限：**粗筛**，不是规则本身（规则是按字节判的单图上限）。
-#: 留 1MB 余量，好让「稍微超一点」的图走到 attachments 的 400（带中文原因），
-#: 而不是在 pydantic 那里变成一句 schema 不符。
+#: Wire-format base64 cap: coarse pre-filter, looser than the byte rule so the 400 comes from here.
 MAX_BASE64_CHARS = 4 * ((MAX_IMAGE_BYTES + 2) // 3) + 1_000_000
-#: 文件名的显示上限；它只用于标记与界面，不参与定位。
+#: Display cap for file names; they label markers and the UI, never locate anything.
 MAX_NAME_CHARS = 200
-#: 图片的字符成本（≈1600 token）：压缩触发线与用量环的货币是「字符」。
+#: Character cost of one image (~1600 tokens): fixed, since the budget counts characters, not bytes.
 IMAGE_CHAR_COST = 6_000
 
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 
 
 class AttachmentError(ValueError):
-    """一条附件不合法；消息是给人看的，可以直接进 400 响应。"""
+    """An invalid attachment; its message is user-facing and may enter a 400 response."""
 
 
 def sniff_mime(data: bytes) -> str | None:
-    """按文件头判型；认不出返回 None（调用方拒收，不信客户端的声明）。"""
+    """Identify the type from magic bytes; None means unknown, and callers must reject it."""
     if data.startswith(b"\x89PNG\r\n\x1a\n"):
         return "image/png"
     if data.startswith(b"\xff\xd8\xff"):
         return "image/jpeg"
     if data.startswith(b"GIF87a") or data.startswith(b"GIF89a"):
         return "image/gif"
-    # RIFF 是容器：只有 WEBP 那种才认，WAVE/AVI 同样以 RIFF 开头。
+    # RIFF is a container: only WEBP qualifies, WAVE/AVI start with it too.
     if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return "image/webp"
     return None
 
 
 def image_part(data: bytes, *, name: str | None = None) -> dict[str, Any]:
-    """把字节收成一块图片；超限或类型不认就抛 AttachmentError。"""
+    """Collect bytes into one image part; AttachmentError when oversize or unrecognized."""
     if len(data) > MAX_IMAGE_BYTES:
         raise AttachmentError(
             f"图片大于 {human_bytes(MAX_IMAGE_BYTES)}（这张 {human_bytes(len(data))}）"
@@ -98,11 +75,7 @@ def image_part(data: bytes, *, name: str | None = None) -> dict[str, Any]:
 def build_user_content(
     text: str, images: Iterable[Mapping[str, Any]]
 ) -> str | list[dict[str, Any]]:
-    """线格式的输入（文本 + 图片数组）→ 存储形态的内容。
-
-    没有图片就原样返回字符串——纯文本消息的形态不变。有图片时按「文本在前、
-    图片按用户给的顺序在后」拼成分块数组。
-    """
+    """Wire-format input (text + images) to stored content; without images the text stays a str."""
     payloads = list(images)
     if not payloads:
         return text
@@ -129,11 +102,7 @@ def build_user_content(
 
 
 def check_content(content: Any) -> str | None:
-    """落盘前的形状校验：返回问题描述，None 表示合法。
-
-    判据是「存下来的块一定能渲染」：类型认识、图片字段自洽（声明的字节数与
-    base64 实际长度相符）、三档上限不超。
-    """
+    """Last gate before disk: a problem description, or None when every stored part renders."""
     if content is None or isinstance(content, str):
         return None
     if not isinstance(content, (list, tuple)):
@@ -156,7 +125,7 @@ def check_content(content: Any) -> str | None:
             if not isinstance(part.get("text"), str):
                 return f"第 {index} 个文本块缺 text"
         elif isinstance(part.get("text"), str):
-            continue  # 别家的文本块形状（output_text 等）：有 text 就认，渲染时取它
+            continue  # Other providers' text blocks (output_text etc.): accept any text string
         else:
             return f"第 {index} 个内容块的类型不认识：{kind!r}"
     if images > MAX_IMAGES_PER_MESSAGE:
@@ -167,11 +136,7 @@ def check_content(content: Any) -> str | None:
 
 
 def render_content_text(content: Any) -> str:
-    """内容 → 文本（摘要、索引、hook 的 ``prompt`` 字段共用）。
-
-    文本块按出现顺序换行拼接；图片块渲染成一行标记；别家形状的块取 ``text``；
-    不认识的块静默跳过（它没有任何可渲染的语义，但不该让整条路径炸掉）。
-    """
+    """Content to text for summaries, the index and hooks: images become one marker line."""
     if content is None:
         return ""
     if isinstance(content, str):
@@ -192,7 +157,7 @@ def render_content_text(content: Any) -> str:
 
 
 def content_chars(content: Any) -> int:
-    """内容的字符成本：文本按字面长度，图片按固定成本（见模块注释）。"""
+    """Character cost of content: text by length, images at a fixed cost."""
     if isinstance(content, str):
         return len(content)
     if content is None or not isinstance(content, (list, tuple)):
@@ -215,7 +180,7 @@ def is_image_part(part: Any) -> bool:
 
 
 def image_bytes(part: Any) -> bytes | None:
-    """取回块里的原始字节；不是图片块或 base64 坏了都返回 None。"""
+    """Raw bytes of a part; None when it is not an image part or its base64 is broken."""
     if not is_image_part(part):
         return None
     data = part.get("data")
@@ -234,10 +199,7 @@ def image_count(content: Any) -> int:
 
 
 def ref_of(part: Mapping[str, Any], index: int) -> dict[str, Any]:
-    """图片块 → 线格式 ref：去掉字节，留下显示与定位用的事实。
-
-    ``index`` 是该块在内容数组里的下标——读侧端点靠 (会话, 条目, 下标) 定位字节。
-    """
+    """Image part to wire-format ref: bytes dropped, ``index`` kept for the byte-read endpoint."""
     ref: dict[str, Any] = {
         "type": "image",
         "mime": part.get("mime"),
@@ -251,7 +213,7 @@ def ref_of(part: Mapping[str, Any], index: int) -> dict[str, Any]:
 
 
 def strip_message_bytes(message: dict[str, Any]) -> dict[str, Any]:
-    """消息 → 线格式消息：图片块换成 ref，其余原样。无图的消息返回同一个对象。"""
+    """Message to wire form: image parts become refs; messages without images pass through."""
     content = message.get("content")
     if not isinstance(content, (list, tuple)) or not any(
         is_image_part(part) for part in content
@@ -267,7 +229,7 @@ def strip_message_bytes(message: dict[str, Any]) -> dict[str, Any]:
 
 
 def clean_name(name: Any) -> str | None:
-    """文件名只用于显示与标记：压成一行、去掉控制字符、封顶长度。"""
+    """File names are display-only: collapsed to one line, control chars stripped, capped."""
     if not isinstance(name, str):
         return None
     collapsed = " ".join(_CONTROL_CHARS.sub(" ", name).split())[:MAX_NAME_CHARS].strip()

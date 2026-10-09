@@ -1,18 +1,12 @@
 /**
- * 图片草稿的准备（阶段 59）：客户端只在**超限时**压缩，服务端只校验不重编码。
- *
- * 为什么压缩放在浏览器：内核的运行期依赖只有 httpx，服务端重编码要引 Pillow；
- * 而浏览器本来就拿得到原图，canvas 缩放是它分内的事。超限的图按最长边缩到
- * DOWNSCALE_SIDE（各 provider 内部普遍会做的那个尺度），PNG 保持 PNG 不失真
- * （截图里全是文字，重编码成 JPEG 会把笔画糊掉）；chip 上照实标「已压缩」。
- *
- * 上限数字与 `avid/attachments.py` 同口径：服务端那道闸才是权威，这里只是别把
- * 明知会被拒的东西发出去。
+ * Image draft preparation: over-limit images are downscaled in the browser (PNG stays PNG,
+ * screenshots are text), the server only validates. Size limits mirror `avid/attachments.py`,
+ * which is the authoritative gate.
  */
 
 export const MAX_IMAGE_BYTES = 8 * 1024 * 1024
 export const MAX_IMAGES = 8
-/** 超限图的缩放目标（长边像素）：与各家 provider 内部的下采样档位同量级。 */
+/** Longest-side target for downscaled images; same order as provider-side downsampling. */
 export const DOWNSCALE_SIDE = 1568
 
 const ALLOWED_TYPES = /^image\/(png|jpeg|webp|gif)$/
@@ -21,11 +15,11 @@ export type DraftImage = {
   id: string
   name: string
   bytes: number
-  /** 线格式要的原始 base64（不带 data: 前缀）。 */
+  /** Raw base64 for the wire format (no data: prefix). */
   data: string
-  /** 本地预览地址：落库前用它渲染气泡里的缩略图。 */
+  /** Local preview URL; valid only before the message is persisted. */
   url: string
-  /** 超限压缩过——chip 上照实说。 */
+  /** Downscaled because it exceeded the size limit. */
   compressed: boolean
 }
 
@@ -33,7 +27,7 @@ export function isImageFile(type: string): boolean {
   return ALLOWED_TYPES.test(type)
 }
 
-/** 等比缩放系数：长边超过 maxSide 时缩到 maxSide，否则 1（不动）。 */
+/** Scale factor: maxSide / longest side, or 1 when already within maxSide. */
 export function scaleFor(width: number, height: number, maxSide: number): number {
   const longest = Math.max(width, height)
   return longest <= maxSide || longest === 0 ? 1 : maxSide / longest
@@ -45,7 +39,7 @@ export function humanBytes(size: number): string {
   return `${(size / (1024 * 1024)).toFixed(1)}MB`
 }
 
-/** 字节 → base64；分块拼装，避免一次性展开大数组把调用栈压爆。 */
+/** bytes → base64, chunked so a large array can't blow the call stack. */
 export function base64Of(bytes: Uint8Array): string {
   let binary = ''
   const chunk = 0x8000
@@ -71,7 +65,7 @@ export function draftFromBytes(
   }
 }
 
-/** 一个文件 → 一条草稿；超限时先缩再收，缩不动就抛（调用方把话说给用户）。 */
+/** File → draft; over-limit files are downscaled first, throws when that fails. */
 export async function prepareImage(file: File): Promise<DraftImage> {
   const raw = new Uint8Array(await file.arrayBuffer())
   const name = file.name || '粘贴的图片'
@@ -87,7 +81,7 @@ export async function prepareImage(file: File): Promise<DraftImage> {
 
 function outputType(type: string): string {
   if (type === 'image/jpeg' || type === 'image/webp') return type
-  return 'image/png' // 含 gif：动画在 canvas 里留不住，按静态 PNG 收
+  return 'image/png' // includes gif: animation can't survive canvas, so it lands as static PNG
 }
 
 async function downscale(

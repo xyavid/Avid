@@ -8,8 +8,7 @@
  * 标记符既难读又占地方。气泡自己的排版偏紧，所以首尾块的上下外边距在这里收掉
  * （`[&_.markdown>:first-child]:mt-0` 那一串）。
  *
- * 图片（阶段 59）排在正文之下：用户发图的意图就是「让模型看见它」，界面照实把
- * 发出去的东西摆出来——缩略图直接取原字节（读侧端点），点开看原图。
+ * Images render below the text: each thumbnail links to the full image.
  */
 
 import type { HTMLAttributes } from 'react'

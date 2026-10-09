@@ -98,10 +98,7 @@ def list_entries(
 
 @router.get("/sessions/{session_id}/entries/{entry_id}/attachments/{index}")
 def read_attachment(request: Request, session_id: str, entry_id: str, index: int) -> Response:
-    """One image part's raw bytes (阶段 59).
-
-    条目一旦提交就不再变，所以响应可以长缓存：这张图在 (会话, 条目, 下标) 上永远是同一份字节。
-    """
+    """One image part's raw bytes; a committed entry never changes, so this caches long."""
     data, mime = current_services(request).sessions.attachment_bytes(session_id, entry_id, index)
     return Response(
         content=data,

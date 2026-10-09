@@ -3,8 +3,8 @@
 改这里等于改索引的**内容**（不是结构），所以规则写在模块头而不是散在 SQL 里：
 
 - `user` / `assistant` 正文全文进（这是人真正会搜的东西）；
-- **图片块只进一行标记**（文件名 / 类型 / 大小，阶段 59）：搜得到「哪个会话里有截图」，
-  但 base64 不进索引——体积与敏感面都不该被字节吃掉；
+- **Image parts index as one marker line** (name / type / size): a session is findable by
+  screenshot, but base64 never enters the index (it would only add volume and exposure);
 - `assistant` 的 tool_calls 也进（参数里有路径与命令：搜得到「哪个会话动过 pyproject.toml」），
   每个调用的参数截断，避免一次把大段 JSON 灌进去；
 - `tool` 结果截前 2000 字符：够定位「哪个会话跑过这个命令」，不值得为全文付索引体积与
@@ -38,11 +38,7 @@ DISPLAY_CHARS = 120
 
 
 def _text_of(content: Any) -> str:
-    """Message content as searchable text: strings as-is, parts via the attachment vocabulary.
-
-    图片块渲染成一行标记（文件名 + 类型 + 大小）：既让「哪个会话里有截图」搜得到，
-    也保证 base64 不进索引。
-    """
+    """Message content as searchable text; image parts become a marker line, never base64."""
     return attachments.render_content_text(content)
 
 

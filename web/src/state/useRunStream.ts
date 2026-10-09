@@ -375,7 +375,7 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
     [sessionId, settle, subscribe],
   )
 
-  /** 终态之后接着跑队里的下一条（阶段 60）：服务端不自己起 run，衔接由客户端做。 */
+  /** After a terminal state, start the next queued input's run; the server never starts one on its own. */
   const drainNextTurn = useCallback(async () => {
     if (!sessionId) return
     try {
@@ -385,15 +385,12 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
       const created = await startRun(sessionId, { from_input: next.input_id })
       attach(created.run_id)
     } catch {
-      // 抢输了（另一个标签页取走）或服务端不在：下次终态或刷新再试，不在这里喊
+      // Lost the claim (another tab) or the server is down: retry on the next terminal state.
     }
   }, [sessionId, attach])
 
-  /**
-   * 投一条补充输入（阶段 60）：`after` = 排队等下一 turn（忙时的默认动作），
-   * `now` = 最早可能被处理的时刻（插入当前 run 的下一个 step；空闲就直接起一个 run）。
-   * 收下 ≠ 已进模型上下文：留队的那条先画成「待办」段落，落库那一刻才换成条目。
-   */
+  /** Submit a supplemental input: `after` waits for the next turn, `now` lands in the current
+   *  run's next step. Accepted is not in-context: queued items render as pending until persisted. */
   const submit = useCallback(
     async (text: string, mode: 'now' | 'after', images: DraftImage[] = []) => {
       if (!sessionId) return
@@ -409,7 +406,7 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
             : {}),
         })
         if (accepted.kind === 'run' && accepted.run_id !== null) {
-          // 空闲：服务端这就起了一个 run，去接它的流（历史 + 这条消息由事件重放给出）
+          // Idle: the server started a run; attach to its stream (events replay history + this message)
           attach(accepted.run_id)
           return
         }
@@ -430,7 +427,7 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
     [attach, sessionId],
   )
 
-  /** 撤销一条还没被领取的待办输入。 */
+  /** Drop a pending input that hasn't been claimed yet. */
   const dropInputById = useCallback(
     async (inputId: string) => {
       if (!sessionId) return

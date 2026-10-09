@@ -295,7 +295,7 @@ def test_render_conversation_keeps_roles_calls_and_tool_names():
 
 
 def test_render_conversation_marks_images_instead_of_dumping_base64():
-    """摘要请求里绝不能出现 base64：那是几百 KB 的无效输入，还按 token 计费。"""
+    """The summary prompt must never contain base64 — hundreds of KB of useless, token-billed input."""
     from avid.attachments import image_part
 
     part = image_part(b"\x89PNG\r\n\x1a\n" + b"\x00" * 4096, name="shot.png")
