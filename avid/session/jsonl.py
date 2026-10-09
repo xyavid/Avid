@@ -672,6 +672,10 @@ class JsonlSessionRepo:
         self._pending: set[str] = set()
         # List summaries keyed by id, with (mtime_ns, size) as the validity stamp.
         self._summaries: dict[str, tuple[tuple[int, int], FileSummary]] = {}
+        # Header facts (id / createdAt / storageVersion / parentId) are immutable per file and were
+        # re-read on every listing: remember them under the same (mtime_ns, size) stamp. `modified_at`
+        # rides along because it is part of the metadata and the stamp changes when it does.
+        self._metadata: dict[str, tuple[tuple[int, int], JsonlSessionMetadata]] = {}
         self._closed = False
 
     def summarize(self, metadata: SessionMetadata) -> FileSummary:
@@ -786,15 +790,26 @@ class JsonlSessionRepo:
         if not self.root.exists():
             return []
         found: list[JsonlSessionMetadata] = []
+        seen: set[str] = set()
+        # realpath is a per-file syscall chain and this is the hot path (every sidebar refresh):
+        # resolve the root once, and only ask where an entry really lives when it is a symlink.
+        resolved_root = self.root.resolve()
         for path in sorted(self.root.glob(f"*{SUFFIX}")):
+            seen.add(path.name)
             # 符号链接穿透守卫：真实落点不在本仓库目录里的文件不是自家的，
             # 不列（否则别家工作区的会话会被自动捡进列表并经链接打开）。
-            if path.resolve().parent != self.root.resolve():
+            if path.is_symlink() and path.resolve().parent != resolved_root:
                 continue
-            metadata = self._read_metadata(path)
+            metadata = self._metadata_of(path)
             if metadata is not None:
                 found.append(metadata)
         found.sort(key=lambda item: (-item.created_at, item.id))
+        # 删掉的会话不留记忆：长驻进程（Web 服务）里只会删不会清，凭这个列表顺手收掉。
+        for name in [name for name in self._metadata if name not in seen]:
+            del self._metadata[name]
+        alive = {item.id for item in found}
+        for session_id in [item for item in self._summaries if item not in alive]:
+            del self._summaries[session_id]
         return found
 
     def delete(self, metadata: SessionMetadata) -> None:
@@ -839,6 +854,7 @@ class JsonlSessionRepo:
             storage.close()
         self._open.clear()
         self._summaries.clear()
+        self._metadata.clear()
 
     # Internals: handle lookup, metadata reads and id reservation.
 
@@ -888,6 +904,18 @@ class JsonlSessionRepo:
         if self._session_paths(session_id):
             raise SessionExistsError(session_id)
         self._pending.add(session_id)
+
+    def _metadata_of(self, path: Path) -> JsonlSessionMetadata | None:
+        """Cached header facts; a failed parse is never remembered, so a fixed file shows up next time."""
+        stamp = self._stamp(path)
+        if stamp is not None:
+            cached = self._metadata.get(path.name)
+            if cached is not None and cached[0] == stamp:
+                return cached[1]
+        metadata = self._read_metadata(path)
+        if metadata is not None and stamp is not None:
+            self._metadata[path.name] = (stamp, metadata)
+        return metadata
 
     @staticmethod
     def _header_of(path: Path) -> JsonlHeader:
