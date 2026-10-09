@@ -103,19 +103,6 @@ All flags: `avid --help`, `avid web --help`, `avid workspace --help`, `avid sess
   required to read your sessions.
 - **Environment variables**: all optional, not needed for day-to-day use.
 
-| Variable | Meaning |
-|---|---|
-| `AVID_HOME` | Where the whole user-level directory lives (settings, registry, sessions, audit); default `~/.avid` |
-| `AVID_SESSIONS_DIR` | Put the session store elsewhere (wins over the settings file) |
-| `AVID_INDEX_DIR` | Put the derived search index elsewhere |
-| `AVID_AUDIT_DIR` | Put the audit JSONL in a directory of its own |
-| `AVID_MAX_PARALLEL_TOOL_CALLS` | Parallel tool calls per step; default 10 |
-| `AVID_MODEL_INFO` | Set to `off` to stop asking the provider for the model's context window |
-| `AVID_SANDBOX_BIN` | Use a different bwrap executable (diagnostics / packaging) |
-| `AVID_ALLOWED_HOSTS` | Extra hosts the web server trusts (LAN deployments) |
-| `AVID_BYOK_CONFIG` | Use a different `models.json` (default `~/.avid/models.json`) |
-| `AVID_BYOK_SECRETS` | Use a different `secrets.json` (default `~/.avid/secrets.json`) |
-
 ## Development
 
 ```bash
