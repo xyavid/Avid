@@ -1,8 +1,5 @@
-"""一致性套件的两个后端入口：同一批用例，两个实现。
+"""Conformance suite entry: the cases in ``session_cases.py`` run against both backends."""
 
-用例本体住在 ``session_cases.py``，这里只负责造仓库、跑用例、收尾。
-参数化 id 形如 ``memory/lifecycle-...``，两个后端成对出现。
-"""
 
 from __future__ import annotations
 
@@ -22,7 +19,7 @@ BACKENDS = ("memory", "jsonl")
 
 
 def ticking_clock(start: int = 1_700_000_000_000, step: int = 1_000):
-    """每次都往前走的时钟：id、created_at、timestamp 因此完全确定。"""
+    """A clock that always advances, making ids, created_at and timestamps deterministic."""
     counter = itertools.count(start, step)
     return lambda: next(counter)
 
@@ -48,7 +45,7 @@ def test_session_repo_contract(backend, case, tmp_path):
 
 
 def make_workspace_repo(backend: str, root, clock, workspace: str):
-    """带归属的仓库：一致性用例里要能表达"这是哪个工作区的库"。"""
+    """A repo with a workspace label, so a case can express which workspace owns it."""
     generator = UuidV7Generator(clock)
     if backend == "memory":
         return MemorySessionRepo(
@@ -61,11 +58,8 @@ def make_workspace_repo(backend: str, root, clock, workspace: str):
 
 @pytest.mark.parametrize("backend", BACKENDS)
 def test_a_session_from_outside_the_repository_is_refused(backend, tmp_path):
-    """归属护栏两个后端必须同义：不属于本仓库的会话 open/delete 都被拒。
-
-    归属判据分后端：jsonl 按位置（文件在自己目录里即归属，头里的旧 workspace
-    id 是重新登记前的产物，不拦）；memory 没有位置，按记录上的标签判。
-    """
+    """Both backends refuse open/delete for a foreign session; ownership is by file location
+    (jsonl) or by the recorded label (memory)."""
     clock = ticking_clock()
     if backend == "jsonl":
         repo = make_workspace_repo(backend, tmp_path / "sessions", clock, "w-mine")

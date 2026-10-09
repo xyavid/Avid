@@ -13,7 +13,7 @@ describe('Card（组件墙 §卡片）', () => {
     const title = screen.getByText('纸本卡片')
     expect(title.className).toContain('font-serif')
     expect(screen.getByText(/抬升面比主面更亮/)).toBeTruthy()
-    // 组件墙的简单卡是 5px（rounded-sm），8px 的 --radius-card 留给大面板
+    // the simple card is 5px (rounded-sm); the 8px --radius-card is for large panels
     expect(title.closest('div')?.parentElement?.className).toContain('rounded-sm')
   })
 

@@ -1,9 +1,9 @@
 """Policy facade: builds run security, exposes the verdict gate and holds the ledger.
 
-阶段 51 轻量化后的形态：没有模式阶梯，只有「默认直接跑 + 毁灭级双确认 +
-凭据拒读」；full 是唯一保留的显式授权形态（跳过双确认、关沙箱、不滤 env）。
-「完全访问」由调用方显式给出（CLI --allow-full-access / Web full_access_ack），
-没有请求-降级路径：给不出授权就没有 full。
+No mode ladder: everything runs by default, catastrophic commands need a double confirm and
+credential reads are refused outright; `full` is the only explicit authorization form (it skips the
+double confirm, disables the sandbox and leaves env unfiltered) and must be given by the caller
+(CLI --allow-full-access / Web full_access_ack) — there is no request-downgrade path to it.
 """
 
 from __future__ import annotations
@@ -57,7 +57,7 @@ from .sandbox import (
 
 logger = logging.getLogger("avid.security.permission")
 
-# 记录口径的全部取值：normal = 默认（毁灭级双确认）；full = 完全访问（显式授权）。
+#: Recording vocabulary: normal (default, catastrophic asks) or full (explicit full access).
 PERMISSION_NORMAL = "normal"
 PERMISSION_FULL = "full"
 PERMISSIONS: tuple[str, ...] = (PERMISSION_NORMAL, PERMISSION_FULL)
@@ -109,7 +109,7 @@ class RunSecurity:
 
     @property
     def permission_mode(self) -> str:
-        """Wire/记录用两值口径：normal（默认直接跑）或 full（完全访问）。"""
+        """Wire and audit vocabulary in two values: normal or full."""
         return PERMISSION_FULL if self.full else PERMISSION_NORMAL
 
     def summary(self) -> dict[str, Any]:
@@ -131,8 +131,7 @@ def _default_root() -> str:
     return str(workspace.WORKSPACE_ROOT)
 
 
-#: 提问通道的形状：问题 + 可选项（空 = 自由文本）→ 答案；None 表示没人作答。
-#: 放在 security 层只是因为 AskUser 在这里——它本身不含任何策略。
+#: Ask channel: question + options (empty = free text) -> answer; None = nobody answered.
 AskQuestion = Callable[[str, tuple[str, ...]], "str | None"]
 
 
@@ -148,9 +147,8 @@ def build_run_security(
     audit_enabled: bool = True,
     read_only: bool = False,
 ) -> RunSecurity:
-    """Assemble run security: the sandbox spec and the audit sink; full 只是个开关。
-
-    ``read_only`` 是临时对话（阶段 54）：工作区在沙箱里只读，连 bash 也改不动文件。
+    """Assemble run security: the sandbox spec and the audit sink (full is just a flag); read_only
+    mounts the workspace read-only in the sandbox, so even bash cannot change files.
     """
     resolved = root if root is not None else _default_root()
     sandbox = build_spec(
@@ -175,9 +173,8 @@ def build_run_security(
 
 
 def ask_user(name: str, arguments: dict[str, Any], reason: str) -> bool:
-    """毁灭级命令的终端确认：连问两次（二次确认），任何一次拒绝都不执行。
-
-    The prompts go to stderr so they cannot pollute the answer printed on stdout.
+    """Ask twice for a catastrophic command and run it only if both answers are yes; the prompts go
+    to stderr so they never pollute the answer printed on stdout.
     """
     detail = json.dumps(arguments, ensure_ascii=False, default=str)
     # Serialize prompts: parallel subagents ask at once but only one terminal exists.

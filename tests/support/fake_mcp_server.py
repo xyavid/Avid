@@ -1,8 +1,7 @@
-"""一个最小但**真实**的 stdio MCP server：newline-delimited JSON-RPC。
+"""A minimal but real stdio MCP server speaking newline-delimited JSON-RPC.
 
-按协议回 initialize / tools/list / tools/call 三个方法；工具只有一个 ``echo``。
-命令行开关：``--crash`` 启动即退出（模拟 server 起不来）、``--delay N`` 每次调用
-先睡 N 秒（模拟卡死，测客户端超时）。
+It answers initialize / tools/list / tools/call and exposes one ``echo`` tool; ``--crash`` exits at
+startup and ``--delay N`` sleeps N seconds per tools/call, to exercise client timeouts.
 """
 
 from __future__ import annotations
@@ -29,7 +28,7 @@ def respond(request: dict) -> dict | None:
             },
         }
     if method == "notifications/initialized":
-        return None  # 通知不回
+        return None  # notifications get no reply
     if method == "tools/list":
         return {
             "jsonrpc": "2.0",

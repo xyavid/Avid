@@ -1,7 +1,7 @@
-"""F4 分支语义：列表、分叉、隔离、在分支上继续跑（svc 层，无 HTTP）。
+"""Branch semantics at the service layer, without HTTP: listing, forking, isolation, resuming.
 
-分支只是「链尾是谁」的一个值，条目树只增不改，所以这里断言的是**链条**：分叉点
-之前的条目同时属于两条分支，之后的条目各自私有，且两边互不影响。
+A branch is only a tip value and the entry tree is append-only, so the assertions are about
+chains: entries before a fork belong to both branches, later ones stay private.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ def entry_ids(services: Services, session_id: str, branch: str = "main") -> list
 
 
 def test_fresh_session_exposes_main_as_implicit_default(sandbox):
-    """`create` 不隐式建分支，但读侧必须把 main 当默认——否则新会话显示成「没有分支」。"""
+    """``create`` makes no branch, but readers must treat main as the default."""
     services = build(sandbox, ScriptedChat(make_turn("你好")))
     session_id = services.sessions.create(workspace=bound_workspace(services), name="分支")["id"]
 
@@ -51,9 +51,9 @@ def test_fork_copies_the_prefix_and_keeps_the_rest_private(sandbox):
     run(services, session_id, "第二次")
 
     main_before = entry_ids(services, session_id, "main")
-    assert len(main_before) == 4  # 两条 user + 两条 assistant
+    assert len(main_before) == 4  # two user + two assistant
 
-    # 在第一条 assistant 处分叉：新链 = 前两条
+    # fork at the first assistant: the new chain is the first two entries
     fork_at = main_before[1]
     created = services.sessions.create_branch(session_id, at=fork_at)
     assert created["name"] == "b2"
@@ -62,7 +62,7 @@ def test_fork_copies_the_prefix_and_keeps_the_rest_private(sandbox):
     assert created["entry_count"] == 2
     assert entry_ids(services, session_id, "b2") == main_before[:2]
 
-    # 在 b2 上继续跑：只动 b2，main 一个字都不变
+    # run on b2: only b2 moves, main is untouched
     run(services, session_id, "分支上继续", branch="b2")
     assert entry_ids(services, session_id, "main") == main_before
 
@@ -102,7 +102,7 @@ def test_duplicate_name_and_unknown_fork_point_are_rejected(sandbox):
 
 
 def test_run_creates_a_missing_branch_and_keeps_it_isolated(sandbox):
-    """在一条还不存在的分支上运行 = 从零开一条空分支（recorder 的 ensure_branch）。"""
+    """Running on a missing branch starts an empty one from zero (recorder's ensure_branch)."""
     services = build(sandbox, ScriptedChat(make_turn("主线答复"), make_turn("只在分支上")))
     session_id = services.sessions.create(workspace=bound_workspace(services))["id"]
     run(services, session_id, "第一句")
@@ -119,7 +119,7 @@ def test_run_creates_a_missing_branch_and_keeps_it_isolated(sandbox):
 
 
 def test_fork_is_refused_while_a_run_is_active(sandbox):
-    """分叉要写分支头，而运行线程正在写同一条链——两者不能同时进行。"""
+    """Forking writes the branch tip while a run thread writes the same chain: no overlap."""
     entered = threading.Event()
     release = threading.Event()
 
@@ -140,5 +140,5 @@ def test_fork_is_refused_while_a_run_is_active(sandbox):
         release.set()
         assert wait_terminal(record)
 
-    # 运行结束之后分叉就合法了
+    # forking is legal once the run has finished
     assert services.sessions.create_branch(session_id, name="after-run")["name"] == "after-run"

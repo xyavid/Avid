@@ -1,9 +1,7 @@
 /**
- * 标签页（报告 §7.4：经典 sliding pill）。
- * 结构：胶囊容器（overlay-light 底 + radius-md）内浮着一块 bg-card 滑块，
- * useLayoutEffect 量取选中项的 offsetLeft/offsetWidth，滑块以
- * transform + width 过渡过去（duration-slow + ease-smooth，报告原文）。
- * 滑块在文字层之下（z-0 vs z-1），选中文字色转 --text。
+ * Tabs, sliding pill: a bg-card pill floats inside the overlay-light container; a layout effect
+ * measures the selected item's offsetLeft/offsetWidth and the pill transitions transform + width
+ * on duration-slow / ease-smooth. The pill sits below the text layer (z-0 vs z-1).
  */
 
 import { useLayoutEffect, useRef, useState } from 'react'

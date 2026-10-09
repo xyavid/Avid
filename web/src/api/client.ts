@@ -1,11 +1,8 @@
 /**
- * 网络出口唯一层：所有请求经这里，组件不直接 fetch。
- *
- * 错误归一（老前端同判据，阶段 33 报告过）：
- * - 非 2xx 且响应是约定的 JSON 信封（{error:{code,message,detail}}）→ 按信封抛；
- * - 非 2xx 但不是约定 JSON → 额外探一次 /api/health，区分「后端不在这儿」
- *   （代理伪造的 5xx）与「后端答坏了」——两条给用户的话完全不同；
- * - fetch 直接抛错（后端没起）→ 给可执行的下一步。
+ * The single network exit: all requests go through here, components never call fetch directly.
+ * A non-2xx JSON envelope `{error:{code,message,detail}}` is rethrown as ApiError, a non-JSON
+ * failure probes `/api/health` to tell "backend not running" from "backend answered badly",
+ * and a fetch throw means the service is down.
  */
 
 import type {
@@ -45,7 +42,7 @@ export class ApiError extends Error {
   }
 }
 
-/** 同源请求；开发期由 vite 代理 /api → 8765。 */
+/** Same-origin fetch; in dev, vite proxies /api to port 8765. */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response
   try {
@@ -61,7 +58,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     body = await res.json()
   } catch {
-    // 非 JSON：走下面的 health 探测分流
+    // Not JSON: fall through to the health probe below.
   }
   const envelope = body as { error?: { code?: string; message?: string; detail?: Record<string, unknown> } } | null
   if (envelope?.error?.message) {
@@ -75,7 +72,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   try {
     if ((await fetch('/api/health')).ok) {
-      // 后端活着却回了一份非约定格式 → 是后端答坏了，不是连不上。
+      // Backend alive but answering outside the envelope: it broke, not a connection failure.
       throw new ApiError('bad_gateway', `后端返回了无法解析的响应（HTTP ${res.status}），详情见服务端日志。`, res.status, null)
     }
   } catch (err) {
@@ -95,8 +92,8 @@ export function listSessions(): Promise<{ sessions: SessionSummary[] }> {
 export type CreateSessionInput = { workspace: string; name?: string | null }
 
 /**
- * 新建会话（201 → SessionDetail）。`workspace` 是服务端的必填项——归属是一经写入
- * 不可变的既成事实，没有「默认工作区」这回事；服务端负责生成 id 与磁盘文件。
+ * Create a session (201 → SessionDetail). `workspace` is required server-side: ownership is
+ * fixed once written, and there is no "default workspace"; the server generates id and files.
  */
 export function createSession(input: CreateSessionInput): Promise<SessionDetail> {
   return request('/api/sessions', {
@@ -107,8 +104,8 @@ export function createSession(input: CreateSessionInput): Promise<SessionDetail>
 }
 
 /**
- * 开一个临时会话：从源会话拷一份上下文（投影消息），带只读标记。
- * 只在右列的「临时对话」面板里用——离开面板要把它删掉，别让它在会话列表里留痕。
+ * Scratch session: a copy of the source session's context (projected messages), marked read-only.
+ * Used only by the right dock's scratch panel — destroy it when leaving the panel.
  */
 export function createScratchSession(sourceId: string): Promise<ScratchSession> {
   return request(`/api/sessions/${encodeURIComponent(sourceId)}/scratch`, {
@@ -118,7 +115,7 @@ export function createScratchSession(sourceId: string): Promise<ScratchSession> 
   })
 }
 
-/** 重命名（PATCH 只带 name）。空名字服务端不拒，但 UI 在本地就不提交。 */
+/** Rename (PATCH carries name only). The server accepts an empty name; the UI never submits one. */
 export function renameSession(sessionId: string, name: string): Promise<SessionDetail> {
   return request(`/api/sessions/${encodeURIComponent(sessionId)}`, {
     method: 'PATCH',
@@ -128,9 +125,9 @@ export function renameSession(sessionId: string, name: string): Promise<SessionD
 }
 
 /**
- * 删除会话（204 无正文）。这会**销毁磁盘上的会话记录文件**——与「从项目列表移除、
- * 会话文件还在」的工作区删除不同，删完不可恢复；有活动 run 时服务端回 409 session_busy。
- * （会话现在集中放在 `<AVID_HOME>/sessions/<工作区 id>/`，见设置页「会话存储」。）
+ * Delete a session (204): this destroys the session files on disk and cannot be undone —
+ * unlike removing a workspace, which only drops the registry entry. 409 session_busy while a run
+ * is active. Sessions live under `<AVID_HOME>/sessions/<workspace id>/` (see the settings page).
  */
 export function deleteSession(sessionId: string): Promise<void> {
   return request(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
@@ -145,14 +142,14 @@ export function listEntries(sessionId: string, opts: ListEntriesOptions = {}): P
   return request(`/api/sessions/${encodeURIComponent(sessionId)}/entries?${params.toString()}`)
 }
 
-/** 分支清单（含每分支落盘的用量快照——上下文卡的读数来源）。 */
+/** Branch list; each branch carries its persisted usage snapshot (the context card's reading). */
 export function listBranches(sessionId: string): Promise<BranchList> {
   return request(`/api/sessions/${encodeURIComponent(sessionId)}/branches`)
 }
 
 /**
- * 从某条目分叉出一条分支（缺 name 由服务端起名，缺 at 起一条空分支）。
- * 会话有活动 run 时后端 409——分叉点不能在别人还在往链尾追加时被切走。
+ * Fork a branch at an entry (the server names it when `name` is missing; no `at` starts an empty
+ * branch). 409 while the session has an active run: the fork point must not move mid-append.
  */
 export function createBranch(
   sessionId: string,
@@ -169,26 +166,26 @@ export function listWorkspaces(): Promise<{ workspaces: WorkspaceSummary[] }> {
   return request('/api/workspaces')
 }
 
-/** 列一层工作区目录（只读；越界与凭据类由后端拒绝）。 */
+/** List one directory level (read-only); the server refuses out-of-root and credential paths. */
 export function listFiles(workspaceId: string, path = ''): Promise<FileList> {
   const params = new URLSearchParams({ path })
   return request(`/api/workspaces/${encodeURIComponent(workspaceId)}/files?${params.toString()}`)
 }
 
-/** 读一个文件的预览（超长截断、二进制只报事实）。 */
+/** File preview (long text truncated, binaries only report the fact). */
 export function readFile(workspaceId: string, path: string): Promise<FileContent> {
   const params = new URLSearchParams({ path })
   return request(`/api/workspaces/${encodeURIComponent(workspaceId)}/file?${params.toString()}`)
 }
 
-/** 弹宿主机文件夹选择器（服务端 AVID_PICKER_CMD）；null = 用户取消，不是错误。 */
+/** Host folder picker (server-side AVID_PICKER_CMD); null = user cancelled, not an error. */
 export function pickFolder(): Promise<{ path: string | null }> {
   return request('/api/workspaces/pick', { method: 'POST' })
 }
 
 export type CreateWorkspaceInput = { path: string; name?: string }
 
-/** 注册工作区；已注册时后端 409 workspace_exists（detail 带既有 id/name/root）。 */
+/** Register a workspace; 409 workspace_exists when already registered (detail has id/name/root). */
 export function createWorkspace(input: CreateWorkspaceInput): Promise<WorkspaceSummary> {
   return request('/api/workspaces', {
     method: 'POST',
@@ -198,9 +195,8 @@ export function createWorkspace(input: CreateWorkspaceInput): Promise<WorkspaceS
 }
 
 /**
- * 从项目列表移除工作区（注册表条目，204 无正文）。
- * 它不会删磁盘上的会话文件——那些会话仍留在原目录的 `.avid/sessions/` 下，
- * 重新登记同一个目录就会再出现。UI 上也照实这么说。
+ * Remove a workspace from the project list (registry entry, 204).
+ * The session files on disk stay: re-registering the same directory brings them back.
  */
 export function deleteWorkspace(id: string): Promise<void> {
   return request(`/api/workspaces/${encodeURIComponent(id)}`, { method: 'DELETE' })
@@ -229,12 +225,13 @@ export type StartRunInput = {
   prompt?: string
   /** Images sent with this message: text blocks first, images in array order after. */
   images?: ImageUpload[]
-  /** 这次运行接在哪条链尾上；缺省 = main。 */  branch?: string
-  /** 本次运行的模型覆盖；缺省 = 按设置解析（.env + 界面覆盖层）。 */
+  /** Which branch tip this run attaches to; omitted = main. */
+  branch?: string
+  /** Model override for this run; omitted = resolved from settings. */
   model?: string
-  /** 本次运行的推理强度：必须在所选模型声明的档位列表里（内核按列表校验）。 */
+  /** Reasoning level for this run: must be one of the chosen model's declared levels. */
   reasoning_effort?: string
-  /** `true` = 完全访问（跳过毁灭级确认、关沙箱）；唯一的授权凭据，没有模式字段。 */
+  /** `true` = full access (skip destructive confirmations, sandbox off); the only credential. */
   full_access_ack?: boolean
   /** Claim a queued input to start a run from: prompt/images are ignored, content comes from it. */
   from_input?: string
@@ -245,7 +242,7 @@ export function attachmentUrl(sessionId: string, entryId: string, index: number)
   return `/api/sessions/${encodeURIComponent(sessionId)}/entries/${encodeURIComponent(entryId)}/attachments/${index}`
 }
 
-/** 发起一次运行（201 → RunCreated）。 */
+/** Start a run (201 → RunCreated). */
 export function startRun(sessionId: string, input: StartRunInput): Promise<RunCreated> {
   return request(`/api/sessions/${encodeURIComponent(sessionId)}/runs`, {
     method: 'POST',
@@ -282,12 +279,12 @@ export function getRun(runId: string): Promise<Run> {
   return request(`/api/runs/${encodeURIComponent(runId)}`)
 }
 
-/** 请求取消（202；取消是协作式的，实际终态以 run_cancelled 事件 / getRun 为准）。 */
+/** Request cancel (202); cooperative — the terminal state arrives via run_cancelled or getRun. */
 export function cancelRun(runId: string): Promise<CancelResult> {
   return request(`/api/runs/${encodeURIComponent(runId)}/cancel`, { method: 'POST' })
 }
 
-/** 幂等答复一次提问；answer 是文本（选择题也走同一条）。 */
+/** Answer a question idempotently; the answer is text (choice questions use the same path). */
 export function answerApproval(runId: string, approvalId: string, answer: string): Promise<unknown> {
   return request(`/api/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}`, {
     method: 'POST',
@@ -296,7 +293,7 @@ export function answerApproval(runId: string, approvalId: string, answer: string
   })
 }
 
-/** 幂等答复一次审批；decision: 'allow' | 'deny'。 */
+/** Decide an approval idempotently; decision: 'allow' | 'deny'. */
 export function decideApproval(runId: string, approvalId: string, decision: 'allow' | 'deny'): Promise<unknown> {
   return request(`/api/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}`, {
     method: 'POST',
@@ -305,17 +302,14 @@ export function decideApproval(runId: string, approvalId: string, decision: 'all
   })
 }
 
-/**
- * BYOK 模型配置（阶段 34）。密钥只入不出：PUT 载荷的 api_key 有去无回，
- * GET 只给每家的 key_set。保存后对下一条消息立即生效，无需重启。
- */
+/** BYOK model settings. Keys are write-only: PUT carries `api_key`, GET only reports `key_set`. */
 
-/** 读整份 BYOK 配置（providers + chat 绑定）。 */
+/** Read the whole BYOK config (providers + chat binding). */
 export function getByokSettings(): Promise<ByokSettings> {
   return request('/api/settings/byok')
 }
 
-/** 整体保存（providers 全量 + chat 绑定）；validate 不过服务端 400 不落盘。 */
+/** Save the full config (providers + chat binding); a failed server-side validation returns 400. */
 export function saveByokSettings(input: ByokSettingsInput): Promise<ByokSettings> {
   return request('/api/settings/byok', {
     method: 'PUT',
@@ -325,8 +319,8 @@ export function saveByokSettings(input: ByokSettingsInput): Promise<ByokSettings
 }
 
 /**
- * 两步连通校验（最小对话 + 工具冒烟），针对**载荷**而不是已保存配置——
- * 保存前就能测；密钥走载荷，不读也不写密钥文件。
+ * Two-step connectivity check (minimal chat + tool smoke), run against the payload rather than
+ * saved config: testable before saving, and the key goes only in the request body.
  */
 export function testByokModel(
   provider: ByokSettingsInput['providers'][number],
@@ -339,22 +333,22 @@ export function testByokModel(
   })
 }
 
-/** 重置：删配置与密钥两份文件；之后运行会报「还没有模型配置」，直到重新保存。 */
+/** Delete the config and key files; runs report "no model configured" until saved again. */
 export function resetByokSettings(): Promise<void> {
   return request('/api/settings/byok', { method: 'DELETE' })
 }
 
 /**
- * 会话目录（阶段 56）：改的是「新会话写哪」，不搬已有会话——搬数据是
- * `avid session migrate` 的事。保存后服务端解绑缓存仓库，下一条消息起生效。
+ * Session dir: only changes where new sessions are written; existing ones move via
+ * `avid session migrate`.
  */
 
-/** 读会话目录与它的来源（来源是环境变量时界面只读）。 */
+/** Read the session dir and its source (the UI is read-only when the source is an env var). */
 export function getSessionsDir(): Promise<SessionsDir> {
   return request('/api/settings/sessions')
 }
 
-/** 保存会话目录；空串恢复默认。目录由服务端就地建好，建不出就是 400。 */
+/** Save the session dir; empty restores the default; a dir the server cannot create is 400. */
 export function setSessionsDir(dir: string): Promise<SessionsDir> {
   return request('/api/settings/sessions', {
     method: 'PUT',
@@ -364,8 +358,8 @@ export function setSessionsDir(dir: string): Promise<SessionsDir> {
 }
 
 /**
- * 内容检索（阶段 57）：走本地索引（SQLite + FTS5），不调模型。
- * 索引只服务检索——列表仍以 JSONL 为准，所以这个接口可能落后（响应里的 behind）。
+ * Content search over the local index (SQLite + FTS5, no model call).
+ * JSONL stays authoritative, so this endpoint can lag (see `behind` in the response).
  */
 export function searchEntries(
   query: string,

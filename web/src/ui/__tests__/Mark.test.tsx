@@ -8,18 +8,17 @@ import logoLightSource from '../../assets/avid-logo-light.svg?raw'
 import faviconSource from '../../assets/favicon.svg?raw'
 import { AvidMark } from '../Mark'
 
-/** 标识里全部 path 的 d 串，排序后可比对——各份副本对账用同一把尺子。 */
+/** Sorted `d` attributes of every path — one yardstick for comparing all copies. */
 const paths = (text: string) => (text.match(/ d="[^"]+"/g) ?? []).sort()
 
-/** README 标识里荷花那一层：它嵌在 <svg x="14"> 里，字标在外面。 */
+/** Lotus layer inside the README logo: nested in `<svg x="14">`, with the wordmark outside. */
 const lotusPaths = (text: string) =>
   paths(/<svg x="\d+"[\s\S]*?<\/svg>/.exec(text)?.[0] ?? '')
 
 /**
- * 标识的三条纪律，都用会失败的断言钉住：
- *   1. 同一幅画有多份副本（组件用的 asset、favicon、README 的深浅两版）——副本漂移必须当场报错；
- *   2. 落位不做圆托、不垫色板（背景透明），尺寸由调用点给；
- *   3. README 那两版多一个字标，它是**轮廓**——查看端有没有 Inter 都得长一样。
+ * Three disciplines, each pinned by an assertion that fails on drift: every copy of the drawing
+ * must stay identical; the mark sits transparent with no disc or plate; and the README wordmarks
+ * are outlined so they render without the viewer's fonts.
  */
 describe('Avid 标识（阶段 33 · 阶段 7）', () => {
   afterEach(cleanup)
@@ -31,7 +30,7 @@ describe('Avid 标识（阶段 33 · 阶段 7）', () => {
     expect(img).toBeTruthy()
     expect(img?.getAttribute('width')).toBe('24')
     expect(img?.getAttribute('height')).toBe('24')
-    // 图是资源，不是内联 SVG：形状与配色留在 asset 文件里，不进组件
+    // the drawing is an asset, not inline SVG: shapes and colors stay out of the component
     expect(container.querySelector('svg')).toBeNull()
     expect(img?.getAttribute('src') ?? '').toContain('avid-mark')
   })
@@ -46,7 +45,7 @@ describe('Avid 标识（阶段 33 · 阶段 7）', () => {
 
   it('asset 与 favicon 是同一幅画：两边 path 集合逐字一致（对账门禁）', () => {
     const assetPaths = paths(assetSource)
-    // 9 条有厚度的色块。上限是防「重新描摹一遍」把 400 多条发丝墨线带回来。
+    // a handful of filled shapes; the upper bound blocks re-tracing the 400+ hairline paths
     expect(assetPaths.length).toBeGreaterThanOrEqual(6)
     expect(assetPaths.length).toBeLessThan(40)
     expect(paths(faviconSource)).toEqual(assetPaths)
@@ -57,7 +56,7 @@ describe('Avid 标识（阶段 33 · 阶段 7）', () => {
 
     expect(lotusPaths(logoLightSource)).toEqual(assetPaths)
     expect(lotusPaths(logoDarkSource)).toEqual(assetPaths)
-    // 每份是 9 条荷花 + 1 条字标；不做圆托、不垫色板——透明底，与 asset 同一条纪律
+    // each: 9 lotus paths + 1 wordmark, on a transparent background, same rule as the asset
     for (const source of [logoLightSource, logoDarkSource]) {
       expect(source.match(/<path/g)?.length).toBe(10)
       expect(source).not.toContain('<rect')
@@ -65,7 +64,7 @@ describe('Avid 标识（阶段 33 · 阶段 7）', () => {
   })
 
   it('字标是轮廓，不依赖查看端字体', () => {
-    // 轮廓化是这份文件存在的理由：视图里的 <text> 会随系统字体跑版。
+    // outlining is the reason these files exist: <text> reflows with the viewer's fonts
     expect(logoLightSource).not.toContain('<text')
     expect(logoDarkSource).not.toContain('<text')
   })
@@ -78,17 +77,16 @@ describe('Avid 标识（阶段 33 · 阶段 7）', () => {
   })
 
   it('没有发丝级墨线（它们在 22px 下会变成一圈黑噪点）', () => {
-    // 描摹件的边缘残迹都是 #010101 / #020202 这类近黑且极薄的 path；
-    // 清洗后一条不该剩——颜色照搬原样，但这一层不是画面的一部分。
+    // hairline traces left by tracing (#010101 etc.) are cleaned out; none may survive
     expect(assetSource).not.toMatch(/fill="#0[12]0[12]0[12]"/)
     expect(assetSource).not.toMatch(/fill="#010101"/)
   })
 
   it('favicon 自带底板，asset 没有（标签栏里没有页面底色可继承）', () => {
-    // 底板是青夜色：淡粉花瓣压在纸色上只有 1.15 对比，16px 下看不见（实拍对比过）
+    // the plate is dark: pale petals on paper measure a 1.15 contrast ratio, invisible at 16px
     expect(faviconSource).toContain('fill="#3B4A54"')
     expect(faviconSource).not.toContain('fill="#F8F4ED"')
-    // 图标本体（asset）保持原样：透明底，一个像素都不改
+    // the asset stays untouched: transparent background, not a pixel changed
     expect(assetSource).not.toContain('<rect')
   })
 
@@ -97,8 +95,8 @@ describe('Avid 标识（阶段 33 · 阶段 7）', () => {
     const asset = viewBox(assetSource)
 
     expect(asset).not.toBeNull()
-    // favicon 用的是原始 512 画布 + 居中缩放，asset 用的是收窄后的正方形视框：
-    // 两边都是正方形，标记在各自框里占的比例也就一致。
+    // the favicon keeps the original 512 canvas, the asset a narrowed square viewBox:
+    // both square, so the mark occupies the same share of either
     const fav = viewBox(faviconSource)?.split(' ').map(Number) ?? []
     expect(fav[2]).toBe(fav[3])
     expect(Number(asset?.split(' ')[2])).toBeCloseTo(Number(asset?.split(' ')[3]), 5)

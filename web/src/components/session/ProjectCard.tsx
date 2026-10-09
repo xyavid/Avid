@@ -1,9 +1,9 @@
 /**
- * 项目卡（侧栏 · 可收回）：一个「项目」就是一个选定的工作区——项目行即
- * 工作区候选（参考图形态：文件夹图标 + 名称的紧凑单行）。选中项是新会话
- * 将使用的工作区；会话归属在创建时绑定，现有会话只读（归属行打「当前会话」
- * 标记）。标题行：⊕ 新增（走宿主机文件夹选择器，不可用时按钮禁用并说明）
- * + chevron 收起/展开（可收回）。放在会话搜索框上方；右栏不再有工作区卡。
+ * Project card (sidebar, collapsible): each row is a workspace candidate, and the selected one is
+ * the workspace a new session will use — session ownership is bound at creation, so existing
+ * sessions keep theirs and only show a "current session" marker.
+ * The title row carries the add button (host folder picker, disabled with an explanation when
+ * unavailable) and a chevron that collapses the list.
  */
 
 import { useState } from 'react'
@@ -19,17 +19,17 @@ function basename(root: string): string {
 }
 
 export type ProjectCardProps = {
-  /** 注册过的工作区候选；null = 还在加载。 */
+  /** Registered workspace candidates; null = still loading. */
   workspaces: WorkspaceSummary[] | null
   activeWorkspaceId: string | null
-  /** 选中会话归属的工作区 id（打「当前会话」标记，只读）。 */
+  /** Workspace id the selected session belongs to (gets the "current session" marker). */
   sessionWorkspaceId?: string | null
   pickerAvailable?: boolean
   busy?: boolean
   hint?: string | null
   onSelectWorkspace?: (id: string) => void
   onAddByPicker?: () => void
-  /** 给了解构出「更多 → 删除」；不给则项目行只读（组件墙的静态演示就属于这种）。 */
+  /** Provide to get the "more → delete" affordance; without it the rows stay read-only. */
   onDeleteWorkspace?: (id: string) => void
 }
 
@@ -45,7 +45,7 @@ export function ProjectCard({
   onDeleteWorkspace,
 }: ProjectCardProps) {
   const [open, setOpen] = useState(true)
-  /** 展开的是哪一行的「更多」——同时只开一个，免得一排删除按钮同时挂在那儿。 */
+  /** Which row's "more" menu is open; only one at a time so delete buttons cannot pile up. */
   const [menuFor, setMenuFor] = useState<string | null>(null)
   const listScrollRef = useAutoHideScroll<HTMLDivElement>()
 
@@ -118,8 +118,7 @@ export function ProjectCard({
                       </span>
                     )}
                   </button>
-                  {/* 「更多」：默认透明（不占视线），悬停或键盘聚焦才现形；
-                      按下后常亮（expanded 一档），并展开下面那条删除栏。 */}
+                  {/* "More": hidden until hover or focus, visible while expanded. */}
                   {onDeleteWorkspace && (
                     <button
                       type="button"

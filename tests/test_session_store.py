@@ -1,4 +1,4 @@
-"""会话目录的解析（环境变量 > 设置文件 > 默认）与设置文件的读写纪律。"""
+"""Sessions-dir resolution (env > settings file > default) and settings-file write discipline."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from avid.security import userdirs
 
 @pytest.fixture
 def home(tmp_path, monkeypatch):
-    """AVID_HOME 指向临时目录（conftest 已设，这里显式拿回路径）。"""
+    """AVID_HOME points at a temp dir (set by conftest; the path is fetched explicitly here)."""
     return userdirs.avid_home()
 
 
@@ -29,7 +29,7 @@ def test_settings_file_wins_over_the_default(home, tmp_path):
 
     assert userdirs.sessions_dir() == custom
     assert userdirs.sessions_dir_source() == "settings"
-    # 默认值仍报默认值：界面要能显示「回到哪」。
+    # The default is still reported: the UI needs to show where "restore" lands.
     assert userdirs.default_sessions_dir() == home / "sessions"
     assert userdirs.sessions_dir() != userdirs.default_sessions_dir()
 
@@ -92,7 +92,7 @@ def test_write_settings_merges_only_the_given_keys(home):
     assert userdirs.read_settings()["sessions_dir"] == "/tmp/three"
 
 
-# ---------------- HTTP 面（设置页的那两个端点） ----------------
+# ---- HTTP surface (the two settings endpoints) ----
 
 
 @pytest.fixture
@@ -124,7 +124,7 @@ def test_get_reports_the_default_store(client, home):
 
 
 def test_put_moves_the_store_and_new_sessions_follow(client, tmp_path, home):
-    """改配置只影响「新会话写哪」：目录就地建好，随后建的会话落在新目录里。"""
+    """Changing the setting only affects where new sessions go: the dir is created on the spot."""
     target = tmp_path / "on-another-disk"
     assert not target.exists()
 
@@ -177,11 +177,12 @@ def test_put_refuses_while_the_environment_wins(client, tmp_path, monkeypatch):
     assert not (tmp_path / "ignored").exists()
 
 
-# ---------------- 评审修复（2026-10-09）：改会话目录不得打断正在跑的 run ----------------
+# ---- changing the store must not interrupt a live run ----
 
 
 def test_changing_the_store_is_refused_while_a_run_is_live(tmp_path):
-    """活动 run 手里握着从缓存仓库里开的会话句柄：解绑会把它关掉，模型回复就丢了。"""
+    """A live run holds session handles opened from the cached repo: rebinding closes them and the
+    model's reply is lost."""
     import threading
 
     from fastapi.testclient import TestClient
@@ -219,7 +220,7 @@ def test_changing_the_store_is_refused_while_a_run_is_live(tmp_path):
 
         release.set()
         assert wait_for_run(client, run.json()["run_id"]), "run 没结束"
-        # 回复没丢：这一次运行的两条消息都落进会话文件（也就是老位置的库）
+        # The reply is not lost: both messages of this run landed in the session file (old store).
         detail = client.get(f"/api/sessions/{session_id}").json()
         assert detail["message_count"] >= 2
 
@@ -240,7 +241,7 @@ def wait_for_run(client, run_id: str, timeout: float = 5.0) -> bool:
 
 
 def test_a_busy_services_reports_session_busy_not_a_crash(tmp_path):
-    """直接调 Services 的路径也一样（路由只是它的一个调用方）。"""
+    """The direct Services path behaves the same; the route is just one caller."""
     from avid.services import Services
     from avid.services.errors import SessionBusy
 
@@ -254,11 +255,11 @@ def test_a_busy_services_reports_session_busy_not_a_crash(tmp_path):
                 services.rebind_session_store()
             except SessionBusy as exc:
                 assert "run-fake" in str(exc) or "运行" in str(exc)
-            else:  # pragma: no cover - 没抛就是漏了守卫
+            else:  # pragma: no cover - reaching here means the guard is missing
                 raise AssertionError("有活动 run 时不该允许解绑")
         finally:
             with runs._lock:
                 runs._active.pop("s-fake", None)
-        services.rebind_session_store()  # 没有活动 run 时照样能解绑
+        services.rebind_session_store()  # with no active run, rebinding is allowed
     finally:
         services.close()

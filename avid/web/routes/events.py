@@ -13,7 +13,7 @@ router = APIRouter()
 
 
 def _cursor(request: Request, after: int | None) -> int:
-    """Picks the resume cursor: the explicit query parameter first, the Last-Event-ID header second."""
+    """Picks the resume cursor: the query parameter first, the Last-Event-ID header second."""
     if after is not None:
         return max(0, after)
     raw = request.headers.get("last-event-id", "").strip()
@@ -30,7 +30,7 @@ async def stream_events(
     after: int | None = Query(default=None, ge=0),
     deltas: int = Query(default=0, ge=0, le=1),
 ) -> StreamingResponse:
-    """Streams one run at most once, delivering delta events only when they are explicitly requested."""
+    """Streams one run once, delivering delta events only when they are explicitly requested."""
     services = current_services(request)
     record = services.runs.get(run_id)
     cursor = _cursor(request, after)
@@ -46,7 +46,7 @@ async def stream_events(
                 record,
                 after=cursor,
                 deltas=bool(deltas),
-                # Passing the constant avoids a metadata call that would scan the skill directory per stream.
+                # A constant avoids a metadata call that would scan the skill directory per stream.
                 heartbeat=STREAM_HEARTBEAT_SECONDS,
             ):
                 yield frame

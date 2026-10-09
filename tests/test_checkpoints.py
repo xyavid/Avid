@@ -1,4 +1,4 @@
-"""agent/checkpoints 的单元测试：写前快照落盘与按会话点恢复。"""
+"""agent/checkpoints: pre-write snapshots on disk and per-session-point restore."""
 
 import json
 from concurrent.futures import ThreadPoolExecutor
@@ -17,7 +17,7 @@ SESSION = "s1"
 
 
 class FixedTip:
-    """tip_seq 探针替身：返回可推进的预设 seq。"""
+    """A tip_seq probe stand-in returning a preset, advanceable seq."""
 
     def __init__(self) -> None:
         self.seq: int | None = 1
@@ -39,7 +39,7 @@ def session_dir(root: Path) -> Path:
 
 
 def test_snapshot_then_restore_returns_the_pre_write_content(tmp_path):
-    """roundtrip：改前快照，改完再 restore，内容回到快照时的样子。"""
+    """Roundtrip: snapshot before the write, restore after it, and the content is back."""
     sink, _ = make_sink(tmp_path)
     target = tmp_path / "a.txt"
     target.write_text("旧内容\n", encoding="utf-8")
@@ -54,7 +54,7 @@ def test_snapshot_then_restore_returns_the_pre_write_content(tmp_path):
 
 
 def test_tombstone_restore_deletes_the_created_file(tmp_path):
-    """墓碑：快照时文件尚不存在，恢复 = 删除该文件。"""
+    """Tombstone: the file did not exist at snapshot time, so restore deletes it."""
     sink, _ = make_sink(tmp_path)
     target = tmp_path / "created.txt"
 
@@ -68,7 +68,7 @@ def test_tombstone_restore_deletes_the_created_file(tmp_path):
 
 
 def test_second_snapshot_in_the_same_seq_is_skipped(tmp_path):
-    """同一 seq 目录内同一路径只保留最早的「写前」状态。"""
+    """Within one seq directory a path keeps only its earliest pre-write state."""
     sink, _ = make_sink(tmp_path)
     target = tmp_path / "a.txt"
     target.write_text("v0", encoding="utf-8")
@@ -84,7 +84,7 @@ def test_second_snapshot_in_the_same_seq_is_skipped(tmp_path):
 
 
 def test_paths_under_avid_are_never_snapshotted(tmp_path):
-    """.avid 之下的路径不快照（防递归），也不留下任何检查点目录。"""
+    """Paths under .avid are never snapshotted (recursion guard), leaving no checkpoint dir."""
     sink, _ = make_sink(tmp_path)
     target = tmp_path / ".avid" / "checkpoints" / SESSION / "blob-0000"
     target.parent.mkdir(parents=True)
@@ -95,7 +95,7 @@ def test_paths_under_avid_are_never_snapshotted(tmp_path):
 
 
 def test_tip_seq_change_produces_a_new_seq_directory(tmp_path):
-    """落点跟随会话 tip 条目：seq 变化产生新的 12 位零填充分隔目录。"""
+    """Each seq directory is named with 12 zero-padded digits."""
     sink, tip = make_sink(tmp_path)
     target = tmp_path / "a.txt"
     target.write_text("v0", encoding="utf-8")
@@ -114,7 +114,7 @@ def test_tip_seq_change_produces_a_new_seq_directory(tmp_path):
 
 
 def test_snapshot_fails_closed_when_the_probe_breaks(tmp_path):
-    """tip_seq 探针异常 = 无法归属落点 = 快照失败，调用方必须拒写。"""
+    """A probe error means no landing spot: the snapshot fails and the write must be refused."""
 
     def broken() -> int | None:
         raise RuntimeError("会话已关闭")
@@ -128,7 +128,7 @@ def test_snapshot_fails_closed_when_the_probe_breaks(tmp_path):
 
 
 def test_snapshot_without_a_session_tip_refuses(tmp_path):
-    """tip 为 None = 会话还没有可归属的落库条目，同样按失败处理（拒写）。"""
+    """A None tip means no committed entry to attach to; same failure and write refusal."""
     tip = FixedTip()
     tip.seq = None
     sink = DirCheckpointSink(root=tmp_path, session_id=SESSION, tip_seq=tip)
@@ -140,7 +140,7 @@ def test_snapshot_without_a_session_tip_refuses(tmp_path):
 
 
 def test_blob_roundtrips_non_utf8_bytes(tmp_path):
-    """快照按字节保存：非 UTF-8 内容也原样恢复。"""
+    """Snapshots are byte-exact, so non-UTF-8 content restores unchanged."""
     sink, _ = make_sink(tmp_path)
     target = tmp_path / "raw.bin"
     target.write_bytes(b"\xff\xfe\x00binary")
@@ -154,7 +154,7 @@ def test_blob_roundtrips_non_utf8_bytes(tmp_path):
 
 
 def test_parallel_snapshots_of_the_same_seq_all_land(tmp_path):
-    """并行 subagent 共享一个 sink：同一 seq 的并发快照互不丢条目。"""
+    """Parallel subagents share one sink: concurrent snapshots of the same seq lose no entries."""
     sink, _ = make_sink(tmp_path)
     targets = [tmp_path / f"f{index}.txt" for index in range(8)]
     for target in targets:
@@ -178,7 +178,7 @@ def test_parallel_snapshots_of_the_same_seq_all_land(tmp_path):
 
 
 def test_earliest_snapshot_wins_across_seq_dirs(tmp_path):
-    """多轮编辑：恢复取该路径第一次被改前的内容；through_seq 推进则取其后的最早一份。"""
+    """Restore takes the earliest pre-write content; through_seq advances that point."""
     sink, tip = make_sink(tmp_path)
     target = tmp_path / "a.txt"
     target.write_text("v0", encoding="utf-8")
@@ -221,7 +221,7 @@ def test_restore_through_a_future_seq_says_nothing_to_do(tmp_path):
 def chain_entry(
     seq: int, role: str, *, entry_type: str = MESSAGE_ENTRY, parent: str | None = None
 ) -> Entry:
-    """构造分支链上的真实会话条目（字面量漂移会在这里暴露）。"""
+    """Build a real entry on the branch chain; literal drift surfaces here."""
     return Entry(
         id=f"e{seq}",
         parent_id=parent,
@@ -233,7 +233,7 @@ def chain_entry(
 
 
 def test_rewind_target_finds_the_last_user_input():
-    """锚点是最后一条 user 转录消息：返回它的父条目 id 与它自己的 seq。"""
+    """The anchor is the last user transcript message: return its parent id and own seq."""
     chain = [
         chain_entry(1, "user"),
         chain_entry(2, "assistant", parent="e1"),
@@ -245,14 +245,14 @@ def test_rewind_target_finds_the_last_user_input():
 
 
 def test_rewind_target_hits_a_bare_user_tail():
-    """链尾就是 user 消息（裸 prompt 还没有回复）也算命中；链首的父是 None。"""
+    """A user message at the chain tail hits too; the first entry's parent is None."""
     assert rewind_target([chain_entry(1, "user")]) == RewindTarget(
         parent_id=None, through_seq=1
     )
 
 
 def test_rewind_target_never_anchors_on_a_notice():
-    """notice 条目的 role 同为 user，但不是人说的话：不能当锚点，也挡不住更早的锚点。"""
+    """Notice entries share role user but never anchor, and never block an earlier anchor."""
     chain = [
         chain_entry(1, "user"),
         chain_entry(2, "assistant", parent="e1"),

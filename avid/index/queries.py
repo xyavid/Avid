@@ -1,13 +1,8 @@
-"""读侧：会话与条目的查询，以及全文检索。
+"""Read side: session and entry queries plus full-text search; rows carry their byte range and the
+caller reads the original text from JSONL.
 
-这一层不写任何东西，也不猜：查到的每一行都带着它在文件里的位置（字节区间），
-调用方要原文就回 JSONL 取。列表类查询默认按最近更新倒序——「找刚才那个会话」
-是这里最常见的用法。
-
-FTS5 查询语法在这里收口：用户输入里可能有 `AND`、引号、`*`、括号，直接塞进 MATCH
-会得到语法错误甚至非预期的表达式。策略是**把词当成词**：拆成词元、逐个加引号、
-词之间按 AND 连接；`<3` 字符的词元走 LIKE 扫描（trigram 索引按 3 字符成组，短词它
-匹配不到，而这个代价在几千行的量级上是毫秒）。
+User input is tokenised and quoted as literals joined by AND, and tokens shorter than 3 characters
+take a LIKE scan because the trigram index cannot see them.
 """
 
 from __future__ import annotations
@@ -25,13 +20,13 @@ from .types import (
     SearchHit,
 )
 
-# 短于这个长度的词元不进 FTS（trigram 的粒度），改走 LIKE 扫描。
+# Tokens shorter than this skip FTS (trigram granularity) and take a LIKE scan.
 MIN_FTS_TOKEN = 3
-# 默认返回条数；搜索是给人看的，不是导出。
+# Default result count; search is for people, not for export.
 DEFAULT_SEARCH_LIMIT = 50
-# 片段窗口：命中词两侧各留这些字符。
+# Snippet window: characters kept on each side of a hit.
 SNIPPET_PAD = 60
-# 什么算一个词元：CJK、字母数字与下划线连续段。
+# What counts as a token: runs of CJK, alphanumerics and underscores.
 _TOKEN = re.compile(r"[\w\u4e00-\u9fff]+", re.UNICODE)
 _SESSION_FIELDS = (
     "session_id",
@@ -242,9 +237,7 @@ def search_entries(
 
     hits: list[SearchHit] = []
     if short_words:
-        # 有短词时整条查询都走 LIKE：短词 FTS 看不见，而两路各查一遍再合并只能得到**并集**
-        # ——那与「多个词按 AND」的承诺矛盾（实测：专有词 + 两字中文词会捞回只含短词的会话）。
-        # 几千行的量级是毫秒级，所以宁可全扫也要语义正确：所有词（长与短）都必须是子串。
+        # A short token sends every word through LIKE; merging an FTS pass breaks the AND contract.
         clauses = [" AND ".join("e.search_text LIKE ? ESCAPE '\\'" for _ in words)]
         params: list[object] = [_like_pattern(word) for word in words]
         clauses.extend(scope)
@@ -252,7 +245,7 @@ def search_entries(
             conn, where=" AND ".join(clauses), params=params, needles=words, limit=limit
         )
     elif long_words:
-        # 加引号 = 当成字面量：既不解析 AND/OR，也不会把 * 当通配符。
+        # Quoting makes each word a literal: AND/OR is not parsed and * is not a wildcard.
         expression = " AND ".join(f'"{word}"' for word in long_words)
         where = ["e.entry_pk IN (SELECT rowid FROM entries_fts WHERE entries_fts MATCH ?)"]
         params = [expression, *scope_params]
@@ -278,8 +271,7 @@ def index_stats(conn: sqlite3.Connection) -> dict[str, Any]:
             "SELECT index_status, COUNT(*) AS n FROM sessions GROUP BY index_status"
         )
     }
-    # 「落后」= 没读到头（游标 < 长度）、或记录指向的文件已经不在（幽灵行）。两者都让
-    # 检索结果不可信，所以都算进这个数——它要能当新鲜度信号用。
+    # "Behind" = cursor short of EOF or the file gone; both make search results untrustworthy.
     behind = 0
     for row in conn.execute(
         "SELECT file_path, file_size, indexed_bytes FROM sessions WHERE index_status = ?",

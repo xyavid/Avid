@@ -1,7 +1,8 @@
-"""RunSpec：一次运行的只读输入。
+"""RunSpec: one run's read-only input.
 
-resolve() 是唯一构造入口——模型配置解析、窗口探测、工具表与 schemas、
-并发上限都在这里收口；运行期的可变状态（RunState）不属于它。
+resolve() is the only construction entry — model config resolution, window probing, the tool table
+and schemas, and the parallel limit all land there; mutable run-time state (RunState) is not part
+of it.
 """
 
 from __future__ import annotations
@@ -25,8 +26,6 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class RunSpec:
-    """一次运行的只读输入：取代旧 agent_loop 的 22 参数散布。"""
-
     config: Config
     chat: Callable[..., Turn]
     tools: list[dict[str, Any]]

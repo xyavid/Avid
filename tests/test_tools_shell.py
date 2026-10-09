@@ -50,11 +50,8 @@ def test_bash_truncates_output(sandbox, monkeypatch):
 
 
 def test_bash_truncation_keeps_the_tail_and_the_exit_code(sandbox, monkeypatch):
-    """截断保尾，且退出码不被切掉。
-
-    长输出的开头信息量最低，最近的几行（报错、汇总）才是结论；`[exit N]` 若跟着正文
-    一起被切，模型会分不清"命令失败了"和"输出被截断了"。
-    """
+    """Truncation keeps the tail and the exit code: early output is least informative, and
+    `[exit N]` must survive or failure looks like truncation."""
     monkeypatch.setattr(shell, "MAX_OUTPUT_CHARS", 200)
 
     result = bash(
@@ -83,10 +80,8 @@ def test_timeout_is_clamped_and_tolerant():
 
 
 def test_bash_bounds_a_flooding_command(sandbox):
-    """输出上限必须在**读的时候**生效：以前 capture_output 会把整个输出读进内存。
-
-    `yes` 是无尽的输出；超过"上限 × 余量"就判定为刷屏并终止命令，而不是一路读完。
-    """
+    """The output cap applies while reading: a command flooding past cap x margin is killed,
+    not read to the end."""
     import time
 
     started = time.perf_counter()
@@ -98,12 +93,8 @@ def test_bash_bounds_a_flooding_command(sandbox):
 
 
 def test_bash_timeout_kills_the_whole_process_group(sandbox):
-    """超时要连子孙一起清理：只 kill 直接子进程时，后台子壳会活下来继续干活。
-
-    命令在后台立刻起一个"1.5 秒后写标记"的子壳，超时设 1 秒。若只杀 bash 自己，
-    那个子壳会在 1.5 秒时把标记写出来——这正是 `bash -c 'npm run …'` 留下的
-    一堆孤儿进程。
-    """
+    """A timeout kills the whole process group: killing only `bash` leaves the background
+    subshell alive to keep working."""
     import time
 
     result = bash(
@@ -114,11 +105,11 @@ def test_bash_timeout_kills_the_whole_process_group(sandbox):
     )
     assert "超时" in result
 
-    time.sleep(1.2)  # 越过子壳原本要写标记的时刻
+    time.sleep(1.2)  # past the moment the subshell was to write the marker
     assert not (sandbox / "late-marker").exists(), "子进程活下来了：超时没清进程组"
 
 
-# ---------------------------------------------------------------- 平台适配
+# ---- platform adaptation ----
 
 
 def test_shell_argv_selects_the_interpreter_per_platform():
@@ -133,7 +124,7 @@ def test_shell_argv_selects_the_interpreter_per_platform():
     windows = shell_argv("Get-Date", platform="win32")
     assert windows[0].endswith(("pwsh", "pwsh.exe", "powershell", "powershell.exe"))
     assert "-NoProfile" in windows and "-NonInteractive" in windows
-    # -EncodedCommand（UTF-16LE base64）命令原样到达，绕开命令行转义；前缀强制 UTF-8 输出
+    # -EncodedCommand (UTF-16LE base64) bypasses quoting; the prefix forces UTF-8 output
     assert windows[-2] == "-EncodedCommand"
     script = base64.b64decode(windows[-1]).decode("utf-16-le")
     assert script.startswith(shell_module._UTF8_PREFIX)

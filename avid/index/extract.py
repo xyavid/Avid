@@ -1,24 +1,8 @@
-"""哪条记录的哪段文本进 search_text —— 全库唯一一处规则。
+"""The single place deciding which text of an entry becomes `search_text`: message bodies, tool-call
+arguments and compaction summaries go in, images become a marker line and never base64.
 
-改这里等于改索引的**内容**（不是结构），所以规则写在模块头而不是散在 SQL 里：
-
-- `user` / `assistant` 正文全文进（这是人真正会搜的东西）；
-- **Image parts index as one marker line** (name / type / size): a session is findable by
-  screenshot, but base64 never enters the index (it would only add volume and exposure);
-- `assistant` 的 tool_calls 也进（参数里有路径与命令：搜得到「哪个会话动过 pyproject.toml」），
-  每个调用的参数截断，避免一次把大段 JSON 灌进去；
-- `tool` 结果截前 2000 字符：够定位「哪个会话跑过这个命令」，不值得为全文付索引体积与
-  敏感面（工具输出里可能有凭据、大文件内容）；
-- `notice` / `error` 进（它们是给人看的行，同一段规则不加例外）；
-- value 行一般不进（标题走会话级字段）；但**压缩摘要**进——它只落在游标值里、不是条目
-  （`transcript.replace_all` 插入的那条摘要消息从不被 emit，所以它不是条目），而它概括了被压掉的
-  那段历史，正是「我什么时候讨论过这个」要找的东西。
-
-单条封顶 8000 字符。超限不是错误（不报 last_error）——只是搜不到尾部，这在「找会话」
-这件事上可以接受，而它保证了一条离谱的巨无霸消息不会把库撑爆。
-
-**改这里的规则要跑一次 `avid index rebuild`**：索引从 JSONL 增量补齐，它不会知道「内容规则变了」
-（文件没动，游标没动）——只有重建才让旧文本按新规则重算。
+Tool results are truncated, the whole row is capped at 8000 characters, and changing this
+rule requires one `avid index rebuild` because incremental scans cannot notice it.
 """
 
 from __future__ import annotations
@@ -80,10 +64,8 @@ def entry_text(entry_type: str, message: dict[str, Any] | None) -> tuple[str | N
 
 
 def compaction_text(value: Any) -> str:
-    """The compaction cursor's summary as searchable text.
-
-    值是 `{"through_seq": …, "summary": <结构化检查点>, "keep": …}`：只取 summary 的**内容**
-    （键名不进——搜 "facts" 命中一切毫无意义），按出现顺序拼成一段。
+    """The compaction cursor's summary as searchable text: only the summary's own content,
+    in order, with the keys left out.
     """
     if not isinstance(value, dict):
         return ""

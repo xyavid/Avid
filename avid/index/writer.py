@@ -1,11 +1,7 @@
-"""把扫描结果写进库：一个事务里插条目、推游标、记状态。
+"""Write scan results into the database: rows, cursor and status in one transaction.
 
-**游标与这批条目同事务提交**，这是这一层唯一真正要命的不变量：崩在中间只会让下一次
-重做这批，不会出现「游标前进了、条目却没入库」——那种缺口靠 `check` 是查不出来的
-（文件好好的，库只是少了一批）。
-
-写失败不是异常路径的终点：`mark_error` 把原因留在 `last_error` 里、状态标 error，
-调用方（索引器）吞掉异常继续跑别的会话。索引落后是允许的，串起运行不是。
+The cursor commits together with the rows of that batch, so a crash only redoes the batch and never
+leaves the cursor ahead of the rows; a failure lands in `last_error` and the indexer moves on.
 """
 
 from __future__ import annotations

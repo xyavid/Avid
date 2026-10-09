@@ -1,4 +1,4 @@
-"""Route package whose ``current_services`` helper is the only way routes obtain the service container."""
+"""Route package; ``current_services`` is the only way routes obtain the service container."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from ...services import Services
 
 
 def current_services(request: Request | WebSocket) -> Services:
-    # WebSocket 也从 app.state 取容器（终端桥等 WS 端点与 HTTP 路由同一套服务）。
+    # WebSocket endpoints read the container from app.state too, the same Services as HTTP routes.
     return request.app.state.services
 
 

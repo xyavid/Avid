@@ -1,9 +1,7 @@
 /**
- * 工作区文件（右列的默认面板）：列目录、点开看文件。
- *
- * 只读、只在一个工作区里——越界（`..` 与 symlink 穿透）、凭据类、超大与二进制都由
- * 后端拦下并给出说法，这里只做导航与呈现，错误原样转述后端的话（前端不另编一套）。
- * 进面板落在工作区根；换会话（工作区变了）也回到根。
+ * Workspace files panel: lists a directory and opens a file for preview.
+ * Read-only and confined to one workspace; the backend rejects escapes (`..`, symlink traversal),
+ * credential files, oversize reads and binaries, and this panel relays its message verbatim.
  */
 
 import { useCallback, useEffect, useState } from 'react'
@@ -16,9 +14,9 @@ import { cx } from '../../ui/cx'
 import { Icon } from '../../ui/Icon'
 
 export type FilesPanelProps = {
-  /** 归属工作区 id；null = 还没有选中会话。 */
+  /** Owning workspace id; null = no session selected yet. */
   workspaceId: string | null
-  /** 工作区根：预览时显示完整路径，拼的就是它。 */
+  /** Workspace root: the full path shown in the preview is built from it. */
   root?: string | null
 }
 
@@ -29,13 +27,13 @@ function sizeText(size: number | null): string {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`
 }
 
-/** 预览里显示的完整路径：工作区根 + 相对路径（没有根就只给相对路径）。 */
+/** Full path shown in the preview: root + relative path (relative alone when root is absent). */
 export function fullPath(root: string | null, relative: string): string {
   if (root === null || root === '') return relative
   return `${root.replace(/\/+$/, '')}/${relative}`
 }
 
-/** 面包屑：根 + 每一级；点哪一级就回哪一级。 */
+/** Breadcrumbs: root + one per level; clicking a level navigates back to it. */
 export function crumbs(path: string): { name: string; path: string }[] {
   const parts = path === '' ? [] : path.split('/')
   const trail = [{ name: '工作区', path: '' }]
@@ -85,7 +83,7 @@ export function FilesPanel({ workspaceId, root = null }: FilesPanelProps) {
     [workspaceId],
   )
 
-  // 进面板 / 换工作区：回到根。
+  // Entering the panel or switching workspace goes back to the root.
   useEffect(() => {
     setPath('')
     setList(null)
@@ -134,7 +132,7 @@ export function FilesPanel({ workspaceId, root = null }: FilesPanelProps) {
                 二进制文件，不预览内容（{sizeText(file.size)}）
               </p>
             ) : (
-              // 与正文里的代码块同一个组件：路径行 + 语言标 + 复制 + 行号。
+              // Same component as chat code blocks: path row + language tag + copy + line numbers.
               <CodeBlock
                 lang={langOf(file.path)}
                 text={file.text ?? ''}

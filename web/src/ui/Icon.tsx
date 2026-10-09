@@ -1,40 +1,8 @@
 /**
- * 线性 SVG 图标集（报告 §9 图标规范）：24 视框、stroke=currentColor、
- * stroke-width 1.5、fill none、round 端点；不用 emoji、不用实心 fill。
- *
- * 纪律：**每个图标都有真实使用点**（下表锚定到组件与阶段），不做"可能用得上"
- * 的预置集；新增图标先在表里登记用途再画。墙上已有的图标（check / file-frame）
- * 逐字取自 Hana 组件墙，其余按同族 feather 风补齐。
- *
- * | 图标 | 首个使用点 |
- * |---|---|
- * | check | 成功徽章「已编译」等（阶段 2 ✓） |
- * | user-check | 权限胶囊「默认」（毁灭级命令确认一次，阶段 4/51） |
- * | x | 审批拒绝、对话框关闭、清空搜索（阶段 3–4） |
- * | plus | 新建会话、composer 附加（阶段 3–4；阶段 13 落成侧栏新建） |
- * | search | 侧栏会话搜索框（阶段 3） |
- * | pencil | 会话行的「重命名」（悬停现形，行内编辑，阶段 13） |
- * | trash-2 | 会话行的「删除」（悬停现形，确认条先行，阶段 13） |
- * | message-square | 会话列表空态（阶段 3） |
- * | send / paperclip / square | composer 发送 / 附件 / 停止运行（阶段 4） |
- * | copy | 消息动作「复制回复」（阶段 4） |
- * | file-frame | 工具卡的通用文件头（阶段 3，墙原件） |
- * | file-text | 右栏文件清单条目（阶段 4） |
- * | terminal | bash 工具卡（阶段 3）；globe 备用（联网工具移除后空置） |
- * | folder | 工作区面板（阶段 4） |
- * | list-checks | 待办/计划块（阶段 4） |
- * | git-branch | 分叉「分支」那个动作（阶段 4）——子智能体另有 bot，两件事别共用一个记号 |
- * | bot | 子智能体：工具卡、右列面板、子任务列表（阶段 54） |
- * | shield-check | 审批条与 dock 审查页签（阶段 4/48） |
- * | alert-circle | 失败运行与错误态（阶段 3） |
- * | chevron-down | 工具卡与折叠块的展开（阶段 3） |
- * | settings | 设置入口（阶段 4+） |
- * | sun / moon | 主题切换（阶段 6） |
- * | user | 消息组的用户侧标识（阶段 4） |
- * | more-horizontal | 项目行的「更多」（悬停现形，按下出删除，阶段 12） |
- * | sparkle | 输入区的模型选择胶囊（阶段 13） |
- * | panel-right | 顶栏的侧边 dock 入口（阶段 48） |
- * | activity | dock 进程面板页签（阶段 48） |
+ * Linear SVG icon set: 24 viewBox, `stroke="currentColor"`, stroke-width 1.5, fill none,
+ * round caps and joins — never emoji or filled shapes.
+ * Every icon must have a real call site before it is added, and distinct actions get distinct
+ * icons (e.g. subagents use `bot`, not `git-branch`).
  */
 
 import type { ReactNode } from 'react'

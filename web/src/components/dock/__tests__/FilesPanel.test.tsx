@@ -8,7 +8,7 @@ import { FilesPanel, crumbs, fullPath } from '../FilesPanel'
 const listFiles = vi.fn()
 const readFile = vi.fn()
 
-// vi.mock 的工厂会被提升到文件顶部，类定义必须跟着一起提升（vi.hoisted）。
+// vi.mock factories are hoisted, so the class must be hoisted too (vi.hoisted).
 const { FakeApiError } = vi.hoisted(() => {
   class FakeApiError extends Error {
     readonly code = 'file_outside'
@@ -48,7 +48,7 @@ describe('工作区文件面板', () => {
     expect(langOf('src/main.py')).toBe('python')
     expect(langOf('a.tar.gz')).toBe('gz')
     expect(langOf('Makefile')).toBeNull()
-    // 语言标与高亮器同族：工具卡详情的代码视图也吃这张表（markdown/langOf.ts）
+    // Same language table as the highlighter: tool-card code views use it too (markdown/langOf.ts).
   })
 
   it('面包屑：根 + 每一级，都能点回去', () => {
@@ -87,7 +87,7 @@ describe('工作区文件面板', () => {
 
     readFile.mockResolvedValue({ path: 'src/main.py', size: 12, text: 'print(1)\n', binary: false, truncated: false })
     fireEvent.click(screen.getByText('main.py'))
-    // 高亮把代码拆成多个 span，所以按整块文本断言
+    // Highlighting splits the code into spans, so assert on the whole block's text.
     const code = await screen.findByText('python')
     expect(code.closest('div')?.parentElement?.textContent).toContain('print(1)')
     expect(readFile).toHaveBeenCalledWith('w1', 'src/main.py')

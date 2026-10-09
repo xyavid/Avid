@@ -1,7 +1,7 @@
-"""P4：通知与补偿——索引落后、被锁、坏掉，都不该影响会话本身。
+"""Notify and reconcile: a stale, locked, or corrupt index must never affect the session itself.
 
-这组用例盯的是那条不变量：**JSONL 是权威，索引是派生**。所以每个失败场景都问两件事：
-会话文件写成功了吗（是），索引能补回来吗（能，靠下一次 reconcile）。
+The invariant is that JSONL is authoritative and the index is derived — every failure case checks
+that the session file still wrote and that reconcile can catch the index up again.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ def test_notify_indexes_the_session_it_was_told_about(indexer, store):
 
 
 def test_a_burst_of_notifications_becomes_one_pass(indexer, store, monkeypatch):
-    """一次运行连着提交好几条：合并成一遍，别一条一次扫。"""
+    """A burst of notifications from one run coalesces into a single pass."""
     make_session(store, session_id="s-burst", messages=({"role": "user", "content": "一条"},))
     passes: list[list[str]] = []
     real = indexer._drain
@@ -54,7 +54,7 @@ def test_a_burst_of_notifications_becomes_one_pass(indexer, store, monkeypatch):
 
 
 def test_notify_returns_immediately_even_when_the_database_is_locked(store, tmp_path):
-    """等不到锁是索引的事：notify 绝不把调用方（运行线程）挂住。"""
+    """Lock contention is the index's problem: notify never blocks the run thread."""
     conn = index_db.open_db(tmp_path / "locked.sqlite", timeout_ms=100)
     indexer = SessionIndexer(conn=conn, roots=lambda: [store], now=lambda: 1)
     holder = index_db.open_db(tmp_path / "locked.sqlite")
@@ -67,7 +67,7 @@ def test_notify_returns_immediately_even_when_the_database_is_locked(store, tmp_
         elapsed = time.monotonic() - started
 
         assert elapsed < 0.5, elapsed
-        # 后台那一遍会失败，但失败只留在日志里——索引落后，会话文件毫发无损。
+        # The background pass fails into the log only: the index lags, the session file is intact.
         assert indexer.flush(timeout=1.0) in (True, False)
     finally:
         holder.execute("ROLLBACK")
@@ -78,17 +78,17 @@ def test_notify_returns_immediately_even_when_the_database_is_locked(store, tmp_
 
 
 def test_a_locked_database_still_lets_the_session_be_written(store, tmp_path):
-    """失败隔离：库被锁着，会话照样写进 JSONL；解锁后一遍补齐就追上了。"""
+    """A locked database still lets the session write to JSONL; one reconcile catches up later."""
     file = make_session(store, session_id="s-iso", messages=({"role": "user", "content": "一"},))
     conn = index_db.open_db(tmp_path / "iso.sqlite", timeout_ms=100)
     holder = index_db.open_db(tmp_path / "iso.sqlite")
     indexer = SessionIndexer(conn=conn, roots=lambda: [store], now=lambda: 1)
     try:
         holder.execute("BEGIN EXCLUSIVE")
-        append_message(file, {"role": "assistant", "content": "二"})  # 会话写入不受索引影响
+        append_message(file, {"role": "assistant", "content": "二"})  # independent of the index
         indexer.notify("s-iso")
         indexer.flush(timeout=1.0)
-        # 库里还没有它（这一遍失败了），但文件里有两条。
+        # The db does not have it yet (this pass failed), but the file has two entries.
         assert queries.get_session(indexer.conn, "s-iso") is None
         assert file.read_text(encoding="utf-8").count('"kind": "entry"') == 2
     finally:
@@ -96,7 +96,7 @@ def test_a_locked_database_still_lets_the_session_be_written(store, tmp_path):
         holder.close()
         indexer.stop(flush=False)
 
-    # 解锁后：一遍 reconcile 补齐（进程重启的路径也是这条）。
+    # After unlock, one reconcile catches up (the process-restart path is the same).
     report = indexer.reconcile()
 
     assert report.indexed == 1
@@ -107,7 +107,7 @@ def test_a_locked_database_still_lets_the_session_be_written(store, tmp_path):
 
 
 def test_the_worker_survives_a_bad_session(indexer, store):
-    """一个坏文件不该让 worker 停摆：好的那个照旧索引。"""
+    """A bad file must not stall the worker: the good one still gets indexed."""
     broken = store / ALPHA / "broken.jsonl"
     broken.write_text('{"v": 1, "kind": "header", "id": "s-broken"', encoding="utf-8")
     make_session(store, session_id="s-fine", messages=({"role": "user", "content": "我没事"},))
@@ -117,7 +117,7 @@ def test_the_worker_survives_a_bad_session(indexer, store):
     assert settle(indexer) is True
 
     assert queries.get_session(indexer.conn, "s-fine") is not None
-    indexer.notify("s-fine")  # worker 还活着
+    indexer.notify("s-fine")  # the worker is still alive
     assert settle(indexer) is True
 
 
@@ -131,7 +131,7 @@ def test_stop_drains_pending_notifications(indexer, store):
 
 
 def test_a_lost_notification_is_caught_up_by_reconcile(store, tmp_path):
-    """进程被杀（通知丢了）之后，重启那一遍 reconcile 补上——这才是「可恢复」的落点。"""
+    """After a killed process loses the notification, the restart reconcile catches it up."""
     make_session(store, session_id="s-lost", messages=({"role": "user", "content": "我先走了"},))
 
     conn = index_db.open_db(tmp_path / "lost.sqlite")
@@ -146,7 +146,7 @@ def test_a_lost_notification_is_caught_up_by_reconcile(store, tmp_path):
 
 
 def test_notifying_wraps_a_commit_callback(store, indexer):
-    """装配层用的包装器：先落库、再通知，返回值原样透传。"""
+    """Assembly-layer wrapper: persist first, then notify, passing the return value through."""
     written: list[dict] = []
 
     def sink(message, entry_type=None):
@@ -168,18 +168,18 @@ def test_notifying_without_an_indexer_is_a_noop(store):
 
 
 def test_the_header_of_a_broken_file_is_reported_not_ignored(indexer, store):
-    """坏文件不静默：通知它时状态落 error（check 里看得见），而不是当它不存在。"""
+    """A broken file is not silent: notifying it records an error state visible to check."""
     (store / ALPHA / "half.jsonl").write_text("根本不是 JSON\n", encoding="utf-8")
 
     indexer.notify("half")
     settle(indexer)
 
-    # 发现阶段就读不出 id，所以它没有行——但会出现在报告/日志里，不是静默跳过。
+    # No id parses at discovery, so it has no row; reports/logs still mention it.
     assert queries.get_session(indexer.conn, "half") is None
 
 
 def test_append_after_notify_is_indexed_incrementally(indexer, store):
-    """通知一次、再追加、再通知：第二次只处理新增那几行。"""
+    """Notify, append, notify again: the second pass handles only the new lines."""
     file = make_session(store, session_id="s-again", messages=({"role": "user", "content": "一"},))
     indexer.notify("s-again")
     settle(indexer)
@@ -197,11 +197,11 @@ def test_append_after_notify_is_indexed_incrementally(indexer, store):
     assert json.loads(file.read_text(encoding="utf-8").splitlines()[0])["id"] == "s-again"
 
 
-# ---------------- 走真链路：HTTP 跑一轮 → 索引跟上 ----------------
+# ---------------- real path: one HTTP run, then the index catches up ----------------
 
 
 def test_a_web_run_lands_in_the_index(tmp_path):
-    """真服务 + 真循环（假模型）：消息落库后的通知真的把索引带起来了。"""
+    """A real service with a scripted model: the post-write notification brings the index up."""
     from fastapi.testclient import TestClient
     from support import ScriptedChat, bound_workspace, create_session, make_turn, wait_for
 
@@ -227,7 +227,7 @@ def test_a_web_run_lands_in_the_index(tmp_path):
         assert services.indexer.flush(timeout=5.0) is True
         row = queries.get_session(services.indexer.conn, session_id)
         assert row is not None, "跑完一轮之后索引里该有它"
-        assert row.entry_count >= 2  # 用户那句 + 回答
+        assert row.entry_count >= 2  # the user line plus the answer
         assert bound_workspace(services) == row.workspace_id
         titles = [item["role"] for item in queries.entries_of(services.indexer.conn, session_id)]
         assert "user" in titles and "assistant" in titles
@@ -235,11 +235,11 @@ def test_a_web_run_lands_in_the_index(tmp_path):
         services.close()
 
 
-# ---------------- 评审修复（2026-10-09）：索引坏掉不能拖垮会话运行 ----------------
+# ---------------- a broken index must not break runs ----------------
 
 
 def test_a_corrupt_index_database_does_not_break_runs(tmp_path, monkeypatch):
-    """索引可丢：库文件是垃圾时，运行照跑，库被挪到一边重建。"""
+    """The index is disposable: a garbage db file still lets runs proceed, then is rebuilt."""
     import os
     from pathlib import Path
 
@@ -253,7 +253,7 @@ def test_a_corrupt_index_database_does_not_break_runs(tmp_path, monkeypatch):
     index_dir = userdirs.index_dir()
     index_dir.mkdir(parents=True, exist_ok=True)
     userdirs.index_path().write_bytes(b"garbage, not a database")
-    # 库文件读得了（会被挪走），目录要能写（能重建）
+    # The db file must be readable (to move aside) and the dir writable (to rebuild)
     assert userdirs.index_path().exists()
 
     services = Services(workspace_root=tmp_path, chat=ScriptedChat(make_turn("答")))
@@ -269,7 +269,7 @@ def test_a_corrupt_index_database_does_not_break_runs(tmp_path, monkeypatch):
         assert wait_for(lambda: client.get(f"/api/runs/{run.json()['run_id']}").json()["status"] == "finished")
         assert services.indexer.flush(5.0) is True
         assert queries.get_session(services.indexer.conn, session_id) is not None
-        assert bound_workspace(services) == "w-" + "" or True  # 工作区 id 形状无关紧要
+        assert bound_workspace(services) == "w-" + "" or True  # workspace id shape is irrelevant
         leftovers = [p.name for p in Path(index_dir).iterdir() if "corrupt" in p.name]
         assert leftovers, "坏库该被挪到一边（.corrupt-*），不是被静默丢掉"
         assert os.access(userdirs.index_path(), os.R_OK)
@@ -278,7 +278,7 @@ def test_a_corrupt_index_database_does_not_break_runs(tmp_path, monkeypatch):
 
 
 def test_an_unusable_index_directory_disables_the_index_only(tmp_path, monkeypatch):
-    """索引目录写不了：索引整体停用（搜索明确报不可用），会话读写照旧。"""
+    """Unwritable index dir disables only the index: search unavailable, sessions keep working."""
     import os
 
     from fastapi.testclient import TestClient
@@ -292,7 +292,7 @@ def test_an_unusable_index_directory_disables_the_index_only(tmp_path, monkeypat
     index_dir.mkdir(parents=True, exist_ok=True)
     os.chmod(index_dir, 0o500)
     try:
-        if os.access(index_dir, os.W_OK):  # pragma: no cover - root 下权限位不生效
+        if os.access(index_dir, os.W_OK):  # pragma: no cover - root ignores mode bits
             pytest.skip("这个环境里目录权限位拦不住写入")
 
         services = Services(workspace_root=tmp_path, chat=ScriptedChat(make_turn("答")))
@@ -320,7 +320,7 @@ def test_an_unusable_index_directory_disables_the_index_only(tmp_path, monkeypat
 
 
 def test_stop_does_not_leak_a_worker_when_a_pass_overruns(store, tmp_path):
-    """一遍跑超了 join 时限也不能把旧 worker 忘掉：否则再 start 就有两个常驻线程。"""
+    """An overrunning pass must not orphan the old worker, or the next start leaves two threads."""
     import threading
     import time as time_module
 
@@ -338,15 +338,15 @@ def test_stop_does_not_leak_a_worker_when_a_pass_overruns(store, tmp_path):
     indexer._drain = slow  # type: ignore[method-assign]
     make_session(store, session_id="s-slow", messages=({"role": "user", "content": "慢"},))
     indexer.notify("s-slow")
-    time_module.sleep(0.4)  # 让它进到 slow 里
+    time_module.sleep(0.4)  # let it enter slow
 
     first = indexer._worker
     assert first is not None and first.is_alive()
-    indexer.stop(flush=False, timeout=0.05)  # join 超时：线程还在跑
-    indexer.notify("s-slow")  # 再叫一次：不许因此另起一个 worker
+    indexer.stop(flush=False, timeout=0.05)  # join times out: the thread is still running
+    indexer.notify("s-slow")  # notify again: this must not spawn a second worker
     time_module.sleep(0.2)
 
-    # 按身份断言（全局数线程会把别的用例留下的 worker 算进来）：还是原来那一个。
+    # Assert by identity (thread counts include other tests' workers): still the same one.
     assert indexer._worker is first, "超时的 worker 被忘掉了，下一次 start 会另起一个"
 
     release.set()

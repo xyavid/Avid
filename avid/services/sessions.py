@@ -181,14 +181,10 @@ class SessionService:
         *,
         name: str | None = None,
     ) -> dict[str, Any]:
-        """开一个临时会话（阶段 54）：同一工作区、拷一份源会话的投影当历史、打上临时标记。
-
-        为什么拷**投影**而不是全量条目：投影就是模型当时看到的那些消息（被压缩游标覆盖的
-        前缀已由摘要替代），拷它等于把"当时的上下文"原样搬过来，也不会把已经压缩掉的原文
-        重新塞进新会话。
-
-        标记（`session_scratch()`）落在会话上：之后无论谁发起这个会话的运行，工具表与沙箱
-        都按只读装配；关闭面板即销毁，会话文件一并消失。
+        """Open a scratch conversation: same workspace, the source branch's projected history
+        copied in (its compacted prefix already replaced by the summary), marked through
+        session_scratch() so every run of it gets read-only tools and sandbox, and destroyed
+        together with the panel that created it.
         """
         with self._session(source_id) as source:
             owner = self.workspaces.find_session(source_id)
@@ -201,20 +197,20 @@ class SessionService:
         created = self.create(
             workspace=workspace.id,
             name=name or f"临时对话{f' · {source_name}' if source_name else ''}",
-            # 血缘留着：临时会话从哪条会话长出来的，是排查与展示都用得上的事实
+            # Lineage is kept: the source session is shown and helps debugging.
             parent=source_id,
         )
         new_id = str(created["id"])
         try:
             with self._session(new_id) as scratch:
-                # 走 recorder（会话包的唯一写入者）而不是自己 append：拷贝的也是会话内容，
-                # 旁路会绕过那段契约（A11 门禁现在真扫 services，这条是它逼出来的）。
+                # Go through the recorder, the session package's only writer: the copy is session
+                # content too, and an append would bypass that contract (A11 gates it).
                 recorder = SessionRecorder(scratch)
                 for message in messages:
                     recorder.on_message(message)
                 scratch.set_value(session_scratch(), {"source": source_id})
         except SessionError as exc:
-            # 建一半的临时会话不能留：它没有标记，会被当成普通会话留在列表里
+            # A half-built scratch session must not stay: unmarked it would list as an ordinary one.
             found = self.workspaces.find_session(new_id)
             if found is not None:
                 with suppress(SessionError):
@@ -229,7 +225,7 @@ class SessionService:
         """Rename a session and return its refreshed view."""
         with self._session(session_id) as session:
             session.set_name(name)
-        # 名字是索引里的显示事实：不改它，检索结果会一直报旧名字。
+        # The name is a display fact in the index; skip the notify and search keeps the old one.
         self.runs.notify_index(session_id)
         return self.get(session_id)
 
@@ -247,7 +243,7 @@ class SessionService:
             except SessionError as exc:
                 raise SessionReadError(f"销毁会话失败：{exc}") from exc
             self.workspaces.forget_session(session_id)
-        # 会话没了，索引里那一行也得走：检出「文件已消失」的是索引器自己（它按发现结果判定）。
+        # The index row must go too: the indexer itself detects the vanished file by discovery.
         self.runs.notify_index(session_id)
 
     # Branches.
@@ -383,13 +379,8 @@ class SessionService:
     # Internals.
 
     def _truncated_tail(self, session: Any) -> bool:
-        """Whether the tip is a run that never finished（界面据此说「上次运行在此中断」）。
-
-        两种形状都是中断：**工具调用没有结果**（停在批次中间）、以及**末尾是用户消息**
-        （这一轮一个回复都没留下——最常见的原因是首个模型调用就失败了）。
-
-        正在跑的会话不算：那半截是理所应当的，不是中断。末尾是**失败记账**（error 条目）时
-        也不算——失败的原因已经记在会话里了，再挂一句含糊的「中断」是噪音。
+        """Detect a tip that never finished: a tool call without its result or a trailing user
+        message counts as interrupted, while an active run and a trailing error entry do not.
         """
         if self.runs.active_run_id(session.metadata.id) is not None:
             return False

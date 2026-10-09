@@ -180,9 +180,7 @@ def build_request(
             }
             for item in tools
         ]
-    # 推理强度不在这里映射：Anthropic 的对应物是 thinking 预算（token 数），与 low/medium/high
-    # 不是同一档语义，硬编一张对照表就是把别人的调参当成我们的决定。要开就在该提供商的
-    # extra_body 里直接写 thinking（它会异步到 extra_body 之后合并，覆盖得动）。
+    # No effort mapping: Anthropic uses a thinking budget, enabled via the provider's extra_body.
     # BYOK passthrough (routing params etc.) merges last: an explicit override is deliberate.
     if config.extra_body:
         request.update(config.extra_body)

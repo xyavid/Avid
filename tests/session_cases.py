@@ -1,10 +1,8 @@
-"""会话仓库的一致性套件。
+"""Conformance suite for session repositories: one case set run against every backend
+(memory / JSONL), so behavior stays equal by test rather than by documentation.
 
-一套用例，参数化到所有后端（内存 / JSONL）——行为一致靠测试而不是靠文档，
-这是参考实现最值得抄的一个设计（``testing/conformance``）。用例只碰
-``SessionRepo`` 的公开方法，因此后端任何一处语义漂移都会在这里露出来。
-
-本模块不以 ``test_`` 开头，pytest 不会收集它；它只提供 ``all_cases()``。
+Cases touch only ``SessionRepo``'s public methods, so any semantic drift surfaces here; without a
+``test_`` prefix pytest does not collect this module — call ``all_cases()`` instead.
 """
 
 from __future__ import annotations
@@ -39,7 +37,7 @@ from avid.session import (
     value,
 )
 
-# 条目类型不在门面里（见 avid/session/__init__.py 的取舍）：内部判别字段按子模块导入。
+# Entry types are not in the facade; import the discriminators from the submodule.
 from avid.session.types import MESSAGE_ENTRY, NOTICE_ENTRY
 
 USER = {"role": "user", "content": "一"}
@@ -53,7 +51,7 @@ class Case:
     run: Callable[[Any], None]
 
 
-# ---------------- 生命周期 ----------------
+# ---------------- lifecycle ----------------
 
 
 def _create_has_no_branch(repo) -> None:
@@ -61,8 +59,8 @@ def _create_has_no_branch(repo) -> None:
     assert session.metadata.id == "s1"
     assert session.metadata.created_at > 0
     assert session.metadata.storage_version == STORAGE_VERSION
-    # create 不写任何分支值；但默认分支是**隐式存在**的（空链），所以读侧拿到的
-    # 是一个空分支而不是 None——与 `branch_names()` 的说法保持一致。
+    # create writes no branch values; the default branch is implicit (empty chain), so reads
+    # yield an empty branch, not None — consistent with what `branch_names()` claims.
     implicit = session.branch("main")
     assert implicit is not None
     assert implicit.get_tip_id() is None
@@ -171,15 +169,13 @@ def _invalid_ids_rejected(repo) -> None:
             repo.create(id=bad)
 
 
-# ---------------- 消息与分支 ----------------
+# ---------------- messages and branches ----------------
 
 
 def _append_requires_branch(repo) -> None:
-    """**非默认**分支必须先建：名字敲错时不该悄悄建出一条新链。
+    """Non-default branches must exist before a write so a typo cannot silently create a chain.
 
-    默认分支 main 是隐式存在的空链（`branch_names()` 一直宣称它），所以往 main
-    直接写第一条消息是合法的——那正是"默认分支"的含义；以前这里要求先显式
-    `create_branch("main")`，与读侧的说法相反（审查里的 P2-15）。
+    Main is an implicitly existing empty chain, so writing its first message directly is legal.
     """
     session = repo.create(id="s")
     with pytest.raises(SessionInvariantError):
@@ -246,7 +242,7 @@ def _invalid_messages_are_rejected(repo) -> None:
 
 
 def _append_is_atomic_with_the_branch_tip(repo) -> None:
-    """分支头与条目同一次提交：末尾永远指得到刚写进去的那一条。"""
+    """Branch tip and entry commit together, so the tip always points at the written entry."""
     session = repo.create(id="s")
     branch = session.create_branch("main", None)
     ids = [branch.append_message({"role": "user", "content": f"第{index}条"}) for index in range(3)]
@@ -256,7 +252,7 @@ def _append_is_atomic_with_the_branch_tip(repo) -> None:
     session.close()
 
 
-# ---------------- 变更能力 ----------------
+# ---------------- mutations ----------------
 
 
 def _mutation_commits_exactly_once(repo) -> None:
@@ -276,7 +272,7 @@ def _mutation_commits_exactly_once(repo) -> None:
         mutator.get_value(session_name())
     assert session.get_name() == "第一次"
 
-    # 零次提交也是合法的：变更可以什么都不写。
+    # Zero commits are legal: a mutation may write nothing.
     session.begin_mutation().end()
     session.close()
 
@@ -326,7 +322,7 @@ def _failed_commits_consume_nothing(repo) -> None:
     assert session.get_stats() == before_stats
     assert branch.get_tip_id() == first
 
-    # 一次失败的提交不消耗 seq：下一次成功的提交紧接着上一次成功提交之后。
+    # A failed commit consumes no seq: the next success follows the last success directly.
     address = value("test.app.counter")
     before = session.mutate(lambda mutator: mutator.commit([set_value(address, 0)]))
     with pytest.raises(SessionInvariantError):
@@ -337,7 +333,7 @@ def _failed_commits_consume_nothing(repo) -> None:
     session.close()
 
 
-# ---------------- 值 ----------------
+# ---------------- values ----------------
 
 
 def _values_roundtrip(repo) -> None:
@@ -366,7 +362,7 @@ def _values_roundtrip(repo) -> None:
 
 
 def _value_namespace_scan_is_ordered_and_isolated(repo) -> None:
-    """``scan_values`` 只按命名空间枚举，且按 seq 升序（分支列表依赖这两条）。"""
+    """``scan_values`` enumerates one namespace in ascending seq order (branches rely on both)."""
     session = repo.create(id="s")
     first = value("test.a", "one")
     other = value("test.b", "elsewhere")
@@ -380,7 +376,7 @@ def _value_namespace_scan_is_ordered_and_isolated(repo) -> None:
     found = session.scan_values("test.a")
     assert [item.key for item in found] == ["one", "two"]
     assert [item.value for item in found] == [1, 3]
-    # 升序而不是插入顺序的巧合：seq 必须严格递增
+    # Ascending, not an insertion-order coincidence: seq must strictly increase
     assert found[0].seq < found[1].seq
 
     session.delete_value(first)
@@ -388,14 +384,14 @@ def _value_namespace_scan_is_ordered_and_isolated(repo) -> None:
     assert [item.key for item in session.scan_values("test.b")] == ["elsewhere"]
     assert session.scan_values("test.missing") == []
 
-    # 分支头就是这个机制的第一个真实消费者：main 建好之后必须能被枚举出来
+    # Branch tips are this mechanism's first real consumer: main must be enumerable once created
     assert session.branch_names() == ["main"]
     session.create_branch("b2", None)
     assert session.branch_names() == ["main", "b2"]
     session.close()
 
 
-# ---------------- 查询 ----------------
+# ---------------- queries ----------------
 
 
 def _entry_queries_page_and_filter(repo) -> None:
@@ -451,7 +447,7 @@ def _branch_scan_orders_limits_and_pages(repo) -> None:
 
 
 def _workspace_membership_is_recorded_and_queryable(repo) -> None:
-    """归属是创建时的静态事实：能查、能持久化、老会话按仓库归属补上。"""
+    """Ownership is a create-time fact: queryable, persisted, and backfilled for old sessions."""
     session = repo.create(id="owned", workspace="w-abc")
     assert session.metadata.workspace == "w-abc"
 
@@ -464,15 +460,14 @@ def _workspace_membership_is_recorded_and_queryable(repo) -> None:
     reopened.close()
 
 
-# ---------------- 注入提醒 ----------------
+# ---------------- injected notices ----------------
 
 
 def _notice_entries_are_typed_and_projected(repo) -> None:
-    """内核注入的提醒用 ``NOTICE_ENTRY`` 存：类型在存储里留存，但仍进投影。
+    """Kernel notices are stored as ``NOTICE_ENTRY``: the type survives in storage while the entry
+    still enters the projection, so the model sees the same history verbatim on resume.
 
-    两件事必须同时成立——类型可判别（渲染侧据此不把它画成用户说的话），投影照旧
-    带上（续接时模型看到的历史与当时逐字一致）。文本上认不出来：nudge 的文本由
-    Stop hook 任意给定，没有稳定前缀可匹配。
+    They cannot be recognized by text — the nudge text is arbitrary Stop-hook output.
     """
     session = repo.create(id="s")
     branch = session.create_branch("main", None)
@@ -489,10 +484,10 @@ def _notice_entries_are_typed_and_projected(repo) -> None:
         last: MESSAGE_ENTRY,
     }
 
-    # 按类型召回是存储层的能力（调试与统计要用）
+    # Type-based recall is a storage-layer ability (used by debugging and stats)
     assert [entry.id for entry in branch.find_entries(BranchScan(type=NOTICE_ENTRY))] == [notice]
 
-    # 投影两种都带，顺序不变
+    # The projection carries both, order unchanged
     assert [message["content"] for message in entries_to_messages(ordered)] == [
         "问题",
         "[提醒] 该更新计划了",

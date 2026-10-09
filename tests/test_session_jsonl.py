@@ -1,7 +1,7 @@
-"""文件后端：格式、重放、撕裂行、损坏行与目录扫描。
+"""File backend: format, replay, torn lines, corrupt lines and directory scanning.
 
-这些是被内存后端遮住、只有真的落在磁盘上才会暴露的规则。一致性由
-``test_session_conformance.py`` 管，这里管格式本身。
+These rules only surface on disk (the memory backend hides them); cross-backend consistency
+lives in test_session_conformance.py.
 """
 
 from __future__ import annotations
@@ -86,7 +86,7 @@ def _message_line(
     )
 
 
-# ---------------- 格式 ----------------
+# ---------------- format ----------------
 
 
 def test_create_writes_only_a_header(tmp_path):
@@ -124,7 +124,7 @@ def test_every_commit_is_exactly_one_appended_line(tmp_path):
         "key": "main",
         "value": None,
     }
-    # append 一次提交两写（条目 + 分支头），因此这一行是数组——同事务的格式证据。
+    # one append commits two writes (entry + branch tip), so the line is an array
     commit = json.loads(lines[2])
     assert isinstance(commit, list) and len(commit) == 2
     entry, tip = commit
@@ -162,7 +162,7 @@ def test_header_roundtrip_and_rejections():
         parse_header(json.dumps({"kind": "entry", "v": 1}))
 
 
-# ---------------- 重放 ----------------
+# ---------------- replay ----------------
 
 
 def test_reopening_after_restart_sees_the_same_state(tmp_path):
@@ -212,7 +212,7 @@ def test_list_skips_files_that_cannot_be_read(tmp_path):
     repo = make_repo(tmp_path)
     repo.create(id="good").close()
     repo.close()
-    (tmp_path / "weird.jsonl").mkdir()  # 名字像会话文件，但读不了
+    (tmp_path / "weird.jsonl").mkdir()  # named like a session file but unreadable
 
     fresh = make_repo(tmp_path)
     assert [item.id for item in fresh.list()] == ["good"]
@@ -240,14 +240,14 @@ def test_delete_removes_the_file(tmp_path):
     repo.close()
 
 
-# ---------------- 坏文件 ----------------
+# ---------------- corrupt files ----------------
 
 
 def test_torn_tail_is_dropped_and_repaired(tmp_path):
     path = tmp_path / "torn.jsonl"
     write_lines(path, encode_header(JsonlHeader("torn", 1, 100)), entry_line(1, "a", None))
     with path.open("a", encoding="utf-8") as handle:
-        handle.write('{"kind": "entry", "seq": 2')  # 被杀在半行上
+        handle.write('{"kind": "entry", "seq": 2')  # killed mid-line
 
     storage = JsonlStorage.open(path)
     assert storage.get_entries(["a"])["a"].message == USER
@@ -279,7 +279,7 @@ def test_non_monotonic_seq_is_rejected_on_replay(tmp_path):
         path,
         encode_header(JsonlHeader("seq", 1, 100)),
         entry_line(2, "a", None),
-        entry_line(2, "b", "a"),  # 重复 seq —— 但它在**中间**，不是尾残片
+        entry_line(2, "b", "a"),  # duplicate seq, but in the middle, not a torn tail
         entry_line(3, "c", "a"),
     )
     with pytest.raises(SessionStorageError) as info:
@@ -293,24 +293,23 @@ def test_missing_parent_is_rejected_on_replay(tmp_path):
         path,
         encode_header(JsonlHeader("orphan", 1, 100)),
         entry_line(1, "a", "ghost"),
-        entry_line(2, "b", "a"),  # 让它落在中间：尾部的坏行按残片处理
+        entry_line(2, "b", "a"),  # keep it in the middle: a bad trailing line is a torn tail
     )
     with pytest.raises(SessionStorageError):
         JsonlStorage.open(path)
 
 
 def test_a_corrupt_tail_line_is_repaired_instead_of_killing_the_file(tmp_path):
-    """末行坏了（崩溃短写 / 并发写留下的重复 seq）时**自愈**。
-
-    以前这会让整个文件此后不可读、会话从列表里静默消失——那正是 P0 的后果。
-    中间行坏掉仍然报错：静默丢历史比拒绝打开更危险。
+    """A corrupt trailing line (crash short write, duplicate seq from a concurrent writer) heals
+    in place; a corrupt middle line still raises, because silently dropping history is worse
+    than refusing to open.
     """
     path = tmp_path / "tail.jsonl"
     write_lines(
         path,
         encode_header(JsonlHeader("tail", 1, 100)),
         entry_line(1, "a", None),
-        '{"kind": "entry", "seq": 1, "id": "dup"}',  # 坏末行：seq 重复
+        '{"kind": "entry", "seq": 1, "id": "dup"}',  # bad trailing line: duplicate seq
     )
 
     storage = JsonlStorage.open(path)
@@ -366,7 +365,7 @@ def test_tip_value_survives_a_restart(tmp_path):
     second.close()
 
 
-# ---------------- 工作区归属（阶段 18） ----------------
+# ---------------- workspace ownership ----------------
 
 
 def test_header_records_the_workspace_when_known(tmp_path):
@@ -382,7 +381,7 @@ def test_header_records_the_workspace_when_known(tmp_path):
 
 
 def test_header_omits_the_workspace_when_unknown(tmp_path):
-    """没有归属时不发射这个键：老文件与新文件的形状因此一致（可选字段惯例）。"""
+    """The key is omitted when ownership is unknown, so old and new files share one shape."""
     repo = make_repo(tmp_path)
     session = repo.create(id="demo")
 
@@ -394,7 +393,7 @@ def test_header_omits_the_workspace_when_unknown(tmp_path):
 
 
 def test_legacy_session_inherits_the_repo_workspace(tmp_path):
-    """老会话没有这个字段：按仓库归属补上——位置即归属。"""
+    """A legacy session without the field inherits the repo's workspace: location is ownership."""
     make_repo(tmp_path).create(id="legacy").close()
 
     repo = JsonlSessionRepo(tmp_path, workspace="w-abc")
@@ -408,8 +407,9 @@ def test_legacy_session_inherits_the_repo_workspace(tmp_path):
 
 
 def test_open_ignores_a_stale_workspace_label_in_its_own_directory(tmp_path):
-    """工作区重新登记后 id 会变，旧文件头里的 id 与仓库 id 不一致——文件就在
-    本仓库目录里，位置即归属，必须能打开（重新登记不能把旧会话变砖）。"""
+    """Re-registering a workspace changes its id, so a stale header label must still open inside
+    its own directory: location is ownership, and re-registration must not brick old sessions.
+    """
     mine = JsonlSessionRepo(tmp_path, workspace="w-mine")
     session = mine.create(id="demo", workspace="w-other")
     session.close()
@@ -420,14 +420,14 @@ def test_open_ignores_a_stale_workspace_label_in_its_own_directory(tmp_path):
     assert reopened.open(metadata).metadata.id == "demo"
     reopened.close()
 
-    # 旧标签的仓库仍按标签打开（双向不受影响）
+    # the old-label repo still opens by label (both directions unaffected)
     other = JsonlSessionRepo(tmp_path, workspace="w-other")
     assert other.open(metadata).metadata.workspace == "w-other"
     other.close()
 
 
 def test_open_refuses_a_session_that_lives_in_another_directory(tmp_path):
-    """护栏本意：metadata.path 指向别的目录时，不许借道打开别家的文件。"""
+    """Guard intent: a metadata.path pointing into another directory must not open its file."""
     mine = JsonlSessionRepo(tmp_path / "mine", workspace="w-mine")
     foreign_repo = JsonlSessionRepo(tmp_path / "elsewhere", workspace="w-other")
     session = foreign_repo.create(id="demo")
@@ -441,14 +441,12 @@ def test_open_refuses_a_session_that_lives_in_another_directory(tmp_path):
     mine.close()
 
 
-# ---------------- 分支扫描与会话定位的成本（P2-16） ----------------
+# ---------------- branch scan and session lookup cost ----------------
 
 
 def test_newest_first_scan_stops_before_the_chain_breaks(tmp_path):
-    """newestFirst + limit 必须尽早停：链可以很长，只要够数就不该走到根。
-
-    机制断言：把链中间的一个条目从状态里抹掉（模拟"链在更深处断了"），
-    `limit=2` 的降序扫描不该碰到断点、因此不报错；升序扫描必须走到根、于是报错。
+    """newestFirst with a limit stops early: with a mid-chain entry removed, limit=2 must not
+    reach the break (no error) while oldestFirst must reach the root and raise.
     """
     repo = make_repo(tmp_path)
     session = repo.create(id="demo")
@@ -474,25 +472,23 @@ def test_newest_first_scan_stops_before_the_chain_breaks(tmp_path):
 
 
 def test_a_session_id_is_not_confused_with_another_ids_suffix(tmp_path):
-    """`create(id="a")` 不该被已存在的 `x_a` 挡住（后缀匹配的经典误判）。"""
+    """create(id="a") must not be blocked by an existing x_a: suffix matching is not identity."""
     repo = make_repo(tmp_path)
     repo.create(id="x_a").close()
 
-    created = repo.create(id="a")  # 以前 `_session_paths("a")` 会匹配到 `..._x_a.jsonl`
+    created = repo.create(id="a")  # naive suffix matching would hit ..._x_a.jsonl
     created.close()
 
     assert sorted(item.id for item in repo.list()) == ["a", "x_a"]
     repo.close()
 
 
-# ---------------- 删除的护栏（P1-15） ----------------
+# ---------------- delete guardrails ----------------
 
 
 def test_delete_refuses_a_metadata_from_another_session(tmp_path):
-    """删除也要过 open 的同一套身份护栏。
-
-    `_locate` 优先用 `metadata.path`：不校验的话，拿 A 的 metadata 就能删掉 B 的
-    文件——删除比打开更不可逆，这里不能比 open 更松。
+    """Delete passes the same identity guard as open: since _locate prefers metadata.path,
+    skipping the check would let A's metadata delete B's file, and deletion is less reversible.
     """
     repo = make_repo(tmp_path)
     victim = repo.create(id="victim")
@@ -500,21 +496,21 @@ def test_delete_refuses_a_metadata_from_another_session(tmp_path):
     repo.create(id="attacker").close()
 
     victim_meta = next(item for item in repo.list() if item.id == "victim")
-    forged = replace(victim_meta, id="attacker")  # 指向 victim 的文件，但自称 attacker
+    forged = replace(victim_meta, id="attacker")  # points at victim's file, claims attacker
 
     with pytest.raises(SessionStorageError) as info:
         repo.delete(forged)
     assert "id 与请求不符" in str(info.value)
     assert victim_meta.path.exists(), "护栏拦下时文件必须原样在"
 
-    # 正常删除仍然可用。
+    # normal deletion still works.
     repo.delete(victim_meta)
     assert not victim_meta.path.exists()
     repo.close()
 
 
 def test_delete_ignores_a_stale_workspace_label_in_its_own_directory(tmp_path):
-    """与 open 同一条位置规则：重新登记后的旧标签不拦删除。"""
+    """Same location rule as open: a stale label after re-registration does not block deletion."""
     mine = JsonlSessionRepo(tmp_path, workspace="w-mine")
     mine.create(id="demo", workspace="w-old").close()
     metadata = mine.list()[0]
@@ -538,14 +534,12 @@ def test_delete_refuses_a_session_that_lives_in_another_directory(tmp_path):
     mine.close()
 
 
-# ---------------- 读路径的隔离与并发（P1-16 / P1-17） ----------------
+# ---------------- read-path isolation and concurrency ----------------
 
 
 def test_readers_get_copies_not_the_internal_state(tmp_path):
-    """读出来的对象不能是内部状态本身：改写它不该改变会话。
-
-    `Entry` 是 frozen dataclass，但 frozen 只挡属性赋值——`entry.message["x"] = …`
-    与嵌套的 tool_calls 都改得动。不变量 I1（只增不改）以前只对文件成立。
+    """Readers get copies, not internal state: mutating a returned message must not change the
+    session (frozen dataclasses block attribute assignment but not nested mutation).
     """
     repo = make_repo(tmp_path)
     session = repo.create(id="demo")
@@ -575,7 +569,7 @@ def test_readers_get_copies_not_the_internal_state(tmp_path):
 
 
 def test_writers_cannot_mutate_the_state_after_committing(tmp_path):
-    """写入方提交后改写自己那份 dict，也不该影响会话状态（I1 是双向的）。"""
+    """A writer mutating its own dict after commit must not affect session state (I1 both ways)."""
     repo = make_repo(tmp_path)
     session = repo.create(id="demo")
     branch = session.create_branch("main", None)
@@ -592,7 +586,7 @@ def test_writers_cannot_mutate_the_state_after_committing(tmp_path):
 
 
 class _SpyLock:
-    """记录被进入次数的锁替身（RLock 的上下文协议就这两个方法）。"""
+    """Lock double counting __enter__ calls (RLock's context protocol is now these two methods)."""
 
     def __init__(self) -> None:
         self.entered = 0
@@ -606,13 +600,9 @@ class _SpyLock:
 
 
 def test_every_read_path_takes_the_state_lock(tmp_path):
-    """读路径必须与写互斥（机制断言，不靠竞态复现）。
-
-    dict 在迭代中被插入会抛 ``RuntimeError: dictionary changed size during
-    iteration``（例如 `values_in` 遍历值表时另一个线程提交了一条分支头值），
-    表现为 HTTP 500。这个窗口很窄——用"并发跑一会儿看有没有异常"复现不可靠，
-    所以这里直接断言每条读路径都进入了 `SessionState` 的锁；上面那条并发用例
-    留作冒烟。
+    """Every read path takes the state lock (a mechanism assertion, not a race reproduction):
+    inserting into a dict while iterating raises RuntimeError and surfaces as HTTP 500, and that
+    window is too narrow to reproduce by simply running concurrently.
     """
     repo = make_repo(tmp_path)
     session = repo.create(id="demo")
@@ -641,9 +631,8 @@ def test_every_read_path_takes_the_state_lock(tmp_path):
 
 
 def test_concurrent_reads_during_commits_do_not_raise(tmp_path):
-    """并发读写的冒烟：读路径在提交进行中反复跑，不允许冒出任何异常。
-
-    真正的机制由上面那条断言锁的用例守着（这个窗口很窄，光靠并发不一定复现）。
+    """Read/write smoke test: reads during commits raise nothing (the lock assertion above is
+    the real mechanism guard, since this window rarely reproduces on its own).
     """
     repo = make_repo(tmp_path)
     session = repo.create(id="demo")
@@ -661,7 +650,7 @@ def test_concurrent_reads_during_commits_do_not_raise(tmp_path):
                 session.branch("main").find_entries(BranchScan(order="oldestFirst"))
                 session.find_entries(EntryQuery(limit=10))
                 session.get_entry("demo-e1")
-            except Exception as exc:  # 任何异常都算失败
+            except Exception as exc:  # any exception counts as a failure
                 failures.append(f"{type(exc).__name__}: {exc}")
                 return
 
@@ -683,11 +672,9 @@ def test_concurrent_reads_during_commits_do_not_raise(tmp_path):
 
 
 def test_storage_wraps_unserialisable_and_unencodable_writes(tmp_path):
-    """存储层只承诺抛 SessionError：非 JSON 值（TypeError）与代理对字符
-    （UnicodeEncodeError，是 ValueError 的子类）都要收敛，不能漏出契约。
-
-    消息级校验（session.py 的 validate_message）会先拦下非 JSON 值，所以这里直接
-    打存储层——它才是"写文件"这一步的所有者，也是代理对唯一会炸的地方。
+    """The storage layer only promises SessionError: non-JSON values (TypeError) and surrogate
+    pairs (UnicodeEncodeError, a ValueError) are both wrapped, since this layer owns the actual
+    file write.
     """
     path = tmp_path / "writes.jsonl"
     write_lines(path, encode_header(JsonlHeader("writes", 1, 100)))
@@ -707,7 +694,7 @@ def test_storage_wraps_unserialisable_and_unencodable_writes(tmp_path):
     finally:
         storage.close()
 
-    # 文件仍然可读（失败没有留下半行）。
+    # the file stays readable: the failure left no half line behind
     repo = JsonlSessionRepo(tmp_path)
     reopened = repo.open(repo.list()[0])
     assert reopened.get_stats().message_count == 1
@@ -716,7 +703,7 @@ def test_storage_wraps_unserialisable_and_unencodable_writes(tmp_path):
 
 
 def test_repo_commit_of_a_non_json_value_is_still_a_session_error(tmp_path):
-    """走会话层时非 JSON 值被更早的校验拦下，但错误类型同样是 SessionError。"""
+    """Through the session layer a non-JSON value is caught earlier, but still as SessionError."""
     repo = make_repo(tmp_path)
     session = repo.create(id="demo")
     branch = session.create_branch("main", None)
@@ -726,16 +713,14 @@ def test_repo_commit_of_a_non_json_value_is_still_a_session_error(tmp_path):
     repo.close()
 
 
-# ---------------- 列表页摘要：不重放也能给出名字/条数/链尾残缺 ----------------
+# ---------------- list summary: name, count and torn tail without replay ----------------
 
 TRAILING_NAME = "最后的名字"
 
 
 def test_summarize_matches_replay_even_with_marker_literals_in_content(tmp_path):
-    """快速摘要必须与重放逐字段一致，尤其是正文里含标记字面量时。
-
-    条数靠子串计数（一个条目写恰好一次 `"kind": "entry"`），而消息正文里的
-    同名字面量会被 JSON 转义，因此不该被算进去——这条耦合就在这里钉住。
+    """The fast summary matches replay field by field: the count uses substring counting of
+    "kind": "entry", and the same literal inside message text is JSON-escaped and not counted.
     """
     path = tmp_path / "summary.jsonl"
     trick = '正文里出现 "kind": "entry" 与 "avid.session.name" 这两个字面量'
@@ -751,7 +736,7 @@ def test_summarize_matches_replay_even_with_marker_literals_in_content(tmp_path)
             {
                 "role": "assistant",
                 "content": trick,
-                # 一批没有结果的 tool_calls → 链尾残缺
+                # tool_calls with no results -> torn tail
                 "tool_calls": [
                     {
                         "id": "call_x",
@@ -767,7 +752,7 @@ def test_summarize_matches_replay_even_with_marker_literals_in_content(tmp_path)
         encode_transaction(
             [CommittedValueSet(5, "avid.session.name", "", TRAILING_NAME)]
         ),
-        # 默认分支链尾指向 c；c 是一批没有结果的 tool_calls → 链尾残缺。
+        # the default branch tip points at c, whose tool_calls have no results -> torn tail
         encode_transaction([CommittedValueSet(6, "avid.branch.tip", "main", "c")]),
     )
 
@@ -777,7 +762,7 @@ def test_summarize_matches_replay_even_with_marker_literals_in_content(tmp_path)
     assert summary.message_count == 3, "正文里的字面量不能被算成条目"
     assert summary.truncated_tail is True
 
-    # 与重放路径逐字段对齐。
+    # field-by-field agreement with the replay path.
     repo = JsonlSessionRepo(tmp_path)
     session = repo.open(repo.list()[0])
     assert summary.name == session.get_name()
@@ -787,7 +772,7 @@ def test_summarize_matches_replay_even_with_marker_literals_in_content(tmp_path)
 
 
 def test_summarize_tail_is_none_when_the_window_cannot_decide(tmp_path):
-    """窗口内看不到链尾时返回 None（交给调用方重放），而不是猜一个 False。"""
+    """When the window cannot see the chain tip, return None (let the caller replay) not False."""
     path = tmp_path / "short-window.jsonl"
     write_lines(
         path,
@@ -815,7 +800,7 @@ def test_repo_summarize_is_cached_until_the_file_changes(tmp_path):
     assert first is again, "同一份文件第二次应当命中缓存"
     assert (first.name, first.message_count) == ("名字", 1)
 
-    # 追加一条之后 stamp 变了：必须重新读，不能返回陈旧条数。
+    # after an append the stamp changes: reread instead of returning a stale count
     reopened = repo.open(meta)
     reopened.branch("main").append_message(ASSISTANT)
     reopened.close()
@@ -825,14 +810,13 @@ def test_repo_summarize_is_cached_until_the_file_changes(tmp_path):
     repo.close()
 
 
-# ---------------- 跨进程互斥与写入完整性（P0） ----------------
+# ---------------- cross-process exclusion and write integrity ----------------
 
 
 def test_a_second_opener_is_locked_out_until_the_first_closes(tmp_path):
-    """两个进程各写一行会让 seq 重复，而重放拒绝非单调 seq——整个文件此后不可读。
-
-    flock 是按 open file description 生效的，所以同一个进程里开两次也会互斥，
-    测试因此能覆盖"另一个进程"的语义。
+    """Two processes each writing a line would duplicate seqs, and replay rejects non-monotonic
+    seq, leaving the whole file unreadable; flock is per open file description, so two opens in
+    one process exclude each other too and this covers the other-process semantics.
     """
     repo = make_repo(tmp_path)
     repo.create(id="demo").close()
@@ -846,7 +830,7 @@ def test_a_second_opener_is_locked_out_until_the_first_closes(tmp_path):
     finally:
         first.close()
 
-    # 释放之后必须能再打开（锁不能泄漏）。
+    # after release the file must open again (no lock leak).
     third = JsonlStorage.open(path)
     third.close()
 
@@ -873,7 +857,7 @@ def test_delete_is_locked_out_while_another_holder_exists(tmp_path):
 
 
 def test_a_short_write_is_rolled_back_and_reported(tmp_path, monkeypatch):
-    """短写（ENOSPC / 信号）不能留下半行，也不能让内存状态偷偷推进。"""
+    """A short write (ENOSPC, signal) leaves no half line and never advances in-memory state."""
     import os
 
     repo = make_repo(tmp_path)
@@ -888,7 +872,7 @@ def test_a_short_write_is_rolled_back_and_reported(tmp_path, monkeypatch):
     real_write = os.write
 
     def short_write(fd: int, data: bytes) -> int:
-        # 只截断会话事务那一行，避免影响同一进程里的其它写入。
+        # truncate only the session transaction line, leaving other writes in this process alone
         if b'"seq"' in bytes(data):
             return real_write(fd, data[: max(1, len(data) // 2)])
         return real_write(fd, data)
@@ -904,7 +888,7 @@ def test_a_short_write_is_rolled_back_and_reported(tmp_path, monkeypatch):
     session.close()
     repo.close()
 
-    # 文件仍然可读，且能继续追加。
+    # the file stays readable and appendable
     again = make_repo(tmp_path)
     reopened = again.open(again.list()[0])
     assert reopened.branch("main").append_message(ASSISTANT)
@@ -912,12 +896,13 @@ def test_a_short_write_is_rolled_back_and_reported(tmp_path, monkeypatch):
     again.close()
 
 
-# ---------------------------------------------------------------- 工作区守卫与锁泄漏（评审回归）
+# ---------------- workspace guard and lock leaks ----------------
 
 
 def test_stale_workspace_id_in_header_still_opens_in_its_own_directory(tmp_path):
-    """工作区重新登记后 id 变了，旧文件头里的 id 与仓库 id 不一致——文件就在
-    本仓库目录里，位置即归属，必须能打开（此前被守卫拒绝后还泄漏锁）。"""
+    """A stale workspace id in the header still opens inside its own directory: location decides
+    ownership, and a refusal must not leak the lock.
+    """
     repo = make_repo(tmp_path)
     created = repo.create(id="demo", workspace="w-new")
     created.close()
@@ -931,8 +916,9 @@ def test_stale_workspace_id_in_header_still_opens_in_its_own_directory(tmp_path)
 
 
 def test_a_failed_guard_open_does_not_leak_the_lock(tmp_path):
-    """守卫拒绝（id 不符）时 storage 必须先关闭：否则 flock 泄漏，同一会话
-    在本进程里永远打不开（表现为「被另一个进程占用」）。"""
+    """When the guard refuses (id mismatch) storage must close first, or the flock leaks and the
+    session can never be opened again in this process.
+    """
     repo = make_repo(tmp_path)
     repo.create(id="demo").close()
 
@@ -940,14 +926,15 @@ def test_a_failed_guard_open_does_not_leak_the_lock(tmp_path):
     with pytest.raises(SessionStorageError):
         repo.open(wrong)
 
-    # 锁必须已释放：同一会话立刻能再打开。
+    # the lock must be released: the same session opens again immediately.
     session = repo.open(repo.list()[0])
     session.close()
 
 
 def test_a_symlinked_foreign_session_is_invisible_to_this_repo(tmp_path):
-    """归属守卫的位置判定用 resolve()：把别家会话用 symlink 塞进自家目录，
-    不会被 list 捡走、也无法经链接打开（评审 M3 回归）。"""
+    """Ownership uses resolve(): a foreign session symlinked into this directory is neither
+    listed nor openable through the link.
+    """
     mine = JsonlSessionRepo(tmp_path / "mine", workspace="w-mine")
     foreign_repo = JsonlSessionRepo(tmp_path / "elsewhere", workspace="w-other")
     foreign_repo.create(id="secret").close()
@@ -970,11 +957,10 @@ def test_a_symlinked_foreign_session_is_invisible_to_this_repo(tmp_path):
     foreign_repo.close()
 
 
-# ---------------- 列表热路径：不变的事实记住，符号链接才判落点 ----------------
+# ---------------- list hot path: facts cached, resolve() only for symlinks ----------------
 #
-# 侧栏每次刷新都要列全部会话。实测（579 个会话 / 7.0 MB）里 repo.list() 要 46 ms，
-# 其中只有 8 ms 是真在 I/O：其余是每文件两次 realpath 与一次重复的 header 解析。
-# 下面两条把「只在必要时做」钉住——它们是热路径的护栏，红了说明开销又回去了。
+# The sidebar lists all sessions on every refresh, so the two cases below are hot-path
+# guardrails: red means the per-file realpath and header parsing work came back.
 
 
 def test_listing_twice_parses_each_header_once(tmp_path, monkeypatch):
@@ -998,12 +984,12 @@ def test_listing_twice_parses_each_header_once(tmp_path, monkeypatch):
 
     repo.list()
 
-    assert len(reads) == 3  # 第二次一个 header 都不该再读
+    assert len(reads) == 3  # the second listing reads no header at all
     repo.close()
 
 
 def test_listing_does_not_resolve_every_entry(tmp_path, monkeypatch):
-    """落点判定只对符号链接有意义：普通文件不必走 realpath。"""
+    """Resolving only matters for symlinks: plain files must not go through realpath."""
     repo = make_repo(tmp_path)
     for index in range(3):
         repo.create(id=f"s-{index}").close()
@@ -1053,7 +1039,7 @@ def test_a_deleted_file_drops_out_of_the_next_listing(tmp_path):
 
 
 def test_an_unreadable_file_is_not_remembered_as_unreadable(tmp_path):
-    """失败的解析结果不进缓存：文件补好之后，下一次列表要能看见它。"""
+    """A failed parse is not cached: once the file is fixed the next listing must see it."""
     repo = make_repo(tmp_path)
     repo.create(id="s-ok").close()
     broken = tmp_path / "half.jsonl"
@@ -1075,7 +1061,9 @@ def test_an_unreadable_file_is_not_remembered_as_unreadable(tmp_path):
 
 
 def test_deleted_sessions_do_not_stay_remembered(tmp_path):
-    """长驻进程（Web 服务）里只删不建：删掉的会话不该在缓存里留记忆，列表顺手回收。"""
+    """In a long-lived process (the web service) deletions must leave no cache entry: each
+    listing prunes them.
+    """
     repo = make_repo(tmp_path)
     repo.create(id="s-keep").close()
     dropped = repo.create(id="s-drop")

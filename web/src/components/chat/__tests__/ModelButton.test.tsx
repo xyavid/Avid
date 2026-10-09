@@ -6,9 +6,8 @@ import { ModelButton } from '../ModelButton'
 import type { ModelCandidate } from '../../../api/types'
 
 /**
- * 模型选择（输入区）：默认跟随设置，可以只对「本次运行」换一个模型。
- * 候选只有 BYOK（用户在「设置 → 模型」里配的提供商）——内核不预置任何模型选项，
- * 没配 BYOK 时弹层里给的是去设置里添加的指引，而不是一张预置清单。
+ * Model chip: candidates are only BYOK — with none configured the popover points at settings
+ * instead of listing presets, and no model means no server-side default.
  */
 describe('模型选择（阶段 54：由用户自己选，没有「跟随设置」这一档）', () => {
   afterEach(cleanup)
@@ -80,7 +79,7 @@ describe('模型选择（阶段 54：由用户自己选，没有「跟随设置�
       />,
     )
 
-    // 胶囊把当前档位带出来（几档不占位就不显示）
+    // The chip carries the current effort; unset takes no slot.
     expect(screen.getByRole('button', { name: /模型/ }).textContent).toContain('· high')
 
     fireEvent.click(screen.getByRole('button', { name: /模型/ }))

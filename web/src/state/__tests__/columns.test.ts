@@ -1,9 +1,7 @@
 /**
- * 两侧列宽的夹取规则用例。
- *
- * 宽度是用户拖出来的偏好，但不能把对话列挤没：实际渲染前一律过 `clampWidths`——
- * 先按各自的上下限夹，再按窗口宽度让位（先收右列，再收左列，各自不低于下限）。
- * 纯函数，不需要 DOM。
+ * Clamping rules for the side column widths. Widths are a dragged preference, but every render
+ * passes them through `clampWidths`: clamp per column, then yield by viewport width (right column
+ * first, left second, never below the minimums). Pure functions, no DOM needed.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -21,24 +19,24 @@ describe('列宽夹取', () => {
   })
 
   it('没有右列时不占预算：只按上下限夹，左列不被挤', () => {
-    // 900 - 520 = 380 的预算里，左列想留 300；右列在场时这笔账会被算进去
+    // Budget 900 - 520 = 380; the left wants 300 and is not charged the rail's share
     const got = clampWidths({ sidebar: 300, rail: 400 }, 900, false)
 
     expect(got.sidebar).toBe(300)
-    expect(got.rail).toBe(400) // 值还在存储里，只是不渲染
+    expect(got.rail).toBe(400) // value stays in storage, just not rendered
   })
 
   it('窗口变窄：先收右列，收到底再收左列', () => {
-    // 预算 = 1000 - MAIN_MIN = 480；想留 240 + 280 = 520，超 40
+    // Budget = 1000 - MAIN_MIN = 480; wants 240 + 280 = 520, over by 40
     const got = clampWidths({ sidebar: 240, rail: 280 }, 1000, true)
 
-    expect(got.sidebar).toBe(240) // 左列先不动
+    expect(got.sidebar).toBe(240) // left column untouched first
     expect(got.rail).toBe(280 - 40)
     expect(got.sidebar + got.rail).toBe(1000 - MAIN_MIN_WIDTH)
   })
 
   it('右列让到下限还不够，剩下的由左列出（只出该出的那部分）', () => {
-    // 预算 = 950 - 520 = 430；两列想留 580，超 150：右列让 60 到底，左列出 90
+    // Budget 950 - 520 = 430; wants 580, over by 150: rail yields 60, sidebar gives 90
     const got = clampWidths({ sidebar: 300, rail: 280 }, 950, true)
 
     expect(got.rail).toBe(COLUMN_LIMITS.rail.min)

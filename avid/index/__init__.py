@@ -1,7 +1,6 @@
-"""会话索引：JSONL 之上的派生查询层（元数据 / 定位 / 全文检索）。
+"""Derived query layer over the session JSONL: metadata, entry locations and full-text search.
 
-对外的名字只从这里出；包内分工看各模块的模块注释。这个包的边界只有一条，
-但它是整件事的前提：**索引可以落后、可以坏、可以整个删掉重建，JSONL 不受影响**。
+The index may lag, break or be deleted and rebuilt from scratch; the JSONL is never affected.
 """
 
 from __future__ import annotations

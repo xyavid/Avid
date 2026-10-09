@@ -1,13 +1,9 @@
 /**
- * 右侧 dock（阶段 48 立，阶段 53 收成四面板）：三栏骨架里**占位**的右列，按需打开
- * （阶段 54 起默认收起，打开先给选择页——`choosing` 由页面持有）。
- *
- * 形态语义：它是 `AppShell` 的 `rail` 插槽内容，不是浮层——打开时主列让位、
- * 面板不盖住对话（配合的规则在骨架的栅格里：侧栏 240 ｜ 主列 minmax(0,1fr) ｜
- * 右列 280）。开合由页面决定（不挂这个组件，栅格自然回到两列），所以这里没有
- * `open` 形态；键盘只留 Esc 一条退出路径。
- * 面板注册表是单点：加面板 = 在 PANELS 加一个条目。Dock 是纯展示，数据由
- * 页面下发（会话快照与活运行的子运行），自己不发请求。
+ * Right dock: the on-demand right column of the AppShell `rail` slot, not an overlay — opening it
+ * lets the main column yield (sidebar 240 | main minmax(0,1fr) | rail 280); panel ids live in both
+ * `state/dock.ts` and `PANELS` below and must stay in sync.
+ * Presentational only: the page owns open/close (collapsed = not mounted, so the grid falls back
+ * to two columns) and hands down all data, so there is no `open` prop and no request here.
  */
 
 import { lazy, Suspense, useEffect } from 'react'
@@ -22,11 +18,10 @@ import { FilesPanel } from './FilesPanel'
 import { ScratchPanel } from './ScratchPanel'
 import { SubagentPanel } from './SubagentPanel'
 
-// 重面板按需加载：xterm 的体积隔离进异步 chunk（体积门禁分档计量）
+// Heavy panels load on demand: xterm stays isolated in its own async chunk.
 const TerminalPanel = lazy(() => import('./TerminalPanel'))
 
-// 面板注册表是单点：加一个面板 = 加一个条目 + 在本文件末尾挂上它的视图。
-// hint 是列表里那一行说明（参考界面同形：图标 + 名称 + 一句话）。
+// Adding a panel = one entry here + its view at the bottom of this file; hint is the list line.
 const PANELS: { id: DockPanelId; label: string; hint: string; icon: IconName }[] = [
   { id: 'files', label: '工作区文件', hint: '浏览会话工作区的文件', icon: 'folder' },
   { id: 'subagents', label: '子智能体', hint: '看每个子任务自己干了什么', icon: 'bot' },
@@ -36,21 +31,21 @@ const PANELS: { id: DockPanelId; label: string; hint: string; icon: IconName }[]
 
 export type DockProps = {
   active: DockPanelId
-  /** 是否停在选择页（面板列表）：手动打开时的第一屏。 */
+  /** True while on the chooser page (panel list) — the first screen after a manual open. */
   choosing: boolean
   onChoose: (on: boolean) => void
   onSelect: (id: DockPanelId) => void
   onClose: () => void
-  /** 终端面板的工作目录 / 文件面板要浏览的工作区：选中会话的工作区。 */
+  /** Working directory (terminal) / browsed workspace (files panel): the selected session's. */
   workspaceRoot: string | null
   workspaceId: string | null
-  /** 子智能体面板的数据：整条时间线里摊平出来的子运行（含只剩任务清单的历史项）。 */
+  /** Subagent runs flattened from the whole timeline (including history with only a task list). */
   subagentRuns: SubagentRunView[]
-  /** 这一轮还在跑：面板据此给运行中的标记。 */
+  /** The current turn is still running: panels use it for the running mark. */
   live: boolean
-  /** 临时对话的上下文来源：当前选中的主会话。null = 还没有选中会话。 */
+  /** Context source for the scratch chat: the selected main session; null = none selected. */
   sourceSessionId: string | null
-  /** 这次运行用哪个模型与哪档强度（临时对话面板跟随主输入区的选择）。 */
+  /** Model and effort for this run; the scratch panel follows the main composer's choice. */
   model: string | null
   effort: string | null
 }
@@ -69,14 +64,12 @@ export function Dock({
   model,
   effort,
 }: DockProps) {
-  // 面板区自己滚（列只负责裁切），滚动条仍走「滚动时现形」那套。
+  // The panel body scrolls itself (the column only clips) via the auto-hiding scrollbar.
   const scrollRef = useAutoHideScroll<HTMLDivElement>()
-  // 选择页是"换面板"的入口，不是第四种面板：点条目进面板，面板头部再回列表。
-  // 开还是关由页面持有（手动打开先给选择页），这里只管画。
+  // The chooser switches panels (not a fourth panel); open/close state lives with the page.
   const listing = choosing
   const current = PANELS.find((p) => p.id === active) ?? PANELS[0]!
-  // Esc 关闭：键盘要有一条不找鼠标的退出路径。收起时这个组件根本不挂（页面决定），
-  // 所以监听常开。
+  // Esc closes: the dock is unmounted while collapsed, so the listener can stay always-on.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()

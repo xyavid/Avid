@@ -1,10 +1,4 @@
-/**
- * 助手消息（报告 §7.3）：头像行 + 正文分列，左对齐、无气泡（纸面直书）。
- * 头像 24px 圆，名称行（fs-ui）在其上垂直居中；正文走正文衬线栈
- * （PT Serif），字号 --chat-message-font-size，中文衬线行高 1.7（报告 §5）。
- * 流式态：有部分文本 → 正文 + accent 光标呼吸（hana-pulse）；还没有文本 →
- * 三枚 accent 呼吸点（hana-cycling-dots，阶段 3 补件关键帧）。
- */
+/** Assistant message: mark + name head row, body rendered as markdown. */
 
 import type { ReactNode } from 'react'
 
@@ -19,12 +13,11 @@ export type AssistantMessageProps = {
   streaming?: boolean
   name?: string
   className?: string
-  /** 是否显示标识行（标识 + 名称）。同一轮里第二次以后的正文是续写，
-   *  再挂一次名字只是噪音——调用方按「本轮出现过正文没有」决定。 */
+  /** Show the head row; continuation segments pass false so the name is not repeated. */
   showHead?: boolean
 }
 
-/** 字符串走 markdown 渲染；已经是元素（或空）就原样放。 */
+/** Strings render as markdown; elements (or nothing) pass through. */
 function Body({ children, trailing }: { children?: ReactNode; trailing?: ReactNode }) {
   if (typeof children === 'string') return <Markdown trailing={trailing}>{children}</Markdown>
   return (
@@ -54,8 +47,6 @@ export function AssistantMessage({
       <div className="min-w-0 flex-1">
         {showHead && (
           <div className="flex items-center gap-a8">
-            {/* 头像：标识直接贴在纸面上——不做圆托、不垫色板（用户要求背景透明），
-                图案自带配色，与旁边名称行同一片底色。 */}
             <AvidMark size={24} className="shrink-0" />
             <span className="font-ui text-ui leading-[18px] text-ink-light">{name}</span>
           </div>

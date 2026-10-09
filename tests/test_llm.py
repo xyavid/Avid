@@ -76,10 +76,8 @@ def test_missing_usage_falls_back_to_zero():
 
 
 def test_cache_counters_are_normalized_on_both_paths():
-    """非流式与流式走**同一个**归一化：`prompt_tokens_details.cached_tokens` 都要读出来。
-
-    两条路径各自解析响应（`parse_turn` / `StreamState.to_turn`）。只给一条接线的话，
-    命中率会"整条返回时看得见、流式时看不见"——那正是 F3 要消灭的分叉。
+    """Both paths normalise usage the same way: prompt_tokens_details.cached_tokens must be
+    read whether the reply arrives whole (parse_turn) or streamed (StreamState.to_turn).
     """
     body = {
         "model": "test-model",
@@ -95,13 +93,13 @@ def test_cache_counters_are_normalized_on_both_paths():
     assert direct.usage.cache_read_tokens == 64
     assert direct.usage.cache_write_tokens is None
 
-    # 流式：末帧只带 usage（choices 为空是合法的）。
+    # Streamed: the last frame carries usage only (empty choices is legal)
     streamed = merge_stream_chunk(StreamState(), {**body, "choices": []}).to_turn()
     assert streamed.usage == direct.usage
 
 
 def test_deepseek_style_cache_field_is_recognized_at_the_client_seam():
-    """OpenAI 兼容端点不止一种写法（DeepSeek 用 `prompt_cache_hit_tokens`）。"""
+    """OpenAI-compatible endpoints differ: DeepSeek uses prompt_cache_hit_tokens."""
     turn = parse_turn(
         {
             "model": "deepseek-chat",
@@ -160,8 +158,9 @@ def test_other_400s_stay_plain_llm_errors():
 
 
 def test_server_error_with_overflow_wording_is_not_treated_as_overflow(monkeypatch):
-    """状态码不对就不算上下文超限，避免把服务端故障当成可恢复的。"""
-    # 500 属于传输层可重试：这里抹掉真实等待，只验证"耗尽后按 LLMError 收敛"。
+    """Overflow wording with the wrong status is not an overflow: a server fault must not
+    look recoverable."""
+    # 500 is retryable at the transport layer: drop the wait, assert convergence to LLMError
     monkeypatch.setattr("avid.providers.transport._sleep", lambda seconds: None)
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -177,11 +176,8 @@ def test_server_error_with_overflow_wording_is_not_treated_as_overflow(monkeypat
 
 
 def test_a_non_json_body_becomes_an_llm_error():
-    """网关返回 HTML 错误页时必须是 LLMError，不能漏出 JSONDecodeError。
-
-    否则调用方按"模型层失败"分类的路径接不住它：svc 会把它归成 internal
-    而不是 llm_error，前端拿到的错误分类就是错的。
-    """
+    """A gateway HTML error page must surface as LLMError, not JSONDecodeError, or svc would
+    file it as internal instead of llm_error."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, text="<html>bad gateway</html>")
@@ -194,11 +190,10 @@ def test_a_non_json_body_becomes_an_llm_error():
     assert "不是合法 JSON" in str(exc.value)
 
 
-# ---------- 流式（F3） ----------
+# ---- streaming ----
 
-# 同一份内容的两种线格式：非流式 JSON 与流式 SSE 分片。
-# tool_calls 的分片**故意交错**（0 的第一片、1 的第一片、0 的第二片、1 的第二片）：
-# 「按 index 归并」与「按到达顺序拼接」在这种输入上结果不同，后者是错的。
+# Two wire forms of one reply: whole JSON vs SSE frames. The tool_call fragments
+# interleave out of order, so merging by index differs from concatenating by arrival order.
 NON_STREAM_TURN = {
     "model": "test-model",
     "choices": [
@@ -262,7 +257,7 @@ STREAM_FRAMES = [
 
 
 def sse_payload(frames) -> str:
-    """帧列表 → SSE 文本，带一行注释心跳与结尾的 `[DONE]`。"""
+    """Frames to SSE text, with a comment heartbeat and a trailing [DONE]."""
     blocks = [": ping", ""]
     for frame in frames:
         blocks += ["event: message", "data: " + json.dumps(frame, ensure_ascii=False), ""]
@@ -271,8 +266,8 @@ def sse_payload(frames) -> str:
 
 
 def fold(frames) -> StreamState:
-    """帧 → 累加器状态。先编成 SSE 文本再解析，于是 `iter_sse_events` 与
-    `merge_stream_chunk` 两个纯函数走的是与 `stream_completion` 完全相同的路径。"""
+    """Frames to accumulator state, encoded to SSE text first so the two pure functions
+    take the same path as stream_completion."""
     state = StreamState()
     for chunk in iter_sse_events(sse_payload(frames).splitlines()):
         state = merge_stream_chunk(state, chunk)
@@ -280,7 +275,7 @@ def fold(frames) -> StreamState:
 
 
 def test_stream_and_non_stream_turns_are_field_equal():
-    """B9：同一段 mock SSE 与同一份非流式 JSON 必须产出逐字段相等的 Turn。"""
+    """One mocked SSE stream and its non-stream JSON must produce field-equal Turns."""
     from_stream = fold(STREAM_FRAMES).to_turn()
     from_json = parse_turn(NON_STREAM_TURN)
 
@@ -290,11 +285,8 @@ def test_stream_and_non_stream_turns_are_field_equal():
 
 
 def test_null_content_is_normalised_the_same_way_in_both_paths():
-    """带 tool_calls 时 content 为 null 是常见形状：两条路径必须给它同一个答案。
-
-    修之前非流式把 `None` 原样写进 message（流式写 `""`）——那份 None 会随
-    transcript 进入下一轮请求，"同形"在最常见的一种响应上就不成立。
-    """
+    """Null content with tool_calls must normalise to "" in both paths, or a raw None reaches
+    the next request through the transcript."""
     data = {
         "model": "test-model",
         "choices": [
@@ -340,7 +332,7 @@ def test_null_content_is_normalised_the_same_way_in_both_paths():
 
 
 def test_content_parts_are_joined_into_text():
-    """分片数组形状也归一成正文，而不是把 list 当成 Turn.text。"""
+    """A content-parts array is joined into text; a list must never land in Turn.text."""
     turn = parse_turn(
         {
             "choices": [
@@ -363,22 +355,22 @@ def test_content_parts_are_joined_into_text():
 
 
 def test_interleaved_tool_call_fragments_merge_by_index():
-    """分片交错时按 index 归并；按到达顺序拼会把两个调用的参数搅在一起。"""
+    """Interleaved fragments merge by index; concatenating by arrival order would mix them."""
     state = fold(STREAM_FRAMES)
     arguments = [call["function"]["arguments"] for call in state.tool_calls]
 
     assert arguments == ['{"path":"a.py"}', '{"command":"ls -la"}']
-    # 拼出来的必须真是合法 JSON —— 「拼完再 loads」这条约束的落点。
+    # The merged arguments must be valid JSON
     assert [json.loads(item) for item in arguments] == [
         {"path": "a.py"},
         {"command": "ls -la"},
     ]
-    # 归并产物不带流式的 index 字段：要与 parse_turn 的产物同形（B9 逐字段相等的前提）。
+    # The merged call drops the streaming index field to stay field-equal with parse_turn
     assert all("index" not in call for call in state.tool_calls)
 
 
 def test_merge_stream_chunk_is_pure():
-    """fold 不得就地改入参：否则重放或重试会累加出双倍文本。"""
+    """merge must not mutate its input state, or a replay or retry would double the text."""
     first = merge_stream_chunk(
         StreamState(),
         _frame(
@@ -454,10 +446,8 @@ REASONING_STREAM_FRAMES = [
 
 
 def test_reasoning_gets_its_own_field_and_stays_out_of_the_text():
-    """A2：思维链单独累加——它既不是正文，也不能被写回下一轮 messages。
-
-    现场的推理模型把输出预算**全部**花在思维链上，正文为空；旧代码不认这些字段，
-    于是"花掉 9466 个 completion token"与"看起来什么都没发生"同时成立。
+    """Reasoning accumulates in its own field: not the body, and never written back into
+    the next round's messages.
     """
     turn = fold(REASONING_STREAM_FRAMES).to_turn()
 
@@ -467,12 +457,12 @@ def test_reasoning_gets_its_own_field_and_stays_out_of_the_text():
 
 
 def test_reasoning_is_parsed_the_same_way_on_both_paths():
-    """B9 的延伸：带思维链的响应，流式与非流式仍然逐字段相等。"""
+    """With reasoning too, stream and non-stream replies stay field-equal."""
     assert fold(REASONING_STREAM_FRAMES).to_turn() == parse_turn(REASONING_NON_STREAM)
 
 
 def test_delta_reasoning_reads_only_the_thinking_piece():
-    """三家写法都给同一个结果；正文与工具参数不算思维链。"""
+    """Three vendor spellings give one result; body text and tool arguments are not reasoning."""
     assert delta_reasoning(_frame({"reasoning": "嗯"})) == "嗯"
     assert delta_reasoning(_frame({"reasoning_content": "嗯"})) == "嗯"
     assert delta_reasoning(_frame({"reasoning_details": [{"text": "嗯"}]})) == "嗯"
@@ -481,7 +471,7 @@ def test_delta_reasoning_reads_only_the_thinking_piece():
 
 
 def test_stream_completion_reports_reasoning_on_its_own_callback():
-    """思考与正文走两个回调：前端分开显示，正文才合成气泡。"""
+    """Reasoning and body travel on two callbacks so the front end can show them apart."""
     thought: list[str] = []
     body: list[str] = []
 
@@ -528,7 +518,7 @@ def test_stream_completion_returns_turn_and_reports_deltas():
             client=client,
         )
 
-    # 回调只送正文分片：工具参数的片段不该出现在给人看的增量里。
+    # on_delta gets body fragments only: tool-argument fragments are never user-visible
     assert seen == ["我先看", "两个文件。"]
     assert turn == parse_turn(NON_STREAM_TURN)
 
@@ -554,10 +544,8 @@ def test_stream_without_usage_frame_falls_back_to_zero():
 
 
 def test_the_http_client_is_created_once_and_reused(monkeypatch):
-    """每次调用新建 Client 会重新握手：多轮 agent 与 subagent 线性叠加。
-
-    这条断言机制（只构造一次、两次拿到同一个实例），不发真实请求。
-    """
+    """A new Client per call re-handshakes and adds up across rounds, so assert one construction
+    (same instance twice) without a real request."""
     import httpx as httpx_module
 
     from avid.providers import client as client_module
@@ -569,7 +557,7 @@ def test_the_http_client_is_created_once_and_reused(monkeypatch):
         created.append(1)
         return real_client(*args, **kwargs)
 
-    # 单例归 transport 所有：patch 它的 Client 与状态（client 从 transport 再导出）。
+    # The singleton lives in transport: patch its Client and state (client re-exports it)
     transport_module = import_module("avid.providers.transport")
     monkeypatch.setattr(transport_module.httpx, "Client", counting_client)
     monkeypatch.setattr(transport_module, "_CLIENT", None)
@@ -582,7 +570,7 @@ def test_the_http_client_is_created_once_and_reused(monkeypatch):
 
 
 def test_connect_timeout_is_tighter_than_the_read_timeout():
-    """端点不可达时不该等满 60 秒；长回答的读超时仍留足。"""
+    """An unreachable endpoint must not wait it out: connect stays tighter than read."""
     from avid.providers.client import CONNECT_TIMEOUT_SECONDS, TIMEOUT_SECONDS, _timeout
 
     timeout = _timeout()
@@ -591,22 +579,18 @@ def test_connect_timeout_is_tighter_than_the_read_timeout():
     assert CONNECT_TIMEOUT_SECONDS < TIMEOUT_SECONDS
 
 
-# ---------- 输出预算：默认不设上限 ----------
+# ---- output budget: no default cap ----
 
 
 def test_request_sends_no_max_tokens_by_default():
-    """默认不设输出上限：写死的上限会被推理吃光，正文一个字都产不出来。
-
-    实测（api.commandcode.ai + deepseek-v4.1-flash）：max_tokens=64 时响应正文为空、
-    finish_reason 是 length；8000 也不够长推理用。上限交给服务商，客户端不替它决定。
-    """
+    """No output cap by default: a fixed max_tokens is spent on reasoning and the body comes back
+    empty (finish_reason=length), so the cap is the provider's to decide."""
     request = build_request(CONFIG, [{"role": "user", "content": "hi"}])
 
     assert "max_tokens" not in request
 
 
 def test_request_still_sends_max_tokens_when_the_caller_caps_it():
-    """能力还在：调用方显式给上限时照发（评测与预算实验要用）。"""
     request = build_request(
         CONFIG, [{"role": "user", "content": "hi"}], max_tokens=1234
     )

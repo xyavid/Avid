@@ -1,7 +1,6 @@
-"""A1 – A6 / A10 – A13：架构边界用 grep 与断言守住（不依赖运行）。
+"""A1 - A14 architecture boundaries, held by grep and AST assertions without running anything.
 
-这些规则的价值在于它们**会失败**：一次「顺手 import 一下」会被立刻拦住。
-边界是正则的边界——它只匹配字面量，拼接出来的 URL 与间接 import 不在覆盖内。
+The gates match literals only: concatenated URLs and indirect imports stay outside their reach.
 """
 
 from __future__ import annotations
@@ -14,9 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "avid"
 WEB = ROOT / "web"
 
-# svc/ 也在内核侧：它是最容易被"顺手 import 一下 pydantic"的层（离传输层最近），
-# 而 A1 以前只查这五个包——`pyproject.toml` 那句"web/ 是唯一 importer"因此少了
-# 一半的守护（审查里的 P2-22）。
+# services/ is kernel-side too: closest to the transport layer, it is the likeliest place to
+# pick up an accidental pydantic import.
 KERNEL_PACKAGES = ("agent", "providers", "security", "session", "services")
 
 
@@ -43,7 +41,7 @@ def frontend_sources() -> list[Path]:
 
 
 def code_hits(paths: list[Path], pattern: str) -> list[str]:
-    """只匹配代码行：跳过整行注释与 docstring 起止行（引用类型名不算调用点）。"""
+    """Match code lines only; a type name in a comment or docstring is not a call site."""
     return [
         item
         for item in hits(paths, pattern)
@@ -59,8 +57,8 @@ def test_a1_kernel_does_not_depend_on_a_web_framework():
 
 
 def test_a2_only_web_knows_http_frameworks():
-    # 判定原文：`grep -rln "fastapi" avid` 必须全部落在 web/。
-    # （`avid web` 子命令在 cli.py 里 import uvicorn，是唯一放行点。）
+    # Every "fastapi" hit under avid/ must be inside web/ (cli.py imports uvicorn for the web
+    # subcommand: the one allowed spot).
     found = hits(files_under(suffix=".py"), r"\bfastapi\b")
     assert found, "应该至少有一处 fastapi"
     offenders = [item for item in found if "/web/" not in item.split(":")[0]]
@@ -73,7 +71,7 @@ def test_a2_uvicorn_is_only_used_for_the_web_subcommand():
 
 
 def test_a1_services_is_also_checked_for_web_framework_imports():
-    """A1 的包清单必须含 services：它离传输层最近，最容易顺手 import pydantic。"""
+    """The A1 package list must include services: it sits nearest the transport layer."""
     assert "services" in KERNEL_PACKAGES
     assert hits(files_under("services"), r"fastapi|pydantic|starlette|uvicorn") == []
 
@@ -82,8 +80,8 @@ def test_a1_services_is_also_checked_for_web_framework_imports():
 
 
 def test_a3_run_is_the_only_loop_and_stays_a_scheduler():
-    # 唯一的循环是 agent/run.py 的 Run：调度段只该有 UserPromptSubmit 一个
-    # hook 触发点（Stop 的触发点在终止路径 stop.py），也不该有手写 while。
+    # Run in agent/run.py is the only loop: scheduling has exactly one hook trigger point
+    # (UserPromptSubmit; Stop lives in stop.py) and never a hand-written while.
     run = (SRC / "agent" / "run.py").read_text(encoding="utf-8")
     stop = (SRC / "agent" / "stop.py").read_text(encoding="utf-8")
     assert run.count("state.hooks.trigger(") == 1, (
@@ -92,7 +90,7 @@ def test_a3_run_is_the_only_loop_and_stays_a_scheduler():
     assert stop.count("state.hooks.trigger(") == 1, "终止路径只该有 Stop 一个 hook 调用点"
     assert "while " not in run, "循环里不该出现手写 while"
 
-    # 没有第二份循环：Run 的调用点固定为「三个接线点」（run.py 只定义不调用）。
+    # There is no second loop: Run has exactly three callers (run.py defines without calling).
     callers = {
         item.split(":")[0]
         for item in code_hits(files_under(suffix=".py"), r"\bRun\(")
@@ -103,7 +101,7 @@ def test_a3_run_is_the_only_loop_and_stays_a_scheduler():
         "avid/agent/tools/subagent.py",
     }, callers
 
-    # services / web 不按轮次自己推进调度（while/for round）
+    # services / web never drive scheduling per round (no while/for round).
     assert hits(files_under("services") + files_under("web"), r"for round|while .*round") == []
 
 
@@ -121,7 +119,7 @@ def test_a4_services_does_not_import_web():
 
 def test_a5_svc_only_maps_kernel_errors():
     found = hits(files_under("services"), r"\bLLMError\b")
-    # 只允许出现"捕获并映射"的地方：runs.py 的 except 分支
+    # Only "catch and map" sites are allowed: the except branch in runs.py.
     assert found, "services 应当显式把内核异常映射成 run_failed"
     for item in found:
         assert "services/runs.py" in item, item
@@ -131,7 +129,7 @@ def test_a5_svc_only_maps_kernel_errors():
 
 
 def test_a6_event_names_are_single_sourced():
-    """事件名字面量只允许出现在 events.py（其余地方必须用 events.XXX 常量）。"""
+    """Event-name literals live only in events.py; elsewhere the events.XXX constants are used."""
     names = ("run_started", "run_finished", "tool_call_started", "tool_call_finished")
     pattern = "|".join(f'"{name}"' for name in names)
     found = [
@@ -143,14 +141,9 @@ def test_a6_event_names_are_single_sourced():
 
 
 def test_a10_the_message_callback_is_wired_in_a_known_set_of_places():
-    """消息回调只在这几处出现；多一处就得在这里显式加一行并说清为什么。
-
-    逐处的理由：
-    - `agent/run.py`：循环调用它（唯一真正的接线点）；
-    - `session/recorder.py`：recorder 自己的公开写入口；
-    - `cli.py` / `services/runs.py`：两个平级接线点把 recorder 接给运行；
-    - `services/sessions.py`：临时会话批量拷贝历史时**直接**用 recorder（不接循环），
-      阶段 57 评审把原来自己 `append_message` 的旁路收回来时新增的。
+    """The message callback appears only in these places; one more means declaring it here with a
+    reason (run.py calls it, recorder.py exposes it, cli.py and services/runs.py wire it to runs,
+    services/sessions.py copies history through it directly).
     """
     found = {
         item.split(":")[0]
@@ -169,11 +162,7 @@ def test_a10_the_message_callback_is_wired_in_a_known_set_of_places():
 
 
 def test_a11_recorder_remains_the_only_session_writer():
-    """会话内容只经 SessionRecorder 落库。
-
-    这条门禁原来扫的 `svc` 在阶段 35 就改名成 `services` 了——扫一个不存在的目录等于空转
-    （评审抓到）。改成真包名之后它立刻抓到一处旁路：临时会话批量拷消息直接 append，已收回 recorder。
-    """
+    """Session content reaches disk only through SessionRecorder."""
     for package in ("web", "services", "agent", "providers"):
         assert hits(files_under(package), r"append_message|\.commit\(") == [], package
 
@@ -182,15 +171,10 @@ def test_a11_recorder_remains_the_only_session_writer():
 
 
 def test_a12_frontend_has_no_third_party_urls_outside_api():
-    # 三类例外，都不是「直连第三方」：
-    #   · `__tests__/`：URL 夹具（例如 sanitizeUrl 的用例）必须拿真实字面量当输入，
-    #     而它们不产生请求；
-    #   · `www.w3.org/`：XML 命名空间标识（`xmlns="http://www.w3.org/2000/svg"`）。
-    #     它是格式要求的名字，不是可请求的端点——SVG 数据地址里必须有它，
-    #     浏览器才认这是 SVG。
-    #   · `http://${…}`：GFM 自动链接补协议（`www.a.example` → `http://www.a.example`）
-    #     用的前缀——模板串里没有主机名，主机名来自模型输出，不存在硬编码端点。
-    # 规则拦的是运行时代码里的第三方端点，这三类都不沾边。
+    # Exceptions: URL fixtures under __tests__/ (literals as input, no request), the www.w3.org/
+    # XML namespace name SVG data URLs require (not a callable endpoint), and the http://${
+    # prefix GFM autolinking adds (the host comes from model output). The rule targets runtime
+    # third-party endpoints only.
     found = [
         item
         for item in hits(frontend_sources(), r"https?://")
@@ -203,18 +187,18 @@ def test_a12_frontend_has_no_third_party_urls_outside_api():
 
 
 def test_frontend_sources_exist():
-    """A12 是空集合断言，目录不存在时会假通过——这里把前提钉住。"""
+    """A12 asserts an empty set, which would pass vacuously without web/src; pin the premise."""
     assert frontend_sources(), "web/src 下没有前端源码"
 
 
-# ---------------- A13：agent → security 的边界（判据：策略细节不进调度层） ----------------
+# ---------------- A13: the agent -> security edge (policy stays out of scheduling) ----------------
 
 
 def policy_imports(path: Path) -> tuple[set[str], set[str]]:
-    """返回 (运行时 import 的 security 模块, 只在 TYPE_CHECKING 下 import 的)。
+    """Return (security modules imported at runtime, security modules imported for typing only).
 
-    用 AST 而不是 grep：判据特意区分"注解用的惰性 import"与"真依赖"，
-    正则分不出来，而这条边界的价值恰恰在那个区分上。
+    AST, not grep: the gate separates annotation-only imports from real dependencies, and that
+    distinction is the whole point of this edge.
     """
     tree = ast.parse(path.read_text(encoding="utf-8"))
     runtime: set[str] = set()
@@ -233,8 +217,7 @@ def policy_imports(path: Path) -> tuple[set[str], set[str]]:
             if isinstance(node, ast.ImportFrom) and node.level:
                 module = node.module or ""
                 if module == "security" or module.startswith("security."):
-                    # `from ..security import permission` 也把 security.permission 记上：
-                    # 包级 import 同样是跨层使用。
+                    # A package-level import is cross-layer use too: record security.permission.
                     targets = {
                         f"security.{alias.name}" for alias in node.names if module == "security"
                     } | ({module} if module != "security" else {"security"})
@@ -251,19 +234,19 @@ def policy_imports(path: Path) -> tuple[set[str], set[str]]:
     return runtime, typing_only
 
 
-# agent/ 允许 import security 的文件与各自用到的模块。这不是"豁免名单"，而是把边界
-# 写成会失败的断言：调度（loop/run）、装配（context/compaction）、工具协议（execution）、
-# 终止（stop）与 spec 必须零安全层运行时依赖；只有 state（持有 RunSecurity 实例）、
-# hooks（注册权限裁决默认回调）与 files（唯一硬拒：凭据拒读）三条边。阶段 51 删掉
-# 模式阶梯与审批规则表后，subagent 不再 import security（只透传 state.security 这个
-# 数据）。注解里的 RunSecurity / ApprovalLedger 只许在 TYPE_CHECKING 下出现。
+# Declared agent -> security edges, written as an assertion instead of an exemption list:
+# scheduling (run), context assembly (context/compaction), the tool protocol (execution), stop
+# and spec carry zero runtime security dependency. Only three edges exist: state (holds the
+# RunSecurity instance), hooks (registers the permission default callback) and files (the one
+# hard deny: credential reads). RunSecurity / ApprovalLedger names appear only under
+# TYPE_CHECKING.
 AGENT_SECURITY_EDGES: dict[str, set[str]] = {
     "avid/agent/state.py": {"security.permission"},
     "avid/agent/hooks.py": {"security.permission"},
-    # files 只取凭据闸门（sensitive_reason），不再有模式/审批默认值
+    # files takes only the credential gate (sensitive_reason)
     "avid/agent/tools/files.py": {"security.action"},
-    # shell 只取「这条命令是不是纯读」这个事实（is_read_only），用于决定它能不能和别的读
-    # 并行；裁决（能不能跑）仍然只在 security/engine，工具层拿不到、也不该拿。
+    # shell takes only the read-only fact (is_read_only) to decide parallel eligibility; the
+    # verdict stays in security/engine and is deliberately out of the tool layer's reach.
     "avid/agent/tools/shell.py": {"security.command_parse"},
 }
 SECURITY_FREE_AGENT = (
@@ -288,7 +271,7 @@ def test_a13_scheduling_and_tools_have_zero_runtime_security_dependency():
 
 
 def test_a13_agent_security_edges_are_exactly_the_declared_ones():
-    """agent 对 security 的每一条运行时 import 都必须是申报过的边（新增先改这里）。"""
+    """Every runtime agent -> security import must be a declared edge (declare new ones here)."""
     for name in SECURITY_FREE_AGENT:
         assert name not in AGENT_SECURITY_EDGES
 
@@ -305,8 +288,8 @@ def test_a13_agent_security_edges_are_exactly_the_declared_ones():
 
 
 def test_a13_type_checking_imports_stay_inert():
-    """注解用的 import 必须是惰性的：RunSecurity / ApprovalLedger / McpManager 只在
-    TYPE_CHECKING 下出现，"零运行时依赖"不是因为名字没出现，而是 import 真没执行。
+    """Annotation imports stay inert: those names appear only under TYPE_CHECKING, so the zero
+    runtime dependency means the import never executes, not just that the name is absent.
     """
     for name in (
         "avid/agent/spec.py",
@@ -318,16 +301,9 @@ def test_a13_type_checking_imports_stay_inert():
 
 
 def test_web_imports_name_submodules_not_the_package():
-    """`web/` 内部不许用 `from . import <子模块>` 的形式（P3-15）。
-
-    `web/__init__.py` 会 import `app`，`app` 会 import 各个路由模块；路由再写
-    `from .. import sse`，静态依赖图里就等于"回头 import 包"，于是出现
-    `web ↔ app ↔ routes.events` 的环。`from ..sse import X` 表达的是对子模块的依赖，
-    方向清楚。
-
-    注意 `from . import current_services` **不算**：`current_services` 是路由包
-    `__init__` 导出的函数（名字），不是子模块。所以这里按 AST 判断被导入的名字是否
-    对应真实存在的模块文件/子包——只看语法会把这条合法用法一起误伤。
+    """`from . import <submodule>` is banned inside web/ because it closes a package cycle
+    (__init__ -> app -> routes -> package), while `from . import current_services` stays legal:
+    the AST check resolves imported names against real module files, and that is a function.
     """
     offenders: list[str] = []
     for path in sorted((ROOT / "avid" / "web").rglob("*.py")):
@@ -349,24 +325,20 @@ def test_web_imports_name_submodules_not_the_package():
     assert offenders == [], f"web 内部按子模块名 import：{offenders}"
 
 
-# ---------------- A14：会话索引的方向（判据：派生层不得反向污染真相层） ----------------
+# ---------------- A14: index direction (a derived layer never pollutes truth) ----------------
 
 
 def test_a14_the_session_package_does_not_know_about_the_index():
-    """索引可以依赖会话（只读它的磁盘格式），会话包不得依赖索引。
-
-    JSONL 是唯一权威、索引可以整个删掉重建——这条性质靠「真相层不知道索引存在」保住。
-    有人顺手在 recorder 或 jsonl 里 import 一下索引，第一个破坏的就是它。
+    """The index may read the session disk format; session/ must not import index/, because JSONL
+    is the only authority and the index must stay fully rebuildable from it.
     """
     found = hits(files_under("session"), r"^\s*from\s+\.+.*\bindex\b|^\s*import\s+\S*\bindex\b")
     assert found == [], found
 
 
 def test_a14_the_index_only_depends_on_the_layers_under_it():
-    """index/ 只依赖 session/ 与 security/：不得反过来依赖 services / web / agent / providers。
-
-    通知由装配层发（services/runs.py、cli.py），所以索引包不需要认识它们——
-    真需要「谁在写会话」这个知识时，说明边界画反了。
+    """index/ depends only on session/ and security/, never on services / web / agent / providers:
+    notifications are sent by the wiring layer, so the index never needs to know who writes.
     """
     found = hits(files_under("index"), r"^\s*from\s+\.\.(agent|services|providers|web)\b")
     assert found == [], found

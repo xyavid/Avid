@@ -1,8 +1,8 @@
 """Implements the file tools: read, write, edit and glob.
 
-Failures come back as text so the loop continues; 阶段 51 之后区内区外都不再需要授权，
-唯一闸门是凭据拒读（action.sensitive_reason，唯一硬拒）。Both write paths take a
-write-ahead checkpoint (agent/checkpoints) after validation and refuse to write when it fails.
+Failures come back as text so the loop continues; the only hard refusal is a sensitive-path
+read (``security.action.sensitive_reason``), and both write paths take a write-ahead
+checkpoint after validation and refuse to write when it fails.
 """
 
 from __future__ import annotations
@@ -29,25 +29,22 @@ def _root(state: "RunState | None") -> Path | None:
 
 
 def _outside_ok(state: "RunState | None") -> bool:
-    """区外访问不再需要授权（轻量化）：恒真。保留一个函数只为让调用点的语义可读。"""
+    """Returns True — outside-workspace access needs no authorization; kept for call-site
+    readability."""
     _ = state
     return True
 
 
 def _protected(state: "RunState | None", path: Path) -> str | None:
-    """凭据拒读是文件工具唯一的闸门（唯一硬拒）；其余路径直接放行。"""
+    """The file tools' only hard refusal: a sensitive path; everything else passes through."""
     _ = state
     reason = sensitive_reason(str(path))
     return None if reason is None else f"错误：受保护的宿主资源（{reason}），任何确认都无效"
 
 
 def _snapshot_before_write(state: "RunState | None", path: Path) -> str | None:
-    """Takes the write-ahead checkpoint once every validation has passed; refuses on failure.
-
-    None (no run state, no checkpointer wired, or a taken snapshot) lets the write proceed;
-    an error line means the backup failed and the caller must not write — a change without
-    a snapshot would be unrecoverable.
-    """
+    """Takes the write-ahead checkpoint after validation; None lets the write proceed, while an
+    error line means the backup failed and the caller must not write."""
     if state is None:
         return None
     checkpointer = state.checkpoint
@@ -82,10 +79,7 @@ def _count_lines(path: Path) -> int:
 
 
 def _read_window(handle: Any, offset: int, limit: int) -> tuple[list[str], bool]:
-    """Reads at most ``limit`` lines from ``offset``, returning the window and a cut flag.
-
-    Only the window is held in memory, so a huge file is never materialized as a line list.
-    """
+    """Reads at most ``limit`` lines from ``offset``, holding only the window in memory."""
     window: list[str] = []
     hit_limit = False
     for number, line in enumerate(handle, start=1):

@@ -1,9 +1,7 @@
-"""系统文件夹选择器：后端探测、取消与失败的区分、以及"新增工作区"这条 HTTP 路径。
+"""The system folder picker: backend probing plus the "add workspace" HTTP path.
 
-真实对话框在测试里不能弹（会卡住等人），所以两个层次分开测：
-
-* **后端逻辑**：注入 ``AVID_PICKER_CMD``（命令把选中路径打到 stdout）或替换 ``BACKENDS``；
-* **HTTP 路径**：monkeypatch ``svc.workspaces.pick_directory``，只验协议与错误码。
+``AVID_PICKER_CMD`` overrides the backend and prints the chosen path on stdout; a real dialog
+cannot open in tests, so the HTTP layer monkeypatches ``svc.workspaces.pick_directory``.
 """
 
 from __future__ import annotations
@@ -18,7 +16,7 @@ from avid.services.picker import PickerFailed, PickerUnavailable, pick_directory
 from avid.services.workspace_registry import WorkspaceRegistry, sessions_root
 from avid.web import create_app
 
-# ---------------- 后端 ----------------
+# ---------------- backend ----------------
 
 def test_override_backend_returns_the_printed_path():
     chosen = pick_directory(env={"AVID_PICKER_CMD": "printf %s /tmp/chosen"})
@@ -31,7 +29,7 @@ def test_empty_output_means_cancelled():
 
 
 def test_nonzero_exit_means_cancelled_not_failed():
-    """取消与失败必须分得开：zenity/kdialog 都用 1 表示取消。"""
+    """Cancel and failure must stay distinct: zenity and kdialog both exit 1 on cancel."""
     assert pick_directory(env={"AVID_PICKER_CMD": "false"}) is None
 
 
@@ -50,7 +48,7 @@ def test_no_backend_at_all_is_unavailable_with_an_actionable_message(monkeypatch
 
 
 def test_backends_fall_through_in_order(monkeypatch):
-    """起不来的后端只记一笔，继续试下一个——UI 不该因为 tkinter 拉不起来就失去这个功能。"""
+    """A backend that fails to start is only noted, then the next one is tried."""
     calls = []
 
     def dead(timeout, env):
@@ -89,7 +87,7 @@ def test_available_backend_is_none_when_nothing_is_left(monkeypatch):
 
 @pytest.fixture
 def bundle(tmp_path):
-    """一个不会碰真实家目录的服务 + 客户端。选择器后端按需替换。"""
+    """A service and client that never touch the real home directory."""
     home = tmp_path.parent / f"picker-home-{tmp_path.name}"
     home.mkdir()
     services = Services(
@@ -107,7 +105,7 @@ def bundle(tmp_path):
 
 @pytest.fixture
 def picked(tmp_path, monkeypatch):
-    """把选择器替换成"返回指定路径"，避免测试里弹出真对话框。"""
+    """Replace the picker with one returning a fixed path, so no real dialog opens."""
     chosen = tmp_path.parent / f"picked-{tmp_path.name}"
     chosen.mkdir()
 
@@ -136,7 +134,7 @@ def test_pick_cancel_changes_nothing(bundle, monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == {"path": None}
-    assert services.workspaces.list() == before  # 取消 = 什么都没发生
+    assert services.workspaces.list() == before  # a cancel changes nothing
 
 
 def test_pick_without_a_backend_is_503_with_the_manual_way_out(bundle, monkeypatch):
@@ -156,7 +154,7 @@ def test_pick_without_a_backend_is_503_with_the_manual_way_out(bundle, monkeypat
 def test_pick_while_one_is_open_is_409(bundle, picked):
     client, services, _ = bundle
 
-    with services.workspaces._pick_lock:  # 模拟"已经有一个对话框开着"
+    with services.workspaces._pick_lock:  # simulate a dialog already being open
         response = client.post("/api/workspaces/pick")
 
     assert response.status_code == 409
@@ -187,7 +185,7 @@ def test_add_then_it_appears_in_the_list_and_in_the_registry(bundle, picked):
 
     listed = client.get("/api/workspaces").json()["workspaces"]
     assert body["id"] in {item["id"] for item in listed}
-    # 持久化：写进了注册表文件，重新读一份注册表也看得见。
+    # persisted: the registry file exists and a fresh read still finds it
     assert services.registry.find(body["id"]) is not None
     assert (tmp_path / "registry.json").exists()
 
@@ -202,13 +200,13 @@ def test_adding_the_same_folder_twice_is_409_and_does_not_duplicate(bundle, pick
     error = again.json()["error"]
     assert error["code"] == "workspace_exists"
     assert error["detail"]["id"] == first["id"]
-    # 没有重复添加：列表里只有一个它。
+    # not added twice: it appears once in the list
     ids = [item["id"] for item in client.get("/api/workspaces").json()["workspaces"]]
     assert ids.count(first["id"]) == 1
 
 
 def test_adding_the_process_bound_folder_is_409_too(bundle):
-    """绑定值也在候选列表里，所以它同样算"已有"，不该被登记成第二条。"""
+    """The process-bound folder is a candidate too, so it counts as already existing."""
     client, services, _ = bundle
 
     response = client.post(
@@ -229,10 +227,10 @@ def test_adding_a_missing_folder_is_400(bundle, tmp_path):
     assert response.json()["error"]["code"] == "workspace_invalid"
 
 
-# ---------------- 与"切换"的配合 ----------------
+# ---------------- interaction with switching ----------------
 
 def test_new_workspace_is_usable_for_a_session_right_away(bundle, picked):
-    """界面上的"切到新工作区"= 选中它；服务端这边的保证是**立刻可用来建会话**。"""
+    """Switching in the UI means selecting it; the server guarantees it is usable right away."""
     client, _, _ = bundle
     created = client.post("/api/workspaces", json={"path": str(picked)}).json()
 
@@ -244,10 +242,8 @@ def test_new_workspace_is_usable_for_a_session_right_away(bundle, picked):
 
 
 def test_meta_exposes_the_picker_backend(bundle, monkeypatch):
-    """诊断字段必须真的出现在 /api/meta 里。
-
-    响应 DTO 是 pydantic 模型：svc 里给了键、schema 里没声明，就会被**静默丢掉**，
-    于是"这台机器其实有选择器"会显示成没有（点按钮没反应时人就查错了地方）。
+    """The diagnostics field must truly reach /api/meta: a pydantic DTO silently drops keys
+    the schema does not declare, which would show a working picker as absent.
     """
     client, _, _ = bundle
     monkeypatch.setattr("avid.services.available_backend", lambda: "tkinter")
@@ -258,12 +254,7 @@ def test_meta_exposes_the_picker_backend(bundle, monkeypatch):
 
 
 def test_a_timing_out_picker_is_a_picker_failure_not_a_500(monkeypatch):
-    """`AVID_PICKER_CMD` 起得来但不返回时，超时必须收敛成 PickerFailed。
-
-    以前 `subprocess.TimeoutExpired` 会穿透所有捕获层（`pick_directory` 只捕
-    `_BackendUnavailable`，服务层只捕 `PickerError`），冒到 500 兜底处理器——把内部
-    命令行回给客户端（审查里的 P2-21）。
-    """
+    """A picker that starts but never returns must time out as PickerFailed, never as a 500."""
     monkeypatch.setenv(picker_module.ENV_OVERRIDE, "sleep 30")
 
     with pytest.raises(picker_module.PickerFailed):
@@ -271,8 +262,7 @@ def test_a_timing_out_picker_is_a_picker_failure_not_a_500(monkeypatch):
 
 
 def test_the_diagnostics_value_is_not_cached_forever(monkeypatch):
-    """`available_backend` 以前是 `lru_cache`（永久）：改了环境变量/装上 zenity 之后
-    界面上的诊断值仍报旧值，只有重启才更新。"""
+    """Backend diagnostics must refresh without a restart: the cache only holds within its TTL."""
     monkeypatch.setenv(picker_module.ENV_OVERRIDE, "")
     picker_module.clear_backend_cache()
     probed = picker_module.available_backend()

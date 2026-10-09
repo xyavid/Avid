@@ -6,7 +6,7 @@ import { ToolCard } from '../ToolCard'
 
 afterEach(cleanup)
 
-/** 差异行 → `种类|整行文字`：元素内部被拆成多个文本节点，按 textContent 读最实在。 */
+/** Diff row → `kind|full text`; textContent is the reliable read since rows split into nodes. */
 function diffRows(container: HTMLElement): string[] {
   return [...container.querySelectorAll('[data-diff]')].map(
     (el) => `${el.getAttribute('data-diff')}|${el.textContent ?? ''}`,
@@ -128,7 +128,7 @@ describe('ToolCard 详情视图（文件类工具点开之后）', () => {
     expect(screen.getByText('+1')).toBeTruthy()
     expect(screen.getByText('-1')).toBeTruthy()
     expect(screen.getByText('已替换 a.py 中的 1 处文本')).toBeTruthy()
-    // 差异行按种类写在 DOM 上（端到端脚本按它读，不猜 class）
+    // Diff rows carry their kind on the DOM; e2e scripts read that instead of class names.
     expect(diffRows(container)).toEqual(['context| a', 'del|-b', 'add|+B', 'context| c'])
   })
 
@@ -147,7 +147,7 @@ describe('ToolCard 详情视图（文件类工具点开之后）', () => {
     )
 
     expect(screen.getByText('python')).toBeTruthy()
-    expect(container.textContent).toContain('100\n101') // 行号列从 100 起
+    expect(container.textContent).toContain('100\n101') // The line-number column starts at 100.
     expect(screen.queryByText('原文不该出现')).toBeNull()
   })
 

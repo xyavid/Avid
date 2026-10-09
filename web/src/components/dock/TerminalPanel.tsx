@@ -1,11 +1,10 @@
 /**
- * 终端面板（阶段 49）：WebSocket + xterm.js，一条连接一个独立交互 shell。
- *
- * - cwd 固定为当前会话的工作区根（由页面下发）；断开（关面板/换会话/关 dock）
- *   即杀整个进程组——生命周期跟连接走，不留孤儿 shell。
- * - xterm 按需加载：dynamic import 把它的体积隔离进异步 chunk（体积门禁分档计量）。
- * - Windows 后端会回 error frame（标准库无 PTY），这里照实显示，不做伪装。
- * - 主题只取运行时计算色（前景）与透明底：终端底色跟随纸面 token，不另立一套。
+ * Terminal panel: one WebSocket per interactive shell, cwd pinned to the session workspace root
+ * handed down by the page; dropping the connection (panel/session/dock closed) kills the whole
+ * process group, so no orphan shell survives.
+ * xterm.js is imported dynamically into its own async chunk and themed with the computed foreground
+ * on a transparent background (paper tokens); Windows backends have no stdlib PTY and reply with an
+ * error frame, which is shown as-is.
  */
 
 import { useEffect, useRef, useState } from 'react'

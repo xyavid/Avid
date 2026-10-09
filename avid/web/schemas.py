@@ -9,12 +9,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..agent.events import TOOL_CALL_DENIED, TOOL_CALL_FINISHED, RunEvent
 from ..attachments import MAX_BASE64_CHARS
 
-# Tool failures come back as text, so three prefixes separate business, argument and environment errors.
+# Tool failures arrive as text, so prefixes separate business, argument and environment errors.
 _FAILED_PREFIXES = ("错误：", "参数错误：")
 _FAILED_TOOL_MARK = "执行失败："
 
 
-# Input length caps keep a single request from writing an unbounded string into session files and memory.
+# Input caps keep one request from writing an unbounded string into session files and memory.
 MAX_PATH_CHARS = 4096
 MAX_NAME_CHARS = 200
 MAX_ID_CHARS = 200
@@ -44,9 +44,8 @@ class BuildInfo(BaseModel):
 
 
 class ModelCandidate(BaseModel):
-    """按运行换模型的 BYOK 候选：`ref` 是 providerId/modelId，label 是展示名。
-
-    `reasoning_efforts` 是这个模型声明的推理强度档位（界面据此列出可选项）；空 = 不提。
+    """A BYOK candidate for a per-run model override: ``ref`` is providerId/modelId, and empty
+    ``reasoning_efforts`` means the request carries no effort parameter.
     """
 
     ref: str = Field(max_length=MAX_NAME_CHARS)
@@ -58,13 +57,12 @@ class Capabilities(BaseModel):
     tools: list[str]
     skills: list[SkillOut]
     model: str | None = None
-    # 可切换的模型候选（本次运行的覆盖用）；取自内核的窗口表，不是提供商目录。
-    # BYOK 候选（providerId/modelId ref）；不预置模型选项，没配 BYOK 时为空。
+    # Per-run override candidates as providerId/modelId BYOK refs; empty when BYOK is unconfigured.
     models: list[ModelCandidate] = Field(default_factory=list)
     workspace: str
-    # Declared because the response model silently drops undeclared keys, which would read as absent.
+    # Declared because the response model drops undeclared keys, which would read as absent.
     workspace_picker: str | None = None
-    # Sandbox probe results, declared for the same reason: an omission would report no sandbox at all.
+    # Sandbox probe results, declared for the same reason: omission would report no sandbox at all.
     sandbox: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -90,7 +88,7 @@ class HealthOut(BaseModel):
 
 
 class WorkspaceRef(BaseModel):
-    """Wire form of a session's workspace, whose id is a static fact recorded in the session header."""
+    """Wire form of a session's workspace; its id is fixed in the session header."""
 
     id: str | None = None
     root: str | None = None
@@ -117,7 +115,7 @@ class FileListOut(BaseModel):
     path: str
     parent: str | None = None
     entries: list[FileEntryOut]
-    #: 条目数超出上限时截断并置真（面板要能说"还有更多"）。
+    #: Set when the listing was cut at the cap, so the panel can say there is more.
     truncated: bool = False
 
 
@@ -136,7 +134,7 @@ class WorkspaceListOut(BaseModel):
 
 
 class PickFolderOut(BaseModel):
-    """Result of the system folder picker, where a null path means the user cancelled and not an error."""
+    """Result of the system folder picker; a null path means the user cancelled, not an error."""
 
     path: str | None = None
 
@@ -148,11 +146,10 @@ class CreateWorkspaceIn(BaseModel):
 
     path: str = Field(max_length=MAX_PATH_CHARS)
     name: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
-    # 阶段 51 之后没有权限模式可选；字段移除，注册只带 name。
 
 
 class CapabilityFlags(BaseModel):
-    """模型能力声明；None = 未声明（保守处理：运行期不据此短路，只有显式 false 才拦）。"""
+    """Declared model capabilities; None means undeclared, and only an explicit false blocks."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -164,7 +161,7 @@ class CapabilityFlags(BaseModel):
 
 
 class ByokModel(BaseModel):
-    """一个具体模型：id + 可选展示名 / 窗口 / 输出上限 / 推理强度档位 / 能力声明（读写同形）。"""
+    """One model declaration; the read and write forms share this shape."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -172,16 +169,14 @@ class ByokModel(BaseModel):
     label: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
     context_window: int | None = Field(default=None, ge=1)
     max_output: int | None = Field(default=None, ge=1)
-    # 这个模型认哪些推理强度档位（运行时从列表里挑一个）；空 = 不带这个参数。
+    # Reasoning levels this model accepts; empty means the parameter is not sent.
     reasoning_efforts: list[str] = Field(default_factory=list)
     capabilities: CapabilityFlags = Field(default_factory=CapabilityFlags)
 
 
 class ByokProviderIn(BaseModel):
-    """一个接入端点：协议 + base URL + 可选密钥。api_key 只入不出，落 secrets.json。
-
-    鉴权隐式：密钥库按 provider id 存了密钥就按协议标准头发送，没存就不带鉴权头
-    （本地服务）——没有 auth_type/header_name 这类选择。
+    """One provider endpoint; ``api_key`` is write-only and lands in secrets.json, and auth is
+    implicit — a stored key means the protocol's standard header, none means no auth header.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -198,10 +193,8 @@ class ByokProviderIn(BaseModel):
 
 
 class ByokProviderOut(BaseModel):
-    """GET 回显：与 In 同形但**没有 api_key**，多一个 key_set 布尔。
-
-    protocol 收宽成 str：值来自已通过 validate 的配置，回显侧不再用
-    Literal 收紧一遍（In 侧的 Literal 负责把非法值挡在 422）。
+    """Echo form: the input shape minus ``api_key`` plus a ``key_set`` boolean, with ``protocol``
+    widened to str because the values already passed validation.
     """
 
     id: str
@@ -216,7 +209,7 @@ class ByokProviderOut(BaseModel):
 
 
 class ByokSettingsIn(BaseModel):
-    """整体保存：providers 全量 + chat 绑定；服务端先 validate 再落盘。"""
+    """Whole-config save: the full provider list plus the chat binding, validated before disk."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -225,14 +218,14 @@ class ByokSettingsIn(BaseModel):
 
 
 class ByokSettingsOut(BaseModel):
-    """模型连接的唯一来源；没有文件时 providers 为空、chat 绑定为 null。"""
+    """The only source of model connections; with no file, providers is empty and chat is null."""
 
     providers: list[ByokProviderOut] = Field(default_factory=list)
     bindings: dict[str, str | None] = Field(default_factory=dict)
 
 
 class ByokTestIn(BaseModel):
-    """连通校验载荷：携带**未保存也能测**的完整提供商声明 + 要测的模型 id。"""
+    """Connectivity-check payload carrying a full provider declaration that need not be saved."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -252,7 +245,7 @@ class ByokTestOut(BaseModel):
 
 
 class SessionsDirOut(BaseModel):
-    """会话目录：当前值、默认值、生效来源；环境变量赢时 editable 为 false（界面只读）。"""
+    """Effective session directory; ``editable`` is false when the environment variable wins."""
 
     dir: str
     default_dir: str
@@ -261,7 +254,7 @@ class SessionsDirOut(BaseModel):
 
 
 class SessionsDirIn(BaseModel):
-    """设置会话目录；空串表示恢复默认。只改配置，不搬已有会话。"""
+    """Sets the session directory; an empty string restores the default, and nothing is moved."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -269,7 +262,7 @@ class SessionsDirIn(BaseModel):
 
 
 class SearchHitOut(BaseModel):
-    """一条内容命中：够显示片段，也够跳回原文（会话 + 条目 + 行偏移）。"""
+    """One content hit: enough to show a snippet and jump back to the raw entry."""
 
     session_id: str
     entry_id: str
@@ -286,7 +279,7 @@ class SearchHitOut(BaseModel):
 
 
 class SearchResultOut(BaseModel):
-    """检索结果；behind 是「索引还落后多少个会话」——如实说，别让人以为搜全了。"""
+    """Search results; ``behind`` is how many sessions the index still lags behind."""
 
     hits: list[SearchHitOut] = Field(default_factory=list)
     behind: int = 0
@@ -323,7 +316,7 @@ class CreateSessionIn(BaseModel):
 
 
 class ScratchIn(BaseModel):
-    """临时会话的创建载荷：名字可省（服务端给「临时对话 · 源名」）。"""
+    """Scratch-session payload; the name is optional and the server derives one."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -331,7 +324,7 @@ class ScratchIn(BaseModel):
 
 
 class ScratchOut(SessionDetail):
-    """临时会话的视图：会话本身 + 拷了多少条消息（界面拿去说「带上了 N 条上下文」）。"""
+    """Scratch view: the session plus how many messages were copied into it."""
 
     copied_messages: int = 0
 
@@ -352,7 +345,8 @@ class EntryOut(BaseModel):
 
 
 class EntryPageOut(BaseModel):
-    """One page of entries, where the cursor is exclusive and a truncated tail means older entries went."""
+    """One page of entries, where the cursor is exclusive and a truncated tail means older
+    entries were dropped."""
 
     session_id: str
     branch: str
@@ -364,9 +358,10 @@ class EntryPageOut(BaseModel):
     truncated_tail: bool = False
 
 
-# Field names are decided by RunState.usage_report and compared against the frontend type definitions.
+# Field names come from RunState.usage_report and are compared against the frontend types.
 class ContextPartsOut(BaseModel):
-    """Estimated token share of each context block, split by character proportion, summing to the total."""
+    """Estimated token share of each context block, split by character proportion and summing
+    to the total."""
 
     system: int = 0
     tools: int = 0
@@ -384,7 +379,7 @@ class ContextUsageOut(BaseModel):
 
 
 class CacheUsageOut(BaseModel):
-    """Cache read and write counts with the hit ratio; only Anthropic-style providers report writes."""
+    """Cache read/write counts with the hit ratio; only Anthropic-style providers report writes."""
 
     read_tokens: int | None = None
     write_tokens: int | None = None
@@ -410,7 +405,7 @@ class BranchOut(BaseModel):
     tip_entry_id: str | None = None
     entry_count: int = 0
     is_default: bool = False
-    # Usage snapshot of the branch's most recent run, persisted with the session; null means never run.
+    # Usage snapshot of the branch's latest run, persisted with the session; null means never run.
     usage: UsageOut | None = None
 
 
@@ -420,7 +415,7 @@ class BranchListOut(BaseModel):
 
 
 class CreateBranchIn(BaseModel):
-    """Branch fork point; an absent entry id starts an empty branch instead of copying an existing one."""
+    """Branch fork point; an absent entry id starts an empty branch instead of copying one."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -440,7 +435,7 @@ class ImageIn(BaseModel):
 
 
 class StartRunIn(BaseModel):
-    """Run request; full_access_ack=true 就是完全访问的授予凭据，没有别的模式可选。"""
+    """Run request; ``full_access_ack=true`` is the grant for full access, the only mode there."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -451,9 +446,9 @@ class StartRunIn(BaseModel):
     from_input: str | None = Field(default=None, max_length=MAX_ID_CHARS)
     auto_approve: bool = False
     branch: str = Field(default="main", max_length=MAX_NAME_CHARS)
-    # 本次运行的模型覆盖；缺省 = 按设置（.env + 界面覆盖层）解析。空串按缺省处理。
+    # Per-run model override; absent or empty falls back to the configured chat binding.
     model: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
-    # 本次运行的推理强度：必须在所选模型声明的档位列表里（内核按列表校验）。空串按缺省处理。
+    # Per-run reasoning effort; must be among the chosen model's levels (the kernel enforces it).
     reasoning_effort: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
     full_access_ack: bool = False
 
@@ -509,10 +504,8 @@ class RunCreatedOut(BaseModel):
 
 
 class ApprovalOut(BaseModel):
-    """一条待决项：kind 决定它是裁决（approval）还是提问（question）。
-
-    两者共用一张表和同一个界面槽（运行卡住了、等你说句话），所以也共用这条 DTO：
-    提问多给 options 与 answer，审批多给 decision。
+    """One pending item; ``kind`` says whether it is a decision (approval) or a question, and both
+    kinds share one table, one UI slot and this DTO.
     """
 
     approval_id: str
@@ -557,7 +550,7 @@ class ApprovalListOut(BaseModel):
 
 
 class AnswerApprovalIn(BaseModel):
-    """裁决给 decision，提问给 answer——二选一，都给或都不给都是 422。"""
+    """A decision sends ``decision``, a question sends ``answer``; both or neither is a 422."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -602,21 +595,21 @@ def classify_tool_status(
     return "ok"
 
 
-#: 子运行工具结果在线上保留的字符数：够看清它拿到了什么，又不让一次并行派发把事件流撑爆。
+#: Chars of a subagent tool result kept on the wire, so a parallel fan-out cannot bloat the stream.
 SUBAGENT_CONTENT_CHARS = 4000
 
 
 def event_payload(event: RunEvent, session_id: str) -> dict[str, Any]:
-    """Maps a kernel event to its wire payload, dropping tool output and adding derived status fields."""
+    """Maps a kernel event to its wire payload, dropping tool output and adding derived status
+    fields."""
     data = dict(event.data)
     if event.type == TOOL_CALL_FINISHED:
         content = data.pop("content", "")
         data["status"] = classify_tool_status(content, truncated=bool(data.get("truncated")))
         data["content_chars"] = len(content) if isinstance(content, str) else 0
         if "subagent" in data:
-            # 子运行的工具结果**只能走这条线**：它不落库，没有 tool_result_message 那样的
-            # durable 通道。所以这里留一段截断的正文（界面的子智能体面板要看到它拿到了什么）；
-            # 父运行的调用照旧只报状态与长度——结果由 durable 消息给，线格式不重复搬运。
+            # A subagent result is never persisted, so the wire is its only channel.
+            # Parent-run calls stay status-only; their content arrives as a durable message.
             data["content"] = content[:SUBAGENT_CONTENT_CHARS] if isinstance(content, str) else ""
     elif event.type == TOOL_CALL_DENIED:
         data["status"] = classify_tool_status("", denied_kind=str(data.get("kind") or "user"))

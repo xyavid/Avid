@@ -5,8 +5,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { ReasoningBlock } from '../ReasoningBlock'
 
 /**
- * 思考块：内核在流里发 `reasoning_delta`（不落盘），所以这个块**只在流里存在**——
- * 流式时展开、收尾自动折成一行，之后还能点开回看。
+ * The block exists only in the stream (`reasoning_delta` is not persisted): expanded while
+ * streaming, folded to one line when the run ends, and still expandable for review.
  */
 describe('思考块', () => {
   afterEach(cleanup)
@@ -31,7 +31,7 @@ describe('思考块', () => {
 
     expect(screen.getByText('思考完成')).toBeTruthy()
     expect(screen.getByRole('button', { name: /思考完成/ }).getAttribute('aria-expanded')).toBe('false')
-    // 折起后正文不在可访问内容里
+    // Folded: the body is not part of the accessible content.
     expect(screen.queryByText(/想完了/)).toBeNull()
   })
 
@@ -39,7 +39,7 @@ describe('思考块', () => {
     render(<ReasoningBlock text="想了三秒" streaming={false} durationMs={3200} />)
 
     expect(screen.getByText('思考 · 3.2s')).toBeTruthy()
-    // 没有读数时只说「完成」，不编一个时长
+    // Without a reading the row says "done" only; no duration is invented.
     cleanup()
     render(<ReasoningBlock text="想了三秒" streaming={false} />)
     expect(screen.getByText('思考完成')).toBeTruthy()
@@ -50,7 +50,7 @@ describe('思考块', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /思考完成/ }))
     expect(screen.getByText(/想完了/)).toBeTruthy()
-    // 再点一次收回去
+    // A second click folds it back.
     fireEvent.click(screen.getByRole('button', { name: /思考完成/ }))
     expect(screen.queryByText(/想完了/)).toBeNull()
   })

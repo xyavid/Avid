@@ -1,14 +1,11 @@
 /**
- * 对话表面：会话历史与本次运行的段落在这里汇成**一条时间线**。
- *
- * 显示的是 `mergeItems(history, run)`：历史段落来自会话条目（权威回拉的产物），
- * 运行段落来自事件流（`useRunStream`）。两条来源同形，所以过程中逐段追加、
- * 收尾原样留着——收尾只回拉用量与会话列表，不重建条目（重建会让段落换位置，
- * 那就是「最后才整体呈现」的病根）。历史的重建只发生在首屏、切会话、切分支。
- *
- * 布局职责：对话列 ≤720px 居中、输入列略宽（chat-input），由本表面自己排——
- * AppShell 只提供三栏骨架与滚动边界。数据分页：desc 取最近 50 条后本地反转；
- * truncated_tail（上次运行中断）在流顶给一条提示——派生自投影，不新增字段。
+ * Conversation surface: session history and the live run's segments merge into one timeline via
+ * `mergeItems(history, run)` — history comes from session entries (the authoritative read) and run
+ * segments from the event stream; rebuilding history stays limited to first paint, session switch
+ * and branch switch, because re-reading entries at settle time would let segments jump position.
+ * Layout is owned here (conversation column centered at ≤720px, composer slightly wider via
+ * `chat-input`; AppShell only gives the three-column skeleton and scroll bounds), and entries are
+ * paged desc, latest 50, reversed locally.
  */
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
@@ -59,7 +56,8 @@ import { SessionNav } from '../../components/session/SessionNav'
 import { SidebarFooter } from '../../components/session/SidebarFooter'
 import { AppShell } from '../../app/AppShell'
 
-/** 会话动作的失败说法：服务端消息多半够用，个别码换成更可执行的下一步。 */
+/** Session-action failure text: mostly the server's message, with a few codes replaced by a more
+    actionable next step (e.g. `session_busy`). */
 function sessionErrorText(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.code === 'session_busy') return '会话还在运行中——先停止这次运行，再删除'
@@ -68,9 +66,8 @@ function sessionErrorText(error: unknown): string {
   return String(error)
 }
 
-/** 欢迎态（报告 §6 底部欢迎态）：标识 + 衬线欢迎语（letter-spacing .06em）。
-    标识直接贴在纸面上，不做圆托——图案自带配色，透明底。
-    空项目时给一个主行动（新建会话）——每屏 ≤1 个 primary，按 Button 的使用约定。 */
+/** Empty state: mark on the bare paper (no disc behind it) + serif greeting, at most one primary
+    action. */
 function Welcome({ detail, action }: { detail: string; action?: ReactNode }) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-a16">
@@ -86,17 +83,14 @@ export function ConversationPage() {
   const [meta, setMeta] = useState<Meta | null>(null)
   const [sessions, setSessions] = useState<SessionSummary[] | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  // 会话历史段落（权威回拉的产物）：只在首屏、切会话、切分支时重建——运行结束后
-  // 不重建，时间线于是不会在收尾那一刻重排（这是本次改动要治的病）。
+  // History: rebuilt on first paint, session switch and branch switch — never at run settle time.
   const [history, setHistory] = useState<TimelineItem[] | null>(null)
-  // 当前查看的分支：分叉后切到新分支，之后的发送也落在它上面（「回到主线」退回去）。
+  // Branch being viewed: forking switches to the new branch and later sends target it too.
   const [branch, setBranch] = useState('main')
   const [branchHint, setBranchHint] = useState<string | null>(null)
   const [usage, setUsage] = useState<UsageReport | null>(null)
   const [error, setError] = useState<string | null>(null)
-  // 「加载更早」：desc 首页只含最近 50 条，更早历史经 next_cursor 追加；
-  // anchor 记录追加前的视口位置，prepend 落地后在 layout effect 里把视口
-  // 钉回同一条旧消息——独立于跟随的 dep 效果，避免与流式合帧抢提交（评审 L7）。
+  // Load earlier: append via next_cursor, pin the viewport with the anchor (separate from follow).
   const [earlier, setEarlier] = useState<{ hasMore: boolean; cursor: number | null }>({
     hasMore: false,
     cursor: null,
@@ -105,46 +99,38 @@ export function ConversationPage() {
   const [pendingAnchor, setPendingAnchor] = useState<{ top: number; height: number } | null>(null)
   const holdFollowRef = useRef(false)
   const anchorRef = useRef<{ top: number; height: number } | null>(null)
-  // 完全访问开关：默认 false（normal 形态）。开启即这次运行跳过毁灭级确认、关沙箱，
-  // 随 StartRunInput 的 full_access_ack 提交；粘住直到用户改回来。
+  // Full-access (default off): skips destructive confirmation + sandbox, sent as full_access_ack.
   const [full, setFull] = useState(false)
-  // 本次运行用的模型与推理强度：都由用户在输入区自己选（阶段 54/55 起没有「跟随设置」这一档），
-  // 选过就记住；候选与档位来自「设置 → 模型」。candidates 落地前先不动记忆。
+  // Model/effort chosen in the composer and remembered; candidates come from Settings → Models.
   const run = useRunChoice(meta?.capabilities.models ?? [])
-  // 工作区候选与「新会话将使用的工作区」选择；新增走宿主机 picker（不可用时手动路径）。
+  // Workspace candidates and the workspace a new session will use; adding goes through the picker.
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[] | null>(null)
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null)
   const [wsBusy, setWsBusy] = useState(false)
   const [wsHint, setWsHint] = useState<string | null>(null)
-  // 会话动作（新建 / 重命名 / 删除）：在飞时禁用新建，结果或失败都落一行提示。
+  // Session actions (create/rename/delete): one hint line reports the result or failure.
   const [sessionsBusy, setSessionsBusy] = useState(false)
   const [sessionsHint, setSessionsHint] = useState<string | null>(null)
-  // 内容检索（阶段 57）：搜索框里的词交给索引查一遍（防抖），命中点开则切会话并跳到那条。
-  // 索引落后是允许的——所以这里只展示「搜到什么」，不假装搜全了。
+  // Content search: debounced index query; a lagging index is fine, so only found hits are shown.
   const [navQuery, setNavQuery] = useState('')
   const [contentHits, setContentHits] = useState<SearchHit[]>([])
   const [searchingContent, setSearchingContent] = useState(false)
-  // 内容那一路的提示：检索失败要说清，索引落后也要说（别让人以为搜全了）。
+  // Content-search notice: a failure and a lagging index are both stated.
   const [searchNotice, setSearchNotice] = useState<string | null>(null)
-  // 跳到哪条分两件事（别合成一个状态）：jump 是「这次要换页」的请求，用完即清；
-  // focusEntryId 是「高亮谁」，留到用户自己切走——合成一个会在换页后把高亮也清掉（踩过）。
+  // Jump and highlight are two states: jump is a one-shot paging request, focusEntryId survives.
   const [jump, setJump] = useState<{ sessionId: string; seq: number } | null>(null)
   const [focusEntryId, setFocusEntryId] = useState<string | null>(null)
-  // 活运行：一次运行的发送/订阅/终态回拉。它自己的段落属于哪个会话由 hook 记着
-  // （live.attachedSession）——切走会话时那些段落不跟过去；attachedRunRef 防重复附着。
-  // `?settings=1` 是开发期钉子（截图/联调直达设置界面），与 ?gallery=1 同性质
+  // Live run segments belong to live.attachedSession; attachedRunRef prevents re-attaching.
+  // `?settings=1` is a dev-only deep link that opens the settings modal.
   const [settingsOpen, setSettingsOpen] = useState(
     () => new URLSearchParams(window.location.search).has('settings'),
   )
-  /**
-   * 用户自己选会话（侧栏列表或内容命中）：先清掉跳转与高亮这两个状态，再切。
-   * 三件事必须一起做——留着上一次的高亮或锚点，下一个会话会从别人的位置开始取页。
-   */
+  /** Select a session (sidebar or content hit): clear jump and highlight before switching. */
   const selectSession = (id: string) => {
     setJump(null)
     setFocusEntryId(null)
     setSelectedId(id)
-    // 上一次的错误（比如点了个已被删掉的命中）不该跟着切到新会话——错误屏会一直粘着。
+    // A previous error must not stick to the next session.
     setError(null)
   }
   const selectedIdRef = useRef<string | null>(null)
@@ -159,32 +145,30 @@ export function ConversationPage() {
   settledRef.current = async () => {
     const id = selectedIdRef.current
     if (id) {
-      // 只回拉用量：条目不再重读——本次运行的段落已经在时间线上（事件流建的），
-      // 重读会让它们换个位置出现，那就是跳变。历史的重建留给切会话/刷新。
+      // Settle refetches usage only: re-reading entries would move segments already on the view.
       try {
         const viewed = branchRef.current
         const bl = await listBranches(id)
         const hit = bl.branches.find((b) => b.name === viewed) ?? bl.branches.find((b) => b.is_default)
         setUsage(hit?.usage ?? null)
       } catch {
-        // 回拉失败保留旧视图，刷新兜底
+        // On refetch failure keep the old view; a reload is the fallback.
       }
     }
     try {
       const w = await listSessions()
       setSessions(w.sessions)
     } catch {
-      // 列表刷新失败不阻塞收尾
+      // A failed list refresh must not block settling.
     }
     live.settle()
   }
 
-  // 时间线 = 会话历史 + 本次运行的段落。运行段落只属于它自己的会话：
-  // 切走会话时只显示目标会话的历史，切回来再并（mergeItems 按 entry_id 去重）。
+  // Timeline = history + this run's segments; run segments only show in their own session.
   const runHere = live.attachedSession === selectedId
   const shown: TimelineItem[] =
     history === null ? [] : runHere ? mergeItems(history, live.items) : history
-  // 右列子智能体面板的数据：整条时间线里摊平出来的子运行（含只剩任务清单的历史项）
+  // Subagent panel data: runs flattened from the whole timeline (history items included).
   const subagents = subagentRuns(shown)
   const dock = useDock()
   const scroll = useConversationScroll(
@@ -252,9 +236,7 @@ export function ConversationPage() {
     if (!selectedId) return
     let alive = true
     setHistory(null)
-    // 用量快照与条目分属两个端点；快照失败不该连累对话流，静默回退到「—」。
-    // 从检索跳过来时（focus 指向这条会话）改成从那条开始取页：cursor 是排他的，
-    // seq + 1 正好把命中那条放在这一页的新端，「加载更早」照旧往回接。
+    // Jump from a hit: cursor is exclusive, so seq + 1 starts paging at that entry.
     const anchor = jump?.sessionId === selectedId ? jump.seq + 1 : undefined
     listEntries(selectedId, { branch, limit: 50, cursorSeq: anchor })
       .then(async (page) => {
@@ -262,7 +244,7 @@ export function ConversationPage() {
         const items = itemsFromEntries([...page.entries].reverse())
         setHistory(items)
         setEarlier({ hasMore: page.has_more, cursor: page.next_cursor })
-        setError(null)  // 这一次读成功了：把上一次的错误屏收掉
+        setError(null)  // this read succeeded, so clear the previous error screen
         // Pending inputs: the queue lives server-side, so queued items survive a reload.
         const queued = await listInputs(selectedId).catch(() => [])
         if (alive && queued.length > 0) {
@@ -275,6 +257,7 @@ export function ConversationPage() {
           setError(e instanceof ApiError ? e.message : String(e))
         }
       })
+    // Usage and entries are two endpoints; a failed usage snapshot must not break the conversation.
     listBranches(selectedId)
       .then((bl) => {
         if (!alive) return
@@ -287,26 +270,23 @@ export function ConversationPage() {
     return () => {
       alive = false
     }
-     // jump 在依赖里：点命中时换了它，这一遍就从这个锚点取页（清它由切会话统一做）
+     // jump is a dep: a hit click changes it and this pass starts paging from that anchor
   }, [selectedId, branch, jump])
 
   const selected = sessions?.find((s) => s.id === selectedId) ?? null
 
-  // 切会话回到主线：分支是「这个会话内部的一条线」，跟到别的会话上是错的。
+  // Switching sessions returns to main: a branch belongs inside one session.
   useEffect(() => {
     setBranch('main')
     setBranchHint(null)
   }, [selectedId])
 
-  // 切会话把贴底状态拨回默认：上一会话停在顶部时，下一会话也要照常落底（评审 L6）。
+  // Switching sessions resets the pinned-to-bottom state for the next one.
   useEffect(() => {
     scroll.reset()
   }, [selectedId])
 
-  /**
-   * 从某条消息分叉：建分支 → 切到它。不切的话这个按钮就是个死按钮
-   * （前端没有分支选择器），所以顺带给一条「回到主线」的退路。
-   */
+  /** Fork from a message: create the branch and switch to it; "back to main" is the way out. */
   const branchFrom = async (entryId: string) => {
     if (!selectedId) return
     setBranchHint(null)
@@ -319,7 +299,7 @@ export function ConversationPage() {
     }
   }
 
-  /** 追加更早历史：先记视口锚点，prepend 后钉回同一条旧消息；失败保留原视图可重试。 */
+  /** Append older history, pinning the viewport to the anchor; a failure keeps the current view. */
   const loadEarlier = async () => {
     if (!selectedId || loadingEarlier || !earlier.hasMore || earlier.cursor === null) return
     setLoadingEarlier(true)
@@ -331,7 +311,7 @@ export function ConversationPage() {
       setHistory((cur) => [...itemsFromEntries([...page.entries].reverse()), ...(cur ?? [])])
       setEarlier({ hasMore: page.has_more, cursor: page.next_cursor })
     } catch {
-      // 追加失败不打断对话视图；按钮保持可点，用户可重试
+      // A failed append must not break the conversation view; the button stays clickable.
       holdFollowRef.current = false
       anchorRef.current = null
     } finally {
@@ -339,48 +319,48 @@ export function ConversationPage() {
     }
   }
 
-  // 从检索跳过来的那条：画出来之后滚进视野一次（用 layout 效果，别让用户自己找）。
+  // The jumped-to hit: scroll it into view once after it renders (layout effect).
   useLayoutEffect(() => {
     if (!focusEntryId) return
     const el = document.querySelector(`[data-entry="${focusEntryId}"]`)
     el?.scrollIntoView({ block: 'center' })
   }, [focusEntryId, history])
 
-  // prepend 落地后按锚点差值回滚视口（layout：在浏览器绘制前完成，不闪）。
+  // After prepending, restore the scroll offset from the anchor before paint (layout effect).
   useLayoutEffect(() => {
     if (pendingAnchor === null) return
     const el = scroll.ref.current
     if (el !== null) el.scrollTop = pendingAnchor.top + (el.scrollHeight - pendingAnchor.height)
     setPendingAnchor(null)
     holdFollowRef.current = false
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只随锚点触发
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only fires for a new anchor
   }, [pendingAnchor])
 
-  // 默认选择：选中会话归属的工作区，否则第一个候选；用户手动选过就不覆盖。
+  // Default workspace: the selected session's own, else the first candidate; a manual pick wins.
   useEffect(() => {
     if (activeWorkspaceId || !workspaces) return
     const sw = selected?.workspace?.id
     const fallback = sw && workspaces.some((w) => w.id === sw) ? sw : (workspaces[0]?.id ?? null)
     if (fallback) setActiveWorkspaceId(fallback)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在缺省时填充一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fill only while unset
   }, [workspaces, selected?.workspace?.id, activeWorkspaceId])
 
-  // 会话由项目管理：切换项目后，当前选中不属于它时，切到该项目下的第一个会话。
+  // Sessions are managed per project: when the selection is outside the active project, switch.
   useEffect(() => {
     if (!activeWorkspaceId || !sessions) return
     const inProject = sessions.filter((s) => s.workspace?.id === activeWorkspaceId)
     if (selectedId && inProject.some((s) => s.id === selectedId)) return
     setSelectedId(inProject[0]?.id ?? null)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只随项目切换与列表刷新而调整
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- react to project switches / refreshes
   }, [activeWorkspaceId, sessions])
 
-  // 选中会话有在跑的运行（刷新 / 切回）：附着到它的流，durable 重放重建运行段落。
+  // A selected session with a live run (refresh / switch back): attach and replay its stream.
   useEffect(() => {
     const active = selected?.active_run_id ?? null
     if (!active || live.phase !== 'idle' || attachedRunRef.current === active) return
     attachedRunRef.current = active
     live.attach(active)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只随会话的活动运行变化而附着
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- attach on active-run changes only
   }, [selected?.active_run_id, live.phase])
 
   const refreshWorkspaces = async (): Promise<WorkspaceSummary[]> => {
@@ -400,7 +380,7 @@ export function ConversationPage() {
       setWsHint(`已新增工作区：${created?.name ?? path}`)
     } catch (e) {
       if (e instanceof ApiError && e.code === 'workspace_exists') {
-        // 409：目录已在列表里——按 detail.id 选中既有项，不当作错误打扰
+        // 409: the directory is already registered — select the existing entry instead of erroring.
         const list = await refreshWorkspaces()
         const detailId = typeof e.detail?.id === 'string' ? e.detail.id : null
         const known = (detailId && list.find((w) => w.id === detailId)) || list.find((w) => w.root === path)
@@ -414,7 +394,7 @@ export function ConversationPage() {
     }
   }
 
-  /** 从项目列表移除：注册表条目，不删磁盘上的会话文件（hint 里照实说）。 */
+  /** Remove from the project list: a registry entry, not the session files on disk. */
   const removeWorkspace = async (id: string) => {
     setWsBusy(true)
     setWsHint(null)
@@ -453,7 +433,7 @@ export function ConversationPage() {
     return list.sessions
   }
 
-  /** 在当前项目下新建会话并选中它（workspace 是服务端必填项，没有默认工作区）。 */
+  /** Create a session in the current project and select it (the server requires a workspace). */
   const createSessionInProject = async () => {
     if (!activeWorkspaceId || sessionsBusy) return
     setSessionsBusy(true)
@@ -482,13 +462,13 @@ export function ConversationPage() {
     }
   }
 
-  /** 删除会话（组件内已二次确认）：销毁磁盘记录文件；删的是选中项就换选同项目第一条。 */
+  /** Delete a session (already confirmed); if selected, fall back to the first in project. */
   const deleteSessionById = async (id: string) => {
     setSessionsBusy(true)
     setSessionsHint(null)
     try {
       await deleteSession(id)
-      // 这个会话的命中立刻从侧栏收掉：它在索引里要等下一次通知/补齐才消失（点进去只会 404）。
+      // Drop its hits now: the index clears them on the next notify/scan and stale clicks 404.
       setContentHits((current) => current.filter((hit) => hit.session_id !== id))
       const list = await refreshSessions()
       if (selectedIdRef.current === id) {
@@ -503,13 +483,11 @@ export function ConversationPage() {
     }
   }
 
-  // 上下文环的读数：运行中吃事件里的每轮快照（所以它是动态的），
-  // 其余时候用分支落盘的那份（切会话/刷新都还在）。
+  // Context-ring reading: live per-turn snapshots while running, else the persisted branch value.
   const shownUsage = runHere ? (live.usage ?? usage) : usage
   const liveActive = live.phase === 'starting' || live.phase === 'running' || live.phase === 'settling'
   const liveHere = liveActive && runHere
-  // 只有"打不开会话 / 事件流断了"这种取数失败占正文（那时没有时间线可展示）。
-  // 运行失败不走这里：它已经在时间线上是一条 error 段（内核落的账），不该把整段对话换掉。
+  // Only load failures own the body; a failed run is already an error segment in the timeline.
   const displayError = error ?? (live.phase === 'error' && runHere ? live.error : null)
 
   let body = (
@@ -547,9 +525,7 @@ export function ConversationPage() {
             </button>
           </div>
         )}
-        {/* 一条时间线：历史与本次运行的段落同形，过程与收尾共用它——
-            收尾不再换渲染器，也不重排（这是「逐段出现」的另一半）。
-            本轮还在跑就铺着过程，跑完由 Timeline 按轮折成一行「已完成，用时 …」。 */}
+        {/* History and the live run share one timeline; finished turns fold into a single row. */}
         {hasItems && (
           <Timeline
             items={shown}
@@ -578,8 +554,7 @@ export function ConversationPage() {
           onClick={dock.toggle}
         />
       }
-      // 右列是占位的 dock 列（阶段 54 起默认收起）：收起 = 不挂它，栅格自然回到两列
-      // （主列于是拿回那 280px，而不是被浮层盖住）；打开先给选择页。
+      // Collapsed rail = not mounted (grid back to two columns); an open starts on the chooser.
       rail={
         dock.open ? (
           <Dock
@@ -631,7 +606,7 @@ export function ConversationPage() {
             creating={sessionsBusy}
             notice={sessionsHint}
           />
-          {/* 设置入口在侧栏最底部、单开一栏（原先挂在顶栏右上角） */}
+          {/* Settings lives at the bottom of the sidebar as its own column. */}
           <SidebarFooter onOpenSettings={() => setSettingsOpen(true)} />
         </div>
       }

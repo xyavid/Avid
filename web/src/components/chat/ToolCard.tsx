@@ -1,13 +1,8 @@
 /**
- * 工具卡双形态：
- * - **折叠态（默认）**：单行——工具图标 + 动作词 + 目标（相对路径 / 命令 / 任务名，
- *   等宽小字截断）+ 耗时 + 状态标记，点击展开；
- * - **展开态**：完整卡——头部同上，正文是**详情视图**（文件类工具给差异 / 代码视图，
- *   见 `toolDetail.ts`）或工具结果原文；subagent 的子步骤在结果之前按任务分组列出
- *   （子步骤是 live-only：子运行不落库，刷新后只剩这张卡与它的结果）。
- *
- * 宽度 330px 是组件墙的解剖值；带详情视图的展开态加宽到 560px——差异与代码要横向读。
- * 失败判定与后端同口径，单点在 `state/timeline.ts` 的 `classifyToolResult`（改动要两侧同步）。
+ * Tool card: a collapsed single row (icon + verb + target + duration + status) or the full
+ * card — detail view for file tools, subagent steps grouped by task, else the raw result.
+ * Subagent steps are live-only (child runs are not persisted); the failed verdict shares its
+ * rule with the backend via `classifyToolResult` in `state/timeline.ts` — keep both in sync.
  */
 
 import { useState } from 'react'
@@ -47,7 +42,7 @@ function StatusMark({ status }: { status: ToolStatus }) {
   )
 }
 
-/** 子步骤按任务分组：并行 subagent 的步骤会交错到达，按任务聚而不是按到达顺序切。 */
+/** Group by task: parallel subagent steps interleave, so arrival order would split them. */
 function stepGroups(steps: SubagentStep[]): Array<{ task: string; list: SubagentStep[] }> {
   const order: string[] = []
   const byTask = new Map<string, SubagentStep[]>()
@@ -79,25 +74,25 @@ function StepRow({ step, workspaceRoot }: { step: SubagentStep; workspaceRoot: s
 
 export type ToolCardProps = {
   icon: IconName
-  /** 动作词：读取 / 写入 / 执行 / 子智能体…（见 toolLabel）。 */
+  /** Action word from toolLabel. */
   verb: string
-  /** 目标：相对路径、命令首行、任务名；空 = 这条调用没有可读目标。 */
+  /** Relative path, command first line or task name; empty = nothing readable. */
   target?: string
   status?: ToolStatus
-  /** 运行期读数（tool_call_finished 的 duration_ms）；null = 没有读数。 */
+  /** Live reading (`tool_call_finished` duration_ms); null = none. */
   durationMs?: number | null
-  /** 子 agent 的子步骤；空数组 = 不是 subagent 卡或还没有步骤。 */
+  /** Subagent steps; empty = not a subagent card or no steps yet. */
   steps?: SubagentStep[]
-  /** 工作区根：子步骤的相对路径也按它算。 */
+  /** Workspace root; sub-step paths are relativized against it too. */
   workspaceRoot?: string | null
   defaultExpanded?: boolean
   className?: string
-  /** 详情视图（文件类工具：差异 / 代码）；给了就画它，不给画 `children` 原文。 */
+  /** Detail view for file tools; absent ⇒ raw `children` result. */
   detail?: ToolDetail | null
-  /** 点开卡片时顺带通知调用方（子智能体卡用它打开右列）——一次点击两个动作是刻意的：
-   *  卡片与右列是同一件事的两个视图，点它就是要看这件事。 */
+  /** Notifies the caller when the card expands (subagent cards open the right column); one
+   *  click does both on purpose. */
   onOpen?: () => void
-  /** 展开态正文：工具结果（没有结果时给参数）。 */
+  /** Expanded body: the tool result (arguments when there is no result). */
   children?: ReactNode
 }
 
@@ -150,7 +145,7 @@ export function ToolCard({
     <div
       className={cx(
         'max-w-full overflow-hidden rounded-card border-hairline border-hair bg-card shadow-soft',
-        // 差异 / 代码视图要横向看：330px 里读 diff 只能一直拖，展开态带详情时加宽
+        // Diff / code views need horizontal room: expanded cards with a detail widen to 560px.
         detail === null ? 'w-[330px]' : 'w-[560px]',
         className,
       )}
@@ -197,7 +192,7 @@ export function ToolCard({
               startLine={detail.startLine}
             />
           )}
-          {/* 视图画的不是结果本身时（编辑 / 写入），把结果原话留作注脚 */}
+          {/* When the view is not the result (edit / write), the result stays as a footnote. */}
           {detail.note !== null && <p className="font-ui text-hint text-ink-muted">{detail.note}</p>}
         </div>
       )}

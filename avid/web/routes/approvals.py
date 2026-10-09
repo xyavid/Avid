@@ -1,7 +1,7 @@
-"""Approval endpoints: list the pending items and answer one of them.
+"""Approval endpoints: list a run's pending items and answer one of them.
 
-一张表两种待决：毁灭级裁决（decision: allow/deny）与模型的提问（answer: 文本）。
-列表与答复都走同一对端点——界面只需要一个「等你说话」的槽。
+One table holds both kinds — a destructive-command decision (``decision: allow/deny``) and a
+model question (``answer``) — so one endpoint pair and one UI slot serve whichever waits.
 """
 
 from __future__ import annotations
@@ -29,7 +29,8 @@ def list_approvals(request: Request, run_id: str) -> dict:
 def answer_approval(
     request: Request, run_id: str, approval_id: str, body: AnswerApprovalIn
 ) -> dict:
-    """Answers one approval idempotently, emitting no event because the run thread owns the sequence."""
+    """Answers one approval idempotently, emitting no event because the run thread owns the
+    sequence."""
     registry = current_services(request).runs
     record = registry.get(run_id)
     if record.approvals is None:

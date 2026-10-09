@@ -1,7 +1,7 @@
-"""grep_search：结构化命中、并发安全、两条实现路径给同一种输出。
+"""grep_search: structured hits, concurrency safety, and one output shape from both code paths.
 
-用真目录跑（夹具造几个文件），断言落在「模型看到的那几行」——路径相对工作区、带行号、
-超限时如实说。
+Assertions target the lines the model sees: workspace-relative paths, line numbers, and an honest
+note when results are capped.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ def project(tmp_path) -> Path:
 
 
 class State:
-    """最小 run state：工具只读 workspace_root。"""
+    """Minimal run state: the tool reads workspace_root only."""
 
     def __init__(self, root: Path) -> None:
         self.workspace_root = str(root)
@@ -48,7 +48,7 @@ def test_finds_content_with_path_and_line(project):
 
 
 def test_ignores_dependencies_and_dot_directories(project):
-    """默认不进 node_modules 与 .git——那是噪声，不是答案。"""
+    """node_modules and .git stay out by default: noise, not answers."""
     out = run("会话存储", project)
 
     assert "node_modules" not in out
@@ -109,7 +109,7 @@ def test_searching_one_file_directly(project):
 
 
 def test_the_python_fallback_gives_the_same_shape(project, monkeypatch):
-    """没有 rg 的机器上输出形状必须一样（是不是装了 ripgrep 不该影响模型看到的东西）。"""
+    """Same shape without rg: whether ripgrep is installed must not change what the model sees."""
     monkeypatch.setattr(search_module.shutil, "which", lambda name: None)
 
     out = run("会话存储", project)

@@ -1,14 +1,13 @@
-"""stress：长会话与性能门禁（默认不跑，`pytest -m stress` 或 CI 的 stress job 跑）。
+"""stress: long-session and performance gates, skipped by default (``pytest -m stress``).
 
-为什么需要它：这些路径的正确性由普通用例守着，但**成本**只能靠量级守住。历史上
-两处退化都不是功能错误、而是复杂度错误——只有把规模拉起来才会红：
+These paths could regress in complexity rather than correctness:
+* Session list replaying every file: 20 sessions of 5.9 MB took 54 ms, and first paint grows to
+  seconds with more sessions.
+* Every delta rescanning the event buffer: 8000 chunks took 1.05 s on the thread that reads the
+  model SSE.
 
-* 会话列表每个会话都重放整个文件：20 会话 5.9 MB 要 54 ms，会话一多首屏就是秒级；
-* 每个 delta 都全量扫事件缓冲：8000 分片 1.05 s，而且跑在读模型 SSE 的线程里。
-
-因此这里的阈值都留了 10–30 倍余量：它们该抓的是**复杂度**（平方级、每会话全量
-重放），不是几个百分点的抖动。写用例时优先断言机制（"一次都没 open"），时间只是
-第二道保险。
+Thresholds carry a 10-30x margin and must catch complexity (quadratic work, per-session full
+replays), not a few percent of jitter; prefer asserting the mechanism over the clock.
 """
 
 from __future__ import annotations
@@ -44,11 +43,8 @@ ASSISTANT = {"role": "assistant", "content": "二"}
 def write_session_file(
     directory: Path, session_id: str, messages: int, *, payload: int = 2000
 ) -> Path:
-    """直接写 JSONL 行，不走 recorder 的每条 fsync。
-
-    造 200 个会话要写一万多条消息——真走记录器的话光是 fsync 就要几分钟，
-    stress 用例本身不能成为瓶颈。
-    """
+    """Write JSONL lines directly, skipping the recorder's per-message fsync so the fixture
+    itself is not the bottleneck."""
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"2026-01-01T00-00-00-000_{session_id}.jsonl"
     lines = [encode_header(JsonlHeader(session_id, STORAGE_VERSION, 1))]
@@ -77,11 +73,7 @@ def write_session_file(
 
 
 def test_stress_session_list_does_not_replay_each_session(tmp_path, monkeypatch):
-    """列表页的成本必须与**会话数**成正比，而不是"会话数 × 文件大小"。
-
-    以前每个会话都 open() 一次（逐行 JSON 解析 + 建 SessionState）：200 个
-    120 KB 的会话实测要数秒。现在只读一次文件 + 解析尾部窗口，并且一次都不 open。
-    """
+    """Listing must cost O(session count), not count x file size: no session file is opened."""
     sessions_root = tmp_path / "sessions"
     count = 200
     for index in range(count):
@@ -112,11 +104,8 @@ def test_stress_session_list_does_not_replay_each_session(tmp_path, monkeypatch)
 
 
 def test_stress_delta_emit_stays_linear(tmp_path):
-    """每个 delta 的记账必须是 O(1)：全量扫缓冲会让长回复退化成平方级。
-
-    修之前 8000 分片要 1.05 s（131 µs/条，而且随着缓冲变大越来越慢）；
-    修之后约 14 ms（1.7 µs/条）。阈值 0.5 s 只抓复杂度，不抓抖动。
-    """
+    """Delta accounting must stay O(1), not a full buffer scan per delta; the 0.5 s budget only
+    catches complexity, not jitter."""
     registry = RunRegistry(None, buffer_size=512)
     record = RunRecord(run_id="stress", session_id="s", started_at=0)
     registry.emit(record, RUN_STARTED)
@@ -132,11 +121,8 @@ def test_stress_delta_emit_stays_linear(tmp_path):
 
 
 def test_stress_long_session_summarize_and_replay_stay_usable(tmp_path):
-    """长会话的两条读路径都要能用：摘要（列表页）与重放（打开会话）。
-
-    5000 条消息的会话：摘要是"读一次 + 尾部窗口"，重放是"逐行解析 + 建状态"。
-    两者都不该出现分钟级退化——真到那个量级说明有人在读路径上加了全量扫描。
-    """
+    """Both read paths on a long session stay usable: summarize is one read plus a tail window
+    and replay parses line by line, neither degrading to a full scan."""
     sessions_root = tmp_path / "sessions"
     path = write_session_file(sessions_root, "long", messages=5000)
 

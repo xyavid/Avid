@@ -1,15 +1,9 @@
-"""把会话文件读成记录：字节 → 行 → 记录。
+"""Turn session files into records (bytes to lines to records): a byte range is the range of
+the whole line, because one commit writes one line and several writes in it share that line.
 
-两条与格式相关的事实写在这里，因为它们决定了整张表的形状：
-
-- **偏移是行的偏移**：一次提交写一行，单写是裸对象、多写是数组（见 `encode_transaction`），
-  所以一条 entry 的字节区间是它**所在行**的区间——同一行的多个写共享它。命中后按
-  entry_id 在那一行里认记录，不需要再把正文抄进库。
-- **只认完整的行**：文件末尾半条（撕裂行、短写残片）不算数，游标停在那条之前，留给下一次；
-  与仓库 `_split_complete_lines` 同一个判据，否则索引会先于文件把半条记录当真。
-
-会话级事实（id / createdAt / workspaceId / 标题）从 header 与 value 行取；增量扫描时
-这些事实由调用方从上一次的结果传入（header 只在文件开头，扫尾巴时看不见它）。
+Only complete lines count, so a torn tail stays for the next pass (the same rule as
+`_split_complete_lines`), and an incremental scan takes the session facts from the caller because
+the header sits at offset 0.
 """
 
 from __future__ import annotations
@@ -27,7 +21,7 @@ from ..session.values import COMPACTION_NS, SESSION_NAME_NS
 from .extract import compaction_text, entry_text, one_line
 from .types import ScannedEntry, ScanResult
 
-# 压缩摘要行在库里算一类自己的条目（不是 message/notice/error，也不是普通 value）。
+# A compaction summary is its own entry type in the index, not a message or a plain value.
 COMPACTION_TYPE = "compaction"
 
 
@@ -68,7 +62,7 @@ def scan_file(
     entry_count = previous.entry_count if previous else 0
 
     if start_offset > size:
-        # 文件比游标还短：被截断或被换掉了，交给调用方重建（这里不猜）。
+        # File shorter than the cursor: truncated or replaced; let the caller rebuild, do not guess.
         raise SessionStorageError(f"游标越界：游标 {start_offset} > 文件长度 {size}")
 
     try:
@@ -86,7 +80,7 @@ def scan_file(
     entries: list[ScannedEntry] = []
     offset = start_offset
     for raw in tail.split(b"\n")[:-1]:
-        line_length = len(raw) + 1  # 含换行：字节区间按原文件算
+        line_length = len(raw) + 1  # +1 for the newline: ranges count against the original file
         line_offset = offset
         offset += line_length
         try:
@@ -138,8 +132,7 @@ def scan_file(
             elif isinstance(record, CommittedValueSet) and record.namespace == SESSION_NAME_NS:
                 title = one_line(record.value) or title
             elif isinstance(record, CommittedValueSet) and record.namespace == COMPACTION_NS:
-                # 压缩摘要不是条目（它只落在游标值里），但它是那段被压掉的历史的概括：
-                # 用确定性的派生 id 让它也能被检索到（重扫同一行得到同一个 id，不会重复）。
+                # Summary lives only in a cursor value; a deterministic id keeps it searchable.
                 summary_text = compaction_text(record.value)
                 if summary_text:
                     entries.append(

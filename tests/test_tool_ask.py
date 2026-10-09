@@ -1,7 +1,8 @@
-"""ask_user：问一句（或给选项）、没人答就降级、以及在真流水线里挂起与回传。
+"""ask_user: ask a question (optionally with choices), degrade when nobody answers, and suspend
+then resume inside a real pipeline.
 
-「没答」与「被拒绝」是两件事——这组用例把这条分寸钉住：通道缺席/超时/取消都回一句
-「没有回答 + 基于现有信息继续」，而不是让运行失败或替用户编一个答案。
+"No answer" and "denial" are different: a missing channel, a timeout, and a cancelled run all return
+"no answer, continue with what you have" instead of failing the run or inventing a reply.
 """
 
 from __future__ import annotations
@@ -23,14 +24,14 @@ from avid.services.approvals import KIND_QUESTION, ApprovalTable
 
 
 class State:
-    """只有 question 通道的最小 run state（工具只读这一个属性）。"""
+    """Minimal run state with only the question channel (the tool reads just this attribute)."""
 
     def __init__(self, channel=None) -> None:
         self.question = channel
 
 
 class Channel:
-    """记录被问了什么，并按剧本作答。"""
+    """Records what was asked and answers on cue."""
 
     def __init__(self, answer: str | None) -> None:
         self.answer = answer
@@ -102,18 +103,18 @@ def test_the_tool_is_exclusive_and_never_writes():
     assert spec.writes is False
 
 
-# ---------------- 真流水线：挂起 → 作答 → 回传 ----------------
+# ---- real pipeline: suspend -> answer -> resume ----
 
 
 class Bench:
-    """一张待决表 + 它发出的事件与状态，供用例断言。"""
+    """A pending table plus the events and statuses it emits, for assertions."""
 
     def __init__(self, timeout: float) -> None:
         self.events: list[tuple[str, dict]] = []
         self.statuses: list[str] = []
         self.flags = {"cancelled": False}
         self.table = ApprovalTable(
-            # 形参换个名字：事件名本身就是第一个位置参数，叫 kind 会与载荷里的 kind 撞车。
+            # Not "kind": the event name comes first positionally and the payload already has kind.
             emit=lambda event, **payload: self.events.append((event, payload)),
             set_status=self.statuses.append,
             is_cancelled=lambda: self.flags["cancelled"],
@@ -162,7 +163,7 @@ def test_asking_twice_is_idempotent_and_a_second_answer_conflicts():
     bench.table.answer(pending_id, "在")
     worker.join(3)
 
-    assert bench.table.answer(pending_id, "在").accepted is False  # 同答案幂等
+    assert bench.table.answer(pending_id, "在").accepted is False  # the same answer is idempotent
     with pytest.raises(ApprovalConflict):
         bench.table.answer(pending_id, "不在")
 
@@ -201,7 +202,7 @@ def test_an_approval_id_cannot_be_answered_as_a_question():
         bench.table.answer(approval_id, "随便写点什么")
 
 
-# ---------------- 走真运行：模型提问 → 界面作答 → 运行继续 ----------------
+# ---- full run: model asks -> UI answers -> run continues ----
 
 
 def test_a_run_suspends_on_ask_user_and_continues_with_the_answer(tmp_path):
@@ -241,7 +242,7 @@ def test_a_run_suspends_on_ask_user_and_continues_with_the_answer(tmp_path):
         assert wait_for(
             lambda: client.get(f"/api/runs/{run_id}").json()["status"] == "finished", 5
         )
-        # 答案真的回到了模型手里：它据此作答（剧本第二轮直接收尾）。
+        # The answer really reached the model: it answers from it (the script's second turn ends).
         detail = client.get(f"/api/sessions/{session_id}").json()
         assert detail["message_count"] >= 2
         assert bound_workspace(services)

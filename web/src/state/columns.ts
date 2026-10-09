@@ -1,12 +1,9 @@
 /**
- * 两侧列宽（界面域状态，localStorage 持久化——appearance/dock 同一模式）。
- *
- * 宽度是用户拖出来的偏好，但**不是拖多宽就多宽**：对话列要留住最小可读宽度，
- * 所以存储里只记「想要多少」，渲染前一律过 `clampWidths`——先按各自上下限夹，
- * 窗口不够就先收右列、再收左列，各自不低于下限（下限优先，主列自己扛）。
- *
- * 初值取自布局 token（`--sidebar-width` / `--channel-inspector-width`）：数字只有
- * 一份来源，token 改了初值跟着改；读不到（jsdom、样式未加载）才回落到下面的数。
+ * Side column widths (UI-domain state, persisted to localStorage under `avid.columns`).
+ * Storage keeps only the wanted widths; every render passes them through `clampWidths`: clamp to
+ * each column's limits, then shrink the right column first and the left one second, never below
+ * their minimums. Initial values come from the layout tokens (`--sidebar-width` /
+ * `--channel-inspector-width`), falling back to numbers only when the styles are unreadable.
  */
 
 import { useCallback, useEffect, useState } from 'react'
@@ -20,7 +17,7 @@ export const COLUMN_LIMITS: Record<ColumnId, { min: number; max: number }> = {
   rail: { min: 220, max: 560 },
 }
 
-/** 对话列的最小宽度：两侧再怎么拖也不许把它挤没。 */
+/** Minimum width of the conversation column: dragging must never squeeze it away. */
 export const MAIN_MIN_WIDTH = 520
 
 const STORAGE_KEY = 'avid.columns'
@@ -35,7 +32,7 @@ function clamp(value: number, min: number, max: number): number {
   return Math.round(Math.min(max, Math.max(min, value)))
 }
 
-/** 解析 `--sidebar-width` 这类 token 的 px 值；样式没加载（jsdom）时给 null。 */
+/** px value of a token like `--sidebar-width`; null when styles are not loaded (jsdom). */
 function tokenWidth(name: string): number | null {
   if (typeof window === 'undefined') return null
   const raw = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
@@ -54,7 +51,7 @@ function limitTo(id: ColumnId, value: number): number {
   return clamp(value, COLUMN_LIMITS[id].min, COLUMN_LIMITS[id].max)
 }
 
-/** 夹取 + 让位：返回这一帧真正渲染的宽度（`hasRail=false` 时右列不占预算）。 */
+/** Clamp and yield: widths actually rendered this frame (`hasRail=false` takes no rail budget). */
 export function clampWidths(widths: ColumnWidths, viewport: number, hasRail: boolean): ColumnWidths {
   const sidebar = limitTo('sidebar', widths.sidebar)
   const rail = limitTo('rail', widths.rail)
@@ -64,7 +61,7 @@ export function clampWidths(widths: ColumnWidths, viewport: number, hasRail: boo
   const overflow = sidebar + rail - budget
   if (overflow <= 0) return { sidebar, rail }
 
-  // 先收右列（它承载的是状态面板），收到底再收左列。
+  // Shrink the right column first (it carries status panels), then the left one.
   const railFloor = COLUMN_LIMITS.rail.min
   const railTake = Math.max(0, Math.min(rail - railFloor, overflow))
   const sidebarTake = Math.max(0, Math.min(sidebar - COLUMN_LIMITS.sidebar.min, overflow - railTake))
@@ -93,19 +90,19 @@ export function useColumns() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(widths))
   }, [widths])
 
-  /** 拖完（或键盘调完）落一次盘：夹到上下限内，越界值不进存储。 */
+  /** Persist after a drag or key tweak: clamped, so out-of-range values never reach storage. */
   const resize = useCallback((id: ColumnId, value: number) => {
     setWidths((current) => ({ ...current, [id]: limitTo(id, value) }))
   }, [])
 
-  /** 双击列缘复位：回到布局 token 的初值。 */
+  /** Double-clicking a column edge resets to the layout-token default. */
   const reset = useCallback((id: ColumnId) => {
     setWidths((current) => ({ ...current, [id]: defaultWidths()[id] }))
   }, [])
   return { widths, resize, reset }
 }
 
-/** 视口宽度：拖动期间要让位、窗口拉伸时要跟着夹，所以得订阅 resize。 */
+/** Viewport width: yielding during a drag and clamping on resize require subscribing to resize. */
 export function useViewportWidth(): number {
   const [width, setWidth] = useState(() => (typeof window === 'undefined' ? 1440 : window.innerWidth))
   useEffect(() => {

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type { DiffRow } from '../diff'
 import { diffLines } from '../diff'
 
-/** 差异行 → 可读形状：`+新行` / `-旧行` / ` 未改行` / `…省略N行`。 */
+/** Diff rows → readable shape: `+added` / `-removed` / ` unchanged` / `…skipped`. */
 function shape(rows: DiffRow[]): string[] {
   return rows.map((row) =>
     row.kind === 'skip'
@@ -91,10 +91,10 @@ describe('diffLines：两段文本 → 差异行', () => {
     expect(diff.rows).toHaveLength(400)
     expect(diff.rows.filter((row) => row.kind === 'skip')).toHaveLength(1)
     expect(diff.rows[199]).toMatchObject({ kind: 'skip', count: 1200 - 199 - 200 })
-    // 头尾都要看得见：前面是被删的旧行，后面是新增的新行
+    // Both ends must stay visible: deleted old lines first, added new lines last.
     expect(diff.rows[0]).toMatchObject({ kind: 'del', text: 'old 0' })
     expect(diff.rows.at(-1)).toMatchObject({ kind: 'add', text: 'new 599' })
-    // 全文不截断：显示是给人眼的，复制拿走的是完整的
+    // The full text is never truncated: display is for the eye, copy takes everything.
     expect(diff.text.split('\n')).toHaveLength(1200)
   })
 

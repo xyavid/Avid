@@ -36,9 +36,8 @@ class SessionRecorder:
     def on_message(
         self, message: dict[str, Any], *, entry_type: EntryType = MESSAGE_ENTRY
     ) -> str:
-        """Same signature as the notification callback, so it can be passed in directly; returns the new entry id.
-
-        `entry_type` 决定这条消息怎么被读到（消息 / 提醒 / 失败记账），见 types.py 的三个常量。
+        """Same signature as the notification callback, so it can be passed straight in;
+        returns the new entry id.
         """
         branch = self.ensure_branch()
         entry_id = branch.append_message(message, entry_type=entry_type)
@@ -51,7 +50,7 @@ class SessionRecorder:
         return len(self.entry_ids)
 
     def tip_seq(self) -> int | None:
-        """当前分支 tip 条目的 seq；分支还没有条目时返回 None（写前快照的落点探针）。"""
+        """Seq of the branch tip entry, or None while the branch has no entries."""
         tip = self.ensure_branch().get_tip_id()
         if tip is None:
             return None
@@ -65,10 +64,8 @@ class SessionRecorder:
         logger.debug("会话落库 usage：分支 %s", self.branch)
 
     def record_compaction(self, summary: dict[str, Any], keep: int = 0) -> None:
-        """Per-branch compaction cursor: projection replaces history up to the tip with the summary (+ kept tail).
-
-        锚点是写入时的分支 tip seq——条目只追加不可变，所以 snip/micro 这类只改内存的
-        步骤不影响它；摘要消息自带落盘路径，投影端不需要再找原文。
+        """Per-branch compaction cursor: projection replaces history up to the tip with the summary
+        plus kept tail.
         """
         branch = self.ensure_branch()
         tip = branch.get_tip_id()

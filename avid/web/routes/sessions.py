@@ -39,7 +39,7 @@ def create_session(request: Request, body: CreateSessionIn) -> dict:
     status_code=status.HTTP_201_CREATED,
 )
 def create_scratch_session(request: Request, session_id: str, body: ScratchIn) -> dict:
-    """开一个临时会话：拷一份源会话的上下文、打上只读标记（关闭即销毁）。"""
+    """Creates a scratch session: a copy of the source context, read-only and destroyed on close."""
     return current_services(request).sessions.create_scratch(session_id, name=body.name)
 
 
@@ -86,7 +86,7 @@ def list_entries(
     limit: int | None = Query(default=None, ge=1),
     cursor_seq: int | None = Query(default=None, ge=0),
 ) -> dict:
-    """Pages one branch's entries, with an exclusive cursor and the page size capped in the service."""
+    """Pages one branch's entries with an exclusive cursor; the service caps the page size."""
     return current_services(request).sessions.entries(
         session_id,
         branch=branch,

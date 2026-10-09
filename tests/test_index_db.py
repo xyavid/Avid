@@ -1,4 +1,4 @@
-"""索引库的连接与迁移：初始化、幂等、版本、被锁时的行为、删库重建。"""
+"""Index DB: connection setup, migrations, lock behavior, and rebuilding after deletion."""
 
 from __future__ import annotations
 
@@ -28,7 +28,8 @@ def test_open_creates_the_database_and_the_current_schema(tmp_path):
 
 
 def test_table_names_are_not_shadowed_by_sqlite_internals(tmp_path):
-    """entries 的主键叫 entry_pk：SQLite 每个表都有隐式 rowid，免得 FTS 外部内容模式指错列。"""
+    """The entries PK is ``entry_pk``, not ``rowid``: the implicit rowid would mispoint the FTS
+    external-content mode."""
     conn = index_db.open_db(tmp_path / "sessions.sqlite")
     try:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(entries)")}
@@ -52,7 +53,7 @@ def test_reopening_is_idempotent_and_keeps_data(tmp_path):
 
 
 def test_migrations_apply_in_order(tmp_path):
-    """老库不重建表：只补差的那几步（user_version 是 sqlite 自带的版本位）。"""
+    """An old DB gets only the missing migration steps (user_version is SQLite's version slot)."""
     conn = index_db.open_db(tmp_path / "sessions.sqlite", migrations=index_db.MIGRATIONS[:1])
     assert index_db.schema_version(conn) == index_db.MIGRATIONS[0][0]
     assert "entries" not in table_names(conn)
@@ -64,7 +65,7 @@ def test_migrations_apply_in_order(tmp_path):
 
 
 def test_a_locked_database_gives_up_quickly_instead_of_hanging(tmp_path):
-    """索引等不到锁就认输：运行线程绝不能被它拖住。"""
+    """The index gives up on a lock instead of hanging: it must never stall a run thread."""
     path = tmp_path / "sessions.sqlite"
     holder = index_db.open_db(path)
     writer = index_db.open_db(path, timeout_ms=200)
@@ -146,7 +147,7 @@ def test_meta_round_trips_missing_keys_as_none(tmp_path):
 
 
 def test_index_status_names_are_stable(tmp_path):
-    """状态名是落库的字符串，改它就是一次数据迁移：这里钉住取值。"""
+    """Status names are stored strings; changing one is a data migration, so pin them here."""
     assert set(INDEX_STATUSES) == {
         "ok",
         "pending",

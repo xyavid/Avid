@@ -5,8 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SidebarFooter } from '../SidebarFooter'
 
 /**
- * 侧栏底栏（设置入口）：它必须是**自己一栏**（独立的顶发丝线与留白、贴住栏底），
- * 不是会话列表里的又一项——所以这里既验交互，也验「单开一栏」这件事本身。
+ * Sidebar footer (settings entry): asserted to be its own column — a separate top hairline, its own
+ * padding, pinned to the bottom — and not another session-list row.
  */
 describe('侧栏底栏（设置入口）', () => {
   afterEach(cleanup)
@@ -35,7 +35,7 @@ describe('侧栏底栏（设置入口）', () => {
 
     expect(bar.className).toContain('border-t')
     expect(bar.className).toContain('mt-auto')
-    // 栏本身不是可点区域（只有里面那个按钮是），否则整条空白都会亮起来
+    // The bar itself is not clickable — only the button is, so blank space stays inert.
     expect(bar.getAttribute('role')).toBeNull()
   })
 })

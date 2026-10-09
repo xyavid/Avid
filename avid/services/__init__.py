@@ -53,7 +53,7 @@ FEATURES: dict[str, int] = {
     "deltas": 1,
     "branches": 1,
     "workspaces": 1,
-    # 权限体系轻量化（阶段 51）：默认直接跑，毁灭级命令双确认，无模式可选。
+    # Lightweight permission model: runs by default, one confirmation for destructive commands.
     "danger_confirm": 1,
     "security_layers": 1,
     # Full access needs an explicit acknowledgement and is never the default.
@@ -64,7 +64,7 @@ FEATURES: dict[str, int] = {
     "workspace_delete": 1,
     # Branches carry a usage snapshot reported in one shared schema.
     "usage": 1,
-    # 内容检索（阶段 57）：本地索引 + FTS5，端点 GET /api/search。
+    # Content search: the local FTS5 index, served by GET /api/search.
     "search": 1,
 }
 
@@ -139,13 +139,13 @@ class Services:
         self.workspaces = WorkspaceService(
             self.registry, default=default, default_sessions_root=sessions_root
         )
-        # 会话索引：本进程写自己的会话、索引自己的会话；启动后先在后台补齐（运行不等它）。
-        # root= 直传了具体会话库路径时只索引那一个目录——那是那个接缝的语义。
+        # Session index: the process indexes the sessions it writes, and startup backfill runs in
+        # the background without runs waiting for it. A root= store indexes only that directory.
         def _roots() -> list[Path]:
             return [Path(sessions_root)] if sessions_root is not None else [userdirs.sessions_dir()]
 
-        # 索引是可丢的派生层：建不起来（盘满/目录只读/库坏了）就整体停用，
-        # 绝不能连累会话读写与运行——搜索会明确报「索引不可用」。
+        # The index is a droppable derived layer: if it cannot start (disk full, read-only dir,
+        # corrupt DB) it is disabled entirely and never blocks sessions or runs; search reports it.
         try:
             self.indexer: SessionIndexer | None = SessionIndexer(
                 roots=_roots,
@@ -206,8 +206,8 @@ class Services:
                 "tools": [item["function"]["name"] for item in TOOLS],
                 "skills": self.skills(),
                 "model": self.model_name(),
-                # BYOK 候选（providerId/modelId ref + 展示名）；不预置任何模型选项，
-                # 没配 BYOK 时就是空的——模型选项只来自用户自己的配置。
+                # BYOK candidates (providerId/modelId ref plus display name); nothing is preset,
+                # so the list is empty when unconfigured and options come only from user config.
                 "models": self.model_candidates(),
                 # Root of the process-bound workspace; candidates come from the workspaces endpoint.
                 "workspace": (
@@ -256,15 +256,13 @@ class Services:
         try:
             return byok_model_candidates()
         except ConfigError:
-            # 配置文件坏了也要让界面能加载——错误文案会在设置面板里暴露。
+            # A corrupt config must not stop the UI from loading; the error shows in settings.
             return []
 
     def rebind_session_store(self) -> None:
-        """Re-derive the repositories after the session directory moved.
-
-        活动 run 期间**拒绝**：run 手里的会话句柄是从按工作区缓存的仓库里开的，而解绑会关掉
-        那些仓库（连同句柄）。关掉之后这次运行的下一次提交抛 SessionClosed，模型那条回复
-        就永远不落盘——丢的不是索引，是对话。所以先让它跑完再来改设置。
+        """Re-derive the repositories after the session directory moved; refused while a run is
+        active, since closing the cached repositories would strand the run's open handle and its
+        next reply would never reach disk, so the caller must wait for the run to finish.
         """
         busy = self.runs.active_runs()
         if busy:

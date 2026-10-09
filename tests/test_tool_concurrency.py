@@ -1,7 +1,7 @@
-"""并发分类：三档声明、单向降级、bash 的只读判定。
+"""Concurrency classification: the three declarations, one-way downgrade, and bash's read-only test.
 
-判据表就写在这个文件的参数化用例里——「什么算安全」是一份会被改的名单，
-它和它的用例必须待在一起（否则下一次放宽会没人拦）。
+The criteria table lives in this file's parametrized cases: the list of what counts as safe changes,
+and it must stay next to its cases so a future relaxation gets caught.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from avid.agent.tools.registry import ToolSpec
 from avid.agent.tools.safety import is_concurrency_safe
 from avid.security.command_parse import is_read_only
 
-# ---------------- bash：什么算纯读 ----------------
+# ---- bash: what counts as a pure read ----
 
 
 @pytest.mark.parametrize(
@@ -71,17 +71,17 @@ def test_commands_that_only_read(command):
     ],
 )
 def test_commands_that_are_not_provably_read_only(command):
-    """保守优先：拿不准就交给独占（宁可少并行，不可让写混进并行段）。"""
+    """Conservative: anything unsure goes exclusive, never a write inside a parallel segment."""
     assert is_read_only(command) is False
 
 
-# ---------------- 三档声明与单向降级 ----------------
+# ---- the three declarations and one-way downgrade ----
 
 
 def test_declared_classes_are_three_way():
     classes = {spec.concurrency for spec in specs()}
     assert classes <= {"safe", "exclusive", "conditional"}
-    assert "conditional" in classes  # bash 这一档要真用上
+    assert "conditional" in classes  # bash must really use this class
 
 
 def test_unknown_tool_is_exclusive():
@@ -112,7 +112,7 @@ def test_an_assessor_that_raises_falls_back_to_exclusive(monkeypatch):
 
 
 def test_a_writing_tool_can_never_be_conditional():
-    """声明会写的工具不许拿到 conditional：降级是一处误判面，别开在写路径上。"""
+    """A writing tool may never be conditional: the declaration rejects it at import time."""
     from avid.agent.tools.registry import tool
 
     with pytest.raises(TypeError, match="会写文件"):
@@ -125,7 +125,7 @@ def test_a_writing_tool_can_never_be_conditional():
             writes=True,
             assess=lambda arguments, state: "safe",
         )
-        def dangerous(args):  # pragma: no cover - 声明期就报错
+        def dangerous(args):  # pragma: no cover - raises at declaration time
             return "x"
 
 
@@ -135,11 +135,11 @@ def test_conditional_requires_an_assessor():
     with pytest.raises(TypeError, match="assess"):
 
         @tool(name="noassess", description="", properties={}, concurrency="conditional")
-        def noassess(args):  # pragma: no cover - 声明期就报错
+        def noassess(args):  # pragma: no cover - raises at declaration time
             return "x"
 
 
-# ---------------- 分段：只读命令加入并行段 ----------------
+# ---- segmentation: read-only calls join a parallel segment ----
 
 
 def call(name: str, arguments: dict, *, call_id: str = "c") -> dict:
@@ -175,7 +175,7 @@ def test_unparseable_arguments_are_treated_as_exclusive():
     assert plan_segments([broken, call("read_file", {"path": "a.py"})], 8) == [[0], [1]]
 
 
-# ---------------- 墙钟：真的更快（否则「并行」只是感觉） ----------------
+# ---- wall clock: actually faster, or "parallel" is just a feeling ----
 
 
 def _sleep_state() -> RunState:
@@ -185,7 +185,7 @@ def _sleep_state() -> RunState:
 
 
 def test_read_only_bash_calls_share_one_wall_clock_slot():
-    """三个只读命令（各睡 0.3 秒）：并行应当 ≈ 一个时段，而不是三个。"""
+    """Three read-only calls sleeping 0.3s each: parallel should cost about one span, not three."""
     registry = {
         "bash": lambda args, **kwargs: (time.sleep(0.3), "ok")[1],
     }
@@ -203,7 +203,7 @@ def test_read_only_bash_calls_share_one_wall_clock_slot():
 
 
 def test_a_write_command_does_not_join_the_reads():
-    """写命令夹在中间：它自己独占，前后的读仍在各自的段里并行（但跨越它的不重叠）。"""
+    """A write in the middle goes exclusive while reads on either side keep their own segments."""
     spans: list[tuple[str, float, float]] = []
     lock = threading.Lock()
 

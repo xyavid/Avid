@@ -1,10 +1,7 @@
 /**
- * 设置界面（报告 §7.5 的弹窗外壳：scrim 遮罩 + hana-scale-in 入场）：
- * - 模型段：BYOK 三层配置管理（阶段 34，见 ModelSection）——Provider / Model /
- *   Binding 全部由配置描述，密钥只入不出，保存后对下一条消息立即生效；
- * - 会话存储段：会话目录在哪、由谁决定、怎么改（阶段 56，见 SessionsSection）；
- * - 外观段：模式三档（浅色 / 深色 / 跟随系统）+ 主题卡（暖纸 / 青夜）。
- * 关闭：右上 ✕ / Esc / 遮罩点击。
+ * Settings modal shell (scrim + `hana-scale-in`) holding the model section (see ModelSection), the
+ * session-storage section (see SessionsSection) and the appearance section.
+ * Closes via the ✕ button, Esc or a scrim click.
  */
 
 import { useEffect } from 'react'

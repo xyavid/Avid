@@ -1,3 +1,5 @@
+"""Tool registry contracts: definitions vs implementations, schema completeness, derived tables."""
+
 import inspect
 import json
 
@@ -14,7 +16,7 @@ PARAMETERS = {item["function"]["name"]: item["function"]["parameters"] for item 
 
 
 def _integer_specs(spec):
-    """递归找出所有 integer 参数节点（含数组 items 与嵌套对象 properties）。"""
+    """Yield every integer parameter node, including array items and nested object properties."""
     if not isinstance(spec, dict):
         return
     if spec.get("type") == "integer":
@@ -30,12 +32,8 @@ def test_definitions_and_implementations_match():
 
 
 def test_stateful_tools_are_exactly_the_handlers_that_take_state():
-    """`STATEFUL_TOOLS` 是可枚举的事实：需要运行状态的工具必须真的接受 `state=`。
-
-    `execution.py` 的 docstring 一直声称这条由契约测试守着，但此前只有一条针对 6 个
-    任务工具的子集断言。漏进这张表（或反过来多写一个名字）会让执行时抛 TypeError，
-    再被兜底成「工具执行失败」——错误信息指向工具，根因却在注册表。
-    """
+    """`STATEFUL_TOOLS` must be the handlers taking `state=`: a missing or extra name becomes
+    a runtime TypeError masked as a tool failure."""
     from avid.agent.execution import STATEFUL_TOOLS
 
     takes_state = {
@@ -48,11 +46,7 @@ def test_stateful_tools_are_exactly_the_handlers_that_take_state():
 
 
 def test_security_side_tool_tables_only_name_registered_tools():
-    """安全层的工具名表不许出现已删除或拼错的工具名（静默失效的规则等于没有规则）。
-
-    ``APPROVAL_RULES`` 随阶段 51 删除；剩下的工具名表是 ``PATH_TOOLS`` / ``WRITE_TOOLS``
-    （判定目标路径与读写类别），它们同样必须只列已注册的工具。
-    """
+    """Security-side name tables may only list registered tools: a stale name fails silently."""
     from avid.security.action import PATH_TOOLS, WRITE_TOOLS
 
     assert set(PATH_TOOLS) <= set(NAMES)
@@ -60,12 +54,8 @@ def test_security_side_tool_tables_only_name_registered_tools():
 
 
 def test_concurrency_tables_are_a_partition_of_the_registry():
-    """并发分类必须是注册表的一个**划分**：每个工具恰好表态一次。
-
-    这张表决定"批内谁和谁能同时跑"（阶段 25）。漏写一个名字的后果是它按独占处理
-    （慢，但安全）；但**两张表都写**或**表里出现不存在的名字**说明分类在漂移——
-    到时候没人知道某个工具到底安不安全，所以让它红在契约测试里。
-    """
+    """Concurrency classes must be a partition of the registry: a missing name falls back to
+    exclusive, but a name in two tables or in none means the classification has drifted."""
     from avid.agent.tools.safety import CONCURRENCY_SAFE, CONDITIONAL, EXCLUSIVE
 
     assert not (CONCURRENCY_SAFE & EXCLUSIVE), "同一个工具不能既安全又独占"
@@ -75,11 +65,7 @@ def test_concurrency_tables_are_a_partition_of_the_registry():
 
 
 def test_concurrency_safe_tools_are_read_only_by_name():
-    """并发安全的一侧不许混进"写"类工具（名字级护栏，防手滑挪表）。
-
-    真正判"会不会写"要靠人，这里只把最容易搞错的那几个钉住：写文件、跑命令、
-    改任务/待办、派子 agent 全都在独占侧。
-    """
+    """The safe side must not gain write-class tools (a name-level guard against table moves)."""
     from avid.agent.tools.safety import CONCURRENCY_SAFE, CONDITIONAL, EXCLUSIVE
 
     assert {
@@ -94,19 +80,19 @@ def test_concurrency_safe_tools_are_read_only_by_name():
         "grep_search",
         "load_skill",
     } <= CONCURRENCY_SAFE
-    # bash 是「按调用判」的那一档：只读命令可以并行，写命令仍然独占（阶段 58）。
+    # bash is the per-call class: read-only commands parallelize, writes stay exclusive.
     assert "bash" in CONDITIONAL
 
 
 @pytest.mark.parametrize("item", TOOLS, ids=NAMES)
 def test_integer_parameters_declare_a_lower_bound(item):
-    """整数参数必须有下界：无界 integer 让模型可以传 0 或负数，只能靠实现各自兜底。"""
+    """Integer parameters must declare a lower bound: unbounded integers let the model pass 0."""
     for spec in _integer_specs(item["function"]["parameters"]):
         assert isinstance(spec.get("minimum"), int), spec
 
 
 def test_timeout_parameter_matches_the_enforced_cap():
-    """`timeout_seconds` 的上界以前只写在描述里，实现里另有一份 clamp（300 秒）。"""
+    """The schema maximum must equal the enforced `shell.MAX_TIMEOUT` clamp (300 s)."""
     from avid.agent.tools import shell
 
     spec = PARAMETERS["bash"]["properties"]["timeout_seconds"]
@@ -135,11 +121,8 @@ def test_names_are_unique():
 
 
 def test_placeholder_args_stay_schema_valid():
-    """测试用的占位参数表必须与 schema 同步。
-
-    `support.PLACEHOLDER_ARGS` 被大量 loop / svc / web 用例当前提：某一项一旦不合
-    schema，这些用例就会静默走到"参数错误"分支，测的就不再是它们声称的那条路径。
-    """
+    """`support.PLACEHOLDER_ARGS` must stay schema-valid: a bad entry silently sends loop / svc /
+    web cases down the "bad arguments" path."""
     from support import PLACEHOLDER_ARGS
 
     for name in NAMES:
@@ -178,7 +161,7 @@ def test_every_parameter_documents_type_and_meaning(item):
 
 @pytest.mark.parametrize("item", TOOLS, ids=NAMES)
 def test_array_parameters_declare_their_items(item):
-    """数组参数必须写清元素结构，否则模型只能猜。"""
+    """Array parameters must declare their item structure, or the model can only guess."""
     for name, spec in item["function"]["parameters"]["properties"].items():
         if spec["type"] != "array":
             continue
@@ -195,11 +178,7 @@ def test_builder_defaults_required_to_empty():
 
 
 def test_agent_help_lists_exactly_the_registered_tools():
-    """help 曾两次与注册表脱节（写 8 个时实际 14 个），钉住「派生而非手抄」。
-
-    argparse 会在空白处折行，所以比较前先去掉全部空白：这样既要求每个工具都在
-    help 里，也要求它不多列任何已有工具之外的名字。
-    """
+    """Help lists exactly the registered tools: whitespace stripped because argparse wraps."""
     help_text = "".join(build_parser().format_help().split())
 
     assert "".join(AGENT_TOOL_HELP.split()) in help_text

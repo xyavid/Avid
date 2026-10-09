@@ -9,8 +9,7 @@ from typing import Any
 
 from .usage import Usage, normalize_usage
 
-#: Default output cap; None omits max_tokens so the provider decides the limit.
-# A fixed cap lets reasoning tokens starve the visible reply, which then looks like a finished turn.
+#: None omits max_tokens so the provider decides; a fixed cap lets reasoning starve the reply.
 DEFAULT_MAX_TOKENS: int | None = None
 
 
@@ -37,8 +36,7 @@ _PROMPT_TOO_LONG_SIGNS = (
 )
 
 
-#: 端点不认 reasoning_effort 时的可执行提示（阶段 55）：只在 400/422 且这次真带了
-#: 推理强度时附上，措辞是「这条像是」——猜错也不至于断言错。
+#: Appended only when a 400/422 answer follows a request that really sent reasoning_effort.
 _REASONING_EFFORT_HINT = (
     "（这条像是端点不认 reasoning_effort：在输入区把这次的推理强度改回「不设」，"
     "或者到「设置 → 模型」里把这一档从该模型的档位列表里去掉；"
@@ -47,11 +45,8 @@ _REASONING_EFFORT_HINT = (
 
 
 def http_error(status_code: int, body: str, *, sent_reasoning_effort: bool = False) -> LLMError:
-    """The one way to turn "the endpoint answered with an error" into an exception.
-
-    Keeping it in one place means the body excerpt, the status code and the repair hints stay
-    consistent across the three protocols.
-    """
+    """The one conversion from an endpoint error response to an exception, so the body excerpt,
+    status code and repair hints stay consistent across the three protocols."""
     message = f"HTTP {status_code} — {body[:500]}"
     if sent_reasoning_effort and status_code in (400, 422):
         message += _REASONING_EFFORT_HINT
@@ -116,7 +111,7 @@ def image_data_url(part: Mapping[str, Any]) -> str:
 
 
 def usage_of(data: Any) -> Usage:
-    """Normalize a response envelope's usage fields; dialect detection lives in ai/usage.py."""
+    """Normalize a response envelope's usage fields; dialect detection lives in usage.py."""
     return normalize_usage(data)
 
 
@@ -135,7 +130,7 @@ def iter_sse_events(lines: Iterable[str]) -> Iterator[dict[str, Any]]:
     # Partial frames are already reassembled: the caller iterates whole lines, so no parser here.
     buffered: list[str] = []
     for line in lines:
-        if line == "":  # An empty line ends the current frame.
+        if line == "":
             payload = "\n".join(buffered)
             buffered.clear()
             if not payload.strip():

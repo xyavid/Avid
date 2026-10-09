@@ -1,7 +1,7 @@
-"""会话基础件：id、值地址、物化状态、变更线与关闭语义。
+"""Session building blocks: ids, value addresses, materialized state, mutation line, close rules.
 
-一致性套件（``test_session_conformance.py``）管"两个后端是否一致"；这里管
-"单个部件本身的规则"，包括两个后端都跑不到的多线程关闭路径。
+The conformance suite covers "are the two backends consistent"; this file covers each part's own
+rules, including the multi-threaded close path neither backend exercises.
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ def make_session(**kwargs):
     return repo, session
 
 
-# ---------------- id ----------------
+# ---- ids ----
 
 
 def test_new_id_is_a_uuidv7_with_the_given_time():
@@ -88,7 +88,7 @@ def test_now_ms_is_an_integer_millisecond_clock():
     assert now_ms() > 1_600_000_000_000
 
 
-# ---------------- 值地址 ----------------
+# ---- value addresses ----
 
 
 def test_address_validation():
@@ -111,7 +111,7 @@ def test_reserved_addresses_are_distinct_namespaces():
     assert len({session_name().namespace, entry_label("e").namespace, branch_tip("b").namespace}) == 3
 
 
-# ---------------- 消息校验 ----------------
+# ---- message validation ----
 
 
 def test_valid_message_shapes_pass():
@@ -144,7 +144,8 @@ def test_non_serializable_message_is_rejected():
 
 
 def test_a_message_with_image_parts_passes_validation():
-    """Image parts are one valid message shape; shape and caps are attachments' job, the session layer accepts them as-is."""
+    """Image parts are one valid message shape; attachments own shape and caps, the session layer
+    takes them as-is."""
     from avid.attachments import image_part
 
     part = image_part(b"\x89PNG\r\n\x1a\n" + b"\x00" * 8, name="shot.png")
@@ -169,7 +170,7 @@ def test_a_malformed_image_part_is_rejected_before_it_reaches_the_log():
         )
 
 
-# ---------------- 物化状态 ----------------
+# ---- materialized state ----
 
 
 def test_commit_assigns_continuous_seqs_and_one_timestamp():
@@ -181,7 +182,7 @@ def test_commit_assigns_continuous_seqs_and_one_timestamp():
     assert prepared.first_seq == 1
     assert prepared.timestamp == 42
     assert all(item.timestamp == 42 for item in prepared.writes if isinstance(item, CommittedEntry))
-    assert state.next_seq == 1  # prepare 不改动状态
+    assert state.next_seq == 1  # prepare does not touch state
     stats = state.apply(prepared.writes)
     assert stats.message_count == 2
     assert state.next_seq == 4
@@ -225,14 +226,14 @@ def test_scan_branch_needs_a_start_and_a_complete_chain():
     with pytest.raises(SessionInvariantError):
         state.scan_branch(BranchScan(start="missing"))
 
-    # 人为造一条断链：apply 时父条目必须已存在，所以这里直接改内部结构来模拟损坏。
+    # Forge a broken chain: apply needs the parent, so poke internals to fake corruption.
     state.apply(state.prepare_commit([EntryWrite(NewEntry(id="a", parent_id=None, message={"role": "user", "content": "1"}))], 1).writes)
     state._entries["a"] = Entry(id="a", parent_id="ghost", seq=1, timestamp=1, type="message", message={"role": "user", "content": "1"})
     with pytest.raises(SessionInvariantError):
         state.scan_branch(BranchScan(start="a"))
 
 
-# ---------------- 变更线 ----------------
+# ---- mutation line ----
 
 
 def test_sealed_line_refuses_new_acquires():
@@ -272,7 +273,7 @@ def test_wait_idle_returns_only_after_release():
     assert done.is_set()
 
 
-# ---------------- 关闭语义（线程级） ----------------
+# ---- close semantics (thread level) ----
 
 
 def test_close_waits_for_another_threads_mutation_and_keeps_its_commit():
@@ -301,7 +302,7 @@ def test_close_waits_for_another_threads_mutation_and_keeps_its_commit():
     closer_thread = threading.Thread(target=closer)
     closer_thread.start()
     time.sleep(0.05)
-    assert not closed.is_set()  # close 在等正在跑的作业
+    assert not closed.is_set()  # close is waiting for the in-flight commit
 
     release.set()
     worker_thread.join(5)
@@ -322,7 +323,7 @@ def test_waiting_mutation_is_rejected_once_close_seals():
     def waiter():
         try:
             session.begin_mutation()
-        except Exception as exc:  # noqa: BLE001 - 这里就是要看它抛了什么
+        except Exception as exc:  # noqa: BLE001 - capturing whatever it raises is the point
             errors.append(exc)
 
     waiter_thread = threading.Thread(target=waiter)

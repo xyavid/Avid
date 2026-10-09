@@ -1,37 +1,27 @@
 /**
- * 行级差异（文件类工具卡详情用）：把「改之前」与「改之后」两段文本算成一屏能读的差异行。
- *
- * 为什么自研而不是引 diff/jest-diff：这里只要「行级、给人眼、能省略」这一件事，
- * 全套 diff 库（含字符级、补丁格式、样式）是几十 kB 的首屏代价，而这台界面
- * 已经有体积预算（`web/budget.json`）。算法是标准 LCS：先掐掉两端相同的行
- * （编辑通常只动中间一段），中间用最长公共子序列走一遍；中间大到算不动
- * （见 `MAX_CELLS`）就整段删、整段加——宁可给粗答案，不猜。
- *
- * 省略规则（与参考界面同形）：未改动的行超过 `CONTEXT * 2 + 1` 行才折，
- * 折出来的那一行写「… 其余 N 行」。
- *
- * 显示与复制分开：`rows` 是给人看的（带省略、有上限），`text` 是原样的差异全文
- * （+ / - / 空格 逐行，不含省略行、不截断），复制按钮复制的就是它。它**不是补丁**：
- * 没有 @@ 头，行号也不对（这段只是 old/new 两个片段，不是整个文件）——别拿它去 patch。
+ * Line-level diff for file-tool cards: LCS over the middle section, falling back to a
+ * wholesale delete + add when the middle is too large to compute (never guessing). `rows` is
+ * the display view with elision; `text` is the full diff, which is not a patch — no `@@`
+ * headers and the line numbers do not line up.
  */
 
-/** 改动上下各留几行未改动行。 */
+/** Unchanged lines kept around each change. */
 export const CONTEXT = 3
-/** 一屏最多画多少行（超了删中间、留两头）。 */
+/** Max rows drawn; the middle is dropped, both ends kept. */
 export const MAX_ROWS = 400
-/** LCS 表的格子上限：超了就走「整段删 + 整段加」的粗答案（约 1 MB 的 Int32 表）。 */
+/** LCS cell cap; above it the middle is replaced wholesale (~1 MB Int32 table). */
 const MAX_CELLS = 250_000
 
 export type DiffRow =
   | { kind: 'context' | 'add' | 'del'; text: string }
-  /** 省略的未改动行数（显示用；`text` 里没有它）。 */
+  /** Elided unchanged-line count (display only; absent from `text`). */
   | { kind: 'skip'; count: number }
 
 export type LineDiff = {
   rows: DiffRow[]
   added: number
   removed: number
-  /** 差异全文（含未改动的上下文行，不含省略行）。 */
+  /** Full diff with context lines and without elision rows. */
   text: string
 }
 
@@ -39,7 +29,7 @@ type Op = { kind: 'context' | 'add' | 'del'; text: string }
 
 const MARK: Record<Op['kind'], string> = { context: ' ', add: '+', del: '-' }
 
-/** 拆行：尾随换行造成的空尾行不是内容（"a\n" 是一行，不是两行）。 */
+/** Split lines; a trailing newline does not create an empty last line. */
 function splitLines(text: string): string[] {
   if (text === '') return []
   const lines = text.split('\n')
@@ -47,7 +37,7 @@ function splitLines(text: string): string[] {
   return lines
 }
 
-/** 中间段的行差异：LCS 回溯。段落大到算不动就整段换（不猜中间哪几行没动）。 */
+/** Mid-section LCS backtrack; over MAX_CELLS it becomes wholesale delete + add. */
 function diffMiddle(a: string[], b: string[]): Op[] {
   if (a.length === 0) return b.map((text) => ({ kind: 'add' as const, text }))
   if (b.length === 0) return a.map((text) => ({ kind: 'del' as const, text }))
@@ -114,7 +104,7 @@ function diffOps(a: string[], b: string[]): Op[] {
   return ops
 }
 
-/** 折长段未改动行：段首 / 段尾只留贴着改动的 `CONTEXT` 行，中间段两头各留 `CONTEXT` 行。 */
+/** Elides long context runs: keep `CONTEXT` lines adjacent to each change. */
 function elide(ops: Op[]): DiffRow[] {
   const rows: DiffRow[] = []
   let i = 0
@@ -132,9 +122,9 @@ function elide(ops: Op[]): DiffRow[] {
     const trail = end === ops.length
 
     if (!lead && !trail && run.length <= CONTEXT * 2 + 1) {
-      rows.push(...run) // 两头都够得着改动，折了反而更碎
+      rows.push(...run) // The run is short and touches changes on both sides; eliding would fragment it.
     } else if (lead || trail) {
-      // 段首留最后几行、段尾留头几行——留下的都是贴着改动的那一侧
+      // Leading / trailing runs keep only the `CONTEXT` lines adjacent to the change.
       const kept = lead ? run.slice(Math.max(0, run.length - CONTEXT)) : run.slice(0, CONTEXT)
       const skip = run.length - kept.length
       if (lead) rows.push(...(skip > 0 ? [{ kind: 'skip' as const, count: skip }] : []), ...kept)
@@ -149,7 +139,7 @@ function elide(ops: Op[]): DiffRow[] {
   return rows
 }
 
-/** 上限：超了删中间留两头，被删掉的行数并进一行省略（省略行自己的数也并进去）。 */
+/** Over MAX_ROWS: keep both ends and fold the dropped lines into one skip row. */
 function cap(rows: DiffRow[]): DiffRow[] {
   if (rows.length <= MAX_ROWS) return rows
   const head = Math.floor(MAX_ROWS / 2) - 1
@@ -159,9 +149,7 @@ function cap(rows: DiffRow[]): DiffRow[] {
   return [...rows.slice(0, head), { kind: 'skip', count: hidden }, ...rows.slice(rows.length - tail)]
 }
 
-/**
- * 两段文本 → 差异行。一字未改时 `rows` 为空（没改动就不铺原文）、`text` 为 ''。
- */
+/** Two texts → diff rows; unchanged input yields empty `rows` and ''. */
 export function diffLines(before: string, after: string): LineDiff {
   const ops = diffOps(splitLines(before), splitLines(after))
   const added = ops.filter((op) => op.kind === 'add').length

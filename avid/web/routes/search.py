@@ -1,10 +1,8 @@
-"""全文检索端点：``GET /api/search``。
+"""Full-text search endpoint (``GET /api/search``): the sole read-the-index entry point, reporting
+how far the index lags in ``behind`` while session listing stays on JSONL.
 
-索引只服务检索——会话列表仍以 JSONL 为准（阶段 57 的取舍），所以这个端点是唯一的
-「读索引」入口，也在这里如实报告索引有没有落后（``behind``）。
-
-`q` 是用户随手敲的词，不是查询语言：`avid.index.queries` 会把输入拆成词元、当字面量
-处理（引号/AND/星号都只是字符），所以这里不做二次校验，只限长度。
+``q`` is literal user text split into tokens by ``avid.index.queries`` (quotes, AND and asterisks
+are just characters), so only its length is validated here.
 """
 
 from __future__ import annotations
@@ -19,9 +17,9 @@ from ..schemas import SearchResultOut
 
 router = APIRouter()
 
-# 检索词上限：够长到能贴一整句，短到不会变成拒绝服务的入口。
+# Query cap: long enough for a whole sentence, short enough not to feed a denial-of-service.
 MAX_QUERY_CHARS = 500
-# 刚落库的消息也该搜得到：搜索前把通知队列排空（超时不算错，索引落后是允许的）。
+# Drain the queue so fresh messages are searchable; timing out is fine, lag is allowed.
 SEARCH_FLUSH_SECONDS = 1.0
 
 

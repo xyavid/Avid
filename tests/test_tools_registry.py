@@ -1,9 +1,5 @@
-"""registry 单点登记的契约（阶段 30b）。
-
-原契约测试（test_tools_contract.py）钉的是"派生出来的表自洽"；这里钉的是
-**登记侧**：一个工具的全部事实（schema、实现、并发分类、是否需要 state）只在
-一处声明，其余一切都是派生。
-"""
+"""Contract of the single registration point: every fact about a tool (schema, impl,
+concurrency class, state need) is declared once and everything else is derived."""
 
 import inspect
 
@@ -32,7 +28,7 @@ def test_stateful_flag_matches_the_implementation_signature():
 def test_concurrency_is_total_and_explicit():
     for spec in specs():
         assert spec.concurrency in ("safe", "exclusive", "conditional"), spec.name
-        # conditional 必须带 assess；其余两档必须不带（声明期的规矩，见 registry.tool）
+        # conditional requires assess; the other two classes must not carry one (see registry.tool)
         assert (spec.assess is None) == (spec.concurrency != "conditional"), spec.name
 
 
@@ -61,7 +57,8 @@ def test_duplicate_registration_is_rejected():
 
 
 def test_decorator_requires_concurrency_classification():
-    """漏表态并发安全性的声明在登记时就报错，而不是执行时才歧义。"""
+    """A declaration missing its concurrency class fails at registration, not later at
+    execution."""
     from avid.agent.tools.registry import tool
 
     with pytest.raises(TypeError):
@@ -86,7 +83,7 @@ def test_stateful_defaults_to_the_signature():
     assert spec["demo_state_probe"].stateful is True
     assert spec["demo_bare_probe"].stateful is False
 
-    # 测试登记的工具不留在进程注册表里
+    # tools registered by tests do not stay in the process registry
     from avid.agent.tools import registry
 
     registry._SPECS[:] = [

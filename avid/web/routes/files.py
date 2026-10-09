@@ -1,7 +1,7 @@
-"""工作区文件浏览：列一层目录 / 读一个文件的预览（都只读，都限定在已登记的工作区内）。
+"""Workspace file browsing: list one directory and preview one file, both read-only and confined
+to a registered workspace root.
 
-工作区按 id 解析（与终端桥同一条规矩：只认登记过的根目录），路径与凭据的判据在
-`services/files.py`——路由只把服务错误翻成协议。
+Path and credential rules live in ``services/files.py``; the route only translates service errors.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ router = APIRouter()
 
 
 def _workspace(request: Request, workspace_id: str) -> Workspace:
-    """按 id（或路径）取一个已登记的工作区；未知一律 404，不做"回落到当前目录"的猜测。"""
+    """Resolves an id or path to a registered workspace; unknown is a 404, never a cwd fallback."""
     found = current_services(request).workspaces.find_known(workspace_id)
     if found is None:
         raise WorkspaceMissing(f"没有这个工作区：{workspace_id}")

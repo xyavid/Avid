@@ -1,8 +1,7 @@
-"""B1 / B2 / B3：事件序列与重放（无 UI 也能验收）。
+"""B1 / B2 / B3: event ordering and replay, verifiable without a UI.
 
-F0 的价值不依赖前端：它把「工具是否开始过」「压缩是否发生过」「审批被谁拒绝」
-变成可断言的事实。这里跑的是真的 ``svc`` 注册表 + 真的会话落盘，只把模型换成
-脚本、把工具换成记录器。
+Runs the real services registry and real session writes; only the model and the tools are
+swapped for scripts and recorders.
 """
 
 from __future__ import annotations
@@ -90,23 +89,23 @@ def test_event_sequence_is_ordered_and_durable_seq_is_monotonic(sandbox):
     assert types[0] == RUN_STARTED
     assert types[-1] == RUN_FINISHED
     assert USER_MESSAGE in types
-    assert APPROVAL_REQUESTED not in types  # 只读工具不需要审批
+    assert APPROVAL_REQUESTED not in types  # read-only tools need no approval
     assert types.count(TOOL_CALL_STARTED) == 2
     assert types.count(TOOL_CALL_FINISHED) == 2
     assert types.count(TOOL_RESULT_MESSAGE) == 2
     assert types.count(ASSISTANT_MESSAGE) == 3
 
-    # durable 的 seq 严格递增、不重复、从 1 开始
+    # durable seq is strictly increasing, unique and starts at 1
     seqs = [event.seq for event in got if event.seq is not None]
     assert seqs == list(range(1, len(seqs) + 1))
     assert record.next_seq == seqs[-1] + 1
 
-    # transient 不带 seq
+    # transient events carry no seq
     transient = [event for event in got if event.type == RUN_STATUS]
     assert transient
     assert all(event.seq is None for event in transient)
 
-    # 同一 run 的事件都带同一个 run_id；消息事件都带 entry_id
+    # every event carries the run_id; message events also carry entry_id
     assert {event.run_id for event in got} == {record.run_id}
     for event in got:
         if event.type in (
@@ -117,7 +116,7 @@ def test_event_sequence_is_ordered_and_durable_seq_is_monotonic(sandbox):
             assert event.data["entry_id"]
             assert event.data["message"]["role"] in ("user", "assistant", "tool")
 
-    # run_finished 是提示，权威事实是注册表状态 + 已提交条目
+    # run_finished is a hint; the authority is the registry status plus committed entries
     assert record.status == "finished"
     assert record.text == "完成"
     assert services.sessions.get(record.session_id)["message_count"] == len(
@@ -168,7 +167,7 @@ def test_buffer_eviction_is_explicit_resync(sandbox):
     assert got, "订阅应当至少收到一条 resync"
     assert got[0].type == RESYNC
     assert got[0].data["reason"] == "buffer_evicted"
-    assert got[0].seq is not None  # resync 自己是 durable 的
+    assert got[0].seq is not None  # resync is durable itself
 
 
 def test_fresh_cursor_within_buffer_does_not_resync(sandbox):
@@ -180,11 +179,11 @@ def test_fresh_cursor_within_buffer_does_not_resync(sandbox):
     assert RESYNC not in [event.type for event in got]
 
 
-# ---------------- B1（F3）：delta 通道 ----------------
+# ---------------- B1: the delta channel ----------------
 
 
 def streaming_reply(pieces: tuple[str, ...], reply: str):
-    """假的流式调用：按分片回调，最后返回一条与非流式同形的 Turn。"""
+    """Fake streaming call: emits pieces through on_delta, then returns a Turn shaped as usual."""
 
     def fake_stream(config, messages, *, on_delta=None, **kwargs):
         for piece in pieces:
@@ -196,10 +195,8 @@ def streaming_reply(pieces: tuple[str, ...], reply: str):
 
 
 def test_deltas_are_opt_in_and_carry_no_seq(sandbox, monkeypatch):
-    """C13 的内核侧：同一批 delta，订阅了才投递；不参与游标补齐，也不改最终状态（I5）。
-
-    delta 不重放（I15），所以只能在**流式过程中**观察它。用一道闸门把假模型卡在模型
-    调用里，等两个订阅者（一个订阅、一个不订阅）都进入实时跟随后再放行。
+    """Deltas are opt-in, carry no seq, never fill a replay cursor and never change the final
+    state (I5); they are not replayed (I15), so only a live subscriber sees them.
     """
     entered = threading.Event()
     release = threading.Event()
@@ -244,22 +241,19 @@ def test_deltas_are_opt_in_and_carry_no_seq(sandbox, monkeypatch):
     assert all(event.seq is None for event in deltas), "delta 不参与游标补齐（I4）"
     assert ASSISTANT_DELTA not in [event.type for event in without_deltas]
 
-    # durable 消息仍带**完整**内容：delta 全丢也不影响正确性（I5）。
+    # durable messages still carry full content: losing every delta does not affect correctness
     finals = [event for event in with_deltas if event.type == ASSISTANT_MESSAGE]
     assert finals[-1].data["message"]["content"] == "你好"
 
-    # delta 不重放：跑完之后从 0 补齐也拿不到它（I15）。
+    # deltas are not replayed: replaying from 0 after the run yields none either
     assert wait_terminal(record)
     replayed = collect(services, record.run_id, after=0, deltas=True)
     assert ASSISTANT_DELTA not in [event.type for event in replayed]
 
 
 def test_many_deltas_do_not_evict_durable_events(sandbox, monkeypatch):
-    """重放预算按 durable 计数：一次长回复的 delta 不该把 durable 挤出缓冲。
-
-    否则 delta 的**多少**会左右 I5 的语义——流得久一点，重连的客户端就平白收到
-    resync。这里 50 条 delta + 4 条 durable，缓冲上限压到 10：按总条数淘汰会丢掉
-    durable，按 durable 计数则一条都不丢。
+    """The replay budget counts durable events: 50 deltas plus 4 durable ones under a cap of 10
+    must evict nothing, or a long stream alone could push a reconnecting client into resync.
     """
     monkeypatch.setattr(
         "avid.services.runs.stream_completion",
@@ -275,16 +269,13 @@ def test_many_deltas_do_not_evict_durable_events(sandbox, monkeypatch):
     assert RESYNC not in [event.type for event in got]
 
 
-# ---------------- 会话句柄的并发（阶段 18 修掉的竞态） ----------------
+# ---------------- session handle concurrency ----------------
 
 
 def test_reading_while_a_run_starts_never_double_opens_the_session(sandbox):
-    """读路径与运行路径会同时想开会话，而会话层只允许一个句柄。
-
-    修之前：``start`` 先登记 ``_active`` 再在运行线程里 ``open``，窗口期内读取
-    看到"有活动 run 但拿不到句柄"，就自己开——同一会话被开两次，运行刚起就
-    failed（``会话已经打开``），或读取 500（``会话已关闭``）。修法是把
-    「开句柄」放进每会话一把的句柄锁，并让 ``_active`` 与句柄同时可见。
+    """Read and run paths want the session handle at the same time while the session layer allows
+    one handle, so opening goes under the per-session handle lock together with publishing
+    ``_active``.
     """
     services = build(sandbox, ScriptedChat(make_turn("答")))
     session_id = new_session(services)
@@ -296,7 +287,7 @@ def test_reading_while_a_run_starts_never_double_opens_the_session(sandbox):
             try:
                 services.sessions.get(session_id)
                 services.sessions.list_sessions()
-            except Exception as exc:  # 读路径任何异常都算失败
+            except Exception as exc:  # any read-path exception counts as a failure
                 failures.append(f"{type(exc).__name__}: {exc}")
                 return
 
@@ -316,11 +307,11 @@ def test_reading_while_a_run_starts_never_double_opens_the_session(sandbox):
     assert services.sessions.get(session_id)["message_count"] >= 2
 
 
-# ---------------- 运行记录的取消与统计 ----------------
+# ---------------- run record cancellation and stats ----------------
 
 
 def test_reasoning_delta_is_a_delta_tier_event(sandbox):
-    """A2：思维链增量走 delta 档——默认不投递、不落盘、不占重放预算。"""
+    """Reasoning deltas are delta-tier: not delivered by default, not persisted, not budgeted."""
     services = build(sandbox, ScriptedChat(make_turn("答")), buffer_size=8)
     record = services.runs.get(services.runs.start(new_session(services), "跑").run_id)
 
@@ -335,11 +326,8 @@ def test_reasoning_delta_is_a_delta_tier_event(sandbox):
 
 
 def test_delta_bookkeeping_keeps_the_buffer_consistent(sandbox):
-    """delta 记账必须与"从头重算"完全一致。
-
-    以前每个 delta 都全量扫一遍缓冲来数 durable（O(n²)，实测 8000 分片 1.05 s，
-    而且跑在读模型 SSE 的线程里）。现在增量维护 `durable_index`——这条用例把
-    增量结果与一次全量重算对齐，防止记账写错。
+    """Incremental delta bookkeeping must equal a full recompute: the durable count stays within
+    the cap, absolute indices stay self-consistent, and evicted_upto is the highest dropped seq.
     """
     services = build(sandbox, ScriptedChat(make_turn("答")), buffer_size=8)
     record = services.runs.get(services.runs.start(new_session(services), "跑").run_id)
@@ -350,7 +338,6 @@ def test_delta_bookkeeping_keeps_the_buffer_consistent(sandbox):
         if index % 7 == 0:
             services.runs.emit(record, TOOL_RESULT_MESSAGE, entry_id=str(index))
 
-    # 与全量重算对齐：耐久事件数不超上限、绝对下标自洽、evicted_upto 是被丢掉的最高 seq。
     durable = [event for event in record.events if event.seq is not None]
     assert len(durable) <= 8
     assert record.durable_index == [
@@ -364,21 +351,19 @@ def test_delta_bookkeeping_keeps_the_buffer_consistent(sandbox):
 
 
 def test_finished_runs_and_session_locks_are_reclaimed(sandbox):
-    """终态记录与句柄锁都要能被回收，而且不许动刚结束的记录。
-
-    没有回收时，长驻的 `avid web` 会一直攒：每条记录带着最长 buffer_size 条
-    durable 事件与期间的全部 delta，每个访问过的会话还留一把锁。
+    """Terminal records and session locks are both reclaimable, while a just-finished record stays
+    inside its retention window.
     """
     services = build(sandbox, ScriptedChat(make_turn("答")), max_runs=1)
     record = run_to_end(services)
 
-    # 刚结束的记录还在保留窗口内：条数兜底不许动它（订阅者可能还在消费缓冲）。
+    # Just finished and still inside the retention window: the count fallback must not touch it.
     assert services.runs.get(record.run_id) is record
     services.runs._sweep()
     assert services.runs.get(record.run_id) is record, "刚结束的记录不该被兜底淘汰"
     assert services.runs._session_locks == {}, "运行结束后句柄锁应当已被摘掉"
 
-    # 过了保留窗口：记录连同缓冲一起收掉，回查变成 404（前端按条目重建视图）。
+    # Past the window the record and its buffer are dropped, so a lookup becomes 404.
     services.runs._retention_ms = 0
     record.finished_at = 0
     services.runs._sweep()
@@ -388,7 +373,7 @@ def test_finished_runs_and_session_locks_are_reclaimed(sandbox):
     assert services.runs._session_locks == {}
 
 
-# ---------------- 失败路径：五种 code 都要变成可观察的终态 ----------------
+# ---------------- failure paths: every code becomes an observable terminal state ----------------
 
 
 def _raising_chat(exc: Exception):
@@ -407,10 +392,8 @@ def _raising_chat(exc: Exception):
     ids=["llm_error", "internal"],
 )
 def test_chat_failures_become_a_terminal_event_with_the_right_code(sandbox, exc, code):
-    """失败必须是可观察的终态：record 上有 code，事件流里有 run_failed。
-
-    审查发现这五条失败路径**零测试**：唯一的"守护"是 test_web_boundaries 里一条
-    grep 断言（只证明字面量存在），而前端按 code 分支的错误面完全没被验证。
+    """A failure is an observable terminal state: the record carries a code and the stream carries
+    run_failed, never run_finished.
     """
     services = build(sandbox, _raising_chat(exc))
     record = services.runs.start(new_session(services), "跑")
@@ -429,9 +412,8 @@ def test_chat_failures_become_a_terminal_event_with_the_right_code(sandbox, exc,
 
 
 def test_a_run_longer_than_the_old_cap_still_finishes(sandbox):
-    """内核里没有轮数上限：8 轮工具调用（比旧上限多）照常跑到模型自己收尾。
-
-    回归用例：旧代码写死 8 轮，这条运行会被判成 `run_failed{round_limit}`。
+    """No round cap exists in the kernel: 8 tool rounds still run to the model's own finish
+    (regression against the old hard limit of 8, which failed as run_failed{round_limit}).
     """
     tools = RecordingTools().registry("read_file")
     services = build(sandbox, many_rounds(8), tools)
@@ -443,7 +425,7 @@ def test_a_run_longer_than_the_old_cap_still_finishes(sandbox):
 
 
 def test_a_run_of_forty_rounds_still_finishes(sandbox):
-    """再往上也没有截止点：40 轮的工具往返仍然是"跑完"，不是"预算耗尽"。"""
+    """No higher cutoff either: 40 tool rounds still end as finished, not budget-exhausted."""
     tools = RecordingTools().registry("read_file")
     services = build(sandbox, many_rounds(40), tools)
     record = services.runs.start(new_session(services), "跑")
@@ -454,8 +436,8 @@ def test_a_run_of_forty_rounds_still_finishes(sandbox):
 
 
 def test_config_error_failure_is_mapped(sandbox, monkeypatch):
-    """模型配置缺失发生在运行线程里，必须是 config_error 而不是让线程裸死。"""
-    # BYOK 配置指向不存在的文件：resolve_chat 报「还没有模型配置」
+    """A missing model config surfaces inside the run thread as config_error, not a dead thread."""
+    # BYOK config points at a file that does not exist, so resolve_chat has no model
     monkeypatch.setenv("AVID_BYOK_CONFIG", str(sandbox / "none" / "models.json"))
     services = build(sandbox, ScriptedChat(make_turn("答")))
     record = services.runs.start(new_session(services), "跑")
@@ -465,7 +447,7 @@ def test_config_error_failure_is_mapped(sandbox, monkeypatch):
 
 
 def test_session_error_failure_is_mapped(sandbox, monkeypatch):
-    """会话层失败（读历史时文件坏了）映射成 session_error。"""
+    """A session-layer failure (corrupt file while reading history) maps to session_error."""
 
     def boom(session, branch):
         raise SessionStorageError("会话文件坏了")
@@ -478,11 +460,11 @@ def test_session_error_failure_is_mapped(sandbox, monkeypatch):
     assert record.error["code"] == "session_error"
 
 
-# ---------------- 缓冲边界：跟随期缺口与事件总数上限 ----------------
+# ---------------- buffer bounds: live-follow gaps and the total event cap ----------------
 
 
 class BlockingChat:
-    """卡住第一轮模型调用，好让测试在"运行还在进行"时操作缓冲。"""
+    """Blocks the first model call so the test can touch the buffer while the run is live."""
 
     def __init__(self) -> None:
         self.entered = threading.Event()
@@ -495,10 +477,8 @@ class BlockingChat:
 
 
 def test_live_follower_is_told_when_its_cursor_is_evicted(sandbox):
-    """订阅时检查一次不够：慢消费者还在跟的时候缓冲翻页，同样要显式 resync（I5）。
-
-    以前跟随循环用 ``max(0, index - dropped)`` 把越界下标夹到队首，于是缺口被
-    静默跳过——客户端丢了一段历史却收不到任何提示。
+    """A resync check at subscribe time is not enough: when the buffer turns over mid-follow the
+    live subscriber must be told explicitly, never quietly served from the new head (I5).
     """
     chat = BlockingChat()
     services = build(sandbox, chat, buffer_size=2)
@@ -509,7 +489,7 @@ def test_live_follower_is_told_when_its_cursor_is_evicted(sandbox):
     consumed = threading.Event()
 
     def consume() -> None:
-        # 慢消费者：每次 next() 之间停一下，模拟"跟不上的客户端"。
+        # slow consumer: pause between next() calls to simulate a client that cannot keep up
         for event in services.runs.subscribe(record.run_id, after=0):
             if event is not None:
                 got.append(event.type)
@@ -518,11 +498,11 @@ def test_live_follower_is_told_when_its_cursor_is_evicted(sandbox):
 
     thread = threading.Thread(target=consume, daemon=True)
     thread.start()
-    # 先让订阅者把已有事件消费完并进入跟随（此刻还没有任何淘汰）。
+    # first let the subscriber drain existing events and start following (nothing evicted yet)
     assert consumed.wait(5), "订阅者没开始消费"
     assert record.evicted_upto == 0, "这一步不该有缺口，否则测不到跟随期路径"
 
-    # 订阅者正在 sleep，此刻灌入远超 buffer_size 的 durable：它的游标会被淘汰。
+    # while the subscriber sleeps, emit far more durable events than buffer_size: it gets evicted
     for index in range(6):
         services.runs.emit(
             record,
@@ -540,10 +520,8 @@ def test_live_follower_is_told_when_its_cursor_is_evicted(sandbox):
 
 
 def test_delta_flood_cannot_grow_the_buffer_without_bound(sandbox):
-    """一次长回复的 delta 也要有上限：每条 delta 都是一个 RunEvent。
-
-    上限淘汰最旧的前缀；被连带丢掉的 durable 必须记进 ``evicted_upto``，
-    否则重连的客户端会看到静默缺口。
+    """Every delta is a RunEvent, so deltas are capped too: the cap evicts the oldest prefix, and
+    any durable event dropped with it must be recorded in ``evicted_upto``.
     """
     chat = BlockingChat()
     services = build(sandbox, chat, buffer_size=16, max_events=64)
@@ -575,12 +553,8 @@ def test_delta_flood_cannot_grow_the_buffer_without_bound(sandbox):
 
 
 def test_cancel_arriving_before_the_state_exists_is_not_lost(sandbox, monkeypatch):
-    """取消在 ``record.state`` 装上之前到达时必须补一次，否则永久丢失。
-
-    ``cancel()`` 只在 state 已就绪时调 ``state.cancel()``，而循环检查的是
-    ``state.cancelled``。线程启动到 ``RunState.for_run`` 之间有一段真实工作
-    （装配记录器、读历史），此间的取消以前会静默丢掉：202 已返回、取消标志
-    为真，运行却照跑完。
+    """A cancel arriving before ``record.state`` exists must be replayed once: ``cancel()`` only
+    reaches ``state.cancel()`` when the state is ready, and the loop watches ``state.cancelled``.
     """
     entered = threading.Event()
     release = threading.Event()
@@ -598,7 +572,7 @@ def test_cancel_arriving_before_the_state_exists_is_not_lost(sandbox, monkeypatc
     record = services.runs.start(session_id, "跑一下")
     assert entered.wait(5), "运行线程没走到读历史那一步"
 
-    services.runs.cancel(record.run_id)  # 此刻 record.state 还是 None
+    services.runs.cancel(record.run_id)  # record.state is still None here
     release.set()
 
     assert wait_terminal(record), record.status
@@ -607,9 +581,8 @@ def test_cancel_arriving_before_the_state_exists_is_not_lost(sandbox, monkeypatc
 
 
 def test_run_record_reports_the_real_round_and_tokens(sandbox):
-    """``GET /runs/{id}`` 的 round/tokens 曾经恒为 0：权威在 state，读数在 RunRecord。
-
-    ``many_rounds(2)`` 是"两轮工具 + 一轮收尾"，所以 round 到 3；tokens 每轮累加。
+    """``GET /api/runs/{id}`` reports round/tokens from the state, not a stale 0: many_rounds(2)
+    is two tool rounds plus a final round, so round reaches 3 and tokens accumulate per round.
     """
     tools = RecordingTools().registry("read_file")
     services = build(sandbox, many_rounds(2), tools)
@@ -622,15 +595,12 @@ def test_run_record_reports_the_real_round_and_tokens(sandbox):
     assert payload["tokens"] > 0, payload
 
 
-# ---------------- 注入提醒的条目类型 ----------------
+# ---------------- entry type of injected reminders ----------------
 
 
 def test_plan_travels_in_the_tail_not_in_the_history(sandbox):
-    """计划不再以 user 提醒注入：它走每轮重渲染的 tail 块，不落库、不发事件。
+    """The plan rides the per-round tail block: not persisted, no event, never a user role."""
 
-    旧机制把「[提醒] 连续 N 轮……」当 user 消息塞进对话并落库，渲染侧只能靠 notice
-    类型把它和用户输入分开；tail 不进消息通道，这条约束整个消失。
-    """
     tools = RecordingTools().registry("read_file")
     services = build(sandbox, many_rounds(4), tools)
     record = run_to_end(services)
@@ -642,10 +612,9 @@ def test_plan_travels_in_the_tail_not_in_the_history(sandbox):
     assert kinds.count(TODO_REMINDER) == 0
     assert kinds.count(USER_MESSAGE) == 1
 
-    # 投影不变：落库的历史里没有内核写的提醒文本。
-    #
-    # 直读会话文件要先等运行线程交还句柄，再持句柄锁打开：`record.terminal` 说的是
-    # "注册表已定终态"，句柄是紧接着才交还的（见 `support.wait_handle_released`）。
+    # Projection invariant: the stored history holds no kernel-written reminder text.
+    # Direct file reads wait for the run thread to hand the handle back, then take the handle
+    # lock: record.terminal only reports the registry state (see support.wait_handle_released).
     wait_handle_released(services, record.session_id)
     with services.runs.session_lock(record.session_id):
         session = services.repo.open(services.runs.find_metadata(record.session_id))
@@ -659,14 +628,14 @@ def test_plan_travels_in_the_tail_not_in_the_history(sandbox):
     assert not any("[提醒]" in text for text in history)
 
 
-# ---------------- 阶段 22：用量快照 ----------------
+# ---------------- usage snapshots ----------------
 
-#: 脚本模型的用量（`support.make_turn`）：prompt=1 / completion=2 / total=3。
+#: Scripted model usage (``support.make_turn``): prompt=1 / completion=2 / total=3.
 SCRIPT_USAGE = {"context": {"tokens": 1, "window": None, "utilization": None}}
 
 
 def test_run_status_carries_the_usage_snapshot_every_round(sandbox):
-    """每轮模型调用后都有一份统一 schema 的快照——界面据此实时显示占用与命中。"""
+    """Every model call leaves a snapshot in one schema; the UI reads occupancy and cache hits."""
     tools = RecordingTools().registry("read_file")
     services = build(
         sandbox,
@@ -680,17 +649,17 @@ def test_run_status_carries_the_usage_snapshot_every_round(sandbox):
         for event in collect(services, record.run_id)
         if event.type == RUN_STATUS and "usage" in event.data
     ]
-    assert len(snapshots) == 2  # 两轮，两份
+    assert len(snapshots) == 2  # two rounds, two snapshots
     context = snapshots[-1]["context"]
     assert context["tokens"] == SCRIPT_USAGE["context"]["tokens"]
     assert context["window"] is None
-    # 分块：三块之和 = 真实总数（系统提示与工具定义各占一部分，对话消息拿走余数）
+    # parts: the three blocks sum to the real total (system, tools, messages as the remainder)
     parts = context["parts"]
     assert parts is not None
     assert sum(parts.values()) == context["tokens"]
-    # 测试模型不在内置窗口表里 → 没有分母，也不猜占用率。
+    # test-model is not in the built-in window table: no denominator, no guessed utilization
     assert snapshots[-1]["context"]["window"] is None
-    # 脚本模型没上报缓存计数：None（「—」），不是 0。
+    # the scripted model reports no cache counters: None (shown as "-"), not 0
     assert snapshots[-1]["cache"] == {
         "read_tokens": None,
         "write_tokens": None,
@@ -700,7 +669,7 @@ def test_run_status_carries_the_usage_snapshot_every_round(sandbox):
 
 
 def test_terminal_event_and_rest_view_share_the_final_snapshot(sandbox):
-    """run_finished 带最终快照（durable，流里就拿到），REST 视图同源。"""
+    """run_finished carries the final snapshot (durable, delivered in-stream) and REST agrees."""
     tools = RecordingTools().registry("read_file")
     services = build(
         sandbox,
@@ -712,16 +681,16 @@ def test_terminal_event_and_rest_view_share_the_final_snapshot(sandbox):
 
     finished = next(e for e in events_list if e.type == RUN_FINISHED)
     assert finished.data["usage"] == record.usage
-    # 出口原因（阶段 40）：每个出口都叫得出名字（StopReason）
+    # exit reason: every exit is named (StopReason)
     assert finished.data["reason"] == "final_text"
     assert record.usage["context"]["tokens"] == 1
-    # 累计量仍是运行账单（两轮 × total 3），与"占用"不是一回事。
+    # accumulated tokens are the run bill (two rounds x total 3), not occupancy
     assert record.tokens == 6
     assert services.runs.get(record.run_id).to_dict()["usage"] == record.usage
 
 
 def test_usage_is_persisted_into_the_session_for_the_branch(sandbox):
-    """落盘：分支列表带该分支最近一次运行的快照（刷新与重启后靠它）。"""
+    """Persisted: the branch list carries that branch's latest run snapshot across restarts."""
     from avid.session import USAGE_NS, branch_usage
 
     tools = RecordingTools().registry("read_file")
@@ -732,7 +701,7 @@ def test_usage_is_persisted_into_the_session_for_the_branch(sandbox):
     main = next(item for item in listed if item["name"] == "main")
     assert main["usage"]["context"]["tokens"] == 1
 
-    # 直读会话文件：先等句柄交还，再持锁打开（与上面那条同理）。
+    # direct file read: wait for the handle release, then open under the handle lock
     wait_handle_released(services, record.session_id)
     with services.runs.session_lock(record.session_id):
         session = services.repo.open(services.runs.find_metadata(record.session_id))
@@ -742,17 +711,13 @@ def test_usage_is_persisted_into_the_session_for_the_branch(sandbox):
             session.close()
     assert [item.key for item in stored] == ["main"]
     assert stored[0].value == main["usage"]
-    # 地址构造器与写入侧用的是同一个（namespace 与 key 都得对得上）。
+    # the address builder matches the write side (same namespace and key)
     assert branch_usage("main").key == "main"
 
 
 def test_terminal_flag_and_terminal_event_land_together(sandbox):
-    """`record.terminal` 为真 ⇒ 终态事件**已经在缓冲里**。
-
-    订阅者就是按这条判断"还有没有后续事件"的（`record.terminal` 且缓冲没有新事件
-    就直接返回）。两者分开写——先置状态、中间再干别的活（阶段 22 起中间有一次
-    会话写入）——订阅者会在那段时间里看到"已终态 + 缓冲里没有终态事件"，于是
-    静默少收一条终态。所以这里**什么也不等**：终态刚置位就立刻订阅。
+    """``record.terminal`` true implies the terminal event is already in the buffer: subscribers
+    decide from it whether more events can come, so the flag and the event must land together.
     """
     tools = RecordingTools().registry("read_file")
     services = build(sandbox, many_rounds(2), tools)
@@ -765,10 +730,8 @@ def test_terminal_flag_and_terminal_event_land_together(sandbox):
 
 
 def test_loop_records_the_three_prompt_parts(sandbox):
-    """分块真的被记下来：系统提示词与工具定义从不发给前端，只有内核在发请求前算得到。
-
-    脚本模型的 usage 是 1 个 token（`support.make_turn`），整数分配下三块里只有一个能
-    拿到 1——所以这里显式给一份**大**用量，才看得出三块都有份额。
+    """The parts are really recorded: a large usage (1000 prompt tokens) is injected because the
+    scripted usage of 1 token would leave only one block with a nonzero share.
     """
     from avid.providers.client import Turn, Usage
 
@@ -792,17 +755,17 @@ def test_loop_records_the_three_prompt_parts(sandbox):
     parts = snapshots[-1]["parts"]
     assert parts is not None
     assert sum(parts.values()) == 1_000
-    assert parts["system"] > 0, parts   # 系统提示词
-    assert parts["tools"] > 0, parts    # 工具定义（15 个工具的 JSON）
-    assert parts["messages"] > 0, parts  # 对话消息（余数在这里）
+    assert parts["system"] > 0, parts   # system prompt
+    assert parts["tools"] > 0, parts    # tool definitions (every TOOLS entry as JSON)
+    assert parts["messages"] > 0, parts  # conversation messages (the remainder)
 
 
-# ---------------- 会话内命令（阶段 45） ----------------
+# ---------------- in-session commands ----------------
 
 
 def test_compact_command_finishes_without_calling_the_model(sandbox):
-    """'/compact' 走命令分支：不调模型，run_finished 带 command 出口与结果文本。"""
-    # ScriptedChat 置空：真被调用会断言“模型被多要了一轮”。
+    """'/compact' takes the command branch: no model call, run_finished carries reason command."""
+    # empty ScriptedChat: being called at all would trip its assertion
     services = build(sandbox, ScriptedChat())
     record = run_to_end(services, prompt="/compact")
 
@@ -823,7 +786,7 @@ def test_unknown_command_answers_with_help_text(sandbox):
 
 
 def test_skill_command_feeds_the_skill_body_as_the_user_message(sandbox):
-    """'/demo' 把技能全文当作用户输入——模型收到的就是技能正文。"""
+    """'/demo' feeds the skill body as the user message: the model receives exactly that text."""
     (sandbox / "skills" / "demo").mkdir(parents=True)
     (sandbox / "skills" / "demo" / "SKILL.md").write_text(
         "---\ndescription: 演示技能\n---\n这是演示技能的正文", encoding="utf-8"
@@ -840,10 +803,8 @@ def test_skill_command_feeds_the_skill_body_as_the_user_message(sandbox):
 
 @contextmanager
 def open_session(services, session_id: str):
-    """等句柄交还后持锁直读会话（运行线程在终态事件之后才关句柄）。
-
-    先进句柄锁再 open：运行线程交还句柄也走同一把锁，否则有撞
-    SessionAlreadyOpenError 的窗口。
+    """Read the session file directly: wait for the handle release, then take the handle lock
+    before open (the run thread releases under the same lock, so no SessionAlreadyOpenError).
     """
     wait_handle_released(services, session_id)
     with services.runs.session_lock(session_id):
@@ -855,10 +816,8 @@ def open_session(services, session_id: str):
 
 
 def test_rewind_command_rolls_back_the_last_user_turn(sandbox):
-    """'/rewind'：对话指针回移、压缩游标清除、文件恢复到该输入前，run 以 command 收尾。
-
-    两轮都用真的 write_file（不注入注册表），写前快照随运行落盘：回滚第二轮后，
-    第一轮写的文件回到原样，第二轮新建的文件被删。
+    """'/rewind' moves the tip back, clears the compaction cursor and restores files to before that
+    input, ending with reason command (two real write_file rounds without a registry override).
     """
     chat = ScriptedChat(
         make_turn("", [tool_call("write_file", '{"path": "notes.txt", "content": "第一版"}')]),
@@ -882,7 +841,7 @@ def test_rewind_command_rolls_back_the_last_user_turn(sandbox):
     assert (sandbox / "notes.txt").read_text(encoding="utf-8") == "第二版"
     assert (sandbox / "created.txt").exists()
 
-    # 模拟 /compact 留下的现场：投影用摘要替代被游标覆盖的前缀
+    # simulate a /compact aftermath: the projection replaces the cursor-covered prefix
     with open_session(services, session_id) as session:
         SessionRecorder(session).record_compaction(
             {"role": "user", "content": "[历史摘要] 前两轮"}, keep=2
@@ -896,11 +855,11 @@ def test_rewind_command_rolls_back_the_last_user_turn(sandbox):
     finished = next(e for e in collect(services, record.run_id) if e.type == RUN_FINISHED)
     assert finished.data["reason"] == "command"
 
-    # 文件：第二轮改过的恢复原样，第二轮新建的删除
+    # files: the second-round edit is reverted, the second-round new file deleted
     assert (sandbox / "notes.txt").read_text(encoding="utf-8") == "第一版"
     assert not (sandbox / "created.txt").exists()
 
-    # 汇总：移出第二问及其全部后续（5 条），恢复 1 个、删除 1 个
+    # summary: the second question and its 5 descendants move out, 1 file restored, 1 deleted
     assert "移出 5 条" in record.text
     assert "恢复 1 个" in record.text and "删除 1 个" in record.text
 
@@ -909,13 +868,13 @@ def test_rewind_command_rolls_back_the_last_user_turn(sandbox):
         contents = [str(entry.message.get("content")) for entry in entries if entry.message]
         assert contents[0] == "第一问"
         assert "第二问" not in contents and "第二答" not in contents
-        # 汇总作为 assistant 条目落在回滚后的链尾
+        # the summary lands as an assistant entry at the rolled-back tip
         assert entries[-1].message is not None
         assert entries[-1].message["role"] == "assistant"
         assert "已回滚" in contents[-1]
-        # 压缩游标被清掉：不清则投影把摘要接在被回滚的链上
+        # compaction cursor cleared: otherwise the projection reattaches the summary
         assert session.get_value(branch_compaction("main")) is None
-        # 孤儿条目留在盘上（append-only）：全局扫描仍能看到被移出的对话
+        # orphaned entries stay on disk (append-only): a global scan still sees them
         every = session.find_entries(EntryQuery(order="asc"))
         assert any(
             entry.message and entry.message.get("content") == "第二问" for entry in every
@@ -923,7 +882,7 @@ def test_rewind_command_rolls_back_the_last_user_turn(sandbox):
 
 
 def test_rewind_command_without_a_user_input_says_so(sandbox):
-    """空会话没有可回滚的锚点：命令照常以 assistant 汇总收尾，不报错。"""
+    """An empty session has no anchor to roll back to: the command still ends with a summary."""
     services = build(sandbox, ScriptedChat())
     record = run_to_end(services, prompt="/rewind")
 

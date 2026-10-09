@@ -5,8 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Markdown } from '../Markdown'
 
 /**
- * 渲染层：模型输出直接进 DOM，所以这里最关键的两条是
- * **不注入 HTML**（全程 React 元素）与**SVG 走 <img> 数据地址**（不内联、不执行脚本）。
+ * Render layer: model output goes straight to the DOM, so the invariants pinned here are no HTML
+ * injection and SVG via an `<img>` data URL.
  */
 afterEach(cleanup)
 
@@ -26,8 +26,8 @@ describe('markdown 渲染', () => {
     const { container } = render(<Markdown>{'```py\nprint(1)\n```'}</Markdown>)
 
     expect(screen.getByText('py')).toBeTruthy()
-    // 高亮把代码拆成多个 token span，所以按整块文本断言（拼回去等于原文由
-    // highlight 的单测保证）
+    // highlighting splits the code into token spans, so assert the whole text; the concat
+    // invariant itself is covered by the highlight tests
     expect(container.querySelector('pre code')?.textContent).toBe('print(1)')
     expect(screen.getByRole('button', { name: /复制/ })).toBeTruthy()
   })
@@ -48,7 +48,7 @@ describe('markdown 渲染', () => {
 
     const img = container.querySelector('img')
     expect(img?.getAttribute('src')).toMatch(/^data:image\/svg\+xml;base64,/)
-    // 不内联：DOM 里不能出现 svg 元素，源码也不能以文本形式留在页面上
+    // never inlined: no svg element in the DOM, no source left as page text
     expect(container.querySelector('svg')).toBeNull()
     expect(container.textContent).not.toContain('<circle')
   })
@@ -58,7 +58,7 @@ describe('markdown 渲染', () => {
       <Markdown>{'```html\n<div>不是图</div>\n```\n\n```html\n<svg xmlns="http://www.w3.org/2000/svg"><rect width="4" height="4"/></svg>\n```'}</Markdown>,
     )
 
-    // 第一块仍是代码，第二块变图
+    // the first fence stays code, the second becomes an image
     expect(container.querySelectorAll('img')).toHaveLength(1)
     expect(container.textContent).toContain('<div>不是图</div>')
   })
@@ -90,7 +90,7 @@ describe('markdown 渲染', () => {
     expect(container.querySelector('h2')?.className).toContain('text-chat-h2')
     expect(container.querySelector('h3')?.className).toContain('text-chat-h3')
     expect(container.querySelector('h4')?.className).toContain('text-chat-h4')
-    // 五级及以下不再更大，靠字重与衬线区分
+    // h5 and below stop growing: weight and serif tell them apart
     expect(container.querySelector('h5')?.className).toContain('text-chat')
     expect(container.querySelector('h5')?.className).not.toContain('text-chat-h')
   })
@@ -101,7 +101,7 @@ describe('markdown 渲染', () => {
     const heading = container.querySelector('h2')
     expect(heading?.textContent).toBe('选型决策线')
     expect(heading?.className).toContain('text-center')
-    // 线属于这一节，画在标题上方
+    // the rule belongs to the section and is drawn above the heading
     expect(container.querySelectorAll('hr')).toHaveLength(1)
   })
 

@@ -1,24 +1,15 @@
 /**
- * 代码高亮（阶段 33 · 阶段 10）——纯函数：源码 → token 序列。
- *
- * 为什么自研而不是引 highlight.js / shiki：那两个加起来是 200 KB～1 MB 量级，
- * 而这个界面要的只是「模型常写的那几种语言、看得懂就够了」。这里是一张
- * 「每种语言一组正则规则」的小表 + 一个共用扫描器，全部约 200 行。
- *
- * **硬不变量：token 拼回去逐字等于原文**（单测里对每种语言都断言）。
- * 高亮永远不许吞字、不许加字——代码块是给人复制的，错一个字符就是事故。
- *
- * 色板只有三个色相 + 一个字重（见 tokens.css 的 --syntax-*）：
- * 关键字（远山青）、字符串（墨绿）、数字（赭）、注释（灰）、函数/类型名（墨色中粗）。
- * 纸本语言的纪律是「全系统仅一种彩色」，代码块是唯一需要多色的地方，
- * 所以每个色都实测过对比度（两套主题都 ≥ 4.5），且不含高饱和色。
+ * Code highlighting: source text in, token list out — a per-language regex table plus one
+ * shared scanner, no third-party highlighter; colors are the `--syntax-*` tokens in tokens.css
+ * (all ≥ 4.5 contrast on both themes). Hard invariant: concatenating token texts reproduces the
+ * source verbatim — a code block is copied by the user, so never drop or add a character.
  */
 
 export type TokenKind = 'plain' | 'comment' | 'keyword' | 'string' | 'number' | 'function'
 
 export type Token = { kind: TokenKind; text: string }
 
-/** 一条规则：匹配则以 kind 吃掉一段；kind 为 plain 表示只推进不染色。 */
+/** One rule: a match consumes a span as `kind`; plain advances without coloring. */
 type Rule = { re: RegExp; kind: TokenKind }
 
 type LangSpec = { rules: Rule[] }
@@ -32,7 +23,7 @@ const BASH_KEYWORDS =
 const SQL_KEYWORDS =
   'select|from|where|group|by|order|having|limit|offset|insert|into|values|update|set|delete|join|left|right|inner|outer|on|as|and|or|not|null|is|in|like|between|distinct|count|sum|avg|min|max|create|table|index|drop|alter|primary|key|foreign|references|union|all'
 
-/** 语言别名 → 规格。找不到就整段 plain（不猜）。 */
+/** Language alias → spec; an unknown language stays entirely plain (no guessing). */
 const LANGS: Record<string, LangSpec> = {
   python: {
     rules: [
@@ -108,7 +99,7 @@ const LANGS: Record<string, LangSpec> = {
   },
 }
 
-/** 别名表：模型写 `ts` / `tsx` / `sh` / `yml` 都得认。 */
+/** Alias table: the spellings models actually write must resolve. */
 const ALIAS: Record<string, keyof typeof LANGS> = {
   py: 'python',
   python: 'python',
@@ -136,8 +127,8 @@ const ALIAS: Record<string, keyof typeof LANGS> = {
 }
 
 /**
- * 扫描：每步按规则顺序试，第一条命中的吃掉一段；都不命中就推进一个字符。
- * 规则里的正则一律不带 `g`（用 `y` 粘性匹配），避免 lastIndex 串味。
+ * Scan left to right, first matching rule wins; rules are sticky (`y`, never `g`) so `lastIndex`
+ * cannot leak between calls.
  */
 export function highlight(code: string, lang: string | null): Token[] {
   if (code === '') return []

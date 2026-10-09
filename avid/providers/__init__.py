@@ -1,13 +1,12 @@
-"""Model protocol layer: config, provider dispatch, and the paired tool-call message invariant.
+"""Model protocol layer: dispatch to a provider module plus the protocol registry.
 
-Provider 注册表也在本模块：新增一个协议 = 一个实现模块 + PROVIDERS 里一条表项。
+Adding a protocol is one implementation module and one entry in PROVIDERS.
 """
 
 from __future__ import annotations
 
 from . import anthropic, openai_compat, responses
 
-# Single registry: adding a protocol is one module plus one entry here.
 PROVIDERS: dict[str, object] = {
     "openai": openai_compat,
     "anthropic": anthropic,

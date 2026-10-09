@@ -1,11 +1,8 @@
-"""SQLite 连接与 schema 迁移：索引库是派生层，删掉就能从 JSONL 重建。
+"""SQLite connection and schema migrations for the derived index, which can be deleted and
+rebuilt from JSONL.
 
-三条纪律写在这里，后面每一步都照它办：
-
-- **user_version 是版本位**：不另建版本表（少一份要维护的真相），每次打开只补差的那几步；
-- **迁移是原子的**：脚本自带 BEGIN/COMMIT，半途失败不会留下半个 schema；
-- **等不到锁就认输**：`busy_timeout` 到期直接抛 OperationalError——索引落后没关系，
-  把运行线程拖住才是事故。
+`user_version` is the version marker, each migration script carries its own BEGIN/COMMIT so it lands
+atomically, and a lock that outlives `busy_timeout` raises instead of stalling the run.
 """
 
 from __future__ import annotations
@@ -23,13 +20,13 @@ from ..security import userdirs
 
 logger = logging.getLogger("avid.index.db")
 
-# 2 秒：本地单用户工具里超过这个时间还没拿到锁，说明有别的东西卡住了（等下去只会更糟）。
+# Two seconds: past this a local single-user tool is stuck elsewhere, and waiting only hurts.
 BUSY_TIMEOUT_MS = 2000
 # Key in `meta` holding the session store this index was built from; a mismatch is a check finding.
 META_STORE_ROOT = "store_root"
 META_BUILT_BY = "built_by"
 
-# schema 的每一步；列表本身就是历史，只能往后追加。
+# Every schema step in order; the list is append-only because it is the version history.
 MIGRATIONS: tuple[tuple[int, str], ...] = (
     (
         1,
@@ -122,7 +119,7 @@ def open_db(
     timeout_ms: int = BUSY_TIMEOUT_MS,
     migrations: Sequence[tuple[int, str]] = MIGRATIONS,
 ) -> sqlite3.Connection:
-    """打开（必要时建好）索引库并把 schema 补到最新。"""
+    """Open (creating when needed) the index database and bring its schema up to date."""
     target = Path(path) if path is not None else userdirs.index_path()
     target.parent.mkdir(parents=True, exist_ok=True)
 
@@ -130,7 +127,7 @@ def open_db(
     try:
         conn.execute("PRAGMA journal_mode = WAL")
     except sqlite3.DatabaseError as exc:
-        # 「不是数据库」= 文件坏了：它是可丢的派生层，挪到一边重建比让整个进程起不来强。
+        # "Not a database" = corrupt: move it aside and rebuild, since this layer is disposable.
         if not _looks_corrupt(exc):
             conn.close()
             raise
@@ -138,14 +135,14 @@ def open_db(
         aside = target.with_name(f"{target.name}.corrupt-{int(time.time())}")
         logger.warning("索引库不是数据库，挪到一边重建：%s → %s", target, aside)
         os.replace(target, aside)
-        for suffix in ("-wal", "-shm"):  # WAL 的伴生文件一起挪，别让新库继承它们
+        for suffix in ("-wal", "-shm"):  # Move WAL sidecars too, or the new database inherits them
             with contextlib.suppress(OSError):
                 os.replace(Path(str(target) + suffix), Path(str(aside) + suffix))
         conn = _connect(target, timeout_ms)
         conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute(f"PRAGMA busy_timeout = {timeout_ms}")
-    # 派生层：崩了重建即可，不值得为它付每次提交的 fsync。
+    # Derived layer: a crash means rebuild, so it is not worth a per-commit fsync.
     conn.execute("PRAGMA synchronous = NORMAL")
     migrate(conn, migrations=migrations)
     return conn
@@ -155,8 +152,8 @@ def _connect(target: Path, timeout_ms: int) -> sqlite3.Connection:
     conn = sqlite3.connect(
         str(target),
         timeout=timeout_ms / 1000,
-        isolation_level=None,  # 事务由 transaction() 显式开，别让驱动替我们决定
-        check_same_thread=False,  # 索引线程与请求线程共用一个连接，串行化由调用方保证
+        isolation_level=None,  # transaction() opens transactions explicitly
+        check_same_thread=False,  # shared by index and request threads; caller serialises
     )
     conn.row_factory = sqlite3.Row
     return conn
@@ -175,12 +172,12 @@ def schema_version(conn: sqlite3.Connection) -> int:
 def migrate(
     conn: sqlite3.Connection, *, migrations: Sequence[tuple[int, str]] = MIGRATIONS
 ) -> int:
-    """按版本号补差；返回补完后的版本。"""
+    """Apply the missing migrations in version order and return the resulting version."""
     current = schema_version(conn)
     for version, script in migrations:
         if version <= current:
             continue
-        # executescript 会先隐式提交，所以事务边界写进脚本本身——一次迁移要么整段生效，要么整段没发生。
+        # executescript commits implicitly, so each script carries its transaction: all or none.
         conn.executescript(f"BEGIN;\n{script}\nPRAGMA user_version = {version};\nCOMMIT;")
         current = version
     return current
@@ -188,14 +185,15 @@ def migrate(
 
 @contextlib.contextmanager
 def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
-    """BEGIN IMMEDIATE … COMMIT；任何异常都回滚，写者之间不会看到半个批次。"""
+    """Open with BEGIN IMMEDIATE and COMMIT at the end; any exception rolls back, so writers never
+    see half a batch.
+    """
     conn.execute("BEGIN IMMEDIATE")
     try:
         yield conn
         conn.execute("COMMIT")
     except BaseException:
-        # COMMIT 自己失败（盘满/等不到锁）也要回滚：否则事务一直开着，
-        # 之后每一次 BEGIN IMMEDIATE 都报「cannot start a transaction within a transaction」。
+        # A failed COMMIT (disk full, lock timeout) must also roll back, or every later BEGIN fails.
         with contextlib.suppress(sqlite3.Error):
             conn.execute("ROLLBACK")
         raise

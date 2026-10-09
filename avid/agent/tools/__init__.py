@@ -1,9 +1,4 @@
-"""Derives the tool tables every consumer reads from the single declaration point.
-
-Each tool's facts live with its implementation in ``registry.py``, so this module only
-projects them.
-
-"""
+"""Derives every consumer-facing tool table from the single declaration point in ``registry.py``."""
 
 from __future__ import annotations
 
@@ -12,8 +7,7 @@ from typing import Any
 
 from .registry import ToolSpec, ensure_loaded, specs
 
-# Parameters are relaxed to ``...``: most tools take (args), the few that need run state
-# take (args, *, state).
+# Parameters are relaxed to ``...``: most tools take (args), a few take (args, *, state).
 ToolImpl = Callable[..., Any]
 
 ensure_loaded()
@@ -32,14 +26,14 @@ SUB_HANDLERS: dict[str, ToolImpl] = {
 
 
 def readonly_names() -> frozenset[str]:
-    """工具名里不带写入能力的那一份（临时的只读对话按它摘表）。"""
+    """The tool names without write capability; a scratch conversation trims its tables by them."""
     return frozenset(spec.name for spec in specs() if not spec.writes)
 
 
 def without_writers(
     schemas: list[dict[str, Any]], impls: dict[str, ToolImpl]
 ) -> tuple[list[dict[str, Any]], dict[str, ToolImpl]]:
-    """把任一工具表里的写入工具摘掉：注入表、MCP 表都过这一道。"""
+    """Drops writers from any tool table; the injected and MCP tables both pass through here."""
     names = readonly_names()
     return (
         [item for item in schemas if item["function"]["name"] in names],
@@ -48,11 +42,8 @@ def without_writers(
 
 
 def build_toolset(state: Any | None = None) -> tuple[list[dict[str, Any]], dict[str, ToolImpl]]:
-    """Returns the schemas and handlers for one run: the built-ins plus any MCP tools.
-
-    The MCP tools come from ``state.mcp`` and follow the built-ins in name and order.
-    临时对话（``state.scratch``）过 :func:`without_writers`：写入工具摘表，MCP 也不放开——
-    外部工具的能力我们不知道，说不清是否只读的东西不进这张表。
+    """Returns one run's schemas and handlers — built-ins plus ``state.mcp`` — dropping every
+    writer in a scratch conversation because external tools' write capability is unknown.
     """
     schemas = list(TOOLS)
     impls = dict(TOOL_IMPLS)

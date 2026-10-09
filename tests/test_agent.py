@@ -43,7 +43,7 @@ def tool_call(name, arguments=None, call_id="call_1"):
 
 
 class FakeChat:
-    """按顺序返回预设轮次，并记录每轮收到的参数。"""
+    """Returns preset turns in order and records the arguments of every call."""
 
     def __init__(self, *turns):
         self.turns = list(turns)
@@ -54,7 +54,7 @@ class FakeChat:
         return self.turns[len(self.requests) - 1]
 
 
-# ---------- 循环基本行为 ----------
+# ---------- basic loop behavior ----------
 
 
 def test_returns_text_and_appends_assistant_when_no_tool_calls(hook_registry):
@@ -101,7 +101,7 @@ def test_executes_tool_call_then_finishes():
         "tool_call_id": "call_1",
         "content": "文件内容",
     }
-    # 请求末尾是每轮重渲染的上下文 tail（user，不落库），工具结果在它前面
+    # the request tail is the per-round context block (user role, not persisted)
     assert chat.requests[1]["messages"][-2]["role"] == "tool"
     assert chat.requests[1]["messages"][-1]["role"] == "user"
     assert chat.requests[1]["messages"][-1]["content"].startswith("[上下文]")
@@ -153,24 +153,21 @@ def test_tool_exception_becomes_a_result_not_a_crash():
 
 
 def test_tool_failure_kinds_have_distinguishable_prefixes():
-    """三类失败各说各的下一步：改参数 / 换做法 / 别重复提交。
-
-    权限层的四类拒绝文案早就是这么做的（`policy/permission.py`）；工具层以前只有一句
-    「工具 X 执行失败」，模型分不清该重试还是该换路。`web/schemas.py` 的状态判定就吃
-    这两个前缀，所以它们是**对外契约**，不是措辞偏好。
+    """The three failure kinds carry distinguishable prefixes because web/schemas.py classifies
+    tool status from them: they are an external contract, not wording preference.
     """
 
     def boom(args, **kwargs):
         raise ValueError("磁盘满了")
 
-    # 程序 / 环境错误
+    # program / environment error
     chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
     messages = [{"role": "user", "content": "读"}]
     run_loop(messages, config=CONFIG, chat=chat, registry={"read_file": boom})
     assert messages[2]["content"].startswith("工具执行失败：read_file（磁盘满了）")
     assert "不要用同样的参数重复调用" in messages[2]["content"]
 
-    # 业务拒绝：工具自己回的「错误：…」原样透传，不被套上新前缀
+    # business refusal: the tool's own error text passes through with no extra prefix
     chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
     messages = [{"role": "user", "content": "读"}]
     run_loop(
@@ -202,11 +199,8 @@ def test_non_string_tool_result_is_serialised():
 
 
 def test_a_plain_task_finishes_no_matter_how_many_rounds_it_takes():
-    """没有轮数上限：12 轮工具调用仍是普通任务，照跑到模型自己收尾。
-
-    回归用例：旧代码把上限写死成 8，实测「逐轮读 9 个文件」这种小任务直接抛
-    RoundLimitExceeded。现在轮数这个限制在内核里不存在（设置里只有终端超时、
-    输出上限与一步内的并发数）。
+    """No round cap exists: 12 tool rounds still run to the model's own finish (regression
+    against the old hard-coded limit of 8, which raised RoundLimitExceeded).
     """
     chat = FakeChat(
         *[make_turn("读一个", [tool_call("read_file")]) for _ in range(12)],
@@ -223,15 +217,13 @@ def test_a_plain_task_finishes_no_matter_how_many_rounds_it_takes():
         )
         == "都读完了"
     )
-    # 12 轮都真的跑过：模型每轮都被再叫一次，工具结果逐条进上下文。
+    # all 12 rounds really ran: the model is called again each round
     assert len(chat.requests) == 13
 
 
 def test_one_turn_with_several_safe_calls_runs_them_concurrently():
-    """一次回复里 3 个读文件的调用在**同一轮**里并发跑（阶段 25 的默认档）。
-
-    判定用 `threading.Barrier(3)`：三个 handler 不重叠就会等超时，而这 3 个都是
-    并发安全工具（read_file），所以它们必须落在同一段里。
+    """Three read_file calls in one turn run concurrently: threading.Barrier(3) times out
+    unless all three handlers overlap.
     """
     barrier = threading.Barrier(3)
     seen: list[str] = []
@@ -264,7 +256,7 @@ def test_one_turn_with_several_safe_calls_runs_them_concurrently():
         == "读完"
     )
     assert sorted(seen) == ["a.txt", "b.txt", "c.txt"]
-    # 结果消息仍按源顺序落进 transcript（并发不改变 transcript 顺序）
+    # result messages keep source order in the transcript (concurrency does not reorder it)
     tool_messages = [m for m in messages if m.get("role") == "tool"]
     assert [m["tool_call_id"] for m in tool_messages] == ["c1", "c2", "c3"]
     assert [m["content"] for m in tool_messages] == [
@@ -275,7 +267,7 @@ def test_one_turn_with_several_safe_calls_runs_them_concurrently():
 
 
 def test_max_parallel_tools_one_restores_strictly_serial_dispatch():
-    """`max_parallel_tools=1` 时同轮多个调用逐个跑（旧行为，也用于评测对照）。"""
+    """With max_parallel_tools=1 same-turn calls run one by one (also an evaluation baseline)."""
     order: list[str] = []
 
     def reader(arguments, **kwargs):
@@ -305,10 +297,10 @@ def test_max_parallel_tools_one_restores_strictly_serial_dispatch():
 
 
 def test_exclusive_writes_in_one_turn_never_overlap_reads(hook_registry):
-    """同一轮里"写"是屏障：它与两侧的读在时间上不重叠（写坏了文件比慢更糟）。
-
-    用空注册表：默认的权限 hook 会让 `write_file` 在终端等人审批，那是别的用例的题目。
+    """A write is a barrier inside a turn: it must not overlap the reads around it (a corrupt
+    file is worse than latency).
     """
+    # No tool registry here: the default permission hook would block write_file on approval.
     spans: list[tuple[str, float, float]] = []
     lock = threading.Lock()
 
@@ -469,7 +461,7 @@ def test_non_object_arguments_never_reach_pre_tool_use(hook_registry):
 
 
 def test_denied_tool_calls_do_not_terminate_the_loop(hook_registry):
-    """被拒的调用既不是失败也不是终点：结果照常回给模型，循环继续到它自己收尾。"""
+    """A denied call is neither failure nor endpoint: the result goes to the model as usual."""
     hook_registry.register("PreToolUse", lambda ctx: BLOCK)
     chat = FakeChat(
         make_turn("", [tool_call("read_file", call_id="c1")]),
@@ -487,17 +479,15 @@ def test_denied_tool_calls_do_not_terminate_the_loop(hook_registry):
         )
         == "那我不读了"
     )
-    # 两次拒绝的文案都进了上下文（模型看得见"被拒了"，不是空结果）。
+    # both denial texts reach the context (the model sees the refusal, not an empty result)
     denied = [m for m in messages if m.get("role") == "tool"]
     assert len(denied) == 2
     assert all("Permission denied" in m["content"] for m in denied)
 
 
 def test_consecutive_denials_stop_the_run(hook_registry):
-    """连续被拒、期间一次都没通过 → 停下来，而不是一直重试。
-
-    现场（会话 01a0d277）：同一份探针被拒 15 次，每一轮都照样再要一次模型。判据是
-"连击"而不是"拒绝总数"——任何一次成功调用都会把它清零（见下一个用例）。
+    """A streak of denials with no success in between stops the run: the criterion is the streak,
+    not the total (any successful call clears it, see the next case).
     """
     hook_registry.register("PreToolUse", lambda ctx: BLOCK)
     chat = FakeChat(
@@ -516,14 +506,14 @@ def test_consecutive_denials_stop_the_run(hook_registry):
     )
 
     assert "停止" in text and "连续" in text
-    # 到阈值就停：没有再问第 MAX+1 轮（多给的轮次是给「没停住」留的失败信号）。
+    # stops at the threshold: round MAX+1 is never asked, so extra turns are the failure signal
     assert len(chat.requests) == MAX_CONSECUTIVE_DENIALS
     assert messages[-1]["role"] == "assistant"
     assert "停止" in messages[-1]["content"]
 
 
 def test_one_successful_call_clears_the_denial_streak(hook_registry):
-    """交替「被拒 → 通过」不算连击：普通任务里偶发的拒绝不该把整个运行判负。"""
+    """Alternating denied/passed calls is not a streak: occasional denials must not fail a run."""
     counter = {"n": 0}
 
     def roughly(context):
@@ -550,14 +540,12 @@ def test_one_successful_call_clears_the_denial_streak(hook_registry):
     assert text == "做完了"
 
 
-# ---------- A1：空答复 / 被上限截断不算「答完了」 ----------
+# ---------- A1: blank or length-truncated answers are not "done" ----------
 
 
 def test_blank_answer_notice_names_the_reason(hook_registry):
-    """A2 接进 A1：说明要写清"为什么没有正文"，而不是一句通用的空答复。
-
-    现场那条空响应的实际情形是"输出预算全花在思维链上"——修完 A2 之后，这句话可以从
-    数据里得出（思维链字符数 / 推理 token 数），不必再靠人翻 JSONL 才知道。
+    """The notice must name why there is no visible text instead of a generic blank answer:
+    the turn's reasoning characters and tokens make that reason computable.
     """
     skipped = make_turn("", finish_reason="length", reasoning="先看目录，再读文件。" * 2)
 
@@ -568,14 +556,14 @@ def test_blank_answer_notice_names_the_reason(hook_registry):
 
     assert "思维链" in text
     assert f"{len(skipped.reasoning)} 字符" in text
-    # 补问也要带上原因：模型得知道自己上一轮"想完就停"了。
+    # the nudge carries the reason too: the model must know it stopped after thinking
     nudge = [m for m in messages if m.get("role") == "user" and "可见正文" in m["content"]]
     assert len(nudge) == 1
     assert "思维链" in nudge[0]["content"]
 
 
 def test_blank_answer_notice_reports_reasoning_tokens(hook_registry):
-    """有推理 token 数就报出来：这一轮花掉的输出预算看得见。"""
+    """When reasoning tokens are reported, the notice prints them so the spend is visible."""
     spend = make_turn("", finish_reason="length")
     spend = replace(spend, usage=Usage(1, 900, 901, reasoning_tokens=880))
 
@@ -586,11 +574,8 @@ def test_blank_answer_notice_reports_reasoning_tokens(hook_registry):
 
 
 def test_empty_answer_is_not_accepted_as_final(hook_registry):
-    """没有可见正文的一轮不是终点：按一次 Stop 拦截处理，补问要一句可见答复。
-
-    现场（会话 01a0d277）：输出被上限截断 → 正文为空、无 tool_calls → 循环把它当成
-    「模型答完了」，整个运行以「成功 + 空答复」收尾，前端把空条目整条隐藏，用户看到的
-    是没有任何解释的结束。
+    """A round with no visible text is not final: it counts as one Stop block and the nudge asks
+    for a visible reply.
     """
     chat = FakeChat(
         make_turn("", finish_reason="length"),
@@ -600,15 +585,15 @@ def test_empty_answer_is_not_accepted_as_final(hook_registry):
 
     assert run_loop(messages, config=CONFIG, chat=chat) == "环境探测完成：无显示、无外网。"
     assert len(chat.requests) == 2
-    # 补问走 Stop nudge 那条通道（同一份预算、同一个事件、同一条消息出口）。
+    # the nudge rides the Stop-nudge channel (same budget, event and message exit)
     nudges = [m for m in messages if m.get("role") == "user" and "可见" in m["content"]]
     assert len(nudges) == 1
-    # 被截断的那一轮仍在上下文里：模型要看得见自己刚才没说完。
+    # the truncated round stays in context: the model must see it never finished
     assert messages.count(messages[1]) == 1
 
 
 def test_still_blank_after_the_nudge_ends_with_a_visible_notice(hook_registry):
-    """补问也补不出正文：用一条**可见**的 notice 收尾，绝不返回空串。"""
+    """Still blank after the nudge: end with a visible notice, never return an empty string."""
     chat = FakeChat(make_turn("", finish_reason="length"), make_turn(""))
     messages = [{"role": "user", "content": "做"}]
 
@@ -664,10 +649,8 @@ def test_large_output_hook_truncates_real_tool_output(hook_registry, monkeypatch
 
 
 def test_user_prompt_submit_injects_context(hook_registry):
-    """注入的上下文进**系统提示词**，用户消息保持原文。
-
-    以前注入被拼在 user content 前面，于是「用户说的话」里混进了内核写的环境信息：
-    界面无从分辨（它就是一条普通 user 消息），落库也存了注入后的版本。
+    """Injected context goes into the system prompt while the user message keeps its original
+    text: kernel-written environment info must never read as user speech.
     """
     hook_registry.register(
         "UserPromptSubmit", lambda ctx: ctx["injected"].append("[环境] 测试注入")
@@ -683,10 +666,8 @@ def test_user_prompt_submit_injects_context(hook_registry):
 
 
 def test_environment_block_lists_the_runs_tools(hook_registry):
-    """系统提示里的「可用工具」必须是本次运行真正发给模型的那一份。
-
-    subagent 只带 `SUB_TOOLS`（去掉自己）：用全局注册表渲染会让它的系统提示宣称能
-    调用 `subagent`，而调用只得到「未知工具」——白烧一轮。
+    """The "available tools" list in the system prompt must be the run's own list: rendering
+    from the global registry would advertise subagent to a subagent that cannot call it.
     """
     chat = FakeChat(make_turn("好的"))
     messages = [{"role": "user", "content": "读"}]
@@ -812,7 +793,7 @@ def test_stop_receives_run_statistics(hook_registry):
     assert seen == [(1, 0)]
 
 
-# ---------- 拒绝信息回传给模型 ----------
+# ---------- denial text travels back to the model ----------
 
 
 def test_hard_deny_message_reaches_the_model(hook_registry):
@@ -833,8 +814,8 @@ def test_hard_deny_message_reaches_the_model(hook_registry):
 
     assert executed == []
     assert "Permission denied." in messages[2]["content"]
-    # 没有询问通道时的拒绝文案：告诉模型「由用户在交互界面确认后重试」，
-    # 而不是旧语义里的「永久禁止」——毁灭级不再等于永久黑名单。
+    # Denial text with no ask channel: retry after user confirmation in the UI, not a permanent
+    # ban — destructive no longer means blacklisted forever.
     assert "没有可用的询问通道" in messages[2]["content"]
 
 
@@ -862,7 +843,7 @@ def test_block_without_denied_content_falls_back_to_the_default(hook_registry):
     assert messages[2]["content"] == "Permission denied."
 
 
-# ---------- todo_write 与 reminder ----------
+# ---------- todo_write and the reminder ----------
 
 
 def test_system_prompt_asks_for_a_plan_first(hook_registry):
@@ -918,7 +899,7 @@ def test_todo_state_does_not_leak_between_runs(hook_registry):
         registry={"read_file": lambda a: "x"},
     )
 
-    # 计划块由**本次运行**的 TodoList 渲染：上一轮的"任务A"不得出现在任何地方
+    # the plan block renders this run's TodoList only: no previous-run todo may appear anywhere
     assert all("任务A" not in str(m.get("content", "")) for m in messages)
     assert all(
         "任务A" not in str(m.get("content", ""))
@@ -928,7 +909,7 @@ def test_todo_state_does_not_leak_between_runs(hook_registry):
 
 
 def test_plan_block_follows_the_todo_list(hook_registry):
-    """计划块挂在每轮请求末尾（tail），随 todo_write 实时增减，且不进消息通道。"""
+    """The plan block rides the request tail, follows todo_write live, never enters messages."""
     chat = FakeChat(
         make_turn(
             "",
@@ -954,7 +935,7 @@ def test_plan_block_follows_the_todo_list(hook_registry):
     assert "当前计划" not in first, "提交前没有计划块"
     assert "当前计划" in second and "第一步" in second and "[~] 1. 第一步" in second
     assert "当前计划" not in third, "清空后计划块整个不渲染"
-    # tail 不落库：消息通道里没有一条内核写的计划
+    # the tail is not persisted: no kernel-written plan appears in the message channel
     assert not [m for m in messages if str(m.get("content", "")).startswith("[上下文]")]
 
 
@@ -978,21 +959,19 @@ def test_plan_is_visible_to_the_model_on_every_round(hook_registry):
 
     run_loop(messages, config=CONFIG, chat=chat)
 
-    # 提交计划之后的每一轮请求，末尾的 tail 都带着当前计划（不再是每 N 轮提醒一次）
+    # every request after submission carries the plan in its tail (no every-N-rounds reminder)
     assert "当前计划" not in chat.requests[0]["messages"][-1]["content"]
     for request in chat.requests[2:]:
         tail = request["messages"][-1]["content"]
         assert "当前计划" in tail and "1. a" in tail
 
 
-# ---------- 技能系统接入 ----------
+# ---------- skill system wiring ----------
 
 
 def point_skills_at(tmp_path, monkeypatch):
-    """把技能目录指到临时工作区。
-
-    技能目录是"运行级工作区根 / skills"，且在**构造时**解析（P2-18 之前是 import 时
-    绑定的模块常量）。所以这里换 cwd，而不是改模块常量——那个常量已经不存在了。
+    """Point the skills directory at a temp workspace: it resolves as "<workspace root>/skills"
+    at construction time, so this swaps cwd instead of a module constant.
     """
     from avid.agent import skills as skill_loader
 
@@ -1047,9 +1026,8 @@ def test_load_skill_returns_the_full_text_as_tool_result(hook_registry, tmp_path
 
 
 def test_load_skill_is_not_in_the_permission_gate(hook_registry, tmp_path, monkeypatch):
-    """load_skill 不进权限闸门：不在路径/写入工具表里，裁决恒为自动放行。
-
-    阶段 51 删除了 APPROVAL_RULES（按工具名审批的表），工具名到裁决的映射随之消失。
+    """load_skill never enters the permission gate: it is in neither PATH_TOOLS nor WRITE_TOOLS,
+    so the verdict is always auto-allow.
     """
     from avid.security.action import PATH_TOOLS, WRITE_TOOLS
     from avid.security.permission import brokerize, decide
@@ -1061,7 +1039,6 @@ def test_load_skill_is_not_in_the_permission_gate(hook_registry, tmp_path, monke
 
 
 def test_unknown_skill_returns_error_text_without_raising(hook_registry, tmp_path, monkeypatch):
-    """验收项：未知技能名返回错误文本且不抛出异常。"""
     point_skills_at(tmp_path, monkeypatch)
 
     chat = FakeChat(
@@ -1076,10 +1053,10 @@ def test_unknown_skill_returns_error_text_without_raising(hook_registry, tmp_pat
     assert result == "好的"
 
 
-# ---------- 压缩管线接入 ----------
+# ---------- compaction pipeline wiring ----------
 #
-# 编排细节（步骤顺序、阈值、一次性标志）在 tests/test_context.py 里测；
-# 这里只验循环确实把管线接上了、兜底重试只做一次、以及状态不跨运行泄漏。
+# Orchestration details (step order, thresholds, one-shot flags) live in tests/test_context.py;
+# here only the wiring, the single reactive retry and per-run state are checked.
 
 
 def test_context_pipeline_runs_before_every_model_call(hook_registry, monkeypatch):
@@ -1154,7 +1131,7 @@ def test_reactive_is_not_retried_twice(hook_registry, monkeypatch):
 
 
 def test_reactive_retry_sends_the_compressed_history(hook_registry, monkeypatch):
-    """重试必须拿压缩后的历史再发一次，不能把旧的原样重发。"""
+    """The retry must send the compressed history, never resend the old one unchanged."""
     from avid.providers.client import PromptTooLongError
 
     seen = []
@@ -1175,13 +1152,13 @@ def test_reactive_retry_sends_the_compressed_history(hook_registry, monkeypatch)
 
     run_loop([{"role": "user", "content": "x"}], config=CONFIG, chat=fake_chat)
 
-    # tail 块挂在请求末尾（不落库），所以历史本体看第一条就够
+    # the tail sits at the request end (not persisted), so the first message is the history
     assert seen[0][0] == "x"
     assert seen[1][0] == "压缩后的历史"
 
 
 def test_compaction_is_logged(hook_registry, caplog):
-    """压缩发生时 announce 的一行日志要在：界面与台账同源。"""
+    """Compaction emits one announce log line: the UI and the ledger share the same source."""
     from avid.agent.compaction import ContextBudget
     from avid.agent.events import CONTEXT_COMPACTED
 
@@ -1216,7 +1193,7 @@ def test_compaction_is_logged(hook_registry, caplog):
 
 
 def test_compaction_count_reaches_the_stop_hook(hook_registry):
-    """压缩计数要能被 Stop hook 看到（state.snapshot 一路带到终止裁决）。"""
+    """The compaction count reaches the Stop hook via state.snapshot."""
     from avid.agent.compaction import ContextBudget
 
     seen = []
@@ -1241,7 +1218,7 @@ def test_compaction_count_reaches_the_stop_hook(hook_registry):
 
 
 def test_run_state_is_created_per_run(hook_registry, monkeypatch):
-    """两次运行各有自己的 RunState——状态不跨运行泄漏。"""
+    """Each run gets its own RunState: state never leaks across runs."""
     states = []
 
     def fake_compact(self):
@@ -1268,15 +1245,12 @@ def test_run_state_is_created_per_run(hook_registry, monkeypatch):
 
 
 def test_injected_budget_lowers_the_compaction_threshold(tmp_path, hook_registry):
-    """`budget` 是评测做「单变量对照」的唯一开口；默认 None 时行为不变。
-
-    真读盘、真走压缩管线（不 monkeypatch 压缩函数）：5 份 20k 字符的文件把 transcript
-    推过注入的阈值，压缩应当发生且 before > after；同一份 transcript 在默认阈值
-    （400k）下不该有任何压缩。
-
-    用空 hook 注册表是为了让字符数可算——生产路径上 `large_output_hook` 会先把每个
-    工具结果截到 8000 字符，实机要达到同一个阈值需要更多轮。
+    """An injected budget lowers the compaction threshold (the only entry for single-variable
+    comparisons): five 20k-char files push the transcript past it, while the default 400k
+    threshold compacts nothing.
     """
+    # The hook registry stays empty so character counts are computable: in production
+    # large_output_hook truncates every tool result to 8000 chars first.
     from avid.agent.context import ContextBudget
 
     for index in range(5):
@@ -1313,11 +1287,7 @@ def test_injected_budget_lowers_the_compaction_threshold(tmp_path, hook_registry
 
 
 def test_loop_does_not_cap_the_output_budget(hook_registry):
-    """主轮次默认不设 max_tokens：上限交给服务商。
-
-    现场事故：固定 8000 被推理吃满 → 正文为空、无 tool_calls → 循环把它当成
-    「模型答完了」，整个运行以空答复「成功」收尾。
-    """
+    """Main rounds send no max_tokens: the cap belongs to the provider."""
     chat = FakeChat(make_turn("你好"))
 
     run_loop([{"role": "user", "content": "hi"}], config=CONFIG, chat=chat)

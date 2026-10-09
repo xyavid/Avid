@@ -1,13 +1,10 @@
 /**
- * 设置 → 会话存储（阶段 56）：会话目录在哪、由谁决定、怎么改。
- *
- * 只改「新会话写哪」——**不搬已有会话**，所以保存后旧目录里的会话原地不动，
- * 要搬是 `avid session migrate` 的事（界面把这句话写在这儿，不然人会以为改个路径
- * 会话就跟过去了）。来源是环境变量 AVID_SESSIONS_DIR 时整段只读：它赢过配置文件，
- * 允许在这里写会写出一个「保存成功但不生效」的假象。
- *
- * 「选择文件夹」复用工作区那套系统选择器（POST /api/workspaces/pick，只回路径）；
- * 拿不到选择器时按钮给出下一步（手输路径），不是死路。
+ * Settings → Session storage: where sessions live, who decides it and how to change it.
+ * Saving only redirects where new sessions are written — existing ones stay put, moving them is
+ * `avid session migrate`; when the source is the `AVID_SESSIONS_DIR` environment variable the whole
+ * section is read-only, because writing a setting that the env var overrides would fake a
+ * successful save. "Choose folder" reuses the workspace picker (POST /api/workspaces/pick, path
+ * only) and falls back to typing a path.
  */
 
 import { useEffect, useState } from 'react'

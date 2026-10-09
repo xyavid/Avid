@@ -1,23 +1,9 @@
-"""BYOK 模型配置：三层（Provider / Model / Binding）与 secret 引用解析。
+"""BYOK model config, the only source of model connections: `~/.avid/models.json` holds the
+providers + bindings pair and stores secret references only, while `~/.avid/secrets.json` maps
+secret_ref to the plaintext key and is written 0600 via a temp file and os.replace.
 
-模型连接的**唯一**来源（阶段 34b 起）：没有 BYOK 配置就没有模型可用，不存在
-env / 旧覆盖层回落。设计（参照 BYOK 配置规格，两处刻意偏离）：
-- 文件键名用 snake_case——Avid 全仓约定，文件是私有格式，没有外部互操作，
-  不值得为规格里的 camelCase 多一层名字映射；
-- **鉴权是隐式的**：密钥库里按 provider id 存了密钥，就按协议标准头发送
-  （Authorization / x-api-key / x-goog-api-key）；没存就不带鉴权头（本地服务）。
-  不再提供 bearer/header/none 的选择——那个维度只制造配置负担。
-
-两份文件（默认 `~/.avid/`，可用环境变量指到别处）：
-- `models.json`：providers + bindings，**只存引用不存明文**——按「配置会被泄露」
-  的假设设计，这份文件可以随意备份、分享；
-- `secrets.json`：secret_ref → 明文密钥，0600、临时文件 + os.replace 原子写。
-
-解析入口只有一个：`resolve_chat()`。优先级为本次运行覆盖（`providerId/modelId`
-ref，或命中绑定提供商的裸模型名）> chat 绑定；两者都不成立就是 ConfigError，
-文案给出可执行的修复步骤。损坏降级分两档：JSON 解析失败按「没有配置」处理并
-警告；结构非法（协议未知、引用不存在……）抛 ConfigError——文件可读但内容错时，
-静默换端点比报错更危险。
+A JSON parse failure degrades to "no config" with a warning, while a structurally invalid file
+raises ConfigError instead of silently switching endpoints.
 """
 
 from __future__ import annotations
@@ -43,7 +29,7 @@ PROTOCOL_OPENAI_COMPATIBLE = "openai-compatible"
 PROTOCOL_OLLAMA = "ollama"
 PROTOCOL_ANTHROPIC = "anthropic"
 PROTOCOL_RESPONSES = "responses"
-#: 协议枚举；映射到 providers/ 注册表的协议族（ollama 走它的 /v1 兼容端点）。
+#: Protocols mapped to registry families; ollama uses its OpenAI-compatible /v1 endpoint.
 PROTOCOLS = (
     PROTOCOL_OPENAI_COMPATIBLE,
     PROTOCOL_ANTHROPIC,
@@ -63,7 +49,7 @@ DEFAULT_PROTOCOL_BASE_URLS = {
     PROTOCOL_RESPONSES: "https://api.openai.com/v1",
 }
 
-#: 唯一的角色槽位。binding 值形如 "providerId/modelId"，null = 未绑定。
+#: The only role slot; a binding is "providerId/modelId" and null means unbound.
 CHAT_SLOT = "chat"
 BINDING_SLOTS = (CHAT_SLOT,)
 
@@ -72,10 +58,7 @@ _REF_PATTERN = re.compile(r"^([a-z0-9-]+)/(.+)$")
 
 CAPABILITY_FIELDS = ("tool_calling", "vision", "json_mode", "streaming", "reasoning")
 
-#: 推理强度的取值不在内核里写死：**模型声明的是档位列表**（`reasoning_efforts`），
-#: 运行时从列表里挑一个（`StartRunInput.reasoning_effort`），值原样发出去。
-#: 为什么是列表而不是枚举：各家的档位不一样（OpenAI 的 low/medium/high、有的端点认
-#: "max"、有的认 "minimal"），把内核当字典是替别人定调；配置的人最清楚自己的端点认什么。
+#: Effort levels come from the model's declared list and go out verbatim; the kernel keeps no enum.
 MAX_EFFORT_CHARS = 32
 
 
@@ -89,7 +72,7 @@ def secrets_path() -> Path:
     return Path(raw).expanduser() if raw else Path.home() / ".avid" / "secrets.json"
 
 
-# ---------------- 声明模型（内存态） ----------------
+# ---------------- Model declarations (in memory) ----------------
 
 
 @dataclass(frozen=True)
@@ -108,7 +91,7 @@ class ModelDecl:
     context_window: int | None = None
     max_output: int | None = None
     capabilities: ModelCapabilities = field(default_factory=ModelCapabilities)
-    #: 这个模型认哪些推理强度档位（界面把它们列出来供选）；空 = 不提这件事，请求里不带参数。
+    #: Effort levels this model accepts, offered in the UI; empty means the parameter is not sent.
     reasoning_efforts: tuple[str, ...] = ()
 
 
@@ -136,7 +119,7 @@ class ByokConfig:
     bindings: dict[str, str | None]
 
 
-# ---------------- 校验 ----------------
+# ---------------- Validation ----------------
 
 
 def _err(message: str) -> ConfigError:
@@ -211,7 +194,7 @@ def validate_byok(config: ByokConfig) -> None:
             )
 
 
-# ---------------- 文件 I/O ----------------
+# ---------------- File I/O ----------------
 
 
 def _write_json_atomic(path: Path, payload: Mapping[str, Any], *, owner_only: bool) -> Path:
@@ -287,8 +270,7 @@ def _parse_provider(raw: Any) -> ProviderDecl:
     for key in ("id", "label", "protocol", "base_url"):
         if not str(raw.get(key, "")).strip():
             raise _err(f"{where} 缺少 {key}")
-    # 旧版写下的 auth 块（bearer/header/none）不再有意义：鉴权已隐式化（见模块
-    # 注释），解析时静默忽略，免得打断已经存在的配置文件。
+    # A legacy auth block is silently ignored: auth is implicit now and old files must keep loading.
     headers = raw.get("headers") or {}
     extra_body = raw.get("extra_body") or {}
     if not isinstance(headers, dict) or not all(
@@ -314,7 +296,7 @@ def _parse_provider(raw: Any) -> ProviderDecl:
         if raw_efforts is None:
             efforts: tuple[str, ...] = ()
         elif isinstance(raw_efforts, str):
-            # 手编文件写成一个字符串也认（等价于只有一个档位的列表）
+            # A single string in a hand-edited file is accepted as a one-element list.
             efforts = (raw_efforts,)
         elif isinstance(raw_efforts, list) and all(isinstance(x, str) for x in raw_efforts):
             efforts = tuple(raw_efforts)
@@ -370,7 +352,7 @@ def parse_byok(raw: Mapping[str, Any]) -> ByokConfig:
 
 
 def load_byok(path: Path | None = None) -> ByokConfig | None:
-    """Read the BYOK config; None = 没有配置（含 JSON 损坏，警告后回落 legacy）。"""
+    """Read the BYOK config; None means no usable one (a parse failure warns and degrades)."""
     target = path or config_path()
     if not target.is_file():
         return None
@@ -382,7 +364,7 @@ def load_byok(path: Path | None = None) -> ByokConfig | None:
     return parse_byok(raw)
 
 
-# ---------------- secret 存取 ----------------
+# ---------------- Secret storage ----------------
 
 
 def read_secrets(path: Path | None = None) -> dict[str, str]:
@@ -418,11 +400,11 @@ def delete_secret(ref: str) -> None:
         write_secrets(secrets)
 
 
-# ---------------- 解析（角色 → 请求配置） ----------------
+# ---------------- Resolution (role -> request config) ----------------
 
 
 def _parallel_cap(env: Mapping[str, str] | None) -> int:
-    """max_parallel_tool_calls 是运行期开关，不是 per-provider 的，直接读环境。"""
+    """The parallel cap is a run-time switch, not per-provider, so it is read from the env."""
     return max_parallel_tool_calls(env)
 
 
@@ -434,12 +416,10 @@ def config_from_provider(
     secret: str | None = None,
     effort: str | None = None,
 ) -> Config:
-    """Resolve one provider+model into the runtime Config (secret plaintext included).
-
-    `secret` 覆盖密钥库查找——连通校验要在保存前对未落盘的 key 发请求，但不能有
-    写文件的副作用，所以明文走参数、只活在内存里。
-    鉴权隐式：密钥库有 provider id 的条目就带上（协议模块负责标准头），没有就
-    不带——本地服务（如 Ollama）不需要密钥，缺密钥不再是错误。
+    """Resolve one provider+model into the runtime Config (secret plaintext included); ``secret``
+    overrides the secret store so an unsaved key can be probed without file writes, and auth is
+    implicit — a key stored under the provider id is sent with the protocol's standard header,
+    while a missing one means no auth header, which local endpoints rely on.
     """
     if secret is None:
         secret = read_secrets().get(provider.id, "")
@@ -507,11 +487,9 @@ def resolve_chat(
     *,
     effort: str | None = None,
 ) -> Config:
-    """唯一解析入口：本次覆盖 > chat 绑定；没有可用的绑定就是 ConfigError。
-
-    `model` 是「本次运行用哪个模型」：`providerId/modelId` ref 直接定位；
-    裸模型名在 chat 绑定的提供商目录里找，找不到就报错（不再有 env 回落）。
-    `env` 只作用于运行期开关（并行工具上限）的读取来源。
+    """The single resolution entry point: this run's override wins over the chat binding, and no
+    usable binding raises ConfigError; ``model`` is a providerId/modelId ref or a bare model name
+    looked up in the bound provider only, while ``env`` only supplies the parallel-cap source.
     """
     override = (model or "").strip() or None
     chosen = (effort or "").strip() or None
@@ -527,7 +505,7 @@ def resolve_chat(
             "或把 bindings.chat 设为 providerId/modelId"
         )
     match = _REF_PATTERN.match(binding)
-    if match is None:  # validate_byok 已挡；防御手编文件绕过校验的路径
+    if match is None:  # Unreachable through parse_byok; guards a hand-edited config path.
         raise _err(f"绑定 chat 的值必须是 providerId/modelId 形式：{binding!r}")
     provider = _pick_provider(byok, match.group(1))
     model_id = match.group(2)
@@ -542,9 +520,8 @@ def resolve_chat(
 
 
 def byok_model_candidates() -> list[dict[str, Any]]:
-    """界面「按运行换模型」的 BYOK 候选：启用的提供商里 tool_calling≠false 的模型。
-
-    每个候选带上它声明的推理强度档位——界面据此列出来供选（列表由配置的人定）。
+    """BYOK candidates for per-run model switching: enabled providers' models with tool_calling not
+    false, each carrying its declared reasoning levels.
     """
     byok = load_byok()
     if byok is None:

@@ -1,14 +1,8 @@
-"""工作区文件浏览：Web 端「工作区文件」面板的只读后端。
-
-三条边界都在这一层（路由只翻协议）：
-- **只在工作区内**：路径交给工具层同一个 `workspace.resolve` —— 解析后判归属，
-  `..` 与 symlink 穿透都拦得住；
-- **凭据类不开放**：判据复用安全层的 `brokerize`（`sensitive_reason` + `.env` 规则），
-  与工具读文件走的是同一道闸——同一个仓库里「哪些文件不许读」只能有一个答案；
-- **有上限**：目录最多列 `MAX_ENTRIES` 条、预览最多 `MAX_PREVIEW_BYTES` 字节。
-  面板是给人看的，不是给整棵仓库做索引的；二进制只报「是二进制」，不猜编码。
-
-目录大小不给：要递归才知道，为一个面板不值当。判二进制只看开头那一段。
+"""Read-only backend of the workspace-files panel: paths resolve through the tools' own
+``workspace.resolve`` (blocking ``..`` and symlink escapes) and credential paths face the same
+``brokerize`` gate as file-reading tools, so the repository has one answer to which files may not
+be read. Listings cap at MAX_ENTRIES, previews at MAX_PREVIEW_BYTES, binaries are judged from the
+leading sample only, and directory sizes are not offered because they would take a full walk.
 """
 
 from __future__ import annotations
@@ -22,15 +16,15 @@ from .errors import FileMissing, FileNotDirectory, FileOutside, FileSensitive
 
 MAX_ENTRIES = 400
 MAX_PREVIEW_BYTES = 256 * 1024
-#: 二进制判定只看开头这段（整份读进来再判，等于把上限当摆设）。
+#: Binaries are judged from this leading sample only, or reading the whole file would void the cap.
 BINARY_SAMPLE_BYTES = 8192
 
 
 def _relative(root: Path, target: Path) -> str:
-    """相对工作区根的 POSIX 路径；根本身是空串。"""
+    """POSIX path relative to the workspace root; the root itself is the empty string."""
     try:
         text = target.relative_to(root.resolve()).as_posix()
-    except ValueError:  # 不该发生：进来之前已经判过归属
+    except ValueError:  # unreachable: ownership was checked before entering
         return ""
     return "" if text == "." else text
 
@@ -39,7 +33,7 @@ def _resolve(root: Path, relative: str) -> Path:
     target, problem = paths.resolve(relative or ".", root=root)
     if target is None:
         raise FileOutside(problem or "只能在当前工作区内浏览")
-    # 凭据类问安全层同一个问题：工具读文件走的就是这道闸。
+    # Credential paths ask the security layer the same question the file-reading tools ask.
     action = brokerize("read_file", {"path": str(target)}, root=str(root))
     if action.credentials or "secret_access" in action.capabilities:
         reason = action.credentials[0] if action.credentials else "密钥文件"
@@ -48,9 +42,8 @@ def _resolve(root: Path, relative: str) -> Path:
 
 
 def list_dir(root: Path, relative: str = "") -> dict[str, Any]:
-    """列一层目录：目录在前、名字序；超出上限截断并报出来。
-
-    返回形状就是线格式（与其余服务一致：services 只吐 dict，路由不搬字段）。
+    """List one directory level (directories first, name order), truncated at MAX_ENTRIES and
+    reported as such; the returned dict already is the wire shape, as in the other services.
     """
     target = _resolve(root, relative)
     if not target.is_dir():
@@ -63,7 +56,7 @@ def list_dir(root: Path, relative: str = "") -> dict[str, Any]:
     here = _relative(root, target)
     return {
         "path": here,
-        # 上一级相对路径；根目录为 None。
+        # Parent as a relative path; None at the root.
         "parent": None if here == "" else _parent_of(here),
         "entries": [_entry(root, child) for child in children[:MAX_ENTRIES]],
         "truncated": len(children) > MAX_ENTRIES,
@@ -71,7 +64,7 @@ def list_dir(root: Path, relative: str = "") -> dict[str, Any]:
 
 
 def read_text(root: Path, relative: str) -> dict[str, Any]:
-    """读一个文件的预览：文本给内容（可能截断），二进制只报事实（`text` 为 None）。"""
+    """Preview one file: text returns content (possibly truncated), a binary only the fact."""
     target = _resolve(root, relative)
     if not target.is_file():
         raise FileMissing(f"没有这个文件：{relative or '/'}")
@@ -97,7 +90,7 @@ def read_text(root: Path, relative: str) -> dict[str, Any]:
 def _entry(root: Path, child: Path) -> dict[str, Any]:
     is_dir = child.is_dir()
     try:
-        size = None if is_dir else child.stat().st_size  # 目录不给大小：要递归才知道
+        size = None if is_dir else child.stat().st_size  # no size for dirs: it needs a full walk
     except OSError:
         size = None
     return {

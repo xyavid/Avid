@@ -30,13 +30,13 @@ function emitter(): { send: (type: string, data: Record<string, unknown>, seq?: 
   }
 }
 
-/** 时间线上的正文与用户段，按顺序取出来断言。 */
+/** Assistant/user texts in timeline order, for assertions. */
 function texts(items: TimelineItem[], kind: 'assistant' | 'user'): string[] {
   return items.filter((item) => item.kind === kind).map((item) => (item.kind === kind ? item.text : ''))
 }
 
 beforeEach(() => {
-  // delta 合帧走 rAF；jsdom 没有实现，测试里同步触发（帧内合并不变）
+  // delta flushing uses rAF, absent in jsdom: fire it synchronously (same-frame merging stands)
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
     cb(0)
     return 1
@@ -70,7 +70,7 @@ describe('useRunStream（发送 → 订阅 → 段落归并 → 终态收尾）'
       full_access_ack: true,
     })
 
-    // 选了模型才带 model；不选时载荷与旧行为逐字一致（服务端按设置解析）
+    // model goes out only when chosen; otherwise the server resolves it from settings
     await act(async () => {
       await result.current.send('换个模型', false, 'deepseek-reasoner')
     })
@@ -84,7 +84,7 @@ describe('useRunStream（发送 → 订阅 → 段落归并 → 终态收尾）'
     })
     expect(startRun).toHaveBeenLastCalledWith('s1', { prompt: '还是跟随设置' })
 
-    // 分叉之后：只有非 main 才带 branch（main 与旧行为逐字一致）
+    // after a fork: branch goes out only when it is not main
     await act(async () => {
       await result.current.send('在分支上问', false, null, 'b2')
     })
@@ -101,7 +101,7 @@ describe('useRunStream（发送 → 订阅 → 段落归并 → 终态收尾）'
     await act(async () => {
       await result.current.send('你好', false)
     })
-    // 乐观段的 ts 是本地时钟的临时值（发送到事件到达之间），到达后被事件读数取代
+    // the optimistic ts is a local-clock placeholder until the event lands and replaces it
     expect(result.current.items).toEqual([
       { kind: 'user', entryId: null, text: '你好', ts: expect.any(Number) },
     ])
@@ -163,7 +163,7 @@ describe('useRunStream（发送 → 订阅 → 段落归并 → 终态收尾）'
       startedAt: 1000,
       endedAt: 1200,
     })
-    // 结果先落地、终态事件还没来：状态按结果文案定（与重读会话同一口径）
+    // the result lands before the terminal event: status comes from its text, as on reload
     expect(result.current.items[2]).toMatchObject({
       kind: 'tool',
       callId: 'c1',
@@ -192,7 +192,7 @@ describe('useRunStream（发送 → 订阅 → 段落归并 → 终态收尾）'
       bus.send('assistant_delta', { text: 'a' })
       bus.send('assistant_delta', { text: 'b' })
     })
-    // 帧没跑：state 保持原样（这正是合帧的目的一一回渲染不随 token 数增长）
+    // frame not run yet: state unchanged (merging keeps re-renders from growing with tokens)
     expect(texts(result.current.items, 'assistant')).toEqual([])
     act(() => {
       frames.splice(0).forEach((cb) => cb(0))
@@ -203,7 +203,7 @@ describe('useRunStream（发送 → 订阅 → 段落归并 → 终态收尾）'
       bus.send('assistant_delta', { text: 'c' })
       bus.send('assistant_message', { entry_id: 'e2', message: { role: 'assistant', content: '最终' } }, 5)
     })
-    // 最终消息权威：未刷帧的增量作废，不得接在最终文本之后
+    // the final message is authoritative: unflushed deltas are dropped, never appended after it
     expect(texts(result.current.items, 'assistant')).toEqual(['最终'])
   })
 
@@ -259,12 +259,12 @@ describe('useRunStream（发送 → 订阅 → 段落归并 → 终态收尾）'
     await waitFor(() => expect(result.current.phase).toBe('settling'))
     expect(result.current.error).toContain('timed out')
 
-    // 页面在终态事件后回拉用量，然后 settle —— 收尾不该把原因擦掉
+    // the page refetches usage, then settles — settling must not wipe the failure cause
     act(() => result.current.settle())
     expect(result.current.phase).toBe('idle')
     expect(result.current.error).toContain('timed out')
 
-    // 下一次运行才清：那是新的一件事
+    // cleared only by the next run: that is a new matter
     await act(async () => {
       await result.current.send('再问一句', false)
     })
@@ -311,7 +311,7 @@ describe('useRunStream（发送 → 订阅 → 段落归并 → 终态收尾）'
       )
     })
     act(() => {
-      // 两条增量交错的到达顺序 = 子先吐了一片、父接着吐
+      // interleaved arrival order: the sub-run speaks a piece first, then the parent
       emitter().send('assistant_delta', { text: '子说', subagent: { task: '统计 a.py', index: 0 } }, 0, 20)
       emitter().send('assistant_delta', { text: '父说' }, 0, 21)
     })
@@ -340,7 +340,7 @@ describe('useRunStream（发送 → 订阅 → 段落归并 → 终态收尾）'
       emitter().send('run_status', { round: 1, tokens: 10, usage: report(1234) })
     })
     act(() => {
-      // 子运行也会发 run_status（同一个事件名 + subagent 标记）：它的占用各算各的
+      // a sub-run also emits run_status (same name + subagent tag): its usage counts separately
       emitter().send('run_status', { round: 1, tokens: 10, usage: report(999), subagent: { task: '甲', index: 0 } })
     })
 
@@ -394,7 +394,7 @@ describe('useRunStream（发送 → 订阅 → 段落归并 → 终态收尾）'
     })
     expect(result.current.phase).toBe('idle')
     expect(result.current.approvals).toEqual([])
-    // 收尾不清段落：清了就等于「过程一个样、最后另起一个样」
+    // settling keeps items: clearing them would make the process and the ending diverge
     expect(texts(result.current.items, 'assistant')).toEqual(['在'])
     expect(result.current.items.map((item) => item.kind)).toEqual(['user', 'assistant'])
   })

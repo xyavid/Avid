@@ -1,8 +1,6 @@
 /**
- * 标签（组件墙 §标签）：padding 3px 9px、字号 --fs-hint（墙 11.5px）。
- * 变体只保留 token 能表达的三个：accent / danger / neutral。
- * 墙里的「墨蓝」「印章」两枚装饰变体是 Hana 的皮肤层内容，不搬——
- * Avid 需要新语义色时，回 token 层补，再在这里开变体。
+ * Tag: padding 3px/9px, `--fs-hint` label; variants stay limited to what tokens can express
+ * (accent / danger / neutral) — a new semantic color is added to the token layer first.
  */
 
 import type { HTMLAttributes } from 'react'

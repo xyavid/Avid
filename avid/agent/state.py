@@ -34,11 +34,8 @@ MAX_CONSECUTIVE_DENIALS = 5
 
 
 class Checkpointer(Protocol):
-    """files 工具写路径的写前快照契约；实现在 agent/checkpoints.py。
-
-    None=快照成功（或无需快照）；字符串=备份失败的错误文案，调用方必须拒绝写入，
-    不留无快照的改动。
-    """
+    """Write-ahead snapshot contract of the files-tool write paths (checkpoints.py), where None
+    means success and a string is the error text telling the caller to refuse the write."""
 
     def snapshot(self, path: Path) -> str | None: ...
 
@@ -69,7 +66,7 @@ class RunState:
     # Run-level switch that auto-answers approval prompts without widening what is questioned.
     auto_approve: bool = False
 
-    # 记录口径两值：normal（默认直接跑）/ full（完全访问）。架构已无模式阶梯。
+    # The two permission values: normal runs directly, full skips the danger prompt.
     permission_mode: str = PERMISSION_NORMAL
 
     # Run security spec (sandbox, audit), the one place tools read it from;
@@ -82,21 +79,19 @@ class RunState:
     # Workspace root for this run; None defers to tools.workspace.WORKSPACE_ROOT, read at call time.
     workspace_root: str | None = None
 
-    # 临时对话（阶段 54）：这个运行来自一个临时会话。三个消费方——工具表摘掉写入工具、
-    # 沙箱把工作区挂只读、环境块里写一句「这是临时对话」；子运行逐字段继承同一个事实。
+    # Scratch conversation: the run belongs to a temporary session. The tool table drops write
+    # tools, the sandbox mounts the workspace read-only, and a child run inherits the same fact.
     scratch: bool = False
 
-    # 本次运行的模型覆盖与推理强度（界面选的那两个，阶段 55）：子运行要用同一份——
-    # 不然用户选了 A 模型，子 agent 却按设置里的绑定 B 跑（花的还是钱）。
-    # None = 没有覆盖，按设置解析（与父运行同一条路）。
+    # Model override and effort for this run (chosen in the UI); None resolves through the settings.
+    # Child runs must reuse the same pair, or a subagent spends money on the model nobody picked.
     model_ref: str | None = None
     effort: str | None = None
 
     # Approval callback injection point; None falls back to the default stdin-based prompter.
     ask: AskUser | None = None
-    #: 模型主动提问的通道（阶段 58）：(question, options) -> 答案；None = 没有通道或没人答。
-    #: 与 ``ask``（毁灭级确认的 bool 通道）分开：那条路是安全裁决，这条是普通问答，
-    #: 混在一起会让「允许/拒绝」的语义漏进工具层。
+    #: Channel for a question the model asks: (question, options) -> answer. Kept apart from
+    #: ``ask``, the boolean danger-confirmation channel, or allow/deny semantics leak into tools.
     question: AskQuestion | None = None
 
     #: Steer channel, pulled by the run thread at turn boundaries; recorder stays the only writer.
@@ -177,7 +172,8 @@ class RunState:
                 full=self.permission_mode == PERMISSION_FULL,
                 root=self.workspace_root,
                 run_tag=self.run_tag,
-                # 临时对话直接构造 RunState 时也只有读沙箱——这条不能只挂在运行装配上
+                # A directly built scratch RunState also gets the read-only sandbox; this must not
+                # rest on the run wiring alone.
                 read_only=self.scratch,
             )
 
@@ -204,11 +200,9 @@ class RunState:
         model_ref: str | None = None,
         effort: str | None = None,
     ) -> "RunState":
-        """Build a run state and rescan skills; full 只由显式授权（full=True）产生。
-
-        A caller-supplied security spec is authoritative and reused as-is, so the enforcement
-        and the start event cannot disagree.
-        """
+        """Build a run state and rescan skills, where full comes only from an explicit full=True
+        grant and a caller-supplied security spec is reused as-is, so enforcement and the start
+        event cannot disagree."""
         is_full = full or permission_mode == PERMISSION_FULL
         return cls(
             auto_approve=auto_approve,
@@ -223,8 +217,8 @@ class RunState:
                 full=is_full,
                 root=workspace_root,
                 home=home,
-                # 临时对话（scratch）自带只读沙箱：这里与运行装配那条路必须是同一个事实，
-                # 否则直接构造 RunState 的调用方（CLI、测试）会拿到可写沙箱。
+                # Scratch carries the read-only sandbox on this path and on the run wiring alike, or
+                # callers that build RunState directly (CLI, tests) would get a writable one.
                 read_only=scratch,
                 audit_dir=audit_dir,
                 audit_enabled=audit_enabled,
@@ -245,7 +239,7 @@ class RunState:
         return self.ledger.path_grants()
 
     def security_summary(self) -> dict[str, Any]:
-        """Security snapshot（permission + 沙箱）carried into events and REST responses."""
+        """Security snapshot (permission plus sandbox) carried into events and REST responses."""
         if self.security is None:  # pragma: no cover - __post_init__ guarantees a value
             return {}
         return self.security.summary()

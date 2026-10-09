@@ -1,8 +1,5 @@
-"""RunSpec / Run（新流程骨架）：与旧 agent_loop 的序列一致性 + 新 API 行为钉。
-
-一致性是阶段 36 的验收 bar：同一份脚本化模型与工具，两条流程产出的
-messages 序列、on_message 顺序、每轮发给模型的请求（messages/system/tools）
-与最终返回值逐字节一致。行为分叉自阶段 37 起才允许发生。
+"""RunSpec.resolve defaults and Run behavior: outcomes and stop reasons, cancellation at a
+checkpoint, and the per-round RUN_STATUS events.
 """
 
 from __future__ import annotations
@@ -27,7 +24,7 @@ USER = {"role": "user", "content": "读 a.txt"}
 
 
 def drive(*turns, registry=None, messages=None):
-    """唯一循环跑一份脚本：结束结果返回给用例，脚本本身严格限制轮数。"""
+    """Run one scripted chat through the single loop and hand the outcome back."""
     base = messages if messages is not None else [dict(USER)]
     messages_run = [dict(m) for m in base]
     emitted: list[dict] = []
@@ -38,7 +35,7 @@ def drive(*turns, registry=None, messages=None):
     return outcome
 
 
-# ---------------- 一致性用例 ----------------
+# ---------------- run outcomes ----------------
 
 
 def test_single_round_answer_is_identical():
@@ -90,7 +87,7 @@ def test_blank_answer_nudge_and_notice_are_identical():
     assert outcome.reason == STOP_BLANK_NOTICE
 
 
-# ---------------- RunSpec.resolve 行为钉 ----------------
+# ---------------- RunSpec.resolve pins ----------------
 
 
 def test_resolve_defaults_cover_the_whole_old_signature():
@@ -103,7 +100,7 @@ def test_resolve_defaults_cover_the_whole_old_signature():
     assert spec.tool_names == [t["function"]["name"] for t in spec.tools]
     assert spec.max_tokens == DEFAULT_MAX_TOKENS
     assert spec.parallel_limit == CONFIG.max_parallel_tool_calls
-    # 测试环境 AVID_MODEL_INFO=off，窗口探测让位：config 原样保留
+    # AVID_MODEL_INFO=off in tests: no window probing, config kept as given
     assert spec.config is CONFIG
 
 
@@ -114,7 +111,7 @@ def test_resolve_honors_explicit_parallel_override():
 
 def test_resolve_uses_hooks_default_when_omitted():
     spec = RunSpec.resolve(config=CONFIG, chat=ScriptedChat())
-    assert spec.hooks is None  # 交给 RunState.for_run 落 DEFAULT_HOOKS
+    assert spec.hooks is None  # RunState.for_run fills in DEFAULT_HOOKS
 
 
 def test_prebuilt_hooks_instance_flow_through():
@@ -122,7 +119,7 @@ def test_prebuilt_hooks_instance_flow_through():
     assert spec.hooks is DEFAULT_HOOKS
 
 
-# ---------------- Run 行为钉 ----------------
+# ---------------- Run pins ----------------
 
 
 def test_run_accepts_prebuilt_state_and_records_round():
@@ -149,5 +146,5 @@ def test_run_emits_status_events_per_round():
     spec = RunSpec.resolve(config=CONFIG, chat=ScriptedChat(make_turn("答")))
     Run([dict(USER)], spec, on_event=lambda e: events.append((e.type, e.data))).run()
     statuses = [e for e in events if e[0] == RUN_STATUS]
-    assert len(statuses) == 2  # 每轮两次：模型调用前 + usage 回填后
+    assert len(statuses) == 2  # two per round: before the model call and after usage lands
     assert STOP_NUDGE not in {e[0] for e in events}

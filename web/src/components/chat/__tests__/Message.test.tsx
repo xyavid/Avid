@@ -11,7 +11,7 @@ describe('UserBubble（组件墙 §消息与工具卡）', () => {
   it('右对齐、accent 浅垫底、主文字色', () => {
     const { container } = render(<UserBubble>帮我读 pyproject.toml</UserBubble>)
 
-    // 文本现在落在 markdown 段落里，气泡样式在外层——按结构找气泡本体
+    // Text lands in markdown paragraphs; the bubble styles sit on the outer element.
     const bubble = container.querySelector('.bg-accent-light')
     expect(bubble?.textContent).toContain('帮我读 pyproject.toml')
     expect(bubble?.parentElement?.className).toContain('justify-end')
@@ -33,7 +33,7 @@ describe('AssistantMessage（报告 §7.3：头像行 + 正文分列）', () => 
     const { container } = render(<AssistantMessage>好，我去读文件。</AssistantMessage>)
 
     expect(screen.getByText('Avid')).toBeTruthy()
-    // 正文外层仍是衬线栈；文本落在 markdown 的段落里，样式靠继承
+    // The body wrapper keeps the serif stack; text lands in markdown paragraphs and inherits it.
     const body = container.querySelector('.serif-text')
     expect(body?.textContent).toContain('好，我去读文件。')
     expect(body?.querySelector('p')?.textContent).toBe('好，我去读文件。')
@@ -67,7 +67,7 @@ describe('AssistantMessage（报告 §7.3：头像行 + 正文分列）', () => 
 
     expect(screen.getByText(/正在生成/)).toBeTruthy()
     expect(container.querySelector('.serif-text')).toBeTruthy()
-    // 有文本时不再显示三点占位
+    // With text present the three-dot placeholder is gone.
     expect(screen.queryByLabelText('生成中')).toBeNull()
   })
 })

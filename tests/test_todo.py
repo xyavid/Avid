@@ -1,3 +1,5 @@
+"""todo_write: whole-list replacement with atomic validation, owned per RunState."""
+
 import inspect
 
 import pytest
@@ -18,7 +20,7 @@ def write(state, todos):
     return todo_write({"todos": todos}, state=state)
 
 
-# ---------- 状态模型 ----------
+# ---------- state model ----------
 
 
 def test_starts_empty(state):
@@ -65,7 +67,7 @@ def test_empty_list_clears(state):
     assert state.todo.items == []
 
 
-# ---------- 更新规则：整体替换 + 原子校验 ----------
+# ---------- update rule: whole-list replacement with atomic validation ----------
 
 
 def test_invalid_status_rejects_the_whole_update(state):
@@ -124,7 +126,7 @@ def test_only_one_in_progress_allowed(state):
     assert state.todo.items == []
 
 
-# ---------- 运行隔离：显式 RunState，不再是隐式全局状态 ----------
+# ---------- run isolation: explicit RunState, no implicit global ----------
 
 
 def test_two_runs_do_not_share_todo_state():
@@ -137,7 +139,8 @@ def test_two_runs_do_not_share_todo_state():
 
 
 def test_todo_write_requires_an_explicit_state():
-    """工具不再自己去全局注册表找状态——拿不到就该报错，而不是静默用错的那份。"""
+    """The tool no longer reads a global registry: missing state must error, not silently use the
+    wrong one."""
     parameters = inspect.signature(todo_write).parameters
 
     assert "state" in parameters

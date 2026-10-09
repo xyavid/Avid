@@ -1,12 +1,7 @@
 /**
- * 工具调用 → 一行「动作 + 目标」（时间线上的工具行）。
- *
- * 为什么不直接显示参数 JSON：过程要读的是「它做了什么、对谁做的」，参数是细节，
- * 点开卡片就有。未登记的工具（MCP 等）回落成「工具名 + 压缩参数」——宁可难看，
- * 不猜它的语义。
- *
- * 路径相对化只在工作区根以内发生：根以外的绝对路径原样显示，把它显示成相对路径
- * 会指向另一个文件。根由调用方下发（会话的工作区根），无根时一律原样。
+ * Tool call → one "verb + target" line for the timeline; unregistered tools (MCP) fall back
+ * to the tool name plus compacted arguments rather than guessing semantics. Paths are
+ * relativized only inside the workspace root, and with no root nothing is relativized.
  */
 
 import { parseArgs, stringField as field, subagentTasks } from '../../state/toolArgs'
@@ -14,13 +9,12 @@ import type { IconName } from '../../ui/Icon'
 
 export type ToolLabel = {
   icon: IconName
-  /** 动作词：读取 / 写入 / 编辑 / 执行 / 查找 / 搜索 / 子智能体…；未登记工具回落成工具名。 */
+  /** Action word; unregistered tools fall back to the tool name. */
   verb: string
-  /** 目标：相对路径、命令首行、pattern、任务名。空串 = 这条调用没有可读目标。 */
+  /** Relative path, command first line, pattern or task name; empty = nothing readable. */
   target: string
 }
 
-/** 未登记工具的图标：通用的文件帧。 */
 const FALLBACK_ICON: IconName = 'file-frame'
 
 function relativeTo(path: string, root: string | null | undefined): string {
@@ -29,7 +23,6 @@ function relativeTo(path: string, root: string | null | undefined): string {
   return path.startsWith(prefix) ? path.slice(prefix.length) : path
 }
 
-/** 多行命令只看首行：折叠行只有一行位置，剩下的进展开态。 */
 function firstLine(text: string): string {
   return (text.split('\n', 1)[0] ?? '').trim()
 }
@@ -42,7 +35,7 @@ function todoCount(parsed: Record<string, unknown> | null): string {
 export function toolLabel(name: string, args: string, root?: string | null): ToolLabel {
   const parsed = parseArgs(args)
   const text = (key: string) => field(parsed, key)
-  // 参数不是合法 JSON（半截流、上游塞了裸串）时原样当目标：宁可难看，不能空着让人猜。
+  // Invalid JSON args (partial stream, bare string) are shown as the target instead of blank.
   const raw = parsed === null ? args.trim() : ''
   const or = (value: string) => value || raw
   switch (name) {
@@ -65,7 +58,7 @@ export function toolLabel(name: string, args: string, root?: string | null): Too
     case 'subagent': {
       const tasks = subagentTasks(args)
       return {
-        // 子智能体有自己的图标（机器人头）：`git-branch` 留给「分支」那个动作，两件事别共用一个记号
+        // bot icon: `git-branch` is reserved for the branch action — do not share the mark.
         icon: 'bot',
         verb: '子智能体',
         target: or(tasks.length === 1 ? tasks[0]! : tasks.length > 1 ? `${tasks.length} 个子任务` : ''),

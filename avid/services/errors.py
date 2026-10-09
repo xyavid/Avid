@@ -136,14 +136,14 @@ class PickerFailed(ServiceError):
 
 
 class FileOutside(ServiceError):
-    """浏览路径越出工作区（含 `..` 与 symlink 穿透）。"""
+    """A browsed path escapes the workspace, through ``..`` or a symlink."""
 
     code = "file_outside"
     status = 403
 
 
 class FileSensitive(ServiceError):
-    """凭据类路径不开放浏览；判据与工具读文件同一道闸。"""
+    """Credential paths are not browsable; the gate is the one that guards file-reading tools."""
 
     code = "file_sensitive"
     status = 403
@@ -155,7 +155,7 @@ class FileNotDirectory(ServiceError):
 
 
 class FileMissing(ServiceError):
-    """目标文件或目录不存在（含读不动：权限、竞态删除）。"""
+    """Target file or directory is missing, including unreadable ones (permissions, races)."""
 
     code = "file_missing"
     status = 404

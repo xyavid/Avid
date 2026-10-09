@@ -16,7 +16,7 @@ describe('代码块（高亮）', () => {
     expect(container.querySelector('.text-syntax-keyword')?.textContent).toBe('def')
     expect(container.querySelector('.text-syntax-comment')?.textContent).toBe('# 求和')
     expect(container.querySelector('.text-syntax-number')?.textContent).toBe('1')
-    // 拼回去 == 原文
+    // concat === source
     expect(container.querySelector('pre code')?.textContent).toBe(code)
   })
 

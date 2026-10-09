@@ -1,7 +1,7 @@
-"""终端桥的 WebSocket 用例：回环、守卫、生命周期。
+"""Terminal WebSocket bridge: echo roundtrip, guards, and lifecycle.
 
-TestClient 的 websocket_connect 走真实握手；shell 用测试进程的 SHELL，
-echo 回环足以钉住「写入到 PTY → 读回输出」的主链路。
+TestClient performs a real handshake and the shell is the test process's SHELL, so an
+echo roundtrip pins writing to the PTY and reading the output back.
 """
 
 from __future__ import annotations
@@ -24,14 +24,14 @@ def client(sandbox: Path):
         base_url="http://127.0.0.1:8765",
     )
     yield client
-    # 工作区注册表是用户级的（~/.avid/workspaces.json），测试登记过的要拆掉
+    # the workspace registry is user-level (~/.avid/workspaces.json); undo test registrations
     for item in client.get("/api/workspaces").json()["workspaces"]:
         if str(sandbox) in (item.get("root") or ""):
             client.delete(f"/api/workspaces/{item['id']}")
 
 
 def _register_workspace(client: TestClient, path: Path) -> str:
-    """登记工作区并返回其根目录；重复登记（409）按既有条目处理。"""
+    """Registers a workspace and returns its root; a 409 means the existing entry."""
     response = client.post("/api/workspaces", json={"path": str(path)})
     if response.status_code == 409:
         detail = response.json()["error"]["detail"]
@@ -42,7 +42,7 @@ def _register_workspace(client: TestClient, path: Path) -> str:
 
 
 def _read_until(ws, needle: str, cap: int = 300) -> str:
-    """收集下行帧直到出现 needle（bash 启动横幅在前，帧数不固定）。"""
+    """Collects down frames until needle appears (the startup banner makes the frame count vary)."""
     seen: list[str] = []
     for _ in range(cap):
         frame = json.loads(ws.receive_text())
@@ -56,7 +56,7 @@ def _read_until(ws, needle: str, cap: int = 300) -> str:
 
 
 def test_terminal_echo_roundtrip_in_the_workspace(client: TestClient, sandbox: Path):
-    """写入 PTY 的命令在登记的工作区里执行，输出原样流回。"""
+    """A command written to the PTY runs in the registered workspace and streams back as-is."""
     root = _register_workspace(client, sandbox)
     with client.websocket_connect(
         f"/api/ws/terminal?root={root}&cols=80&rows=24"
@@ -68,7 +68,7 @@ def test_terminal_echo_roundtrip_in_the_workspace(client: TestClient, sandbox: P
 
 
 def test_terminal_refuses_an_unregistered_root(client: TestClient):
-    """root 必须是已登记工作区：任意目录不给开 shell。"""
+    """root must be a registered workspace: arbitrary directories get no shell."""
     with client.websocket_connect("/api/ws/terminal?root=/tmp/not-registered") as ws:
         frame = json.loads(ws.receive_text())
         assert frame["type"] == "error"
@@ -76,35 +76,36 @@ def test_terminal_refuses_an_unregistered_root(client: TestClient):
 
 
 def test_terminal_rejects_a_foreign_origin(client: TestClient, sandbox: Path):
-    """WS 不走 TrustBoundaryMiddleware，Origin 校验自己补。"""
+    """WS bypasses TrustBoundaryMiddleware, so the Origin check is done here."""
     _register_workspace(client, sandbox)
     with pytest.raises(WebSocketDisconnect):
         with client.websocket_connect(
             f"/api/ws/terminal?root={sandbox}&cols=80&rows=24",
             headers={"origin": "http://evil.example"},
         ):
-            pass  # 握手即被拒：连接根本建立不起来
+            pass  # rejected at the handshake: the connection never opens
 
 
 def test_terminal_closing_the_socket_kills_the_shell(client: TestClient, sandbox: Path):
-    """生命周期跟连接走：socket 断开，shell 进程组必须被收割（不留孤儿）。"""
+    """Lifecycle follows the connection: when the socket closes the shell process group must
+    be reaped (no orphans)."""
     import subprocess
 
     root = _register_workspace(client, sandbox)
     marker_file = sandbox / "orphan-probe"
     with client.websocket_connect(f"/api/ws/terminal?root={root}&cols=80&rows=24") as ws:
         ws.send_text(json.dumps({"type": "in", "data": f"sleep 30 && touch {marker_file}\r"}))
-        _read_until(ws, "$")  # 等提示符出现再断开（sleep 已在跑）
+        _read_until(ws, "$")  # wait for the prompt so sleep is already running
     import time
 
     time.sleep(0.5)
     assert not marker_file.exists(), "断开连接后 sleep 进程组没有被收割"
-    # 清理可能还在跑的 sleep（组被杀则它早死了；双保险）
+    # clean up a sleep that may still be running (belt and braces)
     subprocess.run(["pkill", "-f", "sleep 30"], check=False)
 
 
 def test_terminal_survives_non_object_frames(client: TestClient, sandbox: Path):
-    """评审 L1：数字/字符串之类的坏帧跳过不杀连接，后续正常帧照常工作。"""
+    """Bad frames (numbers, strings) are skipped without killing the connection."""
     root = _register_workspace(client, sandbox)
     with client.websocket_connect(f"/api/ws/terminal?root={root}&cols=80&rows=24") as ws:
         for bad in ("5", "null", '"x"', "[1]"):
@@ -114,7 +115,7 @@ def test_terminal_survives_non_object_frames(client: TestClient, sandbox: Path):
 
 
 def test_terminal_rejects_cross_port_origin(client: TestClient, sandbox: Path):
-    """评审 M4：hostname 在白名单但端口与本服务不一致的本机页面，不许驱动 shell。"""
+    """A local page whose hostname is allowlisted but whose port differs may not drive the shell."""
     _register_workspace(client, sandbox)
     with pytest.raises(WebSocketDisconnect):
         with client.websocket_connect(

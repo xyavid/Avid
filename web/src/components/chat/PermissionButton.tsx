@@ -1,9 +1,8 @@
 /**
- * 权限按钮（输入区左侧的「态势」胶囊）：chip 反映**这次运行是否完全访问**，
- * 点击弹出两态卡片——默认（毁灭级命令会问你一次）/ 完全访问（跳过确认、关沙箱）。
- * 完全访问不能点一下就开：先出确认块，显式「确认开启」才回调；降级回默认不设
- * 确认（收回授权是安全方向）。发送时 hook 按这个布尔附 full_access_ack
- * （见 StartRunInput）——界面只表达意图，服务端仍按显式凭据授权。
+ * Permission chip in the composer: shows whether this run has full access (skips the
+ * destructive-command confirmation, turns the sandbox off) and opens the two-state card.
+ * Enabling full access takes an explicit confirm click while returning to default does not;
+ * on send the hook attaches `full_access_ack` — the UI only states the intent.
  */
 
 import { useEffect, useState } from 'react'

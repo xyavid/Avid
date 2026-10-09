@@ -1,8 +1,8 @@
-"""CLI 的会话旗标：新建、续接、列举、销毁。
+"""CLI session flags: create, continue, list, delete.
 
-端到端跑真 CLI：只把模型换成 ``FakeChat``（替换 ``cli.agent_loop`` 注入），
-循环、会话、文件落盘都是真的。工作区根目录被换成 tmp_path，会话因此写在
-AVID_HOME（conftest 指到临时目录）下的 ``sessions/<工作区 id>/``。
+End to end through the real CLI with only the model swapped for a FakeChat: loop, sessions
+and file writes are real, the workspace root becomes tmp_path, and sessions land under
+AVID_HOME's sessions/<workspace id>/.
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ def make_turn(text="回答"):
 
 
 class Model:
-    """按需安装一个返回固定回答的假模型（换掉 spec.chat，其余走真 Run）。"""
+    """Install a fake model answering fixed texts (spec.chat swapped, the real Run stays)."""
 
     def __init__(self, monkeypatch):
         self.monkeypatch = monkeypatch
@@ -70,7 +70,7 @@ class Model:
 
 @pytest.fixture
 def sandbox(monkeypatch, tmp_path: Path, hook_registry) -> Path:
-    # 模型配置由 conftest 的 model_env 种好（test/test-model）
+    # conftest's model_env seeds the model config
     monkeypatch.setattr(workspace, "WORKSPACE_ROOT", tmp_path)
     return tmp_path
 
@@ -81,7 +81,7 @@ def model(monkeypatch) -> Model:
 
 
 def session_dir(root: Path) -> Path:
-    """会话目录（阶段 56）：专用目录下按工作区 id 分的那个子目录，不在工作区里。"""
+    """The session directory: <store>/<workspace id>, not inside the workspace."""
     from avid.services.workspace_registry import sessions_root
     from avid.services.workspaces import bound_workspace
 
@@ -108,7 +108,7 @@ def entries_of(path: Path) -> list[dict]:
     return records
 
 
-# ---------------- 新建与续接 ----------------
+# ---- create and continue ----
 
 
 def test_new_session_runs_and_records(sandbox, model, capsys):
@@ -178,7 +178,7 @@ def test_plain_agent_run_does_not_create_sessions(sandbox, model, capsys):
     assert not session_dir(sandbox).exists()
 
 
-# ---------------- 列举与销毁 ----------------
+# ---- list and delete ----
 
 
 def test_list_sessions_shows_name_and_count(sandbox, model, capsys):
@@ -191,7 +191,7 @@ def test_list_sessions_shows_name_and_count(sandbox, model, capsys):
     row = out.strip().splitlines()[0].split("\t")
     assert row[0] == created
     assert row[2] == "2"
-    # 阶段 18 起列表多一列归属工作区，名字后移一位。
+    # The list has a workspace column, so the name is one field later
     assert row[3].startswith("w-")
     assert row[4] == "演示会话"
 
@@ -214,7 +214,7 @@ def test_delete_session_removes_the_file(sandbox, model, capsys):
     assert "没有这个会话" in capsys.readouterr().err
 
 
-# ---------------- 参数校验 ----------------
+# ---- argument validation ----
 
 
 @pytest.mark.parametrize(
@@ -222,7 +222,7 @@ def test_delete_session_removes_the_file(sandbox, model, capsys):
     [
         ["--session", "a", "--new-session", "问"],
         ["--session-name", "名字", "--agent", "问"],
-        # --permission 已删（阶段 51）：权限模式不存在，完全访问只有 --allow-full-access。
+        # No --permission flag: full access comes only from --allow-full-access
         ["--agent", "--permission", "auto", "问"],
     ],
 )
@@ -233,7 +233,8 @@ def test_argument_errors_exit_2(sandbox, argv):
 
 
 def test_no_prompt_enters_the_interactive_session(sandbox, monkeypatch):
-    """无参数 = 交互会话（默认续接最近会话）；EOF 立即退出且返回 0。"""
+    """No arguments enters the interactive session (continuing the most recent one); EOF exits
+    with status 0."""
 
     def eof(prompt=""):
         raise EOFError()
@@ -244,7 +245,7 @@ def test_no_prompt_enters_the_interactive_session(sandbox, monkeypatch):
     assert cli.main([]) == 0
 
 
-# ---------------- 工作区（阶段 18） ----------------
+# ---- workspaces ----
 
 
 def test_new_session_records_the_selected_workspace(sandbox, model, capsys, tmp_path):
@@ -257,7 +258,7 @@ def test_new_session_records_the_selected_workspace(sandbox, model, capsys, tmp_
     err = capsys.readouterr().err
     assert "工作区 w-" in err
     assert str(other) in err
-    assert session_files(sandbox) == []  # 会话落在被选中的工作区里
+    assert session_files(sandbox) == []  # the session lands in the selected workspace
     assert len(session_files(other)) == 1
 
 
@@ -273,9 +274,9 @@ def test_session_list_shows_the_workspace_column(sandbox, model, capsys):
 
 
 def test_run_state_carries_the_workspace_and_the_default_permission(sandbox, model, monkeypatch, capsys):
-    """没有工作区默认权限、也没有 --permission：不给旗标就是 normal，沙箱照常请求强制隔离。"""
-    # 沙箱后端是宿主事实（CI runner 上通常没有 bwrap）：注入一个可用探针，把断言钉在
-    # 「CLI 请求了强制隔离」而不是「这台机器装了 bwrap」。
+    """With no flag the run is normal and still requests an enforced workspace sandbox."""
+    # The backend is a host fact (CI runners rarely have bwrap): inject a working probe so
+    # the assertion pins the CLI's request, not the machine.
     probe = BackendProbe(
         backend=BACKEND_BWRAP,
         binary="/usr/bin/bwrap",
@@ -301,8 +302,8 @@ def test_run_state_carries_the_workspace_and_the_default_permission(sandbox, mod
 
     assert cli.main(["--agent", "--new-session", "问"]) == 0
 
-    # 权限与工作区根都装在那份运行级规格里（state.security）：少一处转发就是
-    # "界面说 normal、实际按别的形态跑"，所以断言读的是**真正传给循环的那份 state**。
+    # Permission and workspace root live in the run spec (state.security), so the assertions
+    # read the state actually handed to the loop.
     state = seen.get("state")
     assert state.permission_mode == "normal"
     assert state.workspace_root == ws.root
@@ -313,7 +314,8 @@ def test_run_state_carries_the_workspace_and_the_default_permission(sandbox, mod
 
 
 def test_allow_full_access_turns_on_full_permission(sandbox, model, monkeypatch, capsys):
-    """完全访问的唯一开关是 --allow-full-access：跳过毁灭级确认、关沙箱。"""
+    """--allow-full-access is the only switch for full access: it skips destructive
+    confirmation and disables the sandbox."""
     seen = {}
 
     class FakeRun:
@@ -346,13 +348,13 @@ def test_workspace_subcommand_add_list_remove(sandbox, capsys, tmp_path):
     assert cli.main(["workspace", "list"]) == 0
     assert "另一个" in capsys.readouterr().out
 
-    # `workspace permission` 子命令已删（阶段 51）：argparse 直接拒。
+    # The `workspace permission` subcommand is gone: argparse rejects it
     with pytest.raises(SystemExit) as info:
         cli.main(["workspace", "permission", added[0], "auto"])
     assert info.value.code == 2
 
     assert cli.main(["workspace", "remove", added[0]]) == 0
-    # 摘掉 = 立墓碑：候选里没有了，但会话与条目都留着（`add` 同一个路径即撤销）。
+    # Removing leaves a tombstone: not a candidate, but sessions and entries stay
     assert "会话与磁盘数据都留着" in capsys.readouterr().out
     assert cli.main(["workspace", "list"]) == 0
     assert "另一个" not in capsys.readouterr().out
@@ -368,10 +370,8 @@ def test_workspace_subcommand_reports_unknown(monkeypatch, capsys, tmp_path):
 
 
 def test_cli_never_writes_the_registry(sandbox, model, capsys, tmp_path):
-    """CLI 的读与跑都不写注册表：只有 `avid workspace add` 会写。
-
-    启动/日常使用写盘会让"注册表里有什么"取决于你用没用过它，而不是你登记了什么。
-    """
+    """Reading and running write no registry (only `avid workspace add` does), so the file lists
+    what you registered, not what you ran."""
     registry_file = tmp_path / "avid-home" / "workspaces.json"
     model.answer("答")
 
@@ -400,7 +400,8 @@ def test_workspace_add_reports_a_duplicate_without_adding_twice(sandbox, capsys,
 
 
 def test_interactive_turn_skill_and_unknown_command(sandbox, model, monkeypatch, capsys, tmp_path):
-    """交互会话：普通输入走一次运行；/技能 全文写入会话；未知命令给提示不发模型。"""
+    """Plain input runs once; a /skill writes its full text into the session; an unknown
+    command only prints the hint and calls no model."""
     model.answer("答")
     (tmp_path / "skills" / "demo").mkdir(parents=True)
     (tmp_path / "skills" / "demo" / "SKILL.md").write_text(
@@ -422,10 +423,10 @@ def test_interactive_turn_skill_and_unknown_command(sandbox, model, monkeypatch,
     out, err = capsys.readouterr()
     assert "答" in out
     assert "已载入技能 demo" in err
-    assert "/compact" in err and "/demo" in err   # 未知命令提示列出可用命令与技能
+    assert "/compact" in err and "/demo" in err   # the hint lists commands and skills
     assert "没有可压缩的更早历史" in err
 
-    # 技能全文确实写入了会话（落库、可续接）
+    # The skill text really lands in the session (recorded, resumable)
     from avid.services.workspace_registry import sessions_root
     from avid.session import JsonlSessionRepo, messages_for_branch
 
@@ -446,8 +447,10 @@ def test_interactive_turn_skill_and_unknown_command(sandbox, model, monkeypatch,
 def test_interactive_rewind_restores_files_and_moves_the_tip_back(
     sandbox, monkeypatch, capsys
 ):
-    """/rewind：文件恢复到该输入之前，第二问及其全部后续移出对话（孤儿留在盘上）。"""
-    # Model.answer 只会包装纯文本回合；这里要真 write_file（写前快照 + 落盘），自己接 FakeRun。
+    """/rewind restores files to before that input and drops the following turns from the
+    conversation; orphans stay on disk.
+    """
+    # Model.answer only wraps plain-text turns; a real write_file needs FakeRun wired by hand
     chat = FakeChat(
         scripted_turn("", [tool_call("write_file", '{"path": "notes.txt", "content": "第一版"}')]),
         scripted_turn("第一答"),
@@ -502,11 +505,11 @@ def test_interactive_rewind_restores_files_and_moves_the_tip_back(
 
 
 
-# ---------------- 会话目录与旧布局迁移（阶段 56） ----------------
+# ---- session store and legacy migration ----
 
 
 def legacy_session_file(root: Path, session_id: str = "s-legacy") -> Path:
-    """在旧布局（<工作区根>/.avid/sessions）里造一个真会话。"""
+    """Create a real session in the legacy layout (<workspace root>/.avid/sessions)."""
     from avid.services.workspace_registry import derive_id
     from avid.session import JsonlSessionRepo
 
@@ -537,7 +540,7 @@ def test_session_dir_hints_at_sessions_left_in_the_old_layout(sandbox, capsys):
 
 
 def test_session_migrate_moves_them_and_listing_still_finds_them(sandbox, capsys):
-    """搬完还能按 id 列出来——迁移不是搬走就找不到了。"""
+    """After the move they are still listed by id: migrating must not lose them."""
     legacy_session_file(sandbox)
 
     assert cli.main(["session", "migrate", "--yes"]) == 0
@@ -574,7 +577,7 @@ def test_session_migrate_with_nothing_to_do_is_not_an_error(sandbox, capsys):
 
 
 def test_session_migrate_takes_a_store_root_through_from(sandbox, capsys, tmp_path):
-    """`--from` 指一个旧的集中目录：按下面的工作区 id 子目录认归属。"""
+    """--from names an old central store: its workspace id subdirectory carries ownership."""
     from avid.services.workspace_registry import derive_id
     from avid.session import JsonlSessionRepo
 
@@ -593,11 +596,13 @@ def test_session_migrate_takes_a_store_root_through_from(sandbox, capsys, tmp_pa
 
 
 def test_session_migrate_finds_the_previous_store_through_the_index(sandbox, capsys, tmp_path):
-    """改过会话目录之后，旧位置只有索引记得——`avid session migrate` 要能顺着这条线索找回去。"""
+    """After the store moves only the index remembers the old location, and migrate must
+    follow that lead back.
+    """
     from avid.index import db as index_db
     from avid.index.writer import indexed_store_root, record_store_root
 
-    legacy_session_file(sandbox)  # 现在 cwd 下的旧布局里有一个会话
+    legacy_session_file(sandbox)  # a session exists in the legacy layout under cwd
     legacy = str(sandbox / ".avid" / "sessions")
     conn = index_db.open_db()
     try:
@@ -606,7 +611,7 @@ def test_session_migrate_finds_the_previous_store_through_the_index(sandbox, cap
     finally:
         conn.close()
 
-    # 把当前会话目录指到别处（模拟「改过位置」），cwd 的旧布局照旧存在
+    # Point the current store elsewhere; the legacy layout under cwd stays
     target = tmp_path / "moved-sessions"
     monkeypatch_env = {"AVID_SESSIONS_DIR": str(target)}
 

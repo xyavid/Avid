@@ -1,13 +1,7 @@
 /**
- * 消息动作行（阶段 14）：悬停在一条消息上时，消息**底部**浮出一行小动作。
- *
- * 两条纪律：
- *   · **隐藏直到需要**——平时 `opacity-0`，鼠标悬停或键盘聚焦才淡入（和会话项上的
- *     置顶/归档同一套），免得每一轮对话下面都挂着一排按钮；
- *   · **用户消息没有「分支」**——分叉点是模型的回答（从那里再问一遍、换个方向继续），
- *     用户自己的话分叉没有意义。组件用「有没有给 onBranch」表达这件事，调用方不传即没有。
- *
- * 复制复制的是**原文**（助手侧是 markdown 源码，不是渲染后的文本）——粘到别处仍然成形。
+ * Hover-revealed action row under a message; copy takes the original text (markdown source
+ * on the assistant side). The branch button only exists when `onBranch` is passed — user
+ * messages have no fork point.
  */
 
 import { useState } from 'react'
@@ -17,9 +11,8 @@ import { cx } from '../../ui/cx'
 import { Icon } from '../../ui/Icon'
 
 export type MessageActionsProps = {
-  /** 要复制的原文。 */
   text: string
-  /** 给了才显示「分支」；参数无（分叉点由调用方闭包带上）。 */
+  /** Given, the branch button appears; the fork point travels in the caller's closure. */
   onBranch?: () => void
   className?: string
 }

@@ -15,11 +15,11 @@ from avid.agent.hooks import (
 
 @pytest.fixture
 def clean() -> HookRegistry:
-    """每个用例一份空注册表：自己注册需要的回调，不碰进程级那份。"""
+    """A fresh empty registry per test: register your own callbacks, never the shared one."""
     return HookRegistry()
 
 
-# ---------- 注册表与调用约定 ----------
+# ---- registry and calling convention ----
 
 
 def test_no_hooks_means_allow(clean):
@@ -122,7 +122,7 @@ def test_register_hook_works_as_a_decorator(clean):
 
 
 def test_default_hooks_are_registered_on_import():
-    # UserPromptSubmit 上没有默认回调：环境注入已是 ContextManager 的 environment 块
+    # No default callback on UserPromptSubmit: the environment block owns that
     assert DEFAULT_HOOKS.registered("UserPromptSubmit") == []
     assert DEFAULT_HOOKS.registered("PreToolUse") == [permission_hook, log_hook]
     assert DEFAULT_HOOKS.registered("PostToolUse") == [
@@ -133,11 +133,11 @@ def test_default_hooks_are_registered_on_import():
     assert DEFAULT_HOOKS.registered("Stop") == [summary_hook]
 
 
-# ---------- 五个回调各自的行为 ----------
+# ---- individual callback behaviour ----
 
 
 def test_permission_hook_does_not_question_dangerous_categories(clean):
-    """危险类别（sudo 等）不再问人：直接放行，风险名只进审计（阶段 51）。"""
+    """Dangerous categories (sudo etc.) skip the ask; the risk name goes to the audit only."""
     asked = []
     context = {
         "tool": "bash",
@@ -151,7 +151,7 @@ def test_permission_hook_does_not_question_dangerous_categories(clean):
 
 
 def test_permission_hook_lets_the_sandbox_cover_ordinary_commands(sandbox, clean):
-    """区内常规命令**不进审批**——沙箱能保证的事不重复打搅人。"""
+    """An ordinary in-workspace command needs no approval: the sandbox already guarantees it."""
     from avid.agent.state import RunState
 
     state = RunState.for_run(workspace_root=str(sandbox), audit_enabled=False)
@@ -173,7 +173,7 @@ def test_permission_hook_lets_the_sandbox_cover_ordinary_commands(sandbox, clean
 
 
 def test_permission_hook_writes_the_audit_record(sandbox, clean, tmp_path, monkeypatch):
-    """放行也要留痕：审计记录里有裁决、来源与越界事实（三轴字段已随轻量化删除）。"""
+    """Even an allow is recorded: verdict, answerer and the outside-write fact go to the audit."""
     import json
 
     from avid.agent.state import RunState
@@ -188,7 +188,7 @@ def test_permission_hook_writes_the_audit_record(sandbox, clean, tmp_path, monke
         "workspace_root": str(sandbox),
     }
 
-    assert permission_hook(context) is None  # 区外写不再问人，直接执行
+    assert permission_hook(context) is None  # out-of-area writes run without asking
 
     records = [
         json.loads(line)
@@ -205,7 +205,7 @@ def test_permission_hook_writes_the_audit_record(sandbox, clean, tmp_path, monke
     assert "decision_kind" not in record and "danger" not in record
     assert "/etc/hostname" in record["outside"]
     assert "越界" in record["risks"]
-    # 区外写自动授权并写进账本，沙箱按账本挂载
+    # The outside write is auto-granted into the ledger the sandbox mounts from
     assert state.ledger.path_grants() == (("/etc/hostname", "rw"),)
 
 
@@ -227,7 +227,7 @@ def test_permission_hook_refuses_destruction_without_an_ask_channel(clean):
 
 
 def test_unanswered_and_refused_destruction_give_different_guidance(clean):
-    """两种拒绝必须让模型看到不同的话：无人可问 vs 用户拒绝（别再重复提交）。"""
+    """The two refusals read differently: nobody to ask vs the user refused (do not resubmit)."""
     unanswered = {"tool": "bash", "arguments": {"command": "rm -rf /"}}
     refused = {
         "tool": "bash",
@@ -246,7 +246,8 @@ def test_unanswered_and_refused_destruction_give_different_guidance(clean):
 
 
 def test_brief_redacts_credentials_and_truncates():
-    """工具参数进日志前必须脱敏：INFO 是默认级别，而命令里常带 token。"""
+    """Tool arguments are redacted before logging: INFO is the default level and commands
+    often carry tokens."""
     from avid.agent.hooks import brief
 
     line = brief({"command": 'curl -H "Authorization: Bearer sk-live-abc123" https://x'})
@@ -263,7 +264,8 @@ def test_brief_redacts_credentials_and_truncates():
 
 
 def test_permission_hook_routes_auto_approve_to_the_answerer(clean):
-    """``--yes`` 只换回答者：注入的 ask 不被调用，凭据硬拒仍然拦住。"""
+    """--yes swaps the answerer only: the injected ask stays uncalled, the credential
+    hard deny still blocks."""
     asked = []
     auto = {
         "tool": "bash",
@@ -272,10 +274,10 @@ def test_permission_hook_routes_auto_approve_to_the_answerer(clean):
         "ask": lambda *args: asked.append(args) or False,
     }
 
-    assert permission_hook(auto) is None  # 危险类别不经过任何询问
+    assert permission_hook(auto) is None  # dangerous categories go through no ask
     assert asked == []
 
-    # 毁灭级：本该问人，auto_approve 用 always_allow 替人回答
+    # Destructive: normally asked, auto_approve answers always_allow in the user's place
     destruction = {
         "tool": "bash",
         "arguments": {"command": "rm -rf /"},
@@ -286,7 +288,7 @@ def test_permission_hook_routes_auto_approve_to_the_answerer(clean):
     assert permission_hook(destruction) is None
     assert asked == []
 
-    # 凭据拒读是唯一硬拒，auto_approve 也无效
+    # Credential reads are the only hard deny; auto_approve does not override it
     credential = {
         "tool": "read_file",
         "arguments": {"path": "~/.ssh/id_rsa"},
@@ -298,7 +300,7 @@ def test_permission_hook_routes_auto_approve_to_the_answerer(clean):
 
 
 def test_permission_hook_uses_the_injected_ask_without_the_run_flag(clean):
-    """注入了 ask 就必须用它——Web 路径的审批不能落到 stdin 上（§7.2）。"""
+    """An injected ask must be used: the Web path's approval must never fall through to stdin."""
     seen = []
     ask = lambda name, arguments, reason: seen.append((name, reason)) or True  # noqa: E731
 
@@ -314,7 +316,8 @@ def test_log_hook_never_blocks(clean):
 
 
 def test_large_output_hook_spills_the_full_text(clean, monkeypatch, sandbox):
-    """超限时全文落盘：模型看到首尾节选，需要细节时能自己读回来。"""
+    """Over the cap the full text spills to disk: the model sees head and tail and can read
+    the rest back."""
     monkeypatch.setattr("avid.agent.hooks.MAX_TOOL_OUTPUT_CHARS", 400)
     payload = "头" * 300 + "尾" * 300
     context = {
@@ -338,11 +341,11 @@ def test_large_output_hook_spills_the_full_text(clean, monkeypatch, sandbox):
     files = list((sandbox / SPILL_DIR).glob("tool-output-*.txt"))
     assert len(files) == 1
     assert files[0].read_text(encoding="utf-8") == payload
-    assert files[0].name in content  # 提示里给出了可读回的路径
+    assert files[0].name in content  # the hint carries the path back
 
 
 def test_large_output_hook_falls_back_when_spill_fails(clean, monkeypatch, sandbox):
-    """落盘失败（路径不可用）不能丢掉结果，也不能让这次调用失败：退回只留头部。"""
+    """A failed spill must not lose the result or fail the call: fall back to the head only."""
     monkeypatch.setattr("avid.agent.hooks.MAX_TOOL_OUTPUT_CHARS", 100)
     blocked = sandbox / "not-a-dir"
     blocked.write_text("x", encoding="utf-8")
@@ -357,8 +360,8 @@ def test_large_output_hook_falls_back_when_spill_fails(clean, monkeypatch, sandb
     assert context["truncated"] is True
     assert context["content"].startswith("x")
     assert "原文 1000 字符" in context["content"]
-    assert "已存至" not in context["content"]  # 没落盘成功就不给假的恢复路径
-    # 连截断提示一起算进预算，不超上限。
+    assert "已存至" not in context["content"]  # no fake recovery path when the spill failed
+    # The truncation hint counts against the cap too
     assert len(context["content"]) <= 100
 
 
@@ -372,7 +375,7 @@ def test_large_output_hook_leaves_small_output_alone(clean):
 
 
 def test_repeat_call_hook_reminds_on_the_third_and_fifth_time(clean):
-    """同名同参重复到第 3、5 次时追加一句提醒；其余次数原样返回。"""
+    """A same-name, same-argument repeat is reminded on the 3rd and 5th time; others pass."""
     counts: dict[str, int] = {}
     for times in range(1, 6):
         context = {
@@ -415,7 +418,7 @@ def test_repeat_call_hook_treats_different_arguments_as_different_calls(clean):
 
 
 def test_repeat_call_hook_ignores_key_order(clean):
-    """参数按规范化 JSON 比较：键序不同是同一个调用。"""
+    """Arguments compare as canonical JSON: a different key order is the same call."""
     counts: dict[str, int] = {}
     for arguments in ({"a": 1, "b": 2}, {"b": 2, "a": 1}, {"a": 1, "b": 2}):
         context = {
@@ -430,7 +433,7 @@ def test_repeat_call_hook_ignores_key_order(clean):
 
 
 def test_repeat_call_hook_is_inert_without_the_run_state(clean):
-    """没接上 RunState（直调、别的调用方）时不报错、不误判。"""
+    """Without a RunState (direct calls, other callers) it neither errors nor guesses."""
     context = {"tool": "bash", "arguments": {"command": "a"}, "content": "输出"}
 
     assert repeat_call_hook(context) is None
@@ -438,7 +441,7 @@ def test_repeat_call_hook_is_inert_without_the_run_state(clean):
 
 
 def test_repeat_call_hook_counts_through_execute_one():
-    """接线：`execution` 必须把 `RunState.repeat_calls` 放进 PostToolUse 的 context。"""
+    """Wiring: execution must put RunState.repeat_calls into the PostToolUse context."""
     from avid.agent.execution import execute_one
     from avid.agent.state import RunState
 
@@ -465,16 +468,12 @@ def test_summary_hook_writes_a_summary(clean):
     assert context["summary"] == "轮数=3 工具调用=5 拒绝=2"
 
 
-# ---------- 注册表归运行所有（P2-19） ----------
+# ---- the registry belongs to the run ----
 
 
 def test_two_runs_use_different_registries():
-    """注入的注册表只影响这一次运行。
-
-    以前注册表是模块级字典：任何一处 `register_hook` 都会漏到同一进程里所有运行
-    （含子 agent），测试也只能 monkeypatch 全局字典来隔离。现在"这次运行用哪份"
-    是一个能看见、能替换的值——这条用例在旧设计下根本写不出来。
-    """
+    """An injected registry affects this run only; the module-level dict it replaced would leak
+    a callback into concurrent runs and subagents."""
     from support import run_loop
 
     from avid.agent.hooks import HookRegistry
@@ -522,14 +521,14 @@ def test_two_runs_use_different_registries():
             state=state,
         )
 
-    run(HookRegistry())  # 安静的那次：什么都没注册
+    run(HookRegistry())  # the quiet run: nothing registered
     assert seen == []
     run(loud)
     assert seen == ["bash"], "注册在 loud 上的回调只该在 loud 那次运行里触发"
 
 
 def test_copy_is_independent_but_inherits():
-    """子运行拿的是父注册表的副本：继承已有回调，自己追加的不回漏。"""
+    """A child run gets a copy: it inherits the parent's callbacks, additions never leak back."""
     from avid.agent.hooks import HookRegistry
 
     parent = HookRegistry()
@@ -542,15 +541,12 @@ def test_copy_is_independent_but_inherits():
     assert len(clone.registered("Stop")) == 2, "副本继承父的回调"
 
 
-# ---------- PostToolUse 的 BLOCK 语义（P3-6） ----------
+# ---- PostToolUse BLOCK semantics ----
 
 
 def test_post_tool_use_block_stops_the_result_from_entering_context():
-    """PostToolUse 返回 BLOCK 时必须真的拦住结果。
-
-    以前这个返回值被直接丢掉：注册了拦截的回调等于静默失效，而且失败方向正好是
-    最糟的那个——内容照样进了上下文（比如输出里带凭据）。
-    """
+    """A PostToolUse BLOCK must really stop the result, or the hook is silently disabled and
+    content (say, credentials) enters the context."""
     from avid.agent.execution import POST_BLOCKED_CONTENT, execute_one
 
     def runner(arguments, *, state=None):
@@ -575,7 +571,7 @@ def test_post_tool_use_block_stops_the_result_from_entering_context():
 
 
 def test_post_tool_use_without_block_passes_the_content_through():
-    """没有拦截时结果照常回传（别把"显式处理 BLOCK"做成"总是拦截"）。"""
+    """Without a block the content passes through; handling BLOCK is not always-blocking."""
     from avid.agent.execution import execute_one
     from avid.agent.state import RunState
 

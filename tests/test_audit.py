@@ -1,4 +1,7 @@
-"""审计：只追加的 JSONL、按天分文件、内联凭据打码、写失败不改结论。"""
+"""Audit log: append-only JSONL, one file per day, inline credentials redacted.
+
+Write failures are counted but never raised, and a redacted command keeps its shape.
+"""
 
 from __future__ import annotations
 
@@ -27,7 +30,7 @@ def read(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
-# ---------------------------------------------------------------- 落盘
+# ---------------------------------------------------------------- persistence
 
 
 def test_each_write_is_one_appended_json_line(tmp_path):
@@ -66,7 +69,7 @@ def test_disabled_log_returns_the_record_without_touching_disk(tmp_path):
     record = entry.write("decision", tool="bash")
     assert record is not None and record["tool"] == "bash"
     assert entry.path() is None
-    # byok/ 是 conftest model_env 种的模型配置，与审计无关
+    # byok/ comes from the conftest model_env fixture, not the audit log
     assert [p for p in tmp_path.iterdir() if p.name != "byok"] == []
 
 
@@ -76,11 +79,11 @@ def test_run_tag_is_the_fallback_identity(tmp_path):
     assert read(tmp_path / "audit-2023-11-14.jsonl")[0]["run"] == "tag-only"
 
 
-# ---------------------------------------------------------------- 失败不改结论
+# ---------------------------------------------------------------- write failures
 
 
 def test_write_failure_is_counted_and_never_raised(tmp_path):
-    """审计失败是"少了一条记录"，不是"这次调用该失败"。"""
+    """An audit failure loses a record; it must not fail the call."""
     blocked = tmp_path / "afile"
     blocked.write_text("not a directory", encoding="utf-8")
     entry = log(blocked / "audit")
@@ -100,7 +103,7 @@ def test_summary_reports_the_current_path(tmp_path):
     assert summary["written"] == 1 and summary["failures"] == 0
 
 
-# ---------------------------------------------------------------- 打码与截断
+# ---------------------------------------------------------------- redaction and truncation
 
 
 def test_inline_credentials_are_redacted_but_the_command_is_kept(tmp_path):
@@ -113,7 +116,7 @@ def test_inline_credentials_are_redacted_but_the_command_is_kept(tmp_path):
     record = read(tmp_path / "audit-2023-11-14.jsonl")[0]
     assert "sk-live-abc" not in json.dumps(record)
     assert "topsecret" not in json.dumps(record)
-    # 命令结构留下：审计要能回答"它想干什么"
+    # the command shape stays: audit must answer what it tried to do
     assert "curl" in record["command"] and "api.example.com" in record["command"]
     assert "***" in record["command"]
 
@@ -134,7 +137,7 @@ def test_non_ascii_is_written_as_utf8(tmp_path):
     entry = log(tmp_path)
     entry.write("decision", reason="目标在工作区之外")
     raw = (tmp_path / "audit-2023-11-14.jsonl").read_text(encoding="utf-8")
-    assert "目标在工作区之外" in raw  # 不是 \uXXXX 转义
+    assert "目标在工作区之外" in raw  # not \uXXXX escapes
     assert read(tmp_path / "audit-2023-11-14.jsonl")[0]["reason"] == "目标在工作区之外"
 
 
@@ -147,7 +150,7 @@ def test_nested_values_are_cleaned(tmp_path):
     assert entry.failures == 0
 
 
-# ---------------------------------------------------------------- 目录优先级
+# ---------------------------------------------------------------- directory precedence
 
 
 def test_audit_dir_precedence(monkeypatch, tmp_path):

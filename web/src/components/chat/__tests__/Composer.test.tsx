@@ -13,7 +13,7 @@ function renderComposer(overrides?: { busy?: boolean; disabled?: boolean; model?
     <Composer
       full={false}
       onToggleFull={() => {}}
-      // 阶段 54 起模型是必选：默认给一个，专测"没选"的那条用例自己覆盖成 null
+      // A model is required; give one by default — the unset-model case overrides it with null.
       model="stub/a"
       onChangeModel={() => {}}
       onSend={onSend}
@@ -55,7 +55,7 @@ describe('Composer（多行输入与发送/停止）', () => {
     fireEvent.change(input(), { target: { value: '跑一下' } })
 
     expect((screen.getByRole('button', { name: '发送' }) as HTMLButtonElement).disabled).toBe(true)
-    // 胶囊此时是"选择模型"，并把原因写在可访问名里（不靠说明句）
+    // The chip reads "select a model" and puts the reason in its accessible name.
     expect(screen.getByRole('button', { name: /模型/ }).textContent).toContain('选择模型')
   })
 
@@ -122,7 +122,7 @@ describe('Composer 的图片草稿（阶段 59）', () => {
   const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 1, 2, 3])
 
   beforeEach(() => {
-    // jsdom 没有 object URL：给一个可控替身，断言只看 chip 有没有出现。
+    // jsdom has no object URLs: stub them; assertions only check that the chip appears.
     Object.assign(URL, {
       createObjectURL: () => 'blob:test',
       revokeObjectURL: () => undefined,
@@ -183,7 +183,7 @@ describe('Composer 的图片草稿（阶段 59）', () => {
 })
 
 describe('Composer 忙时的两个动作（阶段 60）', () => {
-  // 忙时的占位文案会变（说的是排队与插入），所以按可访问名取输入框。
+  // The busy placeholder changes (queue / insert), so target the box by accessible name.
   const busyInput = () => screen.getByLabelText('消息输入') as HTMLTextAreaElement
 
   function renderBusy() {

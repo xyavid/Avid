@@ -27,7 +27,7 @@ SUBAGENT_PARAMETERS = next(
 
 
 def run(payload, **kwargs):
-    """带上 RunState 调工具——真实调用方（execution）也是这么传的。"""
+    """Call the tool with a RunState, as execution (the real caller) does."""
     return subagent(payload, state=RunState(), **kwargs)
 
 
@@ -49,7 +49,7 @@ def task(
     }
 
 
-# ---------- 工具集与递归防护 ----------
+# ---- tool set and recursion guard ----
 
 
 def test_sub_tools_exclude_subagent():
@@ -62,7 +62,7 @@ def test_sub_tools_exclude_subagent():
 
 
 def test_subagent_has_no_turn_cap_of_its_own():
-    """子 agent 不自带轮数上限——内核里已经没有这个限制。"""
+    """A subagent has no turn cap of its own: the kernel has no such limit."""
     import avid.agent.tools.subagent as sub
 
     assert not hasattr(sub, "SUBAGENT_MAX_TURNS")
@@ -71,12 +71,13 @@ def test_subagent_has_no_turn_cap_of_its_own():
 def test_sub_system_asks_for_a_self_contained_summary():
     assert "摘要" in SUB_SYSTEM
     assert "不要反问" in SUB_SYSTEM
-    # 系统提示要说清用户消息是任务提示，五段骨架不是自由文本
+    # The system prompt must say the user message is a task brief, not free text
     assert "Deliverable" in SUB_SYSTEM
 
 
 def test_task_fields_are_the_six_fields_in_render_order():
-    """字段名即段名：顺序就是渲染顺序，schema 与校验都从这张表派生。"""
+    """Field name is section name and the order is the render order; schema and validation
+    derive from this table."""
     assert [key for key, _ in TASK_FIELDS] == [
         "description",
         "objective",
@@ -88,7 +89,7 @@ def test_task_fields_are_the_six_fields_in_render_order():
     assert all(hint.strip() for _, hint in TASK_FIELDS)
 
 
-# ---------- 参数校验 ----------
+# ---- argument validation ----
 
 
 def test_rejects_empty_tasks():
@@ -115,7 +116,7 @@ def test_rejects_a_task_missing_a_section():
 
 
 def test_rejects_the_free_text_task_shape():
-    """父 agent 不能再扔一段自由文本：六段缺一即打回，报错带上该段该写什么。"""
+    """A parent cannot send free text: missing any of the six sections is rejected with a hint."""
     result = run({"tasks": [{"description": "标题", "prompt": "把这件事做完"}]})
 
     assert "objective 不能为空" in result
@@ -129,7 +130,8 @@ def test_rejects_blank_description():
 
 
 def test_schema_requires_every_section():
-    """协议层的校验先于实现：缺段在 execution 那一步就被打回，不用等下到实现里。"""
+    """Schema validation runs before the implementation: a missing section is rejected at
+    the execution step."""
     problem = validate_arguments(SUBAGENT_PARAMETERS, {"tasks": [{"description": "标题"}]})
 
     assert problem is not None
@@ -151,14 +153,12 @@ def test_validation_happens_before_any_subagent_runs():
     assert started == []
 
 
-# ---------- 任务提示的渲染 ----------
+# ---- task brief rendering ----
 
 
 def test_child_receives_the_rendered_brief():
-    """子 agent 的第一条消息不是父 agent 的自由文本，而是 harness 渲染的固定骨架。
-
-    骨架保证每份任务提示形状一致：标题行 + 五段 + 收尾句，父 agent 只填值。
-    """
+    """The child's first message is a fixed harness-rendered skeleton (title line, five sections,
+    stop line), not the parent's free text."""
     seen = []
 
     run({"tasks": [task()]}, runner=lambda prompt, **kwargs: seen.append(prompt) or "ok")
@@ -175,7 +175,7 @@ def test_child_receives_the_rendered_brief():
 
 
 def test_task_brief_closes_with_the_stop_line():
-    """收尾句由 harness 出，父 agent 不用自己写：做完即停、把结论交回父 agent。"""
+    """The harness supplies the stop line: stop when done and hand the conclusion back."""
     brief = task_brief(task())
 
     assert brief.endswith(TASK_STOP_LINE)
@@ -183,7 +183,8 @@ def test_task_brief_closes_with_the_stop_line():
 
 
 def test_task_brief_keeps_the_sections_in_order():
-    """段的顺序即查读顺序：父 agent 填反了也不会乱，渲染只认字段名。"""
+    """Section order is read order: rendering keys off field names, so the parent's order
+    cannot scramble it."""
     brief = task_brief(task(scope="只看 avid/agent/", deliverable="三段话结论"))
 
     assert brief.index("Objective:") < brief.index("Scope:")
@@ -195,7 +196,7 @@ def test_task_brief_keeps_the_sections_in_order():
     assert brief.startswith("干点活\n\nObjective:")
 
 
-# ---------- 并行调度与汇总 ----------
+# ---- parallel dispatch and summary ----
 
 
 def test_runs_every_task_and_labels_the_results():
@@ -267,7 +268,7 @@ def test_timeout_is_reported_per_task():
 
 
 def test_tasks_actually_run_in_parallel():
-    """两个任务都要在栅栏处会合：串行执行会撞上栅栏超时并失败。"""
+    """Both tasks must meet at the barrier: serial execution hits the timeout and fails."""
     barrier = threading.Barrier(2, timeout=2)
 
     def runner(prompt, **kwargs):
@@ -285,7 +286,7 @@ def test_tasks_actually_run_in_parallel():
 
 
 def test_auto_approve_comes_from_the_run_state():
-    """免审批开关从 RunState 读，显式传给子运行——不是隐式的全局状态。"""
+    """The auto-approve switch is read from RunState and passed explicitly to the child run."""
     seen = []
 
     def runner(prompt, *, auto_approve, config, ask=None, **kwargs):
@@ -313,7 +314,8 @@ def test_auto_approve_defaults_to_false(monkeypatch):
 
 
 def test_run_subagent_puts_the_task_brief_in_the_first_message(monkeypatch):
-    """run_subagent 只管把交给它的任务提示放进第一条用户消息；骨架渲染在 subagent 那层。"""
+    """run_subagent only puts the given brief into the first user message; the skeleton is
+    rendered in the subagent layer."""
     import dataclasses
 
     from avid.agent import run as run_module
@@ -339,7 +341,7 @@ def test_run_subagent_puts_the_task_brief_in_the_first_message(monkeypatch):
     assert seen["spec"].instructions == SUB_SYSTEM
     assert seen["spec"].tools is SUB_TOOLS
     assert seen["spec"].registry is SUB_HANDLERS
-    # 子 agent 不传任何轮数预算：内核没有这个概念（旧代码在这里写死过 30 轮）。
+    # No round budget is passed: the kernel has no such concept
     assert "max_rounds" not in {f.name for f in dataclasses.fields(seen["spec"])}
 
 
@@ -362,11 +364,8 @@ def test_run_subagent_returns_no_summary_for_empty_text(monkeypatch):
 
 
 def test_run_subagent_streams_its_words_onto_the_observer(monkeypatch):
-    """子运行默认走流式：正文与思考的增量经它自己的 observer 发出（阶段 53）。
-
-    父运行把 observer 换成一个「加 subagent 标记再转发」的包装，所以这两条增量
-    到前端时带着 {task, index}——面板里的子运行正文就是这么来的。
-    """
+    """A child run streams by default; the parent wraps its observer to tag events with
+    {task, index} before forwarding."""
     from avid.agent import run as run_module
     from avid.agent.tools import subagent as subagent_module
 
@@ -385,7 +384,7 @@ def test_run_subagent_streams_its_words_onto_the_observer(monkeypatch):
             specs.append(spec)
 
         def run(self):
-            # 走 spec 上的 chat——也就是 run_subagent 给的那个默认值
+            # use the spec's chat, the default run_subagent installed
             specs[-1].chat(None, [{"role": "user", "content": "x"}])
 
             class _Outcome:
@@ -401,12 +400,12 @@ def test_run_subagent_streams_its_words_onto_the_observer(monkeypatch):
         ("reasoning_delta", "先看一眼"),
         ("assistant_delta", "看完了"),
     ]
-    # 摘要必须绕开流式，否则压缩摘要的文本会混进子运行的正文
+    # Summarize bypasses streaming, or summary text would mix into the child's body
     assert specs[0].summarize is subagent_module.chat_completion
 
 
 def test_run_subagent_uses_an_injected_chat_as_is(monkeypatch):
-    """注入的 chat 原样用（测试与 benchmark 的脚本模型走这条）。"""
+    """An injected chat is used as is (scripted models in tests take this path)."""
     from avid.agent import run as run_module
 
     specs: list[object] = []
@@ -430,7 +429,7 @@ def test_run_subagent_uses_an_injected_chat_as_is(monkeypatch):
     assert specs[0].chat is scripted
 
 
-# ---------- 取消传导、事件嵌套与 usage 并账（阶段 30c） ----------
+# ---- cancellation, event nesting and usage accounting ----
 
 
 def test_check_cancelled_consults_the_external_probe():
@@ -443,7 +442,7 @@ def test_check_cancelled_consults_the_external_probe():
 
 
 def test_probe_none_means_no_external_source():
-    RunState().check_cancelled()  # 不抛
+    RunState().check_cancelled()  # does not raise
 
 
 def test_adopt_child_usage_sums_tokens_and_counts_calls():
@@ -458,7 +457,7 @@ def test_adopt_child_usage_sums_tokens_and_counts_calls():
 
     assert parent.child_tokens == 9
     assert parent.child_calls == 1
-    assert parent.tokens == 9  # 运行总开销 = 主循环 + 子 agent
+    assert parent.tokens == 9  # total run cost = main loop + subagents
 
 
 def test_usage_report_carries_subagent_totals():
@@ -475,7 +474,8 @@ def test_usage_report_carries_subagent_totals():
 
 
 def test_run_subagent_wires_probe_observer_and_state(monkeypatch):
-    """run_subagent 自建子 RunState：probe/observer 落在它身上，引用交给 on_state。"""
+    """run_subagent builds the child RunState itself: probe and observer land on it, and the
+    reference goes to on_state."""
     from avid.agent import run as run_module
     from avid.agent.run import RunCancelled
 
@@ -487,7 +487,7 @@ def test_run_subagent_wires_probe_observer_and_state(monkeypatch):
             self._state = state
 
         def run(self):
-            self._state.check_cancelled()  # probe 在这里生效
+            self._state.check_cancelled()  # the probe fires here
             return "不该到这里"
 
     monkeypatch.setattr(run_module, "Run", FakeRun)
@@ -507,7 +507,8 @@ def test_run_subagent_wires_probe_observer_and_state(monkeypatch):
 
 
 def test_subagent_tags_child_events_and_adopts_usage(monkeypatch):
-    """子事件带 subagent 标记进父事件流；结束后子 token 并进父台账。"""
+    """Child events enter the parent stream tagged subagent; on finish the child's tokens
+    join the parent ledger."""
     import avid.agent.events as runtime_events
     from avid.agent import run as run_module
     from avid.providers.usage import Usage
@@ -542,7 +543,7 @@ def test_subagent_tags_child_events_and_adopts_usage(monkeypatch):
 
 
 def test_parent_cancel_surfaces_quickly(monkeypatch):
-    """父取消后 collect 提前收敛返回，不再等慢子任务自然结束。"""
+    """After a parent cancel the collect converges early instead of waiting for the slow child."""
     from avid.agent import run as run_module
 
     started = threading.Event()
@@ -553,7 +554,7 @@ def test_parent_cancel_surfaces_quickly(monkeypatch):
 
         def run(self):
             started.set()
-            time.sleep(5)  # 比测试耐心长得多
+            time.sleep(5)  # far longer than the test's patience
             return "太慢"
 
     monkeypatch.setattr(run_module, "Run", FakeRun)
@@ -576,7 +577,7 @@ def test_parent_cancel_surfaces_quickly(monkeypatch):
 
 
 def test_deadline_reaches_child_checkpoints(monkeypatch):
-    """墙钟到点：超时文案照回，同时子任务在下个检查点被 probe 停掉（不再是孤儿）。"""
+    """On deadline the timeout text returns and the child stops at its next checkpoint."""
     from avid.agent import run as run_module
     from avid.agent.run import RunCancelled
 
@@ -587,7 +588,7 @@ def test_deadline_reaches_child_checkpoints(monkeypatch):
             self._state = state
 
         def run(self):
-            time.sleep(0.3)  # 超过 timeout
+            time.sleep(0.3)  # past the timeout
             try:
                 self._state.check_cancelled()
             except RunCancelled as exc:
@@ -600,7 +601,7 @@ def test_deadline_reaches_child_checkpoints(monkeypatch):
     result = run({"tasks": [task("慢", "p")]}, timeout=0.1)
     assert "timed out" in result
 
-    for _ in range(50):  # 等孤儿线程走到检查点
+    for _ in range(50):  # wait for the orphan thread to reach the checkpoint
         if raised:
             break
         time.sleep(0.05)

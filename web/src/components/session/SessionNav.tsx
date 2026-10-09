@@ -1,16 +1,9 @@
 /**
- * 侧栏会话区（参考图）：标题行（「会话」+ 新建）+ 搜索框（30px 高，报告 §7.2）
- * + 会话列表 + 内容命中 + 结果提示行。
- *
- * 搜索框是**双路**的（阶段 57）：本地按名字过滤（即时，不花一次请求），同时把词交给
- * 装配层去查内容索引（内容命中由 `contentHits` 传进来）——两条结果分开展示，因为
- * 「名字里有」和「聊过这个」是两件事。组件仍然只发意图：查询词、选中项都回调出去。
- * 列表按 created_at 降序；标题取会话名，缺名显示「未命名会话」；
- * 流式中的会话（active_run_id 非空）带呼吸点——真实状态，不是装饰。
- * 分组（置顶/今天/昨天）等后端有置顶概念后再立——现在拍平，不造假分组。
- *
- * 组件只发意图：新建/重命名/删除都回调给装配层（它独占状态与副作用），
- * 因此同一套组件既能接真后端，也能在组件墙里当静态演示（不给回调即只读）。
+ * Sidebar session area: title row + search box (30px high) + session list + content hits; search is
+ * two-track — local name filtering is immediate while the query also goes through the assembly
+ * layer for the content index, whose hits arrive via `contentHits`.
+ * The component emits intents only (query, selection, session actions call back) and renders
+ * read-only without callbacks; list order is created_at desc.
  */
 
 import { useState } from 'react'
@@ -21,7 +14,7 @@ import { Input } from '../../ui/Input'
 import { useAutoHideScroll } from '../../ui/useAutoHideScroll'
 import { SessionItem } from './SessionItem'
 
-/** 今天 → HH:MM；今年 → M-D HH:MM；更早 → YYYY-M-D（created_at 是毫秒）。 */
+/** Today → HH:MM; this year → M-D HH:MM; earlier → YYYY-M-D (created_at is milliseconds). */
 function formatStamp(createdAtMs: number): string {
   const d = new Date(createdAtMs)
   const now = new Date()
@@ -33,32 +26,30 @@ function formatStamp(createdAtMs: number): string {
 
 export type SessionNavProps = {
   sessions: SessionSummary[]
-  /** 当前项目（工作区）id：列表只显示该项目下的会话；缺省/null = 全部显示（兜底形态）。 */
+  /** Current project (workspace) id: only its sessions are listed; null = show all as fallback. */
   workspaceId?: string | null
   selectedId: string | null
   onSelect: (id: string) => void
-  /**
-   * 在当前项目下新建会话。**workspace 是服务端的必填项**，所以没有选中项目时
-   * 按钮禁用并说明；不给回调 = 只读演示（组件墙）。
-   */
+  /** Create a session in the current project; the server requires `workspace`, so the button is
+   * disabled without a selected project. */
   onCreateSession?: () => void
-  /** 行内重命名（名字已 trim、非空）；不给则该动作不渲染。 */
+  /** Inline rename (trimmed, non-empty name); the action is not rendered without it. */
   onRenameSession?: (id: string, name: string) => void
-  /** 删除（组件内已先确认）；不给则该动作不渲染。 */
+  /** Delete (already confirmed inside the component); not rendered without it. */
   onDeleteSession?: (id: string) => void
-  /** 内容检索的结果（装配层去查索引）；空数组 = 没有内容命中。 */
+  /** Content-search hits (the assembly layer queries the index); empty array = no hits. */
   contentHits?: SearchHit[]
-  /** 内容命中还在查：给一行「正在查…」，别让人以为没结果。 */
+  /** Content hits still loading: a line says so rather than looking like "no results". */
   contentSearching?: boolean
-  /** 内容命中里点了一条：装配层负责切会话并跳到那条条目。 */
+  /** A hit was clicked: the assembly layer switches session and jumps to that entry. */
   onSelectHit?: (hit: SearchHit) => void
-  /** 查询词变化（装配层据此去查内容索引，自己做防抖）。 */
+  /** Query changed; the assembly layer debounces it against the content index. */
   onSearchQuery?: (query: string) => void
-  /** 内容检索那一路的提示：检索失败、或索引还落后（别让人以为搜全了）。 */
+  /** Notice for content search: a failure, or the index lagging behind. */
   searchNotice?: string | null
-  /** 新建在飞：按钮落 disabled，避免连点建出几个空会话。 */
+  /** Create in flight: the button goes disabled so double-clicks cannot make empty sessions. */
   creating?: boolean
-  /** 动作结果或失败原因，一句人话（删除不可逆，成功也要说话）。 */
+  /** Action result or failure reason in plain words; success is stated too, deletion is final. */
   notice?: string | null
 }
 

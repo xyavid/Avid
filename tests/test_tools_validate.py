@@ -1,7 +1,7 @@
-"""参数校验：模型看到的 schema 与运行时校验同源（P1-1）。
+"""Argument validation: the schema the model sees is the one enforced at runtime, limited to
+structural constraints (required / type / enum / numeric bounds).
 
-只查结构约束（required / type / enum / 数值边界）；跨字段业务规则仍留在工具自己的
-领域校验里。校验失败是**协议错误**：回文本、不抛异常、不触发事件、不计入工具调用。
+A failed check is a protocol error: text back, no exception, no event, no tool call.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from avid.agent.tools.validate import validate_arguments
 
 
 def params_of(name: str) -> dict[str, Any]:
-    """拿到发给模型的那份 parameters 节点——校验用的就是它。"""
+    """The `parameters` node sent to the model — the same object validation reads."""
     return next(item for item in TOOLS if item["function"]["name"] == name)["function"][
         "parameters"
     ]
@@ -48,7 +48,7 @@ def test_wrong_type_says_expected_and_actual():
 
 
 def test_boolean_is_not_accepted_as_integer():
-    """`True` 在 Python 里是 int 的子类，JSON 里却不是 integer。"""
+    """`True` subclasses int in Python but is not a JSON integer."""
     problem = validate_arguments(params_of("read_file"), {"path": "a.txt", "offset": True})
 
     assert problem is not None
@@ -74,12 +74,12 @@ def test_nested_required_is_enforced():
 
 
 def test_extra_keys_are_tolerated():
-    """多带的键现在被实现忽略；收紧它属于行为变更，这条钉住"暂时不收紧"。"""
+    """Extra keys are ignored by the implementation; this pins that they stay tolerated."""
     assert validate_arguments(params_of("read_file"), {"path": "a.txt", "extra": 1}) is None
 
 
 def test_bounds_are_enforced():
-    """数值边界现在写进 schema 了（P1-2），校验器必须真的按它拦。"""
+    """Numeric bounds live in the schema and the validator must enforce them."""
     too_small = validate_arguments(params_of("read_file"), {"path": "a.txt", "offset": 0})
     assert too_small is not None
     assert "不能小于 1" in too_small
@@ -119,7 +119,7 @@ def test_execute_one_rejects_bad_arguments_before_running_the_tool():
 
 
 def test_execute_one_without_schema_skips_validation():
-    """直调路径（单测、复用某个工具）不传 parameters，行为与改动前一致。"""
+    """The direct path (unit tests, tool reuse) passes no parameters and skips validation."""
     seen: list[Any] = []
 
     def runner(arguments: dict[str, Any], *, state: Any = None) -> str:

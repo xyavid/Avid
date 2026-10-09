@@ -1,6 +1,6 @@
 /**
- * 图片草稿的准备（阶段 59）：只测纯计算——缩放系数、体积门限、base64 编码。
- * canvas 那条路在 jsdom 里没有实现（也就没有可测的东西），它由证据脚本在真浏览器里跑。
+ * Image draft preparation: pure calculations only — scale factor, size limits, base64 encoding.
+ * The canvas path has no jsdom implementation, so an evidence script covers it in a real browser.
  */
 
 import { beforeEach, describe, expect, it } from 'vitest'
@@ -18,7 +18,7 @@ import {
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0])
 
 beforeEach(() => {
-  // jsdom 不实现 object URL：造一个可控替身，断言只看它有没有被用上。
+  // jsdom has no object URL: install a controllable stand-in and assert only that it is used.
   Object.assign(URL, {
     createObjectURL: () => 'blob:test',
     revokeObjectURL: () => undefined,

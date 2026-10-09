@@ -1,12 +1,8 @@
-"""grep_search：在工作区里按内容找东西（正则、带行号、默认忽略大小写）。
+"""grep_search: finds workspace content by regex and returns structured ``path:line:text`` hits.
 
-它取代「让模型用 bash 拼一条 grep」这条路，有三个好处：结果是结构化的（路径:行号:文本，
-直接能念给模型听）、**并发档是 safe**（bash 是独占屏障，一次搜索会把同批的读全堵住）、
-以及输出有上限（命中上千条时给的是「前 N 条 + 还有多少」，不是一屏噪声）。
-
-实现在 rg 与纯 Python 之间二选一：本机有 ripgrep 就走 `rg --json`（尊重 .gitignore、
-跳过二进制、快一个量级），没有就回落 Python 遍历（尊重同一份忽略名单）。两条路都给
-同一种输出，所以模型看到的形状与机器上装了什么无关。
+It is concurrency-safe (bash is a barrier, so a search there blocks reads in the same batch)
+and capped; the ripgrep path and the pure-Python fallback share one output shape and one
+ignore list, so what the model sees does not depend on what is installed.
 """
 
 from __future__ import annotations
@@ -28,18 +24,18 @@ if TYPE_CHECKING:  # annotation only: tools must not depend on runtime at run ti
 
 logger = logging.getLogger("avid.agent.tools.search")
 
-# 一次搜索最多回多少条命中（再多对模型没用，只会挤掉别的上下文）。
+# How many hits one search returns; more would only crowd out other context.
 MAX_RESULTS = 60
 HARD_RESULT_CAP = 200
-# 单行最长多少字符（长行——压缩过的 JS、日志——会把上下文撑爆）。
+# Longest single line kept: minified JS and logs would otherwise blow up the context.
 MAX_LINE_CHARS = 300
-# 两条路共用的墙钟预算：超了就报「超时 + 已找到的部分」，而不是把运行卡住。
+# Wall-clock budget shared by both paths: on expiry partial hits come back, not a hang.
 TIME_BUDGET_SECONDS = 20.0
-# 回落遍历时跳过的目录（rg 靠 .gitignore；Python 这条路只能自己列名单）。
+# Directories the fallback walk skips (rg uses .gitignore; Python needs its own list).
 SKIP_DIRS = frozenset(
     {".git", ".hg", ".svn", ".venv", "venv", "node_modules", "__pycache__", ".mypy_cache", ".ruff_cache", ".pytest_cache"}
 )
-# 回落遍历时单个文件的读取上限：再大就不像源码了，跳过并如实说。
+# Per-file read cap in the fallback walk: larger files are skipped and reported as such.
 MAX_FILE_BYTES = 2 * 1024 * 1024
 
 
@@ -165,8 +161,7 @@ def _search_with_rg(
     argv = ["rg", "--json", "--line-number", "--no-heading", "--max-columns", str(MAX_LINE_CHARS)]
     if not case_sensitive:
         argv.append("--ignore-case")
-    # 明确排除依赖目录：rg 只认 .gitignore，而工作区未必是 git 仓库（临时目录里就没有），
-    # 那样 node_modules 会被搜——两条路的行为必须一致，所以排除名单显式传给 rg。
+    # rg reads only .gitignore, so pass the skip list explicitly to keep both paths alike.
     for name in sorted(SKIP_DIRS):
         argv += ["--glob", f"!**/{name}/**"]
     if glob:
@@ -182,7 +177,7 @@ def _search_with_rg(
         process = subprocess.Popen(
             argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace"
         )
-    except OSError as exc:  # pragma: no cover - rg 在 which 查过之后才起不来（权限/竞态）
+    except OSError as exc:  # pragma: no cover - rg passed which; only permissions/races fail
         return [], False, f"rg 起不来（{exc}），请改用更小的 path 或用 bash 里的 grep"
     try:
         assert process.stdout is not None
@@ -214,7 +209,7 @@ def _search_with_rg(
             process.terminate()
             try:
                 process.wait(timeout=2)
-            except subprocess.TimeoutExpired:  # pragma: no cover - 收尾兜底
+            except subprocess.TimeoutExpired:  # pragma: no cover - shutdown backstop
                 process.kill()
         process.wait()
         if process.stderr is not None:
@@ -282,7 +277,7 @@ def _walk_files(root: Path, *, budget: float) -> list[Path]:
                     queue.append(entry)
                 elif entry.is_file():
                     found.append(entry)
-            except OSError:  # pragma: no cover - 权限/竞态：跳过即可
+            except OSError:  # pragma: no cover - permissions or races on the tree
                 continue
     return sorted(found)
 

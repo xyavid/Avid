@@ -1,14 +1,9 @@
-"""Turns one tool call into one verdict: everything runs, unless it must be confirmed.
+"""Turns one tool call into one verdict, in this fixed order: credential reads are hard-denied
+(secrets in context cannot be recalled); catastrophic commands are asked once and denied when no ask
+channel exists, the double confirm living in the UI; everything else runs, with out-of-workspace
+writes granted in the ledger.
 
-轻量化后的决策只有四步（阶段 51）：
-① 凭据拒读——唯一硬拒（凭据进上下文不可撤回，任何确认都无意义）；
-② 毁灭级（DENY 表）→ 询问一次；「二次确认」是 UI 层纪律（CLI 连问两次、
-   Web 审批卡两步），引擎只问一次。没有可用的询问通道时拒绝——确认不可能
-   发生就不执行；
-③ 其余一切 → 直接执行；区外写自动记账授权（沙箱按账本挂载），不再问人；
-④ full 运行跳过 ② 的询问（显式授权 = 连双确认也不要），且无沙箱、env 不滤。
-
-危险表（DANGER_PATTERNS）不再触发任何询问，风险名只进审计与展示。
+`DANGER_PATTERNS` triggers no ask of its own; danger names go to audit and display only.
 """
 
 from __future__ import annotations
@@ -120,12 +115,9 @@ def _allow(
     key: tuple[str, ...] | None = None,
     ledger: Ledger | None = None,
 ) -> Decision:
-    """Allows one call and records its out-of-workspace path grants in the ledger.
-
-    区外写不再问人：账本记住授权，沙箱 argv 据此挂载——「直接执行」包括区外。
-    每一条允许都要记账，毁灭级放行的那条也一样：命令要写区外时，缺了挂载就会
-    在沙箱里撞上只读。
-    允许不产生消息（message 只在拒绝时给模型），原因仍进审计。
+    """Allow one call and record its out-of-workspace path grants so the sandbox mounts them — every
+    allow is recorded, catastrophic ones included, and an allow carries no message; the reason still
+    goes to the audit.
     """
     access = "rw" if action.operations[:1] == (OPERATION_WRITE,) else "ro"
     grants = tuple((target, access) for target in action.outside_writes)
@@ -157,7 +149,7 @@ def decide(
 
     key = review_key(action)
 
-    # Step 2, 毁灭级: asked once at this layer (the double-confirm lives in the UI).
+    # Catastrophic commands: asked once here; the double confirm lives in the UI.
     if action.damage:
         reason = action.damage
         if full:

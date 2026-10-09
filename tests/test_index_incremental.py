@@ -1,7 +1,7 @@
-"""索引器：发现、元数据、条目定位与增量游标。
+"""Indexer tests: discovery, metadata, entry location, and incremental cursors.
 
-夹具与造会话的帮手在 index_cases.py；断言尽量落在「读回原文」这条性质上，
-而不只是行数对不对。
+Fixtures and session builders live in index_cases.py; assertions read the original bytes back
+rather than trusting counts.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from avid.index import check as check_mod
 from avid.index import db as index_db
 from avid.index import queries, scanner
 
-# ---------------- P2：会话元数据
+# ---------------- session metadata
 
 
 def test_index_all_records_session_metadata(indexer, store):
@@ -47,10 +47,10 @@ def test_index_all_records_session_metadata(indexer, store):
 
 
 def test_workspace_falls_back_to_the_directory_name(indexer, store):
-    """header 里没有 workspaceId 的老文件，按它所在的目录归属。"""
+    """A file whose header lacks workspaceId is attributed to its directory."""
     make_session(store, workspace=ALPHA, session_id="s-nohdr")
 
-    # 抹掉 header 里的 workspaceId，模拟阶段 56 之前写下的文件。
+    # Strip workspaceId from the header to emulate a file written before headers carried it.
     file = next((store / ALPHA).glob("*_s-nohdr.jsonl"))
     lines = file.read_text(encoding="utf-8").splitlines(keepends=True)
     header = json.loads(lines[0])
@@ -68,12 +68,12 @@ def test_list_sessions_orders_by_updated_and_filters_by_workspace(indexer, store
     make_session(store, workspace=BETA, session_id="s-b", messages=({"role": "user", "content": "二"},))
     indexer.index_all()
 
-    # 把 alpha 那个文件改新一点（mtime 就是 updated_at 的来源）。
+    # Make the alpha file newer: mtime is the source of updated_at.
 
     stat = older.stat()
     os.utime(older, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10_000_000_000))
 
-    indexer.reconcile()  # 再跑一遍：这一遍才会把新的 mtime 记成 updated_at
+    indexer.reconcile()  # a second pass is what records the new mtime as updated_at
 
     everything = queries.list_sessions(indexer.conn)
     assert [row.session_id for row in everything] == ["s-a", "s-b"]
@@ -121,7 +121,7 @@ def test_an_unknown_storage_version_is_not_guessed(indexer, store):
     assert "storageVersion=99" in (row.last_error or "")
 
 
-# ---------------- P3：条目定位与增量游标
+# ---------------- entry location and incremental cursor
 
 
 def test_entries_land_with_line_offsets_that_read_back(indexer, store):
@@ -179,10 +179,10 @@ def test_a_torn_tail_waits_for_the_rest_of_the_line(indexer, store):
     indexer.reconcile()
     row = queries.get_session(indexer.conn, "s-torn")
     assert row is not None
-    assert row.entry_count == 1  # 半条不算数
-    assert row.indexed_bytes == complete  # 游标停在残片之前
+    assert row.entry_count == 1  # a half line does not count
+    assert row.indexed_bytes == complete  # the cursor stops before the fragment
 
-    with file.open("ab") as handle:  # 残片补齐（换行收尾）
+    with file.open("ab") as handle:  # complete the fragment with its trailing newline
         handle.write(
             '", "type": "message", "message": {"role": "assistant", "content": "补上了"}}\n'.encode()
         )
@@ -194,7 +194,8 @@ def test_a_torn_tail_waits_for_the_rest_of_the_line(indexer, store):
 
 
 def test_a_shortened_file_is_rebuilt_from_scratch(indexer, store):
-    """文件变短 = 被截断或被换掉：游标越界，整篇重扫（不猜缺了什么）。"""
+    """A shorter file means truncation or replacement: the cursor is out of range and the whole
+    file is rescanned; nothing is guessed about what went missing."""
     file = make_session(
         store,
         session_id="s-short",
@@ -208,7 +209,7 @@ def test_a_shortened_file_is_rebuilt_from_scratch(indexer, store):
     assert queries.get_session(indexer.conn, "s-short").entry_count == 3
 
     lines = file.read_text(encoding="utf-8").splitlines(keepends=True)
-    file.write_text("".join(lines[:3]), encoding="utf-8")  # header + 两次提交
+    file.write_text("".join(lines[:3]), encoding="utf-8")  # header + two commits
 
     indexer.reconcile()
 
@@ -217,8 +218,7 @@ def test_a_shortened_file_is_rebuilt_from_scratch(indexer, store):
     assert row.entry_count == 2
     assert row.indexed_bytes == file.stat().st_size
     assert row.index_status == "ok"
-    # 一次消息提交写一行 = [entry, tip 值]（两个写共用一行的字节区间），
-    # 所以条目 seq 是隔一个的：1、3、5…；截掉最后一行正好留下前两条。
+    # One commit = one line [entry, tip value] in one byte range, so stored seq is 1, 3, 5…
     assert [item["seq"] for item in queries.entries_of(indexer.conn, "s-short")] == [1, 3]
 
 
@@ -232,7 +232,7 @@ def test_a_deleted_file_is_forgotten(indexer, store):
 
     assert report.removed == 1
     assert queries.get_session(indexer.conn, "s-gone") is None
-    assert queries.entries_of(indexer.conn, "s-gone") == []  # 级联删掉了
+    assert queries.entries_of(indexer.conn, "s-gone") == []  # cascaded away
     assert queries.get_session(indexer.conn, "s-keep") is not None
 
 
@@ -283,24 +283,25 @@ def test_entries_report_their_own_location(indexer, store):
     assert read_byte_range(file, int(found["byte_offset"]), int(found["byte_length"]))["id"] == entry_id
 
 
-# ---------------- 评审修复（2026-10-09）：游标与行归属的四个洞 ----------------
+# ---------------- cursor and line-ownership edge cases ----------------
 
 
 def test_a_renamed_file_updates_its_path(indexer, store):
-    """改名/迁移后 file_path 必须跟着走：否则通知按旧路径找不到文件，新消息永远不进索引。"""
+    """file_path must follow a rename: notifications look the file up by path, so a stale path
+    silently stops indexing new messages."""
     import os
 
     file = make_session(store, session_id="s-rename", messages=({"role": "user", "content": "一"},))
     indexer.index_all()
     moved = file.with_name("renamed_" + file.name)
-    os.rename(file, moved)  # 保留 mtime：这正是迁移命令的日常路径
+    os.rename(file, moved)  # mtime is kept: this is the everyday path of the migrate command
 
     indexer.reconcile()
 
     row = queries.get_session(indexer.conn, "s-rename")
     assert row is not None and row.file_path == str(moved)
 
-    # 通知也要能找回来：拿旧路径根本读不到文件，得靠新的 file_path
+    # Notifications must find it too: the old path no longer reads, only the new file_path does.
     append_message(moved, {"role": "assistant", "content": "二"})
     indexer.notify("s-rename")
     assert indexer.flush(3.0) is True
@@ -309,14 +310,15 @@ def test_a_renamed_file_updates_its_path(indexer, store):
 
 
 def test_a_same_size_rewrite_is_rebuilt_not_absorbed(indexer, store):
-    """等长原地改写：长度看不出来，mtime 是唯一信号——不能在快路上把它刷新掉。"""
+    """A same-size in-place rewrite is invisible to length, so mtime is the only signal and the
+    fast path must not swallow it."""
     import os
 
     file = make_session(store, session_id="s-rewrite", messages=({"role": "user", "content": "旧词儿"},))
     indexer.index_all()
     assert queries.search_entries(indexer.conn, "旧词儿")
 
-    body = file.read_text(encoding="utf-8").replace("旧词儿", "新词儿")  # 三个字换三个字
+    body = file.read_text(encoding="utf-8").replace("旧词儿", "新词儿")  # three chars for three
     file.write_text(body, encoding="utf-8")
     stat = file.stat()
     os.utime(file, ns=(stat.st_atime_ns, stat.st_mtime_ns + 5_000_000_000))
@@ -329,12 +331,13 @@ def test_a_same_size_rewrite_is_rebuilt_not_absorbed(indexer, store):
 
 
 def test_a_file_replaced_by_another_session_does_not_jam_the_index(indexer, store):
-    """同名文件被换成另一会话：file_path 的唯一约束必须被处理，否则整遍索引永久卡死。"""
+    """A path swapped to another session must handle file_path's unique constraint, or every
+    later index pass jams."""
     file = make_session(store, session_id="s-old", messages=({"role": "user", "content": "老的"},))
     indexer.index_all()
-    # 同一个路径上换一份别的会话（header 里是另一个 id）
+    # Swap in a different session at the same path (the header carries another id)
     other = make_session(store, session_id="s-new", messages=({"role": "user", "content": "新的"},))
-    file.write_bytes(file.read_bytes())  # 占位：确保路径不变
+    file.write_bytes(file.read_bytes())  # placeholder: keep the path
     file.write_text(other.read_text(encoding="utf-8"), encoding="utf-8")
     other.unlink()
 
@@ -347,7 +350,8 @@ def test_a_file_replaced_by_another_session_does_not_jam_the_index(indexer, stor
 
 
 def test_one_bad_session_does_not_stop_the_pass(indexer, store):
-    """一个会话的约束错误不该让整遍中止：排在它后面的健康会话必须照旧被索引。"""
+    """One session's constraint error must not abort the pass: healthy sessions after it still
+    get indexed."""
     import sqlite3 as sqlite
 
     from avid.index import writer
@@ -373,7 +377,7 @@ def test_one_bad_session_does_not_stop_the_pass(indexer, store):
 
     assert report.failed == 1
     assert queries.get_session(indexer.conn, "z-good") is not None
-    assert monkey  # 保留引用，避免 lint 把 import 清掉
+    assert monkey  # keep the reference so lint does not drop the import
 
 
 def test_list_sessions_limit_actually_limits(indexer, store):

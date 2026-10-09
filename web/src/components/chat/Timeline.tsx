@@ -1,19 +1,8 @@
 /**
- * 时间线：把有序段落渲染成对话列。
- *
- * 只吃 `TimelineItem[]`，不碰线格式：段落从哪来（会话回拉还是事件流）是
- * `state/timeline.ts` 的事，这里只管怎么画。一份列表服务两段人生——运行中逐段
- * 追加，收尾后按轮折叠——所以没有「活区块」这第二个渲染器。
- *
- * 轮内顺序就是事件到达的顺序：思考 → 正文 → 它触发的工具。相邻工具行贴紧
- * （连续动作读起来是一组），其余段落之间留呼吸。
- * 标识行只在本轮第一次出现的正文上显示：同一轮后面几段是续写，再挂一次名字是噪音。
- * 动作行（复制 / 分支）同理——一次回话只挂一行，见 `turnActions`。
- *
- * 折叠：一轮跑完（末段是已落库的正文）就把**过程**收进一行
- * （`TurnSummary`：「已完成，用时 …」，点开还原），只留那条大幅消息。判定在
- * `state/timeline.ts` 的 `turnGroups`，这里只按它给的形状画；`liveTail` 是唯一的例外
- * ——本轮还在跑就铺着（过程要逐段看得见），跑完才折。
+ * Renders ordered `TimelineItem`s into the conversation column; it never touches the wire
+ * format — `state/timeline.ts` owns where segments come from and the fold decision
+ * (`turnGroups`). `liveTail` is the one exception that keeps the running turn expanded;
+ * in-turn order is event arrival: thinking → text → the tools it triggered.
  */
 
 import { useState } from 'react'
@@ -35,19 +24,20 @@ import { UserBubble } from './UserBubble'
 
 export type TimelineProps = {
   items: TimelineItem[]
-  /** 容器上的 data-testid：对话列是 `timeline`，子智能体面板里换一个——验收脚本按它区分两条时间线。 */
+  /** Container data-testid; the subagent panel passes a different one so acceptance
+   *  scripts can tell the two timelines apart. */
   testId?: string
-  /** 工作区根：工具行把路径显示成相对它；null = 原样显示绝对路径。 */
+  /** Workspace root for relativizing tool paths; null = absolute paths stay as-is. */
   workspaceRoot?: string | null
-  /** 从这条消息分叉；只给已落库的助手消息（还在流里的那条没有 entry_id）。 */
+  /** Fork from this message; only persisted assistant messages (streaming has no entry_id). */
   onBranch?: (entryId: string) => void
-  /** 最后一轮还在跑：这一轮不折（过程中的样子要逐段看得见）。 */
+  /** The last turn is still running: it never folds. */
   liveTail?: boolean
-  /** 点子智能体卡时通知调用方（打开右列的「子智能体」面板）。 */
+  /** Clicking a subagent card notifies the caller (opens the right-column subagents panel). */
   onOpenSubagents?: () => void
   /**
-   * 从检索命中跳过来的那条条目（阶段 57）：高亮它并滚进视野一次。
-   * 它可能不在当前这一页里——那种情况下由装配层改成从那条开始取页，所以这里只管画。
+   * Entry jumped to from a search hit: highlight and scroll into view once; re-paging when
+   * it is not on the current page is the assembly layer's job.
    */
   focusEntry?: string | null
   /** Session id used to compose stored-image URLs; null = stored images are not drawn. */
@@ -57,12 +47,8 @@ export type TimelineProps = {
 }
 
 /**
- * 回话动作面：一次「助手回话」（两条用户消息之间）只挂一行动作，落在它最后一段
- * 正文上——回话是一个整体，中间每段都挂一排按钮只会把时间线切碎。
- *
- * 复制的是整段回话的原文（各段正文按序拼接，含被折叠的过程段）；分支点是**末段**
- * 那条已落库的消息，还在流的那段没有 entry_id（分叉点必须是磁盘上真实存在的条目），
- * 此时不出现分支钮。
+ * One action row per assistant reply, on its last text segment; copied text joins the whole
+ * reply and the branch point is that persisted segment (streaming has no entry_id).
  */
 function turnActions(items: TimelineItem[]): Map<number, { text: string; branchAt: string | null }> {
   const actions = new Map<number, { text: string; branchAt: string | null }>()
@@ -95,7 +81,7 @@ function turnActions(items: TimelineItem[]): Map<number, { text: string; branchA
 
 type TurnAction = { text: string; branchAt: string | null }
 
-/** 被检索点到的那一条：套一圈 accent 光晕 + 浅底（`shadow-focus-ring` 是输入框聚焦用的同一个记号）。 */
+/** Search-hit highlight, reusing the input focus mark `shadow-focus-ring`. */
 function isFocused(entryId: string | null | undefined, focus: string | null): string {
   return entryId && focus && entryId === focus
     ? 'rounded-sm bg-accent-light/40 p-a4 shadow-focus-ring'
@@ -106,11 +92,11 @@ type Ctx = {
   workspaceRoot: string | null
   onBranch?: (entryId: string) => void
   onOpenSubagents?: () => void
-  /** 从检索跳过来的那条（阶段 57）；null = 没有焦点。 */
+  /** Entry focused from search; null = none. */
   focusEntry: string | null
-  /** 本轮第一段正文吃标识行；由调用方按"这一轮画过正文没有"消费。 */
+  /** Consumed by the turn's first text segment so it takes the head row. */
   head: { pending: boolean }
-  /** 整轮的动作面（复制 / 分支），按段落在组内的下标索引进来的。 */
+  /** Whole-reply actions (copy / branch) indexed by the segment's index within its group. */
   actions: Map<number, TurnAction>
   /** Session id for composing stored-image URLs; null = no session selected yet. */
   sessionId: string | null
@@ -133,13 +119,13 @@ function bubbleImages(images: TimelineImage[] | undefined, sessionId: string | n
   })
 }
 
-/** 段落 → 节点。`list` 是折叠判定后要画的那一段（可能是整轮，也可能只有过程），
- *  `offset` 是它在组内的起点（key 与动作面都按组内下标对齐）。 */
+/** Item → node; `list` is the part to draw after folding (a whole turn or just the process)
+ *  and `offset` is its start index within the group (keys and actions are group-indexed). */
 function itemNodes(list: TimelineItem[], offset: number, ctx: Ctx): ReactNode[] {
   return list.map((item, index) => {
     const at = offset + index
     const key = itemKey(item, at)
-    // 连续的工具行贴紧：动作读起来是一组，逐行之间不需要段落级的间距。
+    // Consecutive tool rows stick together: one action group needs no paragraph gap between rows.
     const tight = item.kind === 'tool' && list[index - 1]?.kind === 'tool'
 
     if (item.kind === 'user') {
@@ -200,7 +186,7 @@ function itemNodes(list: TimelineItem[], offset: number, ctx: Ctx): ReactNode[] 
     }
 
     if (item.kind === 'error') {
-      // 失败记账：一段带危险色的窄条，不进气泡、不挂动作行（它不是"谁说的话"）
+      // Error item: a narrow danger strip, no bubble and no actions — it is not something said.
       return (
         <div
           key={key}
@@ -230,12 +216,10 @@ function itemNodes(list: TimelineItem[], offset: number, ctx: Ctx): ReactNode[] 
     }
 
     const label = toolLabel(item.name, item.args, ctx.workspaceRoot)
-    // 文件类工具的详情视图（差异 / 代码）：折叠态不画，但展开时要有——它只需要参数与
-    // 结果，两条来源（事件流 / 重读会话）都有，所以刷新后同形。
+    // File-tool detail needs only args + result, so the stream and a reload draw the same thing.
     const detail = toolDetail(item.name, item.args, item.result, item.status)
     return (
-      // data-* 是给端到端脚本读时间线用的：段落的种类与身份写在 DOM 上，
-      // 脚本不必猜 class 名（改样式不会让验收脚本静默失效）。
+      // data-* is the e2e read path: item kind and identity live on the DOM, not on class names.
       <div key={key} data-item="tool" data-call={item.callId} className={tight ? '-mt-a8' : undefined}>
         <ToolCard
           icon={label.icon}
@@ -266,7 +250,7 @@ export function Timeline({
   sessionId = null,
   onDropInput,
 }: TimelineProps) {
-  // 手动展开的轮：折叠是默认，点开的那几轮记在这儿（切换会话/刷新即回到默认）。
+  // Manually expanded turns; folding is the default and a session switch or reload resets this.
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set())
   const groups = turnGroups(items)
 
@@ -282,8 +266,7 @@ export function Timeline({
   const nodes: ReactNode[] = []
   groups.forEach((group, index) => {
     const running = liveTail && index === groups.length - 1
-    // 可折一轮的三个条件：有收尾正文（末尾不是工具 = 这轮真跑完了）、有过程可收、
-    // 且不是正在跑的那一轮。跑着的时候铺开——过程要逐段看得见。
+    // Foldable needs a final answer, a process to fold, and not the running turn.
     const foldable = group.answer !== null && group.process.length > 0 && !running
     const open = foldable && opened.has(group.key)
     const ctx: Ctx = {
@@ -300,7 +283,7 @@ export function Timeline({
 
     if (group.user !== null) nodes.push(...itemNodes([group.user], group.offset, ctx))
     if (foldable) {
-      // 折叠行是这一轮过程的抬头：收着时它是全部，点开后过程铺在它下面，还能再收起。
+      // The summary row heads the turn's process: everything when closed, toggles the rest.
       nodes.push(
         <TurnSummary
           key={`${group.key}:summary`}

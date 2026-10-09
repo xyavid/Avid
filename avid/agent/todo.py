@@ -27,7 +27,7 @@ class TodoList:
         self.items: list[dict[str, str]] = []
 
     def replace(self, raw: Any) -> None:
-        """Replace the list from raw input; an invalid item raises and leaves the old list untouched."""
+        """Replace the list from raw input; an invalid item raises and leaves the old list as is."""
         if not isinstance(raw, list):
             _bad("todos 必须是数组")
 

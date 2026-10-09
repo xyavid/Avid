@@ -1,7 +1,7 @@
-"""上下文管线编排的测试：compose() 先跑压缩通路，再装配。
+"""Context pipeline orchestration: compose() runs compaction first, then assembles.
 
-编排逻辑委托给 compaction.py，这一层只验证"何时触发、触发后装配到什么"，
-不需要为了测编排去伪造整个循环。
+Only the orchestration is pinned here (when compaction triggers, what gets assembled); the
+strategy itself lives in compaction.py.
 """
 
 
@@ -25,7 +25,7 @@ def summarize_sentinel(*args, **kwargs):
 
 
 class Summarizer:
-    """固定返回摘要文本的假摘要模型，记录每次调用。"""
+    """Fake summarizer with fixed text that counts its calls."""
 
     def __init__(self, text="要点摘要"):
         self.calls = 0
@@ -62,7 +62,7 @@ def budget(**overrides):
 
 def prepare(transcript, state, *, budget=None, summarize=summarize_sentinel,
             on_compaction=None):
-    """compose 的压缩半程：本文件只关心编排，不关心渲染。"""
+    """Compaction half of compose(); rendering is out of scope here."""
     manager = ContextManager(
         transcript=transcript,
         state=state,
@@ -114,7 +114,7 @@ def test_above_trigger_summarizes_once_and_persists_cursor():
     assert len(covered) == 1
     summary, keep = covered[0]
     assert summary["content"].startswith("[历史摘要]")
-    assert keep == 20  # 最近 10 轮 = 20 条消息
+    assert keep == 20  # 10 recent turns = 20 messages
     assert transcript.as_messages()[0]["content"] == summary["content"]
 
 
@@ -139,7 +139,7 @@ def test_force_bypasses_threshold_and_the_once_guard():
     report = reactive(transcript, state, budget=budget(), summarize=summarizer)
 
     assert report is not None
-    assert summarizer.calls == 2  # force 不受每运行一次的守护限制
+    assert summarizer.calls == 2  # force bypasses the once-per-run guard
 
 
 def test_summarize_failure_keeps_history():
@@ -173,14 +173,14 @@ def test_each_compaction_is_announced_and_counted(caplog):
 
 
 def test_compaction_arms_the_next_real_reading():
-    """压缩之后要等下一轮真实读数：编排只置"等读数"的标志，回填由 record_usage 做。"""
+    """Compaction only arms the next reading; record_usage backfills it."""
     transcript = Transcript(rounds(12))
     state = RunState()
     state.record_usage(Usage(150_000, 1, 150_001))
 
     prepare(transcript, state, budget=budget(), summarize=Summarizer())
 
-    # 压完还没调用模型：不给数（界面显示「—」），也不猜。
+    # No model call since compaction: report no number (the UI shows "-") rather than guess.
     assert state.usage_report()["compaction"]["last_compaction_tokens"] is None
 
     state.record_usage(Usage(40_000, 1, 40_001))
@@ -202,12 +202,12 @@ def test_default_budget_references_the_compact_constants():
 
 
 def test_budget_is_injectable_so_orchestration_is_testable():
-    """阈值可注入：测编排时不必改全局常量，也就不必建一个巨大的 transcript。"""
+    """Thresholds are injectable, so orchestration is testable without huge transcripts."""
     transcript = Transcript(rounds(12))
     state = RunState()
     summarizer = Summarizer()
 
-    # 触发线抬高到永远够不着：摘要不该被调用
+    # Trigger raised out of reach: the summarizer must not be called
     prepare(
         transcript, state,
         budget=budget(context_chars=100_000_000), summarize=summarizer,

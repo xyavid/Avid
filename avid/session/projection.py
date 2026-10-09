@@ -13,8 +13,7 @@ __all__ = ["messages_for_branch", "entries_to_messages", "repair_incomplete_batc
 # Both types project, because kernel-injected notices were part of the transcript the model actually saw.
 _TRANSCRIPT_TYPES = (MESSAGE_ENTRY, NOTICE_ENTRY)
 
-# 崩溃窗口的合成结果文案：对模型说明执行状态未知，先核实再决定是否重做。
-# 只存在于投影返回值（recorder 不经过这里），永不落库。
+# Crash-window synthetic result: tells the model the outcome is unknown, and never reaches disk.
 _CUT_OFF_RESULT = (
     "（此调用的结果没有落盘：运行在结果记录前被切断，执行状态未知，"
     "可能已生效。请先核实实际状态（读文件/查状态）再决定是否重做。）"
@@ -22,10 +21,8 @@ _CUT_OFF_RESULT = (
 
 
 def messages_for_branch(session: Any, branch: str = "main") -> list[dict[str, Any]]:
-    """Every message on a branch, oldest first; an unknown branch yields an empty list.
-
-    存在压缩游标时（诊断 C2），被游标覆盖的前缀由摘要（＋保留尾）替代——
-    上一次运行花的摘要调用通过投影延续到之后的每个运行，不再重花。
+    """Every message on a branch, oldest first, with a compaction cursor replacing the covered
+    prefix by its summary plus the kept tail; an unknown branch yields an empty list.
     """
     found = session.branch(branch)
     if found is None:
@@ -40,7 +37,9 @@ def messages_for_branch(session: Any, branch: str = "main") -> list[dict[str, An
 def _project_with_compaction(
     record: dict[str, Any], entries: Sequence[Entry]
 ) -> list[dict[str, Any]]:
-    """游标锚定 entry seq（只追加、不可变），覆盖段由摘要＋保留尾替代。"""
+    """The cursor anchors on an entry seq, so the covered prefix becomes the summary plus the
+    kept tail.
+    """
     try:
         through = int(record.get("through_seq") or 0)
         keep = int(record.get("keep") or 0)
@@ -83,7 +82,7 @@ def repair_incomplete_batches(messages: Sequence[dict[str, Any]]) -> list[dict[s
     call_order: list[str] = []
 
     def fill_missing() -> None:
-        # 按 call 在 assistant 消息里的原顺序补，缺一个补一条。
+        # Fill missing results in the order the assistant listed the calls.
         for call_id in call_order:
             if call_id in pending:
                 kept.append(

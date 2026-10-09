@@ -1,9 +1,6 @@
 /**
- * 纸本卡片（组件墙 §卡片）：抬升面 + 0.5px 发丝线 + 衬线标题。
- * 简单卡是 5px（rounded-sm，墙实绘）；8px 的 --radius-card 留给大面板
- * （radius="md"，右栏/设置区块用，报告 §2.3）。
- * 内边距 13/15 是墙的组件解剖值（「内边距 13–15px」），离网注明出处。
- * actions（阶段 4 补件）：标题行右侧的操作区（如工作区卡的「新增」按钮）。
+ * Card: raised surface, hairline border, serif title. `radius="sm"` is 5px and the default,
+ * `radius="md"` maps to `--radius-card` (8px) for large panels; padding 13/15px is off the grid.
  */
 
 import type { HTMLAttributes, ReactNode } from 'react'

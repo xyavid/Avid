@@ -19,8 +19,8 @@ _CMD_START = (
     r"(?:^|[;&|]\s*)(?:(?:sudo|command|env|nohup|xargs|time|nice)\s+)*(?:\S*/)?"
 )
 
-# 毁灭级：不可恢复的系统级破坏。默认形态下它触发一次询问（二次确认在 UI 层），full 由
-# 显式授权跳过——它不再等于「任何模式都拒」的硬拒，唯一硬拒只剩凭据拒读。
+# Catastrophic, unrecoverable system damage: asks once unless full is granted; credential reads
+# remain the only hard denial.
 DENY_PATTERNS: tuple[tuple[str, str], ...] = (
     (
         _CMD_START + r"rm\b[^|;&]*\s(?:/\*?|~/?\*?|\$HOME/?\*?)(?:\s|;|&|$)",
@@ -37,8 +37,7 @@ DENY_PATTERNS: tuple[tuple[str, str], ...] = (
     (_CMD_START + r"ch(?:mod|own)\s+-R\s+\S+\s+/(?:\s|$)", "递归修改根目录的权限或属主"),
 )
 
-# Dangerous commands: side effects outside the workspace, irreversible data loss, or privilege gain.
-# Whether a danger needs approval is decided by the three axes, not by this table.
+# Danger categories feed audit and display only; they trigger no ask on their own.
 DANGER_PATTERNS: tuple[tuple[str, str], ...] = (
     (_CMD_START + r"(?:sudo|su|doas|pkexec)\b", "提权"),
     (
@@ -69,8 +68,7 @@ DANGER_PATTERNS: tuple[tuple[str, str], ...] = (
     (_CMD_START + r"find\b[^|;&]*\s-delete\b", "批量删除文件"),
     (_CMD_START + r"(?:ssh|scp|rsync)\b", "远程访问或传输"),
     (_CMD_START + r"(?:docker|podman|kubectl|helm)\b", "容器或编排操作"),
-    # PowerShell 动词：与 POSIX 同类目同档（表按命令文本匹配，PS 命令不会出现在
-    # bash 的正常用法里，反之亦然，合一张表没有误伤）。
+    # PowerShell verbs share the POSIX tiers: the two syntaxes never cross-match.
     (
         _CMD_START + r"remove-item\b[^|;&]*(?:-recurse\b|-force\b)",
         "递归或强制删除",
@@ -121,12 +119,11 @@ PATH_TOOLS: frozenset[str] = frozenset({"read_file", "write_file", "edit_file", 
 # Write-class file tools; membership decides whether read or write rules are consulted.
 WRITE_TOOLS: frozenset[str] = frozenset({"write_file", "edit_file"})
 
-# Operation names shared with the file tools' 只读/写 判定。
+# Operation names shared with the file tools' read/write classification.
 OPERATION_READ = "read"
 OPERATION_WRITE = "write"
 
-# Risk marker for "a target lies outside the workspace"; it records position, not danger —
-# 阶段 51 起区外读写都直接执行并自动挂载，这个标记只进审计与展示。
+# Risk marker for a target outside the workspace; it feeds audit and display only, never a verdict.
 OUTSIDE_RISK = "越界"
 
 # Capabilities that change state outside the sandbox; reading the host is already granted.
@@ -134,9 +131,8 @@ WRITE_CAPABILITIES: frozenset[str] = frozenset({"filesystem_write", "filesystem_
 
 
 def _outside_write_targets(command: str, outside: tuple[str, ...], root: str | None) -> tuple[str, ...]:
-    """Narrows write targets to known shell shapes; an uncertain command keeps every target.
-
-    Approval only, not isolation: unknown commands are still blocked by the mounts.
+    """Narrow write targets to known shell shapes; approval is all this narrows, so an uncertain
+    command keeps every target and the mounts still provide the isolation.
     """
     # Imported here rather than at module level to avoid a policy <-> tools import cycle.
     from ..agent.tools import workspace

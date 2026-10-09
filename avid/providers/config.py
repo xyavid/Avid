@@ -1,9 +1,8 @@
-"""Runtime model vocabulary: the `Config` carrier, context-window table and knobs.
+"""Runtime model vocabulary: the `Config` carrier, the context-window table and two knobs.
 
-模型**连接**（端点 / 协议 / 密钥 / 模型名）的唯一来源是 BYOK 配置（`ai/byok.py`，
-`~/.avid/models.json` + `~/.avid/secrets.json`）；本模块不再承载任何模型身份配置，
-只保留模型无关的运行期事实：`Config` 载体、上下文窗口内置表与两个旁路开关
-（窗口探测 `AVID_MODEL_INFO`、一步并行工具上限 `AVID_MAX_PARALLEL_TOOL_CALLS`）。
+Model connections (endpoint, protocol, key, model name) come only from the BYOK config in
+`providers/byok.py`; the two bypass switches are window probing (`AVID_MODEL_INFO`) and the
+per-step parallel tool cap (`AVID_MAX_PARALLEL_TOOL_CALLS`).
 """
 
 from __future__ import annotations
@@ -82,8 +81,7 @@ class Config:
     extra_headers: dict[str, str] | None = None
     extra_body: dict[str, Any] | None = None
     max_output: int | None = None
-    # 本次运行选的推理强度（来自运行请求，取值必须在模型声明的档位列表里）；
-    # None = 这次不带这个参数。
+    # Reasoning effort for this run, one of the model's declared levels; None omits the field.
     reasoning_effort: str | None = None
     # Model image capability: only False refuses image messages before the run; None sends as-is.
     vision: bool | None = None

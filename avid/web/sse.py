@@ -1,4 +1,4 @@
-"""SSE framing: only durable events carry an ``id:`` field, so a resume stops at the last of them."""
+"""SSE framing: only durable events carry an ``id:`` field, so a resume stops at the last one."""
 
 from __future__ import annotations
 
@@ -45,7 +45,8 @@ def stream(
     deltas: bool = False,
     heartbeat: float = HEARTBEAT_SECONDS,
 ) -> Iterator[str]:
-    """Encodes a run's event stream to SSE text on a worker thread, turning the None yield into a ping."""
+    """Encodes a run's event stream to SSE text on a worker thread, mapping a None yield
+    to a ping."""
     for event in registry.subscribe(
         record.run_id, after=after, deltas=deltas, heartbeat=heartbeat
     ):
@@ -63,7 +64,7 @@ async def stream_async(
     deltas: bool = False,
     heartbeat: float = HEARTBEAT_SECONDS,
 ) -> AsyncIterator[str]:
-    """Async twin of ``stream`` that waits on the event loop instead of occupying a thread pool slot."""
+    """Async twin of ``stream`` that waits on the event loop instead of a thread pool slot."""
     async for event in registry.subscribe_async(
         record.run_id, after=after, deltas=deltas, heartbeat=heartbeat
     ):

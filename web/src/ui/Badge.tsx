@@ -1,7 +1,4 @@
-/**
- * 徽章（组件墙 §徽章）：带可选线性图标的短标签。padding 2px 8px 全在 4px
- * 网格上（py-a2 px-a8）；gap 5px 是墙的解剖值。
- */
+/** Badge: short label with an optional linear icon; gap 5px is off the 4px grid. */
 
 import type { HTMLAttributes } from 'react'
 

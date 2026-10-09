@@ -1,16 +1,10 @@
-"""User-level Avid directory and the settings file kept there.
+"""The user-level Avid directory and the settings file kept there: one stdlib-only leaf shared by
+the workspace registry, the audit log, sandbox masking and the settings page.
 
-One stdlib-only leaf shared by the workspace registry, the audit log, sandbox masking
-and the settings page, so they all agree on where user-level things live:
-
-- ``avid_home()``：用户级目录（``AVID_HOME``，默认 ``~/.avid``）；
-- ``sessions_dir()``：会话目录（``AVID_SESSIONS_DIR`` → ``settings.json`` 的
-  ``sessions_dir`` → ``<avid home>/sessions``）。解析只此一处——沙箱掩蔽要跟它走，
-  所以它不能住在 services 层。
-
-Reading tolerates a missing or corrupt file (falls back to defaults); writing merges
-the given keys and replaces the file atomically, so an interrupted write cannot
-truncate it. 密钥不在这里：那是 secrets.json 的事。
+``sessions_dir()`` is the single resolution point for the session store
+(``AVID_SESSIONS_DIR`` → ``settings.json``'s ``sessions_dir`` → ``<avid home>/sessions``), and
+sandbox masking follows it, so it cannot live in the services layer; reads tolerate a missing or
+corrupt file, writes merge keys and replace the file atomically, and secrets stay in secrets.json.
 """
 
 from __future__ import annotations
@@ -81,7 +75,7 @@ def write_settings(patch: Mapping[str, Any]) -> None:
 
     path = settings_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    # Write a sibling temp file and replace it, so an interrupted write cannot truncate the settings.
+    # Sibling temp file + atomic replace, so an interrupted write cannot truncate the settings.
     temp = path.with_suffix(".tmp")
     temp.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

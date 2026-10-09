@@ -1,10 +1,7 @@
 /**
- * 外观配置（界面域状态，localStorage 持久化——架构约定「界面域状态归前端」）。
- *
- * 模式：light（暖纸）/ dark（青夜）/ auto（跟随系统，默认）。
- * 应用方式：`document.documentElement.dataset.theme`——tokens.css 是 :root 基线，
- * themes/*.css 用 [data-theme] 覆盖变量，组件零改动（换肤机制的兑现）。
- * main.tsx 在挂载前调 initAppearance()，避免先亮后暗的闪烁。
+ * Appearance (UI-domain state, persisted to localStorage under `avid.appearance`).
+ * Modes: light (warm paper) / dark (midnight) / auto (follow system, default); applied by setting
+ * `document.documentElement.dataset.theme`, which themes/*.css override against tokens.css :root.
  */
 
 import { useCallback, useEffect, useState } from 'react'
@@ -15,9 +12,8 @@ export type ThemeId = 'warm-paper' | 'midnight'
 const STORAGE_KEY = 'avid.appearance'
 
 /**
- * 主题注册表：label 与预览色是**主题调色板的展示副本**（设置界面画色卡用）。
- * 色值出自报告 §3.2（暖纸 --bg/--accent）与 §4（青夜 bg/accent），
- * 主题真值在 styles/themes/*.css，改主题要同步这里的预览。
+ * Theme registry: label and preview colors are display copies of the palette in
+ * styles/themes/*.css — keep them in sync when a theme changes.
  */
 export type ThemeEntry = { id: ThemeId; label: string; kind: 'light' | 'dark'; bg: string; accent: string }
 
@@ -47,7 +43,7 @@ export function writeMode(mode: AppearanceMode): void {
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(mode))
   } catch {
-    // 存储不可用（隐私模式）不是错误：本次会话内生效即可
+    // Storage unavailable (private mode) is not an error: applying it this session is enough
   }
 }
 
@@ -56,17 +52,17 @@ function applyResolved(mode: AppearanceMode): void {
   document.documentElement.dataset.theme = resolveTheme(mode, prefersDark)
 }
 
-/** 应用模式到 DOM（不写存储）。 */
+/** Apply a mode to the DOM (does not write storage). */
 export function applyMode(mode: AppearanceMode): void {
   applyResolved(mode)
 }
 
-/** 挂载前用存储值定主题（避免闪烁）。 */
+/** Set the theme from storage before mount (avoids a flash). */
 export function initAppearance(): void {
   applyResolved(readMode())
 }
 
-/** React 绑定：mode 变化即应用到 DOM；auto 时跟随系统偏好变化。 */
+/** React binding: applies the mode to the DOM on change; auto follows system preference changes. */
 export function useAppearance(): { mode: AppearanceMode; setMode: (mode: AppearanceMode) => void } {
   const [mode, setModeState] = useState<AppearanceMode>(readMode)
 

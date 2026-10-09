@@ -1,17 +1,9 @@
-"""subagent: hands independent subtasks to several child agents in parallel.
+"""Hands independent subtasks to several child agents in parallel.
 
-A child agent reuses the main loop, so the permission gates, hook events and output
-truncation all come for free.
-
-子运行**也走流式**（阶段 53）：它是「看得见的工人」——前端的子智能体面板要逐字看到它在
-写什么、调哪个工具。正文与思考增量经子运行自己的 observer 发出，而 subagent 工具给
-observer 打的标记（`{task, index}`）会跟着走，所以父运行的事件流里分得清哪些是它的。
-摘要调用仍走非流式（`summarize=chat_completion`），否则压缩摘要的文本会混进它的正文。
-
-子 agent 的输入是两段：系统提示（``SUB_SYSTEM``，说明它是谁、摘要交给谁）+ **任务提示**。
-任务提示不由父 agent 自由发挥：``TASK_FIELDS`` 声明六段，schema 把它们全设为必填（协议层
-先拦缺段），``task_brief`` 渲染成固定骨架——标题行 + 五段 + 收尾句。父 agent 只填值，
-子 agent 每轮看到的形状都一样。字段名即段名（``objective`` → ``Objective``），改名一处生效。
+Children reuse the main loop — permission gates, hook events and output truncation included —
+and stream their words as ``{task, index}``-tagged deltas on the parent's event queue, while
+their input is fixed by ``TASK_FIELDS``: the parent only fills values and ``task_brief``
+renders the same six-section shape for every child.
 """
 
 
@@ -47,8 +39,8 @@ SUB_SYSTEM = (
     "不要反问、不要索要更多信息，用你能用的工具自己解决。"
 )
 
-#: 任务提示的六段：字段名 + 给父 agent 的填写说明。顺序即渲染顺序，也是报错顺序；
-#: schema 的 properties / required 与 _validate 的报错都从这张表派生，别处不另抄一份。
+#: The six task fields: name plus the hint the parent fills in. Order drives rendering and the
+#: error order; the schema's properties/required and ``_validate`` errors all derive from here.
 TASK_FIELDS: tuple[tuple[str, str], ...] = (
     ("description", "一句话标题，用于汇总结果与界面上的任务归属"),
     ("objective", "这次要达成什么"),
@@ -62,16 +54,13 @@ TASK_FIELDS: tuple[tuple[str, str], ...] = (
     ("deliverable", "要交回什么，逐项写清回报格式"),
 )
 
-#: 收尾句：每份任务提示都以它结束，父 agent 不用自己写。
+#: Closing line every task brief ends with; the parent need not write it.
 TASK_STOP_LINE = "Stop after completing the deliverable and return the findings to the parent agent."
 
 
 def task_brief(task: dict[str, str]) -> str:
-    """Renders one validated task into the child's first user message.
-
-    父 agent 只填值，形状由这里保证：少了哪一段子 agent 都得自己猜，而它看不到父对话，
-    猜错就是一次白跑。
-    """
+    """Renders one validated task into the child's first user message, a fixed shape the parent
+    cannot vary — a missing section would only make the child guess."""
     sections = [f"{key.capitalize()}:\n{task[key]}" for key, _ in TASK_FIELDS[1:]]
     return "\n\n".join([task["description"], *sections, TASK_STOP_LINE])
 
@@ -92,13 +81,8 @@ def _no_summary(text: str) -> str:
 
 
 def streaming_child_chat(state: "RunState") -> Callable[..., Any]:
-    """The child's chat: stream the call and emit text/reasoning deltas onto its observer.
-
-    Why the child streams at all: the front end shows a running child's work in the subagent
-    panel, and without deltas its words never reach the wire (a child has no message sink and
-    persists nothing). The deltas travel the parent's event queue tagged with `{task, index}`,
-    which is the same route its tool events already take — one streaming implementation, not two.
-    """
+    """The child's chat: streams the call and emits text/reasoning deltas on its observer, the
+    only way its words reach the subagent panel since it has no message sink."""
 
     def chat(config: Config, messages: list[dict[str, Any]], **kwargs: Any) -> Any:
         return stream_completion(
@@ -131,11 +115,9 @@ def run_subagent(
     on_state: "Callable[[RunState], None] | None" = None,
     checkpoint: "Checkpointer | None" = None,
 ) -> str:
-    """Runs one child agent and returns its conclusion summary.
-
-    Permission mode, ledger, security, root, the scratch flag and the write-ahead
-    checkpointer are forwarded field by field, since a child on another thread inherits no
-    run state.
+    """Runs one child agent and returns its conclusion summary, forwarding permission mode,
+    ledger, security, root, scratch and checkpoint field by field since a child thread
+    inherits no run state.
     """
     # A deferred import, since agent/state.py imports this package for the tool tables.
     from ..run import Run
@@ -155,8 +137,7 @@ def run_subagent(
         scratch=scratch,
         hooks=hooks,
     )
-    # The parent's sink is shared as-is: its tip_seq closure points at the parent's session,
-    # which stays open for as long as the parent waits on this batch.
+    # The parent's sink is shared as-is: its closure points at the parent session, kept open.
     child_state.checkpoint = checkpoint
     if cancel_probe is not None:
         child_state.cancel_probe = cancel_probe
@@ -165,16 +146,16 @@ def run_subagent(
 
     tools, handlers = (SUB_TOOLS, SUB_HANDLERS)
     if scratch:
-        # 临时对话的子运行也摘表：父级的只读约束要跟到底，不能靠"子 agent 大概不会写"
+        # A scratch child drops writers too: the parent's read-only constraint must reach the end.
         from . import without_writers
 
         tools, handlers = without_writers(SUB_TOOLS, SUB_HANDLERS)
     messages = [{"role": "user", "content": prompt}]
     spec = RunSpec.resolve(
         config=config or resolve_chat(),
-        # 默认即流式（见 streaming_child_chat）；注入的 chat 走注入的（测试用脚本模型）
+        # Streaming by default; an injected chat wins (tests use a scripted model).
         chat=chat if chat is not None else streaming_child_chat(child_state),
-        # 摘要必须绕开流式：它的文本不是子运行说的话，混进正文就分不出哪句是结论
+        # Summaries bypass streaming: their text is not the child speaking.
         summarize=chat_completion,
         instructions=SUB_SYSTEM,
         tools=tools,
@@ -186,12 +167,8 @@ def run_subagent(
 
 
 def _validate(raw: Any) -> list[dict[str, str]]:
-    """Validates the task list, raising ValueError with text the model can act on.
-
-    Missing fields normally never reach here: the protocol layer rejects a call that lacks a
-    required one first. The check stays for direct callers and reports the same way, with the
-    field's own filling hint attached.
-    """
+    """Validates the task list, raising ValueError with text the model can act on; a missing
+    field normally never gets here because the protocol layer rejects it first."""
     if not isinstance(raw, list) or not raw:
         _bad("tasks 必须是非空数组")
 
@@ -245,8 +222,7 @@ def _render(tasks: list[dict[str, str]], results: list[str]) -> str:
     header = (
         "已运行 1 个 subagent：" if total == 1 else f"已并行运行 {total} 个 subagent："
     )
-    # A second guard: run_subagent already guarantees a non-empty summary, but a replaced
-    # runner may not, and the output contract should not break.
+    # A second guard: a replaced runner may return no summary, and the output contract holds.
     blocks = [
         f"=== {index}/{total} · {task['description']} ===\n{_no_summary(result)}"
         for index, (task, result) in enumerate(zip(tasks, results, strict=True), start=1)
@@ -296,14 +272,13 @@ def subagent(
         return f"错误：{exc}"
 
     run = run_subagent if runner is None else runner
-    # 子运行跟父运行用同一个模型与推理强度（界面选的那两个）；没有覆盖就一起按设置解析——
-    # 否则用户选了 A 模型，子 agent 悄悄按绑定里的 B 跑。
+    # Children use the parent's model and effort; with no override both resolve from settings.
     config = resolve_chat(model=state.model_ref, effort=state.effort)
     # Auto-approval, the ask callback, the permission mode and the ledger are read from the run
     # state and passed explicitly, since implicit state does not follow a child to its thread.
     auto_approve = state.auto_approve
     ask = state.ask
-    # 提问通道也继承：子 agent 缺信息时问的是同一个人（挂起在父运行的那张待决表上）。
+    # The question channel is inherited: a child's question reaches the same person.
     question = getattr(state, "question", None)
     permission_mode = state.permission_mode
     scratch = state.scratch
@@ -390,8 +365,7 @@ def subagent(
             _collect(future, deadline, timeout, state=state) for future in futures
         ]
     finally:
-        # No waiting: a timed-out subtask cannot be killed, but it carries a probe, so it stops
-        # at its next checkpoint instead of running an uninformed loop to completion.
+        # No waiting: a timed-out subtask cannot be killed, but its probe stops it at a checkpoint.
         executor.shutdown(wait=False, cancel_futures=True)
 
     # Usage is adopted even for timed-out or cancelled subtasks, since spent tokens are real.

@@ -1,9 +1,6 @@
-"""Run：一次运行的生命周期（prepare → 轮次循环 → 终止），单出口。
+"""One run's lifecycle (prepare → round loop → termination) with a single exit.
 
-与 agent_loop 的分工：这里只换表达方式（显式阶段方法 + 单一出口），
-行为逐字节一致由 tests/test_run.py 的序列一致性用例钉住；阶段 37 起
-行为演进先改这里，旧 loop.py 在阶段 40 删除（届时 BLANK_* 与
-MAX_STOP_BLOCKS 常量随终止路径迁往 stop 模块）。
+Behaviour is pinned by the sequence-consistency cases in tests/test_run.py.
 """
 
 from __future__ import annotations
@@ -68,8 +65,8 @@ class Run:
         on_message: Callable[[dict[str, Any]], Any] | None = None,
         ask: "AskUser | None" = None,
         on_event: RunObserver | None = None,
-        # ④/⑤ 替换历史后的落盘钩子（summary 消息, keep 条数）；CLI 接会话游标，
-        # 不接则压缩只在内存生效、下个运行重新压缩（诊断 C2 的旧行为）。
+        # Callback after the history is replaced (summary message, kept tail size); the CLI wires it
+        # to the session cursor, and without it compaction stays in memory and reruns next time.
         on_compaction: Callable[[dict[str, Any], int], None] | None = None,
     ) -> None:
         self.messages = messages
@@ -95,7 +92,7 @@ class Run:
                 hooks=spec.hooks,
                 context_window=spec.config.context_window,
             )
-        # 调用方自建 state 时窗口还没探测（探测只发生在 resolve），这里回填。
+        # A caller-built state has no probed window yet (probing happens in resolve), so fill it in.
         if state.context_window is None:
             state.context_window = spec.config.context_window
 
@@ -113,7 +110,7 @@ class Run:
 
         trigger = _submit_input(transcript, state, spec.tool_names)
         if trigger is None:
-            # UserPromptSubmit 拦截：运行没开始就结束，但没有模型轮次可补问
+            # UserPromptSubmit blocked: the run ends before it starts, no model round to ask again
             return RunOutcome(text="", reason=STOP_PROMPT_BLOCKED)
         index, injected = trigger
         self._emit(transcript.as_messages()[index])
@@ -123,7 +120,7 @@ class Run:
 
         for round_index in itertools.count(1):
             state.round = round_index
-            state.check_cancelled()  # 取消检查点 1：轮次开始前
+            state.check_cancelled()  # cancellation checkpoint 1: before the round starts
             # Sole delivery point for steers: before compose() each step, where appending is safe.
             for message in [*pending_steers, *self._take_steers(state)]:
                 transcript.append(message)
@@ -164,7 +161,7 @@ class Run:
                     return final
                 continue
 
-            state.check_cancelled()  # 取消检查点 2：工具批前
+            state.check_cancelled()  # cancellation checkpoint 2: before the tool batch
             outcomes = execute_batch(
                 turn.tool_calls,
                 state=state,
@@ -228,7 +225,7 @@ class Run:
             )
 
     def _finish(self, state: RunState, transcript: Transcript, turn: Turn) -> RunOutcome | None:
-        """终止路径委托给 stop 模块；None = 已补问，续轮。"""
+        """Termination is delegated to the stop module; None means a nudge was sent, so continue."""
         return decide(
             state,
             transcript,

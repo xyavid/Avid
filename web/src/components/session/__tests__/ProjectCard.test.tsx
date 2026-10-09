@@ -19,7 +19,7 @@ describe('ProjectCard（侧栏 · 项目卡，可收回）', () => {
 
     expect(screen.getByText('Avid')).toBeTruthy()
     expect(screen.getByText('Other')).toBeTruthy()
-    // 每行一个文件夹图标
+    // One folder icon per row.
     expect(screen.getAllByTitle('/home/fishy/other').length).toBeGreaterThan(0)
 
     fireEvent.click(screen.getByText('Other'))
@@ -32,7 +32,7 @@ describe('ProjectCard（侧栏 · 项目卡，可收回）', () => {
     )
 
     expect(screen.getByText('当前会话')).toBeTruthy()
-    // 选中项：accent 勾（svg）
+    // Selected row: accent check (svg).
     expect(document.querySelectorAll('svg')).toBeTruthy()
   })
 
@@ -80,7 +80,7 @@ describe('ProjectCard（侧栏 · 项目卡，可收回）', () => {
     expect(more.className).toContain('opacity-0')
     expect(more.className).toContain('group-hover:opacity-100')
     expect(more.querySelector('svg')).toBeTruthy()
-    // 两行各一个，不共用
+    // One per row, not shared.
     expect(screen.getAllByRole('button', { name: /^更多：/ })).toHaveLength(2)
   })
 
@@ -91,7 +91,7 @@ describe('ProjectCard（侧栏 · 项目卡，可收回）', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '更多：Other' }))
     expect(screen.getByRole('button', { name: '删除 Other' })).toBeTruthy()
-    // 展开的那一行按钮常亮（不再靠悬停）
+    // The expanded row's button stays visible without hover.
     expect(screen.getByRole('button', { name: '更多：Other' }).getAttribute('aria-expanded')).toBe('true')
 
     fireEvent.click(screen.getByRole('button', { name: '更多：Other' }))
@@ -103,14 +103,14 @@ describe('ProjectCard（侧栏 · 项目卡，可收回）', () => {
     render(<ProjectCard workspaces={WORKSPACES} activeWorkspaceId="w1" onDeleteWorkspace={onDelete} />)
 
     fireEvent.click(screen.getByRole('button', { name: '更多：Other' }))
-    // 展开时就写清这一下删的是什么（注册表条目，不是磁盘上的会话）
+    // The row spells out that it removes a registry entry, not the sessions on disk.
     expect(screen.getByText(/会话文件留在磁盘/)).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: '删除 Other' }))
 
     expect(onDelete).toHaveBeenCalledWith('w2')
     expect(onDelete).toHaveBeenCalledTimes(1)
-    // 删完菜单自己收起
+    // The menu collapses after deleting.
     expect(screen.queryByRole('button', { name: '删除 Other' })).toBeNull()
   })
 

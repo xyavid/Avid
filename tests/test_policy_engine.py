@@ -1,7 +1,8 @@
-"""权限轻量化（阶段 51）的决策规格：默认直接跑、毁灭级双确认、凭据拒读、full 显式授权。
+"""Decision specs for ``security``: normal mode runs everything without asking, except
+destructive commands, which are asked once and deduplicated by the ledger.
 
-这里的每一行都是产品规格的一句话：默认形态下只有毁灭级命令会 (被) 问人；凭据拒读是
-唯一硬拒（连 full 也拒）；区外读写自动授权并挂进沙箱；账本让同一条毁灭级命令只问一次。
+Credential reads are the one hard deny, even under full permission; outside-workspace reads and
+writes are auto-granted and mounted into the sandbox.
 """
 
 from __future__ import annotations
@@ -36,7 +37,8 @@ BROKEN_PROBE = BackendProbe(
     backend=BACKEND_NONE, available=False, reason="找不到 bubblewrap（bwrap）", landlock=3
 )
 
-#: 毁灭级样本：删根/家目录、格式化、写块设备、fork 炸弹、关机、递归改根目录权限。
+#: Destructive samples: deleting root/home, formatting, writing a block device,
+#: shutdown, and recursive chmod on root.
 DESTRUCTIVE = [
     "rm -rf /",
     "rm -rf ~",
@@ -46,7 +48,7 @@ DESTRUCTIVE = [
     "chmod -R 777 /",
 ]
 
-#: 旧 DANGER_PATTERNS：这些命令以前要问人，轻量化后直接跑，只进审计。
+#: Commands that no longer trigger a question: they run silently and only reach the audit trail.
 DANGEROUS_BUT_SILENT = [
     "sudo ls",
     "rm -rf build",
@@ -61,12 +63,13 @@ DANGEROUS_BUT_SILENT = [
 
 SECRET = "sudo ls"
 OUTSIDE = "cat /etc/hostname"
-#: 区外**写**：沙箱只保证工作区可写，写区外要挂载授权（自动的，不问人）。
+#: Outside-workspace writes: the sandbox only guarantees the workspace is writable, so
+#: outside destinations get an automatic mount grant (no question).
 OUTSIDE_WRITE = "echo x >> /etc/hostname"
 
 
-#: 沙箱只能把**已存在**的路径挂进来，所以区外写的用例必须在 /var/tmp 里放真文件。
-#: 刻意避开 /tmp：沙箱把它换成私有 tmpfs，写它不碰宿主。
+#: bwrap can only mount existing paths, so outside-write cases create real files in /var/tmp
+#: (not /tmp: the sandbox swaps in a private tmpfs, so writes there never touch the host).
 @contextmanager
 def outside_files(*names: str):
     directory = Path("/var/tmp") / f"avid-outside-{uuid.uuid4().hex}"
@@ -117,7 +120,7 @@ def no_questions(*args):
     raise AssertionError("默认形态下这条调用不该问人")
 
 
-# ---------------------------------------------------------------- 默认：一切直接执行
+# ---------------------------------------------------------------- default: everything runs directly
 
 
 def test_workspace_actions_run_without_asking(sandbox: Path, specs):
@@ -136,13 +139,13 @@ def test_workspace_actions_run_without_asking(sandbox: Path, specs):
 
 @pytest.mark.parametrize("command", DANGEROUS_BUT_SILENT)
 def test_the_old_danger_table_runs_silently_but_stays_visible(sandbox: Path, specs, command):
-    """旧危险表（sudo/递归删除/包管理/docker/网络…）不再触发询问，风险名只进审计。"""
+    """These commands no longer trigger a question; their risk facts stay in the audit trail."""
     decision = run("bash", {"command": command}, spec=specs["normal"], root=sandbox, ask=no_questions)
     assert decision.allowed and decision.answered_by == "policy"
 
     action = brokerize("bash", {"command": command}, root=str(sandbox))
     assert action.damage is None, command
-    # 事实仍在：要么有风险名，要么有网络/写这类可审计的能力标记。
+    # Facts remain: a risk name or an auditable capability flag (network/write).
     assert action.risks or action.network or action.capabilities, command
 
 
@@ -157,12 +160,12 @@ def test_outside_reads_and_writes_run_directly(sandbox: Path, specs):
             tool, arguments, spec=specs["normal"], root=sandbox, ledger=ledger, ask=no_questions
         )
         assert decision.allowed and decision.answered_by == "policy"
-    # 只读的区外访问不记账（沙箱本来就给整个文件系统只读）
+    # Read-only outside access is not recorded (the sandbox already makes the fs read-only)
     assert ledger.path_grants() == ()
 
 
 def test_outside_writes_are_granted_on_the_way_through(sandbox: Path, specs):
-    """区外写不再问人：账本自动记授权，沙箱 argv 据此挂载。"""
+    """Outside writes ask no one: the ledger records the grant the sandbox argv mounts."""
     with outside_files("auto.txt") as (outside,):
         ledger = ApprovalLedger()
         decision = run(
@@ -179,14 +182,14 @@ def test_outside_writes_are_granted_on_the_way_through(sandbox: Path, specs):
 
 
 def test_external_source_is_not_a_write_capability(sandbox: Path, specs):
-    """外部源只读、写入工作区：不能把全命令的 write 误归到只读源上。"""
+    """An external read source feeding a workspace write must not become a write grant."""
     for command in ("cp /etc/hostname local.txt", "cat /etc/hostname > local.txt"):
         decision = run("bash", {"command": command}, spec=specs["normal"], root=sandbox)
         assert decision.allowed and not decision.grants, command
 
 
 def test_mcp_tools_and_subagents_run_directly(sandbox: Path, specs):
-    """MCP 工具（用户自己装的 server）与 subagent 都不再审查。"""
+    """MCP tools (user-installed servers) and subagents are not reviewed either."""
     for tool, arguments in (
         ("mcp__demo__search", {"query": "x"}),
         ("subagent", {}),
@@ -195,7 +198,7 @@ def test_mcp_tools_and_subagents_run_directly(sandbox: Path, specs):
         assert decision.allowed and decision.answered_by == "policy", tool
 
 
-# ---------------------------------------------------------------- 毁灭级：问一次
+# ---------------------------------------------------------------- destructive: asked once
 
 
 @pytest.mark.parametrize("command", DESTRUCTIVE)
@@ -216,7 +219,7 @@ def test_destructive_commands_ask_once_and_run_when_answered(sandbox: Path, spec
 
 @pytest.mark.parametrize("command", DESTRUCTIVE)
 def test_destructive_commands_are_denied_without_an_ask_channel(sandbox: Path, specs, command):
-    """确认不可能发生就不执行：没有询问通道时 fail closed。"""
+    """No ask channel means fail closed: without confirmation the command does not run."""
     decision = run("bash", {"command": command}, spec=specs["normal"], root=sandbox)
     assert not decision.allowed, command
     assert (decision.kind, decision.answered_by) == ("danger", "policy")
@@ -239,7 +242,7 @@ def test_refusing_the_question_denies_with_its_own_guidance(sandbox: Path, specs
 
 
 def test_one_answer_covers_the_rest_of_the_run(sandbox: Path, specs):
-    """同意一次即生效：同一条规范化命令不再问（双确认只发生一次）。"""
+    """One approval covers the run: the same normalized command is never asked twice."""
     ledger = ApprovalLedger()
     asked: list[str] = []
 
@@ -294,7 +297,7 @@ def test_full_skips_the_question_entirely(sandbox: Path, specs):
 
 
 def test_decision_exposes_structured_command_result_types(sandbox: Path, specs):
-    """机器调用方不能只靠 bool 区分策略拒绝与需要授权。"""
+    """Machine callers need structured types to tell policy denial from needs-approval."""
     safe = run("bash", {"command": "ls"}, spec=specs["normal"], root=sandbox)
     assert safe.type == "SAFE_AUTO"
 
@@ -320,11 +323,11 @@ def test_messages_say_what_the_model_should_do_next(sandbox: Path, specs):
     assert len({credential.message, unanswered.message, refused.message}) == 3
 
 
-# ---------------------------------------------------------------- 凭据拒读：唯一硬拒
+# ---------------------------------------------------------------- credentials: the one hard deny
 
 
 def test_credentials_are_refused_in_every_shape(sandbox: Path, specs):
-    """凭据进上下文不可撤回：ask 答应、账本预先批准、full 都不放行。"""
+    """Credentials cannot be recalled once in context: ask, pre-grant, and full all refuse."""
     ledger = ApprovalLedger()
     ledger.remember(("path", "/etc/shadow", "ro"))
 
@@ -357,7 +360,7 @@ def test_credential_paths_cover_host_secrets(sandbox: Path, specs, path):
 
 
 def test_file_tools_allow_outside_paths_but_refuse_credentials(sandbox: Path, specs):
-    """文件工具的闸门只剩凭据拒读；区外写不再需要授权。"""
+    """For file tools only credential refusal remains; outside writes need no grant."""
     from avid.agent.state import RunState
     from avid.agent.tools.files import write_file
 
@@ -372,7 +375,7 @@ def test_file_tools_allow_outside_paths_but_refuse_credentials(sandbox: Path, sp
     assert "受保护的宿主资源" in refused
 
 
-# ---------------------------------------------------------------- 沙箱与规格
+# ---------------------------------------------------------------- sandbox and specs
 
 
 def test_normal_runs_inside_the_workspace_sandbox(sandbox: Path, specs):
@@ -390,7 +393,7 @@ def test_full_disables_the_sandbox(sandbox: Path, specs):
 
 
 def test_degraded_sandbox_does_not_ask(sandbox: Path):
-    """沙箱是纵深不是门槛：后端不可用也不把命令推回给人（毁灭级照旧问）。"""
+    """A missing sandbox backend never pushes commands back; destructive ones still ask."""
     degraded = security(sandbox, probe=BROKEN_PROBE)
 
     listed = run("bash", {"command": "ls"}, spec=degraded, root=sandbox, ask=no_questions)
@@ -425,7 +428,7 @@ def test_degraded_state_is_visible_in_the_spec(sandbox: Path):
     assert summary["sandbox_state"]["reason"]
 
 
-# ---------------------------------------------------------------- 能力账本
+# ---------------------------------------------------------------- capability ledger
 
 
 def test_the_ledger_keys_destructive_commands_by_normalized_text(sandbox: Path, specs):
@@ -438,7 +441,7 @@ def test_the_ledger_keys_destructive_commands_by_normalized_text(sandbox: Path, 
         ledger=ledger,
         ask=lambda *args: True,
     )
-    # 规范化之后同一条命令再次到来时命中账本
+    # The same command, normalized, hits the ledger on its second arrival
     again = run(
         "bash",
         {"command": "rm -rf /"},
@@ -458,7 +461,7 @@ def test_path_grants_are_rw_and_win_over_ro(sandbox: Path, specs):
 
 
 def test_every_allow_records_its_path_grants(sandbox: Path, specs):
-    """每一条允许都要记账：毁灭级放行的命令要写区外时，缺了挂载会在沙箱里撞上只读。"""
+    """Every allow is recorded; a missing mount would hit read-only inside the sandbox."""
     with outside_files("destructive.txt") as (outside,):
         ledger = ApprovalLedger()
         decision = run(
@@ -484,7 +487,7 @@ def test_every_allow_records_its_path_grants(sandbox: Path, specs):
 
 
 def test_grants_only_mount_the_write_destination(sandbox: Path, specs):
-    """外部只读源不能顺带挂成可写：grants 只有写目标。"""
+    """An outside read source is not mounted writable: grants cover the destination only."""
     with outside_files("source.txt", "destination.txt") as (source, destination):
         ledger = ApprovalLedger()
         decision = run(
@@ -498,11 +501,11 @@ def test_grants_only_mount_the_write_destination(sandbox: Path, specs):
         assert ledger.path_grants() == ((str(destination), "rw"),)
 
 
-# ---------------------------------------------------------------- 分类回归（事实层）
+# ---------------------------------------------------------------- classification regressions
 
 
 def test_script_blocks_propagate_state_capabilities(sandbox: Path):
-    """块内写/删/网必须向整条命令传播：`ForEach-Object { Remove-Item $_ }` 不是只读。"""
+    """Writes/deletes/network inside a script block propagate to the whole command."""
     action = brokerize(
         "bash", {"command": "Get-ChildItem | ForEach-Object { Remove-Item $_ }"}, root=str(sandbox)
     )
@@ -511,7 +514,7 @@ def test_script_blocks_propagate_state_capabilities(sandbox: Path):
 
 
 def test_filter_blocks_stay_read_only(sandbox: Path):
-    """$_ 是管道变量不是写落点：PS 过滤块保持只读档。"""
+    """``$_`` is a pipeline variable, not a write target: filter blocks stay read-only."""
     action = brokerize(
         "bash", {"command": "Get-Process | Where-Object {$_.CPU -gt 10}"}, root=str(sandbox)
     )
@@ -540,7 +543,7 @@ def test_reading_a_variable_is_still_read_only(sandbox: Path):
     ],
 )
 def test_block_and_quote_blind_spots_stay_visible_in_the_facts(sandbox: Path, command):
-    """评审发现的盲区（块内未知程序/块内 $ 写目标/引号内 system()）仍要被分类看见。"""
+    """Blind spots (unknown programs in blocks, quoted system()) must stay visible in the facts."""
     action = brokerize("bash", {"command": command}, root=str(sandbox))
     risky = action.risks or action.damage or action.network
     assert risky, f"{command} 的风险事实丢了"
@@ -548,7 +551,7 @@ def test_block_and_quote_blind_spots_stay_visible_in_the_facts(sandbox: Path, co
 
 
 def test_powershell_aliases_are_classified(sandbox: Path):
-    """Windows 上 bash 工具跑 PowerShell：别名与动词进同一套能力/风险表。"""
+    """On Windows the bash tool runs PowerShell: aliases and verbs share the same tables."""
     listing = brokerize("bash", {"command": "gci"}, root=str(sandbox))
     assert "filesystem_read" in listing.capabilities and not listing.risks
 
@@ -564,7 +567,7 @@ def test_powershell_aliases_are_classified(sandbox: Path):
 
 
 def test_windows_style_paths_are_scan_candidates(sandbox: Path):
-    """盘符/UNC/反斜杠相对路径都进目标扫描（区外判定由宿主 ntpath 解析）。"""
+    """Drive-letter, UNC, and backslash-relative paths are scan candidates (host ntpath decides)."""
     from avid.agent.tools.workspace import _candidate
 
     base = Path(sandbox)

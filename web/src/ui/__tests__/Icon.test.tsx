@@ -18,7 +18,7 @@ describe('Icon 图标集（报告 §9 图标规范）', () => {
       expect(svg?.getAttribute('stroke')).toBe('currentColor')
       expect(svg?.getAttribute('stroke-width')).toBe('1.5')
       expect(svg?.getAttribute('aria-hidden')).toBe('true')
-      // 线性图标必须有笔迹，不许出现空壳
+      // a linear icon must have strokes, never an empty shell
       expect(svg?.querySelector('path, rect, circle, line'), `图标 ${name} 缺笔迹`).toBeTruthy()
       unmount()
     }

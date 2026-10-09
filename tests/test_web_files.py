@@ -1,9 +1,15 @@
-"""工作区文件浏览端点的边界。
+"""Workspace file-browsing endpoint boundaries.
 
-隔离测试先列失败清单，每条都有用例：
-  ① 越出工作区（`..`）；② symlink 穿透；③ 凭据类路径（`.env` / `.pem` / `.ssh`）；
-  ④ 未知工作区；⑤ 不是目录 / 不是文件；⑥ 超大文件截断；⑦ 二进制不猜编码；
-  ⑧ 条目数截断。端点是只读的，所以没有写路径要测。
+Ways it can break, one case each:
+  1) escaping the workspace (`..`);
+  2) symlink escape;
+  3) credential paths (`.env` / `.pem` / `.ssh`);
+  4) unknown workspace;
+  5) not a directory / not a file;
+  6) oversized-file truncation;
+  7) binary data without guessing an encoding;
+  8) entry-count truncation.
+Endpoints are read-only, so there is no write path to test.
 """
 
 from __future__ import annotations
@@ -21,7 +27,7 @@ from avid.web import create_app
 @pytest.fixture
 def client(sandbox):
     services = Services(root=sandbox / ".avid" / "sessions")
-    # 静态目录指向不存在的路径：断言不随环境里有没有构建产物变化。
+    # a missing static dir keeps assertions independent of a local build
     app = create_app(services=services, static_dir=sandbox / "static-not-built")
     with TestClient(app, base_url="http://127.0.0.1:8765") as test_client:
         yield test_client
@@ -30,7 +36,7 @@ def client(sandbox):
 
 @pytest.fixture
 def ws(client, tmp_path) -> tuple[str, Path]:
-    """登记一个临时工作区（目录 + 一个子目录 + 两个文件）。"""
+    """Registers a temp workspace (root dir, one subdir, two files)."""
     root = tmp_path / "proj"
     (root / "src").mkdir(parents=True)
     (root / "README.md").write_text("项目说明\n", encoding="utf-8")
@@ -52,7 +58,7 @@ def test_lists_directories_first_then_files(client, ws):
     assert body["parent"] is None
     assert [entry["name"] for entry in body["entries"]] == ["src", "README.md"]
     assert [entry["kind"] for entry in body["entries"]] == ["dir", "file"]
-    assert body["entries"][0]["size"] is None  # 目录不给大小
+    assert body["entries"][0]["size"] is None  # directories report no size
     assert body["entries"][1]["size"] == len("项目说明\n".encode())
     assert body["truncated"] is False
 
@@ -62,7 +68,7 @@ def test_walks_into_a_subdirectory_and_back(client, ws):
     body = client.get(f"/api/workspaces/{workspace_id}/files", params={"path": "src"}).json()
 
     assert body["path"] == "src"
-    assert body["parent"] == ""  # 上一级是根
+    assert body["parent"] == ""  # parent of the root
     assert [entry["name"] for entry in body["entries"]] == ["main.py"]
     assert body["entries"][0]["path"] == "src/main.py"
 
@@ -98,7 +104,7 @@ def test_refuses_credentials(client, ws):
         assert response.status_code == 403, path
         assert code_of(response) == "file_sensitive", path
 
-    # 列目录也一样：`.ssh` 是敏感组件，连它下面的名字都不给
+    # listing is guarded too: `.ssh` is sensitive, so names under it stay hidden
     response = client.get(f"/api/workspaces/{workspace_id}/files", params={"path": ".ssh"})
     assert response.status_code == 403
     assert code_of(response) == "file_sensitive"

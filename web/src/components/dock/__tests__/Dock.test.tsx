@@ -83,7 +83,7 @@ describe('右侧 dock（阶段 48；阶段 53 起只留三个面板）', () => {
     expect(labels.join(' ')).not.toContain('进程')
     expect(labels.join(' ')).not.toContain('审查')
 
-    // 选一个条目就把选择交出去（收起列表由页面的 select 负责，组件不留状态）
+    // Selecting an entry hands the choice out; the page owns closing the list.
     fireEvent.click([...list.querySelectorAll('button')][1]!)
     expect(onSelect).toHaveBeenCalledWith('subagents')
   })
@@ -127,9 +127,9 @@ describe('右侧 dock（阶段 48；阶段 53 起只留三个面板）', () => {
     expect(screen.getByText('统计 a.py')).toBeTruthy()
     expect(screen.getByText('1 步')).toBeTruthy()
     expect(screen.getByLabelText('运行中')).toBeTruthy()
-    // 只落了任务清单的那条：版面不写解释，事实挂在 title 上
+    // Task-list-only run: no visible explanation, the fact lives in title.
     expect(screen.getByText('统计 b.py').closest('button')?.getAttribute('title')).toContain('明细不落库')
-    // 0 步的那条不再挂一行说明（界面只摆操作需要的）
+    // The 0-step run carries no extra line.
     expect(screen.queryByText('明细不落库（只有任务清单）')).toBeNull()
   })
 
@@ -161,7 +161,7 @@ describe('右侧 dock（阶段 48；阶段 53 起只留三个面板）', () => {
     expect(screen.getByText('我看一眼。')).toBeTruthy()
     expect(screen.getByText('读取')).toBeTruthy()
     expect(screen.getByText('a.py')).toBeTruthy()
-    // 子时间线用另一个 testid：验收脚本要能把它与主对话列分开
+    // The sub timeline uses its own testid so scripts can tell it from the main timeline.
     expect(document.querySelector('[data-testid="timeline-subagent"]')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: '回到子任务列表' }))

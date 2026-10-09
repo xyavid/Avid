@@ -1,18 +1,9 @@
-"""BYOK 三层配置（Provider / Model / Binding）与密钥解析。
+"""BYOK config (provider / model / binding) and key resolution.
 
-契约要点：
-- **配置只存引用**：`~/.avid/models.json` 里没有明文密钥；明文在 `~/.avid/secrets.json`
-  （0600、原子写），按 provider id 索引——「配置会被泄露」假设下的最小机制；
-- **鉴权隐式**：密钥库有该 provider 的条目就带上（协议模块负责标准头），
-  没有就不带——本地服务不需要密钥，缺密钥不是错误；没有 bearer/header 的选择；
-- **解析优先级**：本次运行覆盖（`providerId/modelId` ref，或命中绑定提供商的裸模型名）
-  > chat 绑定；两者都不成立就是 ConfigError——BYOK 是模型连接的唯一来源，没有回落；
-- **能力守卫**：chat 槽位（含按运行覆盖）的模型声明 `tool_calling=false` 时拒绝解析；
-- **损坏降级分两档**：JSON 解析失败 → 警告 + 按「没有配置」处理（同样报错，不静默
-  换到别的东西）；结构非法（协议未知、引用不存在…）→ ConfigError——文件可读但
-  内容错时静默换端点比报错更危险；旧版本写下的 `auth` 块静默忽略，不打断加载；
-- 协议枚举对齐 providers/ 注册表：openai-compatible 与 ollama 归 openai 族，
-  anthropic、responses 归各自族；oauth 不做（没有授权流基础设施）。
+Config holds references only: plaintext keys live in ``secrets.json`` (0600, keyed by provider
+id); a run override beats the chat binding, and BYOK is the only source (no fallback). Corrupt
+JSON degrades to "no config" with a warning, while structurally invalid config raises
+``ConfigError`` instead of silently switching endpoints.
 """
 
 from __future__ import annotations
@@ -42,7 +33,7 @@ from avid.providers.config import ConfigError
 
 @pytest.fixture
 def byok_env(tmp_path, monkeypatch):
-    """BYOK 两个文件的路径都指到本用例的临时目录（盖掉 conftest 的种子配置）。"""
+    """Point both BYOK file paths at this test's tmp dir (overriding conftest seeds)."""
     cfg = tmp_path / "models.json"
     sec = tmp_path / "secrets.json"
     monkeypatch.setenv("AVID_BYOK_CONFIG", str(cfg))
@@ -51,7 +42,7 @@ def byok_env(tmp_path, monkeypatch):
 
 
 def make_config(**overrides) -> ByokConfig:
-    """一份最小合法配置：deepseek 一家一模型，chat 绑定指向它。"""
+    """A minimal valid config: one deepseek provider/model with the chat binding pointing at it."""
     provider = ProviderDecl(
         id="deepseek",
         label="DeepSeek",
@@ -77,7 +68,7 @@ def write_raw(path, raw) -> None:
     path.write_text(json.dumps(raw), encoding="utf-8")
 
 
-# ---------------- 文件与 secret 存取 ----------------
+# ---------------- files and secret storage ----------------
 
 
 def test_missing_file_is_a_config_error_with_repair_text(byok_env):
@@ -140,7 +131,7 @@ def test_secret_roundtrip_and_owner_only(byok_env):
     assert secrets_path() == sec
 
 
-# ---------------- 校验 ----------------
+# ---------------- validation ----------------
 
 
 def test_rejects_bad_provider_id(byok_env):
@@ -209,11 +200,12 @@ def test_rejects_chat_binding_without_tool_calling(byok_env):
         load_byok()
 
 
-# ---------------- 解析 ----------------
+# ---------------- resolution ----------------
 
 
 def test_vision_capability_rides_into_the_config(byok_env):
-    """Vision is a declaration like any other capability: it rides into Config at resolve time, and the caller enforces it per message."""
+    """Vision is a declaration like any other capability: it rides into Config at resolve time,
+    and the caller enforces it per message."""
     _, sec = byok_env
     sec.write_text(json.dumps({"blind": "sk"}), encoding="utf-8")
     raw = {
@@ -247,14 +239,14 @@ def test_chat_binding_resolves_to_config(byok_env):
     assert config.base_url == "https://api.deepseek.example/v1"
     assert config.model == "deepseek-chat"
     assert config.context_window == 65536
-    assert config.provider == "openai"  # openai-compatible → openai 协议族
+    assert config.provider == "openai"  # openai-compatible -> openai protocol family
 
 
 def test_binding_resolves_the_bound_model(byok_env):
     set_secret("deepseek", "sk-live")
     save_byok(make_config())
 
-    # conftest 种的是 test/test-model；这份配置的 chat 绑定指向 deepseek/deepseek-chat
+    # conftest seeds test/test-model; this config's chat binding is deepseek/deepseek-chat
     config = resolve_chat()
     assert (config.api_key, config.model) == ("sk-live", "deepseek-chat")
 
@@ -279,16 +271,16 @@ def test_ref_override_picks_any_provider(byok_env):
 
     config = resolve_chat(model="local/qwen:7b")
     assert (config.model, config.provider) == ("qwen:7b", "openai")
-    assert config.api_key == ""  # 密钥库里没有 local → 不带鉴权头（本地服务）
+    assert config.api_key == ""  # no local key -> no auth header (local service)
 
 
 def test_bare_model_override_must_exist_in_bound_provider(byok_env):
     set_secret("deepseek", "sk-live")
     save_byok(make_config())
 
-    # 绑定提供商里的裸模型名 → BYOK
+    # Bare model name in the bound provider -> BYOK
     assert resolve_chat(model="deepseek-chat").base_url == "https://api.deepseek.example/v1"
-    # 不在提供商目录里的裸名 → 报错（没有 env 回落；要用别家模型就写 ref 形式）
+    # Bare name outside the provider catalog -> error (no env fallback; use the ref form)
     with pytest.raises(ConfigError, match="deepseek"):
         resolve_chat(model="some-other-model")
 
@@ -301,7 +293,7 @@ def test_ref_override_to_unknown_provider_raises(byok_env):
 
 
 def test_absent_secret_means_no_auth_not_an_error(byok_env):
-    """没存密钥不是错误：解析照常，api_key 为空 → 传输层不带鉴权头（本地服务）。"""
+    """A missing key is not an error: api_key is empty, so no auth header is sent."""
     save_byok(make_config())
 
     config = resolve_chat()
@@ -317,7 +309,7 @@ def test_key_from_secrets_by_provider_id(byok_env):
 
 
 def test_legacy_auth_block_is_ignored(byok_env):
-    """旧版配置里的 auth 块（bearer/header/none）在解析时静默忽略，不打断加载。"""
+    """A legacy ``auth`` block (bearer/header/none) is silently ignored at load time."""
     cfg, _ = byok_env
     write_raw(
         cfg,
@@ -338,7 +330,7 @@ def test_legacy_auth_block_is_ignored(byok_env):
 
     loaded = load_byok()
     assert loaded is not None
-    assert resolve_chat().api_key == ""  # 密钥按 provider id（ds）查，与旧 secret_ref 无关
+    assert resolve_chat().api_key == ""  # key lookup is by provider id (ds), not secret_ref
 
 
 def test_static_headers_and_extra_fields_flow_into_config(byok_env):
@@ -355,16 +347,16 @@ def test_static_headers_and_extra_fields_flow_into_config(byok_env):
     save_byok(ByokConfig(providers={"gw": provider}, bindings={"chat": "gw/m1"}))
 
     config = resolve_chat()
-    # 静态头保留；密钥走协议标准头（由协议模块负责），不再注入自定义头
+    # Static headers pass through; the key uses the protocol standard header, not a custom one
     assert config.extra_headers == {"X-Trace": "avid"}
     assert config.api_key == "sk-gw"
     assert config.extra_body == {"provider": {"order": ["b1"]}}
     assert config.max_output == 1024
-    assert config.context_window is None  # 未声明窗口 → 交给运行期的内置表兜底
+    assert config.context_window is None  # undeclared window -> the built-in runtime table
 
 
 def test_reasoning_effort_is_chosen_per_run_from_the_declared_list(byok_env):
-    """档位列表由模型声明，**运行时挑一个**（阶段 55 追加）：挑中的进 Config，随请求发出去。"""
+    """Effort is declared by the model and chosen per run; the pick rides in Config."""
     provider = ProviderDecl(
         id="gw",
         label="网关",
@@ -378,9 +370,9 @@ def test_reasoning_effort_is_chosen_per_run_from_the_declared_list(byok_env):
     save_byok(ByokConfig(providers={"gw": provider}, bindings={"chat": "gw/deep"}))
 
     assert resolve_chat("gw/deep", effort="max").reasoning_effort == "max"
-    # 不挑就不带这个参数（没有隐式默认档位）
+    # No pick, no parameter (there is no implicit default effort)
     assert resolve_chat("gw/deep").reasoning_effort is None
-    # 绑定的模型走同一条路（裸模型名解析）
+    # The bound model takes the same path (bare-name resolution)
     assert resolve_chat(effort="low").reasoning_effort == "low"
 
     with pytest.raises(ConfigError, match="没有声明推理强度"):
@@ -390,7 +382,7 @@ def test_reasoning_effort_is_chosen_per_run_from_the_declared_list(byok_env):
 
 
 def test_reasoning_effort_list_is_free_form_and_validated(byok_env):
-    """档位是配置的人定的（各家不一样），内核只挡住空串、过长与重复。"""
+    """Effort names are free-form; only empty, over-32-char, and duplicate entries fail."""
     ok = ModelDecl(id="m", reasoning_efforts=("minimal", "low", "xhigh"))
     validate_byok(
         ByokConfig(
@@ -437,7 +429,7 @@ def test_reasoning_effort_list_survives_a_save_and_load_round_trip(byok_env):
     assert model.reasoning_efforts == ("low", "high", "max")
     assert model.capabilities.vision is True
 
-    # 列表随候选发给界面（composer 的强度选择器靠它）
+    # The list ships with model candidates for the composer's effort picker
     candidates = byok_model_candidates()
     assert candidates[0]["reasoning_efforts"] == ["low", "high", "max"]
 

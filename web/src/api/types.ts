@@ -1,10 +1,4 @@
-/**
- * REST 契约的 TS 形状：与 `src/avid/web/schemas.py` 的 pydantic DTO 一一对应。
- *
- * 为什么手写而不是生成：设计文档 §6.3 的机械检查先做「两侧事件清单一致」，
- * 生成器要等「事件数量 × 变更频率」超过人工同步成本（§16 给了触发信号）。
- * 到时用 OpenAPI 生成到 `src/api/generated/`，本文件就是替换点。
- */
+/** TS shapes of the REST contract, one-to-one with the pydantic DTOs in `avid/web/schemas.py`. */
 
 export interface ErrorEnvelope {
   error: { code: string; message: string; detail: Record<string, unknown> }
@@ -21,22 +15,22 @@ export interface Skill {
   description: string
 }
 
-/** 沙箱后端探测结果（`GET /api/meta` 的 `capabilities.sandbox`）。 */
+/** Sandbox backend probe (`capabilities.sandbox` of `GET /api/meta`). */
 export interface SandboxState {
   backend: string
   available: boolean
   network: boolean
   reason: string | null
-  /** 内核 Landlock ABI 版本；只有 ABI ≥ 4 才能强制网络（这里只做诊断展示）。 */
+  /** Kernel Landlock ABI; network enforcement needs ABI ≥ 4 (diagnostic display only here). */
   landlock_abi: number | null
 }
 
-/** 系统文件夹选择器的结果：`path` 为 null = 用户取消（不是错误）。 */
+/** System folder picker result: `path` null = user cancelled (not an error). */
 export interface PickFolderResult {
   path: string | null
 }
 
-/** 会话归属的线格式（`SessionSummary.workspace`）：`id` 来自会话 header。 */
+/** Session ownership on the wire; `id` comes from the session header. */
 export interface WorkspaceRef {
   id: string | null
   root: string | null
@@ -44,11 +38,10 @@ export interface WorkspaceRef {
 }
 
 /**
- * `GET /api/workspaces` 的一项。
+ * One item of `GET /api/workspaces`.
  *
- * `is_default` 只有单工作区模式才可能为 true；`name` 在 pydantic DTO 里是可空字段
- * （`WorkspaceOut` 继承 `WorkspaceRef`），所以这里也按可空接。
- * 阶段 51 起工作区没有默认权限——权限只按运行给（见 `StartRunInput`）。
+ * `is_default` is only ever true in single-workspace mode; `name` is nullable in the pydantic DTO
+ * (`WorkspaceOut` extends `WorkspaceRef`), so it is nullable here too.
  */
 export interface WorkspaceSummary {
   id: string
@@ -59,11 +52,11 @@ export interface WorkspaceSummary {
   is_default: boolean
 }
 
-/** 按运行换模型的 BYOK 候选：`ref` 是 providerId/modelId，`label` 是展示名。 */
+/** BYOK candidate for per-run switching: `ref` = providerId/modelId, `label` = display name. */
 export interface ModelCandidate {
   ref: string
   label: string
-  /** 该模型声明的推理强度档位：输入区的强度选择器按它列选项。 */
+  /** Reasoning levels this model declares; the input area's picker lists exactly these. */
   reasoning_efforts?: string[]
 }
 
@@ -71,13 +64,12 @@ export interface Capabilities {
   tools: string[]
   skills: Skill[]
   model: string | null
-  /** 可切换的模型候选（内核窗口表；不是提供商目录）。 */
-  /** BYOK 候选（providerId/modelId ref）；不预置模型选项，没配 BYOK 时为空。 */
+  /** Switchable model candidates (BYOK providerId/modelId refs); empty without BYOK config. */
   models: ModelCandidate[]
   workspace: string
-  /** 这台机器上会用到哪个文件夹选择器后端（null = 没有可用的）。诊断用。 */
+  /** Which folder-picker backend this machine uses (null = none); diagnostics. */
   workspace_picker: string | null
-  /** 沙箱后端探测结果：界面据此说清"沙箱到底在不在"，而不是照模式猜。 */
+  /** Sandbox backend probe: the UI reports whether the sandbox exists instead of guessing. */
   sandbox: SandboxState
 }
 
@@ -108,7 +100,7 @@ export interface SessionSummary {
   created_at: number
   storage_version: number
   parent_session_id: string | null
-  /** 归属的工作区；由会话 header 决定，客户端只读。 */
+  /** Owning workspace; set by the session header, read-only for clients. */
   workspace: WorkspaceRef | null
   message_count: number
   active_run_id: string | null
@@ -120,8 +112,8 @@ export interface SessionDetail extends SessionSummary {
 }
 
 /**
- * 临时会话（`POST /api/sessions/{id}/scratch`）：从源会话拷了一份上下文、带只读标记，
- * 界面离开面板即销毁。`copied_messages` 是拷了多少条——面板拿去说「带上了 N 条上下文」。
+ * Scratch session (`POST /api/sessions/{id}/scratch`): context copied from the source session,
+ * read-only, destroyed when the panel closes; `copied_messages` says how many messages were copied.
  */
 export interface ScratchSession extends SessionDetail {
   copied_messages: number
@@ -136,25 +128,25 @@ export interface Entry {
   message: Record<string, unknown> | null
 }
 
-/** 工作区文件浏览（`GET /api/workspaces/{id}/files`）的一项。 */
+/** Workspace file browser (`GET /api/workspaces/{id}/files`) item. */
 export interface FileEntry {
   name: string
-  /** 相对工作区根（POSIX 分隔）。 */
+  /** Relative to the workspace root (POSIX separators). */
   path: string
   kind: 'dir' | 'file'
-  /** 目录没有大小（要递归才知道）。 */
+  /** Directories have no size (that needs recursion). */
   size: number | null
 }
 
 export interface FileList {
   path: string
-  /** 上一级相对路径；根目录为 null。 */
+  /** Parent relative path; null at the root. */
   parent: string | null
   entries: FileEntry[]
   truncated: boolean
 }
 
-/** 文件预览：二进制文件没有 text（只报事实，不猜编码）。 */
+/** File preview: a binary file has no `text` (report the fact, don't guess an encoding). */
 export interface FileContent {
   path: string
   size: number
@@ -181,9 +173,9 @@ export interface Approval {
   reason: string
   created_at: number
   expires_at: number
-  /** 'approval' 等裁决（decision）、'question' 等回答（answer）——同一张表、同一个界面槽。 */
+  /** 'approval' awaits a decision, 'question' awaits an answer — one table, one UI slot. */
   kind: string
-  /** 选择题的选项（空 = 自由回答）。 */
+  /** Choice options (empty = free-form answer). */
   options: string[]
   decision: string | null
   answer: string | null
@@ -206,7 +198,7 @@ export interface Run {
   finished_at: number | null
   round: number
   tokens: number
-  /** 最近一份 usage 快照；null = 还没有读数。 */
+  /** Latest usage snapshot; null = no reading yet. */
   usage: UsageReport | null
   error: { code: string; message: string } | null
   cancel_requested: boolean
@@ -235,12 +227,11 @@ export interface ApprovalAnswer {
 }
 
 /**
- * 统一 usage 快照（阶段 22）——与 `RunState.usage_report()`、服务端 `UsageOut` 同形。
- *
- * 可空字段的 `null` 一律表示**没有这个数**（端点没上报用量 / 不认识该模型的窗口 /
- * 这家没有写入缓存的计数），界面显示「—」；不要当 0 渲染，"未上报"与"确实为 0"不同。
+ * Unified usage snapshot, same shape as `RunState.usage_report()` and the server's `UsageOut`.
+ * A null field means "no such number" (endpoint reported no usage / unknown window / no cache
+ * writes) and renders as "—", never as 0: "not reported" differs from "actually zero".
  */
-/** 三块文本的**估算** token（按字符占比分配真实总数，三块之和 = tokens）。 */
+/** Estimated tokens per block (share of the real total; blocks sum to `tokens`). */
 export interface ContextParts {
   system: number
   tools: number
@@ -251,7 +242,7 @@ export interface ContextUsage {
   tokens: number | null
   window: number | null
   utilization: number | null
-  /** null = 还没有分块数据（没读数 / 这一轮没记字符数）→ 不画堆叠条。 */
+  /** null = no per-block data yet → do not draw the stacked bar. */
   parts: ContextParts | null
 }
 
@@ -275,11 +266,11 @@ export interface UsageReport {
 
 export interface Branch {
   name: string
-  /** 链尾条目 id；空分支为 null。 */
+  /** Tip entry id; null for an empty branch. */
   tip_entry_id: string | null
   entry_count: number
   is_default: boolean
-  /** 该分支最近一次运行的用量快照（落盘；null = 还没跑过）。 */
+  /** Latest persisted usage snapshot for this branch; null = never ran. */
   usage: UsageReport | null
 }
 
@@ -290,16 +281,14 @@ export interface BranchList {
 
 
 /**
- * BYOK 模型配置（阶段 34；GET/PUT/POST test/DELETE `/api/settings/byok`）。
- *
- * 三层模型：Provider（接入端点）1—N Model（具体模型 + 能力声明），Binding 把
- * Model 挂到角色槽位（当前只有 chat 一槽）。**密钥只入不出**：PUT 载荷里的
- * `api_key` 有去无回，GET 只给每家的 `key_set` 布尔；鉴权隐式——密钥库里按
- * provider id 存了密钥就按协议标准头发送，没存就不带（本地服务）。
+ * BYOK model settings (GET/PUT/POST test/DELETE `/api/settings/byok`): providers 1—N models,
+ * with bindings mapping a model to a role slot (currently only chat). Keys are write-only: a PUT
+ * payload's `api_key` never comes back, GET only reports each provider's `key_set`; auth is
+ * implicit — a stored key is sent in the protocol's standard header.
  */
 export type ByokProtocol = 'openai-compatible' | 'anthropic' | 'responses' | 'ollama'
 
-/** 能力声明；null = 未声明。只有显式 false 才会被运行期拦截。 */
+/** Capability flags; null = undeclared. Only an explicit false is blocked at runtime. */
 export interface CapabilityFlags {
   tool_calling?: boolean | null
   vision?: boolean | null
@@ -310,18 +299,18 @@ export interface CapabilityFlags {
 
 
 
-/** Provider 下的一个具体模型：id + 可选展示名 / 窗口 / 输出上限 / 推理强度 / 能力声明。 */
+/** One model under a provider: id plus optional label / window / output cap / levels / flags. */
 export interface ModelEntry {
   id: string
   label?: string | null
   context_window?: number | null
   max_output?: number | null
-  /** 这个模型认哪些推理强度档位（运行时从列表里挑一个）；空 = 不提这件事。 */
+  /** Levels this model accepts (the runtime picks one from the list); empty = not declared. */
   reasoning_efforts?: string[]
   capabilities: CapabilityFlags
 }
 
-/** GET 回显的一个接入端点：与 ProviderInput 同形但没有 api_key，多 key_set。 */
+/** One endpoint as returned by GET: ProviderInput's shape minus `api_key`, plus `key_set`. */
 export interface ProviderEntry {
   id: string
   label: string
@@ -334,7 +323,7 @@ export interface ProviderEntry {
   key_set: boolean
 }
 
-/** PUT 载荷的一个接入端点：api_key 只入不出（空串 = 清除已存密钥）。 */
+/** One endpoint in a PUT payload: `api_key` is write-only (empty string clears the stored key). */
 export interface ProviderInput {
   id: string
   label: string
@@ -347,34 +336,34 @@ export interface ProviderInput {
   api_key?: string | null
 }
 
-/** GET /api/settings/byok 的响应：模型连接的唯一来源。 */
+/** `GET /api/settings/byok` response: the single source of model connections. */
 export interface ByokSettings {
   providers: ProviderEntry[]
   bindings: Record<string, string | null>
 }
 
-/** PUT 载荷：providers 全量 + chat 绑定；服务端 validate 不过就不落盘。 */
+/** PUT payload: full providers + chat binding; a failed server-side validation writes nothing. */
 export interface ByokSettingsInput {
   providers: ProviderInput[]
   bindings: Record<string, string | null>
 }
 
-/** 连通校验的一步：step = 'chat'（最小对话）| 'tool'（工具冒烟）。 */
+/** One connectivity-check step: step = 'chat' (minimal chat) | 'tool' (tool smoke). */
 export interface VerifyStep {
   step: string
   ok: boolean
   detail: string
 }
 
-/** POST /api/settings/byok/test 的响应。 */
+/** `POST /api/settings/byok/test` response. */
 export interface ByokTestResult {
   ok: boolean
   steps: VerifyStep[]
 }
 
 /**
- * GET /api/settings/sessions 的响应（阶段 56）：会话目录的当前值、默认值与生效来源。
- * source 是 'env' 时 editable 为 false——环境变量赢过配置文件，界面只能看。
+ * `GET /api/settings/sessions` response: current/default session dir and where the value comes
+ * from. `source` 'env' means `editable` is false — the env var wins over the settings file.
  */
 export interface SessionsDir {
   dir: string
@@ -383,14 +372,14 @@ export interface SessionsDir {
   editable: boolean
 }
 
-/** PUT 载荷：空串 = 恢复默认。只改「新会话写哪」，不搬已有会话。 */
+/** PUT payload: empty string restores the default; only changes where new sessions are written. */
 export interface SessionsDirInput {
   dir: string
 }
 
 /**
- * 一条内容命中（阶段 57）：够显示片段，也够跳回原文——会话 + 条目 + 行偏移。
- * type 是条目类型（message / notice / error），role 是消息角色（user / assistant / tool）。
+ * One content hit: enough to show a snippet and jump back to the source (session + entry + byte
+ * offset). `entry_type` is the entry type (message / notice / error), `role` the message role.
  */
 export interface SearchHit {
   session_id: string
@@ -407,7 +396,7 @@ export interface SearchHit {
   byte_length: number
 }
 
-/** GET /api/search 的响应；behind = 索引还落后多少个会话（0 表示搜的是全部）。 */
+/** `GET /api/search` response; behind = sessions the index still lags (0 = everything searched). */
 export interface SearchResult {
   hits: SearchHit[]
   behind: number
@@ -426,7 +415,7 @@ export interface PendingInput {
   missed: boolean
 }
 
-/** Submit result: kind=run means a run started (attach to its stream), input means it stayed queued. */
+/** Submit result: kind=run means a run started (attach to its stream), input = stayed queued. */
 export interface InputAccepted {
   kind: string
   input_id: string | null

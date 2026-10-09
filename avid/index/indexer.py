@@ -1,16 +1,9 @@
-"""索引器：发现会话文件、按游标增量处理、补齐与重建。
+"""Indexer: discover session files, process each from its cursor, and reconcile or rebuild
+on demand.
 
-四条纪律：
-
-- **不知道谁在写会话**：通知从外面进来（装配层），这里不 import 运行层，也不碰 JSONL 的写路径；
-- **一个连接、一次一遍**：同一时刻只有一遍在跑（锁在实例上），CLI 与 Web 各是一个进程、各一份；
-- **失败只落后**：读不了/写不进去都落 `last_error` 并继续，SQLite 整体不可用时中止这一遍——
-  索引落后是允许的，把运行拖住或抛进用户的对话不是；
-- **归属认 header**：workspaceId 来自文件本身，目录名只在 header 没有时兜底（迁移过的文件
-  会落在「别人」的目录里，这时 header 才是权威）。
-
-`reconcile()` 是启动时的补齐入口：发现新文件、补齐落后的、清掉文件已消失的行。
-它被设计成可以随时重跑——重跑一遍的代价是重读变化的文件，不是重建整张表。
+Notifications come from the assembly layer and never drag the run layer in; one connection runs one
+pass at a time; failures only leave the index behind (`last_error`), while workspace ownership comes
+from the file header and the directory name is only a fallback.
 """
 
 from __future__ import annotations
@@ -53,11 +46,11 @@ logger = logging.getLogger("avid.index.indexer")
 WORKSPACE_DIR_PREFIX = "w-"
 # How many per-session failures a report spells out before it just counts them.
 MAX_REPORTED_DETAILS = 10
-# 通知落定窗口：一次运行会连着提交好几条消息，等这么一小会儿能把它们并成一遍。
+# Settle window: one run commits several messages in a row, so waiting briefly merges them.
 NOTIFY_SETTLE_SECONDS = 0.2
-# 等队列排空的上限；到点没排空不算错（索引落后是允许的），只是如实说「还落后」。
+# Upper bound on draining the queue; timing out is not an error, it just means still behind.
 DEFAULT_FLUSH_SECONDS = 2.0
-# 工作区名册的缓存窗口：名字是显示事实，改了要跟得上，但不必每个会话读一次注册表。
+# Workspace-name cache window: display facts change, but a registry read per session is too much.
 WORKSPACE_LOOKUP_TTL_SECONDS = 5.0
 
 
@@ -81,20 +74,20 @@ class SessionIndexer:
         owns_conn: bool | None = None,
     ) -> None:
         self._conn = conn if conn is not None else open_db(db_path)
-        # 借来的连接（测试/调用方给的）不由我们关闭，自己开的自己关。
+        # Borrowed connections (tests, callers) are not ours to close; we close only what we opened.
         self._owns_conn = conn is None if owns_conn is None else owns_conn
         self._lock = threading.RLock()
         self._roots = roots or (lambda: [userdirs.sessions_dir()])
         self._lookup_workspace = lookup_workspace
         self._now = now
-        # 通知队列：同会话合并（集合），一遍处理一批。_busy 让 flush 能等到这一遍结束。
+        # Notification queue: a set merges per session, one pass per batch, _busy lets flush wait.
         self._queue = threading.Condition()
         self._pending: set[str] = set()
         self._busy = False
         self._worker: threading.Thread | None = None
         self._stopped = False
         self._bootstrap = False
-        # 整遍互斥：后台补齐与前台 check/rebuild 不会同时跑（库是同一个连接）。
+        # Pass mutex: catch-up and check/rebuild share one connection, so never run at once.
         self._pass_lock = threading.Lock()
 
     # Lifecycle.
@@ -112,8 +105,7 @@ class SessionIndexer:
 
     # Notification: the assembly layer says "this session has new rows".
     #
-    # 这里只入队，不索引、不等待、不抛异常：通知丢了由下次 reconcile 兜底，索引跟不上
-    # 绝不能拖住运行。写会话的进程自己把这一遍跑掉（CLI 与 Web 各是一个进程）。
+    # Enqueue only: next reconcile catches lost notifications, and indexing must never stall a run.
 
     def notify(self, session_id: str) -> None:
         self.start(initial_reconcile=False)
@@ -155,8 +147,7 @@ class SessionIndexer:
         if worker is not None:
             worker.join(timeout)
             if worker.is_alive():
-                # 这一遍还没完（比如第一轮 reconcile 很大）：**不**清引用。清掉的话下一次
-                # notify → start() 会另起一个 worker，两个线程并排常驻、还共用同一个连接。
+                # Still running: keep the reference, or a later start() spawns a second worker.
                 logger.warning("索引线程还在收尾，先把引用留着；下一次 start 会复用它")
                 return
         with self._queue:
@@ -199,7 +190,7 @@ class SessionIndexer:
                         return
                     if not self._pending:
                         continue
-                # 落定窗口：这期间进来的通知并进同一遍。
+                # Settle window: notifications arriving here join the same pass.
                 self._queue.wait(NOTIFY_SETTLE_SECONDS)
                 batch = sorted(self._pending)
                 self._pending.clear()
@@ -228,9 +219,7 @@ class SessionIndexer:
                     discovered, _ = self.discover()
                 path = discovered.get(session_id)
             if path is None or not path.exists():
-                # 记录里的路径没了（改名/迁移/被删）：按发现结果再找一次——改名/迁移能找到
-                # 新落点，找不到就是真没了（删除），那时把这一行清掉，别留一条指向旧文件的
-                # 幽灵命中（检索会点进去 404）。
+                # Path gone (rename/migrate/delete): rediscover or forget the row, no ghost hits.
                 if discovered is None:
                     discovered, _ = self.discover()
                 path = discovered.get(session_id)
@@ -266,7 +255,7 @@ class SessionIndexer:
                         notes.append(f"{path}：{exc}")
                         continue
                     if unsupported:
-                        # 照记不误：库里留一行 unsupported 比「悄悄看不见它」更容易查。
+                        # Record it: an unsupported row is easier to investigate than silence.
                         notes.append(f"{path}：不认识的 {unsupported}")
                     found.setdefault(session_id, path)
         return found, tuple(notes)
@@ -314,7 +303,7 @@ class SessionIndexer:
         for session_id, path in sorted(found.items()):
             report = report.merged(self._index_one_reported(session_id, path, force_full=False))
             if report.details and report.details[-1].startswith("索引库不可用"):
-                break  # 库整体不可用：再试下去只会重复等锁
+                break  # Database unusable: retrying only waits for a lock that never comes.
         return report
 
     def reconcile(self) -> IndexReport:
@@ -414,7 +403,7 @@ class SessionIndexer:
             scan = scan_file(path, start_offset=start, previous=previous)
         except SessionStorageError as exc:
             if not force_full and "游标越界" in str(exc):
-                # 文件比游标短：被截断或换掉了。重建一次是唯一正确的反应（不猜缺了什么）。
+                # File shorter than the cursor: truncated or replaced, so rebuild; do not guess.
                 return self._index_one(session_id, path, force_full=True)
             with self._lock:
                 mark_error(self._conn, session_id, file_path=str(path), error=str(exc))
@@ -440,9 +429,7 @@ class SessionIndexer:
             logger.info("文件不在了 %s：%s", path, exc)
             return False
 
-        # 长度没变但 mtime 变了 = 原地改写（本仓库唯一的来源是撕裂行修复之外的异常写）。
-        # 长度看不出来，mtime 是唯一信号：这时候「刷新一下 updated_at」等于把证据吃掉，
-        # 之后 check 再也抓不到它——只能整篇重扫。
+        # Same length, newer mtime = in-place rewrite; re-scan fully, or check loses the evidence.
         if (
             row is not None
             and not force_full
@@ -454,8 +441,7 @@ class SessionIndexer:
         ):
             return self._index_one(session_id, path, force_full=True)
 
-        # 没有新条目、长度没变、mtime 没变、路径没变、状态还是 ok：这一遍没什么可写的。
-        # （会话级事实只可能随新行变化，而新行会改变长度；路径会随改名/迁移变。）
+        # No new entries, same size, same mtime, same path, still ok: nothing to write this pass.
         if (
             not scan.entries
             and row is not None
@@ -486,11 +472,10 @@ class SessionIndexer:
             last_error=None,
         )
         with self._lock:
-            # 一条路径只能属于一个会话（file_path UNIQUE）：凡是占着这条路径、id 又不是它的行，
-            # 都得先让位——否则插入直接撞约束，而且每一遍都撞（索引永久卡死）。
+            # UNIQUE file_path: another id's row must yield first, or the insert fails every pass.
             forget_path_owner(self._conn, str(path), scan.session_id)
             if scan.session_id != session_id:
-                # 文件被换成了另一个会话（复制/改名）：旧 id 的行也清掉。
+                # The file now belongs to another session (copy or rename): drop the old id's row.
                 forget_session(self._conn, session_id)
             if force_full:
                 replace_scan(self._conn, session, scan)
@@ -512,11 +497,8 @@ def workspace_lookup(
     ttl: float = WORKSPACE_LOOKUP_TTL_SECONDS,
     clock: Callable[[], float] = time.monotonic,
 ) -> Callable[[str], tuple[str | None, str | None] | None]:
-    """Build ``id -> (root, name)`` from a loader, refreshed after a short window.
-
-    The names are display facts taken from the registry, so they may change while a process runs
-    (rename, register, hide); a短 TTL keeps the index from showing a stale name forever, without
-    reading the registry once per indexed session.
+    """Build ``id -> (root, name)`` from a loader, refreshed after a short window so a renamed
+    workspace cannot show a stale name forever.
     """
     table: dict[str, tuple[str | None, str | None]] = {}
     loaded_at = float("-inf")

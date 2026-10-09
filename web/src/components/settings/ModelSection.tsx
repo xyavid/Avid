@@ -1,15 +1,10 @@
 /**
- * 设置 → 模型：BYOK 三层配置的管理界面（阶段 34）。
- *
- * 三层模型：Provider（接入端点）1—N Model（id + 能力声明），Binding 把 Model 挂到
- * chat 槽位；「新增一个模型提供商只改配置，不改代码」。密钥只入不出：输入框永远
- * 不预填，GET 只给 key_set；**鉴权隐式**——填了密钥就按协议标准头发送，留空就
- * 不带（本地服务），没有 bearer/header 的选择。保存走整体 PUT（providers 全量 +
- * 绑定），服务端 validate 不过就不落盘。「测试连接」对**当前表单值**跑两步探测
- * （最小对话 + 工具冒烟），保存前就能测。
- *
- * 空态引导：没有任何提供商时提示先新增并在下方绑定 chat 槽位——BYOK 是模型
- * 连接的唯一来源，未绑定时运行会报「还没有模型配置」。
+ * Settings → Models: BYOK config UI over Provider → Model → chat binding, all described by
+ * configuration so adding a provider never touches code.
+ * Keys are write-only (never prefilled; GET returns only `key_set`) with implicit auth (a key sends
+ * the protocol's standard headers, blank sends none), saving PUTs the full provider list plus
+ * bindings in one payload that the server rejects wholesale on validation failure, and Test probes
+ * a minimal chat turn + a tool call against the current form values.
  */
 
 import { useEffect, useState } from 'react'
@@ -56,7 +51,7 @@ function emptyDraft(): ProviderInput {
   }
 }
 
-/** GET 回显 → PUT 载荷形状：剥掉 key_set；api_key 永远不预填（只入）。 */
+/** GET echo → PUT payload shape: drop `key_set`; `api_key` is never prefilled (write-only). */
 function entryToInput(entry: ProviderEntry): ProviderInput {
   const { key_set: _keySet, ...rest } = entry
   return { ...rest, api_key: null }
@@ -77,7 +72,7 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 const SELECT_CLS =
   'h-control w-full rounded-sm border-hairline border-hair bg-card px-a8 font-ui text-ui text-ink transition-[border-color,box-shadow] duration-fast ease-out focus:border-accent focus:shadow-focus-ring focus:outline-none'
 
-/** 「low, high」→ ['low','high']：逗号分隔，空段与空白丢掉（输入框自己留原文，见 effortText）。 */
+/** Parse "low, high" → ['low', 'high']; the input keeps the raw text (see effortText). */
 function parseLevels(text: string): string[] {
   return text
     .split(',')
@@ -182,7 +177,7 @@ export function ModelSection() {
 
   return (
     <div>
-      {/* 空态引导：模型连接只认 BYOK，没有任何提供商时先指路 */}
+      {/* Empty state: BYOK is the only model source, so point the way without providers. */}
       {settings !== null && providers.length === 0 && (
         <div className="mt-a8 rounded-md border-hairline border-hair bg-card p-a12">
           <p className="font-ui text-hint leading-[1.6] text-ink-muted">
@@ -192,7 +187,7 @@ export function ModelSection() {
         </div>
       )}
 
-      {/* 提供商列表 */}
+      {/* Provider list */}
       {providers.map((p) => {
         const entry = settings?.providers.find((e) => e.id === p.id)
         const result = Object.entries(testResults).find(([ref]) => ref.startsWith(`${p.id}/`))
@@ -271,7 +266,7 @@ export function ModelSection() {
         )
       })}
 
-      {/* 编辑 / 新增表单 */}
+      {/* Edit / add form */}
       {draft !== null ? (
         <ProviderEditor draft={draft} isNew={draftIsNew} onSave={saveDraft} onCancel={() => setDraft(null)} />
       ) : (
@@ -287,8 +282,7 @@ export function ModelSection() {
         </button>
       )}
 
-      {/* chat 绑定 + 保存 / 重置。阶段 54 起界面里每一个运行都显式带模型（用户在输入区选），
-          所以这里的绑定是**兜底**：命令行、以及没有显式模型的调用才用它。 */}
+      {/* chat binding + save/reset: it is the fallback for calls without an explicit model. */}
       <Field
         label="默认模型（界面没选时兜底）"
         hint="命令行与没有显式模型的调用用它；界面里每个运行都会带上用户选的那个模型"
@@ -345,7 +339,7 @@ const ID_HINT = '小写字母、数字、连字符'
 
 function ProviderEditor({ draft, isNew, onSave, onCancel }: EditorProps) {
   const [form, setForm] = useState<ProviderInput>(draft)
-  // 档位输入框的编辑中原文（按模型行）：受控值不能是解析结果的回写，见那个 Input 的注释
+  // Raw text for the effort field per model row: the controlled value must not echo the parse.
   const [effortText, setEffortText] = useState<Record<number, string>>({})
   const [headersText, setHeadersText] = useState(JSON.stringify(draft.headers, null, 2))
   const [extraText, setExtraText] = useState(JSON.stringify(draft.extra_body, null, 2))
@@ -488,12 +482,9 @@ function ProviderEditor({ draft, isNew, onSave, onCancel }: EditorProps) {
               >
                 <Icon name="x" size={14} />
               </button>
-              {/* 第二行：推理强度档位列表（逗号分隔）与图片输入（能力位）——都是"这个模型认什么"，
-                  不是全局开关。档位由配置的人定（各家不一样），输入区的强度选择器按这份列表列选项。
-                  图片输入目前只作声明：界面还没有图片入口。 */}
+              {/* Per-model: reasoning efforts (comma separated) and vision (declaration only). */}
               <Input
-                // 值取"编辑中的原文"：列表是从文本解析出来的，但输入框必须看着原文——
-                // 每敲一个逗号都被解析回去（"low," → ["low"] → "low"），第二档就永远打不出来。
+                // Keep the raw text: re-rendering the parsed list would swallow a trailing comma.
                 value={effortText[index] ?? (m.reasoning_efforts ?? []).join(', ')}
                 onChange={(e) => {
                   setEffortText((cur) => ({ ...cur, [index]: e.target.value }))

@@ -17,7 +17,7 @@ from .userdirs import avid_home, sessions_dir
 
 logger = logging.getLogger("avid.security.sandbox")
 
-# 沙箱策略档位：workspace = 请求隔离（后端可用时 enforced）；disabled = full 显式关闭。
+# Sandbox policies: workspace requests isolation (enforced when available); disabled = full.
 SANDBOX_WORKSPACE = "workspace"
 SANDBOX_DISABLED = "disabled"
 SANDBOXES: tuple[str, ...] = (SANDBOX_WORKSPACE, SANDBOX_DISABLED)
@@ -228,8 +228,7 @@ class SandboxSpec:
     env_allow: tuple[str, ...] = ()
     # Host home for this run: both the mask list and the child HOME derive from it, or they diverge.
     home: str | None = None
-    #: 工作区挂只读（阶段 54：临时对话）。基线本来就是「整个 / 只读」，所以这一档只是不再把
-    #: 工作区重新挂成读写——bash 里的重定向、sed -i、rm 都写不动。
+    #: Mount the workspace read-only; the baseline / is read-only already, so the remount is skipped
     read_only: bool = False
     notes: tuple[str, ...] = field(default_factory=tuple)
 
@@ -290,17 +289,16 @@ class SandboxSpec:
         return kept
 
     def child_env(self, source: Mapping[str, str] | None = None) -> dict[str, str] | None:
-        """Return the trimmed environment: whitelist when enforced, scrubbed when degraded.
-
-        full（policy=disabled）是显式信任，整体继承——凭据可用是它的语义之一
-        （gh api 这类工作流依赖 token）；降级路径用黑名单（:func:`scrubbed_env`）：
-        凭据形状的变量不进子进程，其余保留。全量白名单在 Windows 会砍掉
-        SystemRoot/PSModulePath 弄死 PowerShell，所以降级不用白名单。
+        """Return the child environment: whitelist when enforced, everything inherited under full
+        (running gh/token workflows is part of its meaning), and a credential-name blacklist when
+        degraded.
         """
         if self.enforced:
             return self.apply_env(source)
         if self.policy == SANDBOX_DISABLED:
             return None
+        # A degraded run cannot use the whitelist: on Windows it would kill PowerShell by dropping
+        # SystemRoot/PSModulePath.
         return scrubbed_env(source)
 
     def argv_prefix(
@@ -349,17 +347,15 @@ class SandboxSpec:
             if Path(item).is_file() and empty is not None:
                 argv += ["--ro-bind", str(empty), item]
 
-        # The workspace is bound last so it covers every earlier mount on that path: read-write
-        # normally, read-only for a scratch run (its baseline is an all-read-only / 已经如此，
-        # 这里少一次读写重挂就是只读）。
+        # The workspace is bound last so it covers earlier mounts: read-write normally, read-only
+        # for a scratch run.
         if workdir:
             argv += ["--ro-bind" if self.read_only else "--bind", workdir, workdir]
         # Deferred masks sit inside the workspace, so they must be re-applied after that bind.
         for directory in deferred:
             if Path(directory).is_dir():
                 argv += ["--tmpfs", directory]
-        # 网络不隔离（阶段 51 轻量化）：网络命令直接跑，不在沙箱里断网。
-        # Unshare every namespace that could leak host state and start from an empty environment.
+        # Network is deliberately not isolated: network commands run, only host state is unshared.
         argv += [
             "--unshare-pid",
             "--unshare-uts",
@@ -532,8 +528,7 @@ def _masks(
             continue
         files.append(str(Path(expanded).resolve()))
 
-    # 用户级 Avid 目录本身（secrets / settings / registry / audit / index）：DEFAULT_MASK_DIRS
-    # 里写死的是 ~/.avid，而 AVID_HOME 能把它搬到别处——那时密钥与审计就全在沙箱里可读了。
+    # Mask the user-level Avid dir too: AVID_HOME can move secrets/audit off the hardcoded ~/.avid.
     home_dir_text = str(avid_home().expanduser().resolve())
     if root and _contains(home_dir_text, root):
         notes.append(f"工作区位于用户级 Avid 目录内（{home_dir_text}），跳过该掩蔽")
@@ -542,8 +537,7 @@ def _masks(
     else:
         dirs.append(home_dir_text)
 
-    # 会话文件就是对话历史本身，agent 的工具不该读自己的记录（阶段 56：会话搬出工作区后
-    # 这条才成立）。默认位置已被上面两条覆盖，配置到别处时这一条生效。
+    # Session files are the conversation history itself: the agent must not read its own record.
     store = str(sessions_dir().expanduser().resolve())
     if root and _contains(store, root):
         notes.append(f"工作区位于会话目录内（{store}），跳过该掩蔽")

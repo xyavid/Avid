@@ -322,11 +322,9 @@ def bound_workspace(root: str | Path) -> Workspace:
 
 
 def single_workspace(root: str | Path) -> Workspace:
-    """Workspace derived from a session store path, either the legacy layout or a plain one.
-
-    集中存储后目录树里已经没有工作区根可推（``<会话目录>/<工作区 id>`` 只有 id），
-    所以 ``root=`` 的调用方是用传进来的路径给这个绑定工作地点命名；旧路径
-    ``<工作区根>/.avid/sessions`` 仍然按老规矩剥回它的工作区根。
+    """Workspace derived from a session store path: a legacy ``<root>/.avid/sessions`` path is
+    stripped back to its workspace root, while any other path names the bound location, since the
+    shared layout carries only the id.
     """
     from .workspace_registry import derive_id
 

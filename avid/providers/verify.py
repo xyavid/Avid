@@ -1,13 +1,9 @@
-"""BYOK 连通校验：把「填完能不能用」在配置阶段就回答掉。
+"""BYOK connectivity check that answers "will this work" at configuration time.
 
-两步（参照 BYOK 规格 §7，省掉列模型——Avid 的模型目录本来就手填，不拉 /models）：
-① 最小对话：`max_tokens=1`，验证密钥（若配了）、端点与网络；
-② 工具冒烟：给一个必答参数的 `get_time` 工具定义，模型必须真的回 tool_calls——
-   「能聊天、一干活就废」的模型在这一步被筛掉，而不是接进 agent 后每次运行都废。
-
-错误分类只认 LLMError 消息里的已知信号（三个适配器统一写 `HTTP <status> — body`），
-认不出时原样透出消息摘录，不编造原因。配置解析失败（ConfigError）不算端点问题，
-也走报告而不是异常——调用方是设置界面，它不会区分这两类。
+Two probes: a minimal chat call (`max_tokens=1`) verifying key, endpoint and network, and a tool
+smoke test whose required-argument `get_time` definition forces a real tool_calls reply; error
+classification recognizes only known LLMError signals (all adapters write `HTTP <status> — body`),
+echoes unknown messages verbatim and reports a ConfigError instead of raising.
 """
 
 from __future__ import annotations
@@ -21,7 +17,7 @@ from .client import chat_completion
 from .config import ConfigError
 from .protocol import LLMError
 
-#: 冒烟工具定义：必答参数逼模型真的发起 tool_call，而不是用文本搪塞。
+#: Smoke tool definition: the required argument forces a real tool_call instead of a text answer.
 SMOKE_TOOL = {
     "type": "function",
     "function": {
@@ -83,9 +79,9 @@ def _fail_detail(message: str) -> str:
 def verify_provider(
     provider: ProviderDecl, model_id: str, *, secret: str | None = None
 ) -> VerifyReport:
-    """Run both probes against a real endpoint; never raises for expected failures.
-
-    `secret` 覆盖密钥库：设置面板在保存前就能测（不产生写文件的副作用）。
+    """Run both probes against a real endpoint and report expected failures instead of raising;
+    ``secret`` overrides the secret store so the settings panel can test before saving, with no
+    file-write side effect.
     """
     try:
         config = byok.config_from_provider(provider, model_id, secret=secret)

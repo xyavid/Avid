@@ -1,14 +1,8 @@
 /**
- * 思考块：把模型流出来的 reasoning（`reasoning_delta`）显示成时间线上的一段。
- *
- * 为什么是「折叠块」而不是直接铺在正文前面：思考是过程不是结论——流式时它值得看
- * （能判断模型有没有跑偏），收尾后它只会挤占正文的位置。所以流式时展开、收尾自动
- * 折成一行，想回看再点开；折叠行带持续时长（首末增量的时间差），"想了多久"是
- * 判断它跑不跑偏的一半信息。
- *
- * **它只在流里存在**：`reasoning_delta` 属于 delta 档（`agent/events.py` 的
- * `DELTA_EVENT_TYPES`），不进会话 JSONL、不参与重放——刷新或切走会话后就没有了。
- * 这是刻意的：思考内容不进 durable（既省盘，也避免把它当事实回灌给模型）。
+ * Collapsible thinking segment fed by the streamed `reasoning_delta`; expanded while
+ * streaming, folded to one line when the run ends. It exists only in the stream: deltas are
+ * a delta event type (`DELTA_EVENT_TYPES` in `agent/events.py`) and never enter the session
+ * JSONL, so a reload drops it by design.
  */
 
 import { useEffect, useState } from 'react'
@@ -18,19 +12,18 @@ import { cx } from '../../ui/cx'
 import { Icon } from '../../ui/Icon'
 
 export type ReasoningBlockProps = {
-  /** 累积的思考文本；空串 = 这段没有内容，整块不渲染。 */
+  /** Accumulated reasoning text; empty string renders nothing. */
   text: string
-  /** 运行是否还在进行：流式时展开、收尾自动折起。 */
+  /** Run in flight: expanded while streaming, folded when done. */
   streaming?: boolean
-  /** 这段思考的持续时长（首末增量的时间差）；null = 没有读数，折叠行只说「完成」。 */
+  /** First-to-last delta span; null = no reading, so the row says "done" only. */
   durationMs?: number | null
 }
 
 export function ReasoningBlock({ text, streaming = false, durationMs = null }: ReasoningBlockProps) {
   const [open, setOpen] = useState(streaming)
 
-  // 收尾那一刻折起来。用 effect 而不是派生值：用户可能在流式时手动折过，
-  // 收尾后又会手动点开——那之后不该再被它拨回去。
+  // Fold when streaming ends; an effect, so a manual re-open is not undone.
   useEffect(() => {
     if (!streaming) setOpen(false)
   }, [streaming])

@@ -1,20 +1,7 @@
-"""终止路径：模型不再请求工具之后、运行结束之前的一段。
+"""Termination path: from the model's last tool-call-free turn to the run's end, every named exit.
 
-判定是显式阶梯，每个出口都叫得出名字（StopReason，出口名单点）：
-
-  1. hook 拦截且预算内 → 补问续轮（decide 返回 None）
-  2. 空答复视同拦截：预算内补问续轮；预算用尽 → BLANK_NOTICE（绝不静默）
-  3. hook 拦截且预算用尽 → HOOK_BUDGET_EXIT（按原文退出）
-  4. 正常可见正文 → FINAL_TEXT
-
-参考实现的三个分支在这里的明确取舍：
-  handoff（模型换 agent）——内核没有模型驱动的 agent 切换（subagent 是工具）；
-    出现真实需求时在 run 循环加分支，不进本模块。
-  terminal tool（工具结果即最终答复）——现在没有这种工具；出现
-    structured-output / ask_user-as-final 类工具时，在 run 循环加
-    should_stop_after_tools 分支并给它一个 StopReason。
-  MAX_TURNS（轮数硬上限）——按 limit-audit 裁定不存在：轮数不是收敛判据，
-    预算只有补问（MAX_STOP_BLOCKS）与两个取消检查点。
+There is no turn cap — the only budgets are MAX_STOP_BLOCKS for nudges and the two cancellation
+checkpoints — and a blank answer always ends in a visible notice, never a silent empty string.
 """
 
 from __future__ import annotations
@@ -34,15 +21,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("avid.agent.stop")
 
-# 补问预算：被拦截的 Stop 与空答复共用，默认只给一轮机会。
+# Nudge budget, shared by a blocked Stop and a blank answer; one retry by default.
 MAX_STOP_BLOCKS = 1
 
-# 空答复的标准补问；hook 自己设置的 nudge 优先于它。
+# Standard nudge for a blank answer; a hook-set nudge wins over it.
 BLANK_ANSWER_NUDGE = (
     "上一轮没有可见正文（{reason}）。请直接给出可见答复：总结已完成的事与当前结论；"
     "要继续动手就发起工具调用。"
 )
-# 补问之后仍无正文时的收尾文本；它必须对用户可见，绝不静默返回空串。
+# Closing text when there is still no visible body: it must be user-visible, never an empty string.
 BLANK_ANSWER_NOTICE = (
     "（本次运行没有产生可见答复：{reason}。请看上一条工具结果，或重试这一轮。）"
 )
@@ -66,7 +53,7 @@ def blank_reason(turn: Turn) -> str:
     return f"{base}，推理 token {tokens}" if tokens else base
 
 
-#: 出口名单点：一次运行为什么结束。名字只增不改（前端/调用方可能对比字面量）。
+#: Single source for why a run ended; names are append-only since callers compare the literals.
 StopReason = Literal[
     "final_text",
     "blank_notice",
@@ -80,15 +67,15 @@ STOP_FINAL_TEXT: StopReason = "final_text"
 STOP_BLANK_NOTICE: StopReason = "blank_notice"
 STOP_HOOK_BUDGET_EXIT: StopReason = "hook_budget_exit"
 STOP_DENIAL_HALTED: StopReason = "denial_halted"
-# UserPromptSubmit hook 在第一轮之前拦截：运行根本没开始，文本为空。
+# UserPromptSubmit blocked before the first round: the run never began, so the text is empty.
 STOP_PROMPT_BLOCKED: StopReason = "prompt_blocked"
-# 会话内命令（/compact、未知命令提示）：不调模型，立即以文本收尾。
+# Session command (/compact, unknown-command hint): no model call, the text ends the run at once.
 STOP_COMMAND: StopReason = "command"
 
 
 @dataclass(frozen=True)
 class RunOutcome:
-    """一次运行的结束：返回给用户的文本，以及它为什么结束。"""
+    """What one run ended with: the text for the user, and why it stopped."""
 
     text: str
     reason: StopReason
@@ -102,7 +89,7 @@ def decide(
     max_blocks: int,
     emitted: Callable[[dict[str, Any]], None],
 ) -> RunOutcome | None:
-    """裁决一轮无 tool_calls 的结束：返回结束结果，None = 已补问、调用方续轮。"""
+    """Decide a tool-call-free round's end; None means a nudge went out and the loop continues."""
     stop: dict[str, Any] = {
         "final_text": turn.text,
         "messages": transcript.as_messages(),
@@ -114,7 +101,7 @@ def decide(
     blank = is_blank(turn)
     reason = blank_reason(turn) if blank else ""
 
-    # 1. 补问续轮：hook 拦截，或空答复视同拦截（hook 的 nudge 优先于标准补问）
+    # 1. Nudge and continue: a hook block, or a blank answer treated as one (a hook nudge wins).
     if blank and not hook_blocked:
         stop["nudge"] = BLANK_ANSWER_NUDGE.format(reason=reason)
     blocked = hook_blocked or blank
@@ -129,7 +116,7 @@ def decide(
         logger.info("Stop 被拦截（第 %d 次），继续循环", state.stop_blocks)
         return None
 
-    # 2. 空答复且预算用尽：可见 notice 收尾（绝不静默返回空串）
+    # 2. Blank answer with the budget spent: close with the visible notice, never an empty string.
     if blank:
         notice = BLANK_ANSWER_NOTICE.format(reason=reason)
         message = {"role": "assistant", "content": notice}

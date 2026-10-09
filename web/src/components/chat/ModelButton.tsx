@@ -1,13 +1,7 @@
 /**
- * 模型选择（阶段 13；阶段 54 去掉「跟随设置」；阶段 55 加推理强度）：输入区左侧的胶囊，
- * 决定**本次运行**用哪个模型、以及哪一档推理强度——都在候选里自己挑。
- *
- * 候选只有 BYOK（「设置 → 模型」里配的提供商与模型），内核不预置任何模型选项；
- * **档位列表也是配置来的**（每个模型声明自己认哪些），所以这段只在当前模型声明了档位时出现，
- * 选项就是那份列表 + 一个「不设」（不设 = 请求里不带这个参数）。
- * 没配模型时这里给一句去设置里添加的指引，发送钮同时保持禁用（没选模型不发车）。
- *
- * 形态与权限胶囊同一套（胶囊按钮 + 底部弹层，点外部不关、选完自己关）。
+ * Model chip in the composer: picks this run's model and reasoning effort from the BYOK
+ * candidates (the kernel ships no presets). Effort levels come from the selected model's own
+ * declaration — the list plus an unset option that keeps the parameter out of the request.
  */
 
 import { useState } from 'react'
@@ -17,13 +11,13 @@ import { cx } from '../../ui/cx'
 import { Icon } from '../../ui/Icon'
 
 export type ModelButtonProps = {
-  /** 本次运行的模型（providerId/modelId）；null = 还没选。 */
+  /** Model for this run (providerId/modelId); null = not chosen yet. */
   model: string | null
   onChange: (model: string) => void
-  /** 本次运行的推理强度；null = 不设（请求里不带这个参数）。 */
+  /** Reasoning effort for this run; null = unset, so the request omits the parameter. */
   effort?: string | null
   onChangeEffort?: (effort: string | null) => void
-  /** BYOK 候选（providerId/modelId ref + 展示名）；来自「设置 → 模型」的用户配置。 */
+  /** BYOK candidates (providerId/modelId ref + label) from the settings page. */
   candidates: ModelCandidate[]
 }
 
@@ -40,7 +34,7 @@ export function ModelButton({
     setOpen(false)
   }
   const current = candidates.find((candidate) => candidate.ref === model)
-  // 档位跟着候选走：每个模型自己声明认哪些（空 = 这个模型不提这件事，界面就不显示这一段）
+  // Effort levels follow the candidate; empty means the model declares none, so hide the section.
   const efforts = current?.reasoning_efforts ?? []
   const label = current?.label ?? model ?? '选择模型'
   const pickEffort = (level: string | null) => {
@@ -57,13 +51,12 @@ export function ModelButton({
         onClick={() => setOpen((v) => !v)}
         className={cx(
           'inline-flex h-[26px] items-center gap-a6 rounded-sm border-hairline px-a8 font-ui text-caption transition-colors duration-fast ease-out hover:bg-overlay-light',
-          // 还没选：强调色描边——发送钮此时是禁用的，原因要看得见（不写说明句）
+          // Not chosen yet: accent outline, since the disabled send button's reason must show.
           model === null ? 'border-accent text-accent' : 'border-hair text-ink',
         )}
       >
         <Icon name="sparkle" size={12} />
         <span className="max-w-[180px] truncate">{label}</span>
-        {/* 强度是这一次的一个选择，胶囊里带出来（几档就写在后面，不设时不占位） */}
         {effort !== null && <span className="shrink-0 text-ink-muted">{`· ${effort}`}</span>}
         <span className={cx('text-ink-muted transition-transform duration-fast ease-out', open ? '' : 'rotate-180')}>
           <Icon name="chevron-down" size={12} />
@@ -101,7 +94,6 @@ export function ModelButton({
             </p>
           )}
 
-          {/* 推理强度：档位来自所选模型的声明列表，随这一轮发出去 */}
           {efforts.length > 0 && onChangeEffort !== undefined && (
             <>
               <p className="mt-a6 border-t border-hair pt-a6 px-a8 font-ui text-micro text-ink-muted">

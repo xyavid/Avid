@@ -1,8 +1,6 @@
-"""待决表：挂起等待人类的两件事——毁灭级命令的裁决（approval）与模型的提问（question）。
-
-两者共用一张表和同一套「挂起 → 超时 → 取消 → run 结束」的语义，因为它们在界面上是
-同一件事：**这个运行卡住了，等你说句话**。区别只在结果：审批是 allow/deny（超时按拒绝
-收场），提问是一条文本答案（超时是「没答」，不是「拒绝」——模型据此降级，而不是当被否决）。
+"""The pending table for the two things that block a run on a human: destructive-command
+approvals (allow/deny, a timeout settles as deny) and model questions (a text answer, a timeout
+settles as unanswered, never as a denial, so the model degrades instead of reading a veto).
 """
 
 from __future__ import annotations
@@ -48,7 +46,7 @@ class PendingApproval:
     reason: str
     created_at: int
     expires_at: int
-    #: "approval" waits for allow/deny; "question" waits for a text answer (阶段 58)。
+    #: "approval" waits for allow/deny; "question" waits for a text answer.
     kind: str = KIND_APPROVAL
     #: For questions: the choices offered to the human (empty = free text).
     options: tuple[str, ...] = ()
@@ -92,7 +90,7 @@ class _Decided:
     decision: Decision
     reason: str
     expired: bool = False
-    #: 提问的答案文本：再答一次要能分辨「同一个答案」与「换了个答案」（后者是冲突）。
+    #: Question answer text: a repeat of the same answer is idempotent, a different one conflicts.
     answer: str | None = None
 
 
@@ -164,10 +162,9 @@ class ApprovalTable:
         return decision == "allow"
 
     def ask(self, question: str, options: tuple[str, ...] = ()) -> str | None:
-        """Blocking question callback: returns the human's answer, or None when nobody answered.
-
-        None 覆盖超时、取消、run 结束与「这个进程根本没有提问通道」——对模型来说它们是
-        同一件事：**没有答案**，据此降级即可，而不是把它当成被否决。
+        """Blocking question callback: returns the answer, or None when nobody answered, since a
+        timeout, a cancellation, the run ending and a missing channel all mean "no answer" to the
+        model, which must degrade rather than read it as a denial.
         """
         text = " ".join(str(question).split())[:MAX_QUESTION_CHARS]
         if not text:
@@ -246,8 +243,8 @@ class ApprovalTable:
 
     def _await(self, pending: PendingApproval) -> tuple[Decision, str]:
         """Wait for an answer, a cancellation, the run ending or expiry, whichever comes first."""
-        # 提问的「有人作答」是 answer 有值；审批是 decision 有值。两者的失败收场共用一套：
-        # 审批按拒绝（deny），提问按「没答」（unanswered）——前者是被否决，后者是没消息。
+        # A question settles when answer is set, an approval when decision is set; their failure
+        # values differ: an approval falls back to deny, a question to unanswered, not a veto.
         fallback = "unanswered" if pending.kind == KIND_QUESTION else "deny"
 
         def settled() -> bool:

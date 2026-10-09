@@ -1,7 +1,7 @@
-"""Conservative shell segmentation for policy analysis; the policy ladder, not this parser, enforces.
+"""Conservative shell segmentation for policy analysis: POSIX lexical approximation plus a
+PowerShell verb table, with anything unprovable marked uncertain.
 
-分段按 POSIX 词法近似，PowerShell 命令靠动词表识别（cmdlet 名带连字符，与
-POSIX 程序名不冲突）；两边都识别不了的程序本来就是 uncertain，走交人档。
+The policy layer, not this parser, enforces.
 """
 
 from __future__ import annotations
@@ -38,9 +38,7 @@ _READ_COMMANDS = {
     "whoami",
 }
 _NETWORK_COMMANDS = {"curl", "wget", "ssh", "scp", "sftp", "rsync", "nc", "ncat", "telnet", "ftp"}
-# PowerShell 别名与 POSIX 同语义档合表：这些名字不与任何标准 POSIX 工具冲突，
-# 而缺了它们 Windows 的第一天体验就是「全问」。别名语义：del/erase/ri/rd =
-# Remove-Item（删），ni/cpi/mi/rni/ac = 写，gci/gi/sls/gps/gsv = 读，iwr/irm = 网。
+# PowerShell aliases share the POSIX tiers; names do not clash, so one table is safe.
 _WRITE_COMMANDS = {
     "rm",
     "rmdir",
@@ -68,11 +66,10 @@ _WRITE_COMMANDS = {
 }
 _NETWORK_COMMANDS = _NETWORK_COMMANDS | {"iwr", "irm"}
 _READ_COMMANDS = _READ_COMMANDS | {"gci", "gi", "sls", "gps", "gsv"}
-# rm/rmdir/del/erase/ri/rd 之外，find -delete 也给删除能力（见分段循环）。
+# rm/rmdir/del/erase/ri/rd and find -delete both grant delete (see the segment loop).
 _DELETE_PROGRAMS = {"rm", "rmdir", "del", "erase", "ri", "rd"}
 _INTERPRETERS = {"bash", "sh", "zsh", "powershell", "pwsh"}
-# 运行/编排类：执行任意代码或触达编排面，按解释器同档（shell_execute 进 _STATE_CAPS，
-# 块内出现时同样向整条命令传播——DANGER 正则的锚点够不着块内，能力才是执法点）。
+# Run/orchestration programs count as interpreters: their payload is invisible to parsing.
 _RUN_PROGRAMS = {
     "invoke-expression",
     "start-process",
@@ -88,7 +85,7 @@ _RUN_PROGRAMS = {
     "kubectl",
     "helm",
 }
-# 进程/服务控制：副作用出工作区，按对外副作用处理。
+# Process/service control: side effects leave the workspace, so they count as external side effects.
 _CONTROL_PROGRAMS = {
     "stop-process",
     "stop-service",
@@ -97,7 +94,7 @@ _CONTROL_PROGRAMS = {
     "pkill",
     "killall",
 }
-# PowerShell 动词表：cmdlet 靠名字识别，语义与 POSIX 同名档对齐（读/写/删/网）。
+# PowerShell verbs are recognized by name and mapped to the POSIX read/write/delete/network tiers.
 _POWERSHELL_READ = {
     "get-childitem",
     "get-content",
@@ -144,11 +141,11 @@ _POWERSHELL_WRITE = {
 }
 _POWERSHELL_DELETE = {"remove-item", "clear-content", "clear-item"}
 _POWERSHELL_NETWORK = {"invoke-webrequest", "invoke-restmethod", "send-mailmessage"}
-# 只改导航不改状态：与 POSIX 的 cd 一样不带能力、也不算未知程序。
+# Navigation only: like POSIX cd it grants no capability and is not an unknown program.
 _POWERSHELL_NAV = {"set-location", "push-location", "pop-location"}
-# socat 既能连也能听，一律按网络处理（network_connect 进 _STATE_CAPS）。
+# socat both connects and listens, so it always counts as network.
 _NETWORK_COMMANDS = _NETWORK_COMMANDS | {"socat"}
-# 全部可识别程序的并集：不在这里的程序在程序位出现即 unknown_program。
+# Union of all known programs; anything else in program position makes the command uncertain.
 _KNOWN_PROGRAMS = (
     _READ_COMMANDS
     | _WRITE_COMMANDS
@@ -181,8 +178,8 @@ _KNOWN_PROGRAMS = (
     | _POWERSHELL_NETWORK
     | _POWERSHELL_NAV
 )
-# 状态改变类能力：这些能力出现在脚本块/子表达式里时必须向整条命令传播——
-# 只读判定容不下任何一种。其余能力（如纯读）不传播。
+# State-changing capabilities propagate out of script blocks and substitutions into the whole
+# command; read-only capabilities do not.
 _STATE_CAPS = frozenset(
     {
         "filesystem_write",
@@ -207,8 +204,7 @@ class ShellFacts:
     #: Program names with assignments/wrappers (env/timeout/sudo…) already stripped, basename-only.
     programs: tuple[str, ...] = ()
     uncertain: bool = False  # true when the parser cannot prove the construct safe
-    # 程序位出现了不认识的程序（且不是 $_ 管道属性访问）：脚本块扫描用它在
-    # 「块内未知程序」与「块内未知参数词」之间做区分，前者传播、后者不传播。
+    #: An unknown program in program position; block scanning propagates it, arguments do not.
     unknown_program: bool = False
 
 
@@ -258,10 +254,8 @@ def _nested_substitutions(command: str) -> tuple[list[str], bool]:
 
 
 def _script_blocks(command: str) -> tuple[list[str], bool]:
-    """Extracts balanced ``{...}`` blocks outside quotes; unbalanced braces make it uncertain.
-
-    引号内的花括号（``echo '{'``、``awk '{...}'``）不算块：字符串内容不是脚本，
-    不进扫描，否则无害字符串会把整条命令拖成 uncertain。
+    """Extract balanced ``{...}`` blocks outside quotes; braces inside quotes are string content and
+    unbalanced braces make the command uncertain.
     """
     blocks: list[str] = []
     uncertain = False
@@ -332,7 +326,7 @@ def parse_shell(command: str, *, depth: int = 0) -> ShellFacts:
     for block in blocks:
         inner = parse_shell(block, depth=depth + 1)
         capabilities.update(inner.capabilities & _STATE_CAPS)
-        # 块内程序位出现未知程序时整条命令交人；未知参数词（$_ 的属性等）不算。
+        # An unknown program inside a block makes the command uncertain; argument words do not.
         uncertain |= inner.unknown_program
 
     unknown_program = False
@@ -472,20 +466,19 @@ def parse_shell(command: str, *, depth: int = 0) -> ShellFacts:
             # An inline eval flag runs arbitrary code, so it counts as shell execution.
             capabilities.add("shell_execute")
         if program in _RUN_PROGRAMS:
-            # 运行/编排类按解释器同档：它们执行的内容解析层看不见。
+            # Run/orchestration programs count as interpreters: the payload cannot be parsed.
             capabilities.add("shell_execute")
         if program in _CONTROL_PROGRAMS:
             capabilities.add("external_side_effect")
         if program in {"awk", "gawk", "perl"} and re.search(
             r"\bsystem\b|\bgetline\b", " ".join(words)
         ):
-            # 脚本文本整体在引号里，块扫描看不见；system()/getline 能执行任意命令。
+            # Script text sits inside quotes, invisible to block scanning; system()/getline execute.
             capabilities.add("shell_execute")
         if program not in _KNOWN_PROGRAMS:
             # A program outside the known tables is unprovable, so it is reported uncertain.
             uncertain = True
-            # $_ 开头的词是管道对象的属性访问（Where-Object {$_.CPU -gt 10}），
-            # 不是被执行的程序，不算未知程序。
+            # A word starting with $_ is property access on a pipeline object, not a program.
             if not program.startswith("$_"):
                 unknown_program = True
         # A word with $ expands to a value whose target cannot be proven ($VAR may name
@@ -513,8 +506,7 @@ def parse_shell(command: str, *, depth: int = 0) -> ShellFacts:
     )
 
 
-# 能安全并行的程序名单：只放「读」这一件事的程序。sed/awk/find/echo 这类
-# 「默认读、带参数能写」的一律不收——判据要能一眼看懂，不靠参数组合的推理。
+# Parallel-safe programs are pure readers; sed/awk/find/echo stay out, because arguments can write.
 _READ_ONLY_PROGRAMS = frozenset(
     {
         "ls",
@@ -548,13 +540,12 @@ _READ_ONLY_PROGRAMS = frozenset(
         "md5sum",
         "sha1sum",
         "sha256sum",
-        # git 只放进名单，具体子命令由既有能力表判：commit/push 会带 filesystem_write
-        # 或 network_connect，读动作不带——单一真相，不在这里再抄一份子命令名单。
+        # git is judged per subcommand by the capability table: write and network verbs set flags.
         "git",
     }
 )
 
-# 只要沾上这些能力就不是「纯读」（process_spawn 人人都有，不在其中）。
+# Anything carrying one of these capabilities is not pure reading (process_spawn is universal).
 _UNSAFE_FOR_PARALLEL = frozenset(
     {
         "filesystem_write",
@@ -570,10 +561,9 @@ _UNSAFE_FOR_PARALLEL = frozenset(
 
 
 def is_read_only(command: str) -> bool:
-    """Whether a shell command is provably pure reading, so it may share a parallel segment.
-
-    这不是权限判定（那条走 engine，判的是「能不能跑」）：这里只回答「能不能和别的读
-    并行」，所以拿不准一律 False——保守方向的代价只是少并行，反过来是把写混进并行段。
+    """Whether a shell command is provably pure reading, so it may share a parallel segment; this is
+    not the permission verdict, and anything unproven returns False because the conservative error
+    only loses parallelism.
     """
     if not isinstance(command, str) or not command.strip():
         return False

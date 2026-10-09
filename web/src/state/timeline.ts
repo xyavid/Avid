@@ -1,38 +1,21 @@
 /**
- * 时间线：一次会话里的有序段落（历史 + 每次运行），过程与收尾共用同一套。
- *
- * 三个来源归并到同一个列表：
- * - **durable 条目**——会话落库后的回拉（`itemsFromEntries`）与运行中的消息事件
- *   （`user_message` / `assistant_message` / `tool_result_message`）同形，都带 `entry_id`；
- * - **live-only 段**——思考（`reasoning_delta`）与子 agent 的子步骤：不落盘、不重放，
- *   只在该次连接里存在，刷新或切会话后消失（见 `ReasoningBlock` 的注释）。
- *
- * 不变量：同一次运行，事件流逐条建出的段落与「重新读会话」建出的段落**逐项同形**
- * （live-only 段除外）。它就是「收尾不跳变」这句话的可执行形式，
- * `__tests__/timeline.test.ts` 钉住它。
- *
- * 归并幂等：按 `entry_id` / `tool_call_id` 去重。中途刷新会附着到运行并从 seq 0
- * 重放事件，重复投递不能变成重复段落。
- *
- * 收尾的折叠（`turnGroups`）也建在这份列表上：一轮跑完就把过程收成一行，
- * 只留收尾正文——它是纯函数，两条来源因此折出同一个形状。
+ * Timeline: ordered items of a session (history plus each run), shared by live and settled views.
+ * Invariant: for one run, items built from the event stream are item-by-item identical to those
+ * rebuilt from the session entries (live-only items aside); merging is idempotent by `entry_id` /
+ * `tool_call_id`, so a mid-run refresh that replays from seq 0 adds no duplicate items.
  */
 
 import type { Entry } from '../api/types'
 import { subagentTasks } from './toolArgs'
 
-/** 工具行状态。内核还有一档 `truncated`（内容被截断，不是调用失败）与 `denied`，
- *  两条路径都要给同一个答案：截断归 ok，拒绝归 failed——重读会话时这两个信息
- *  都不在条目里，只能按结果文本认（见 `classifyToolResult`）。 */
+/** Tool-row status. Kernel `truncated` maps to ok and `denied` to failed; a session reload carries
+ *  neither flag, so both are recognized from the result text (`classifyToolResult`). */
 export type ToolStatus = 'running' | 'ok' | 'failed'
 
 /**
- * 一个子 agent 任务**自己的段落列表**（阶段 53）：正文 / 思考 / 工具，与父时间线
- * 完全同一套模型——面板里的子运行界面就是拿它画的（`components/chat/Timeline` 复用）。
- *
- * 两部分来源不同，这也是「刷新后还剩什么」的答案：
- *   · 任务清单（`task` / `index`）来自**参数**（落在会话 JSONL 里），刷新后仍在；
- *   · `items` 来自**事件流**（子运行不落库、增量不重放），刷新后为空。
+ * One subagent task's own item list, on the same model as the parent timeline.
+ * `task` / `index` come from the persisted arguments; `items` come from the event stream
+ * (not persisted, not replayed) and are empty after a reload.
  */
 export type SubagentRun = {
   task: string
@@ -40,7 +23,7 @@ export type SubagentRun = {
   items: TimelineItem[]
 }
 
-/** 子 agent 内部的一步（卡片折叠行用的扁平形状）：由 `runs` 里的工具段派生。 */
+/** One step inside a subagent (flat shape for the card's collapsed rows), derived from `runs`. */
 export type SubagentStep = {
   task: string
   callId: string
@@ -50,11 +33,10 @@ export type SubagentStep = {
 }
 
 /**
- * 消息段的时间读数（毫秒），用来算一轮的「用时」：`turnGroups` 取用户段与收尾段之差。
- *
- * live 路径吃事件的 `ts`、重读路径吃条目的 `timestamp`——同一个写入的两次取时钟，
- * 相差就是写盘那几毫秒；折叠行精度到秒，两端又同向偏移（差值把写盘时间抵掉了），
- * 所以刷新前后读数是同一个档。两条路径都没有读数时为 null（折叠行只说「已完成」）。
+ * Message reading in ms, used for a turn's duration (`turnGroups` takes answer minus user).
+ * The live path reads the event `ts`, the reload path the entry `timestamp`; both are the same
+ * write, so the difference is disk latency and the settled row still reads the same. Null on both
+ * paths = no reading (the collapsed row only says "done").
  */
 export type MessageTs = number | null
 
@@ -95,7 +77,8 @@ export type TimelineItem =
       pending?: TimelinePending
       ts: MessageTs
     }
-  /** 运行失败的记账（阶段 55）：内核把它落成 error 条目，人或刷新都看得见，模型看不见。 */
+  /** Run-failure record: the kernel persists it as an error entry — visible to people and on
+   *  reload, invisible to the model. */
   | { kind: 'error'; entryId: string | null; text: string }
   | { kind: 'assistant'; entryId: string | null; text: string; streaming: boolean; ts: MessageTs }
   | { kind: 'reasoning'; text: string; startedAt: number; endedAt: number; streaming: boolean }
@@ -107,11 +90,11 @@ export type TimelineItem =
       result: string | null
       status: ToolStatus
       durationMs: number | null
-      /** 子运行各自的段落；非 subagent 工具恒为空数组。 */
+      /** Each sub-run's items; always an empty array for non-subagent tools. */
       runs: SubagentRun[]
     }
 
-/** 内核事件的最小形状；`ts` 用来算思考段的持续时长。 */
+/** Minimal kernel event; `ts` measures a reasoning block's duration. */
 export type TimelineEvent = { type: string; ts: number; data?: Record<string, unknown> }
 
 type MessagePayload = {
@@ -121,9 +104,8 @@ type MessagePayload = {
   tool_call_id?: unknown
 }
 
-/** 与 `avid/web/schemas.py` 的 classify_tool_status 同口径（前缀 + 长度窗口里的标记），
- *  另加内核拒绝时的固定文案——它不以「错误：」开头，重读会话只能按字面认。
- *  口径改动要两侧同步。 */
+/** Same rule as `classify_tool_status` in `avid/web/schemas.py` (prefixes, plus a marker within
+ *  the first 64 chars) and the kernel's fixed denial text; the two sides must change together. */
 const FAILED_PREFIXES = ['错误：', '参数错误：', 'Permission denied.']
 const FAILED_MARK = '执行失败：'
 
@@ -172,7 +154,7 @@ export function userContent(
   return { text: texts.join('\n'), images }
 }
 
-/** 去重身份：有身份的段落（落库消息、工具调用）在两条路径里指向同一件事。 */
+/** Dedup identity: an item with one (persisted message, tool call) is the same on both paths. */
 function identity(item: TimelineItem): string | null {
   if (item.kind === 'tool') return `tool:${item.callId}`
   if (item.kind === 'user' || item.kind === 'assistant' || item.kind === 'error') {
@@ -181,14 +163,13 @@ function identity(item: TimelineItem): string | null {
   return null
 }
 
-/** React key：有身份的用身份，live-only 段用序号兜底（列表只追加，序号稳定）。 */
+/** React key: identity when available, else the index (the list only appends, so it is stable). */
 export function itemKey(item: TimelineItem, index: number): string {
   return identity(item) ?? `live:${item.kind}:${index}`
 }
 
-/** 发送时的乐观用户段：`user_message` 事件到达后就地收编，不再多出一条。
- *  读数先用本地时钟占位（服务端与本机是同一台），事件到达即换成服务端那份。
- *  Draft images stay local (object URL) until `applyUserMessage` folds in the entry ref. */
+/** Optimistic user item on send, adopted in place when `user_message` arrives. Draft images keep
+ *  their local object URL until `applyUserMessage` folds in the entry ref. */
 export function appendUser(
   items: TimelineItem[],
   text: string,
@@ -256,7 +237,7 @@ export function mergePendingInputs(
   return merged
 }
 
-/** 贴底跟随的签名：段落数 + 内容量。它变化 = 有新东西落进列表。 */
+/** Bottom-follow signature: item count + content volume; a change means something new landed. */
 export function timelineSignature(items: TimelineItem[]): string {
   let chars = 0
   for (const item of items) {
@@ -296,13 +277,13 @@ function emptyTool(callId: string, name: string, args: string): TimelineItem {
   }
 }
 
-/** 子运行条目先用**参数**里的任务清单播种：面板在刷新后仍列得出这些任务（明细为空）。 */
+/** Seed sub-runs from the argument task list, so a reload still lists them (details empty). */
 function seedRuns(args: string): SubagentRun[] {
   return subagentTasks(args).map((task, index) => ({ task, index, items: [] }))
 }
 
-/** 思考定稿：正文/工具一到，正在流的思考段就闭段，之后再来的思考 delta 另起一段。
- *  只闭思考——正文的流式段由 assistant_message 原地提交，先闭就找不到了。 */
+/** Close a streaming reasoning item once text or tools arrive; only reasoning — the streaming
+ *  assistant item is committed in place by `assistant_message`, closing it early would lose it. */
 function closeReasoning(items: TimelineItem[]): TimelineItem[] {
   if (!items.some((item) => item.kind === 'reasoning' && item.streaming)) return items
   return items.map((item) =>
@@ -310,9 +291,9 @@ function closeReasoning(items: TimelineItem[]): TimelineItem[] {
   )
 }
 
-// ---------------------------------------------------------------- 会话条目 → 段落
+// ---------------------------------------------------------------- session entries → items
 
-/** 会话条目 → 段落。轮内顺序 = 模型先说话、再动手：正文在前，它触发的工具在后。 */
+/** Session entries → items. Turn order: the model speaks first, then the tools it called. */
 export function itemsFromEntries(entries: Entry[]): TimelineItem[] {
   const items: TimelineItem[] = []
   const byCallId = new Map<string, number>()
@@ -365,7 +346,7 @@ export function itemsFromEntries(entries: Entry[]): TimelineItem[] {
   return items
 }
 
-// ---------------------------------------------------------------- 事件 → 段落增量
+// ---------------------------------------------------------------- events → item deltas
 
 export function subagentTag(data: Record<string, unknown>): { task: string; index: number } | null {
   const raw = data.subagent
@@ -380,11 +361,10 @@ function isSubagentCard(item: TimelineItem): item is Extract<TimelineItem, { kin
 }
 
 /**
- * 带标记的事件归哪张卡。三档，顺序是刻意的：
- *   ① 已在跑、且认领过这条任务的卡——同名任务被重派时，旧卡不会被新批抢走事件；
- *   ② 最近一张还在跑的 subagent 卡（子运行是独占调用，同一时刻至多一张在跑）；
- *   ③ 最近一张 subagent 卡——批已经结束，但它的增量还压在合帧缓冲里等着落地，
- *      那时卡的状态已经是 ok，事件仍要找得到自己的家（否则子运行的正文会漏）。
+ * Which card a tagged event belongs to, in a deliberate order: a running card that already claimed
+ * this task (a re-dispatched task must not steal the old card's events), then the latest running
+ * subagent card, then the latest subagent card — a finished batch's deltas may still sit in the
+ * frame buffer, and its events must still find a home.
  */
 function subagentCardIndex(items: TimelineItem[], tag: { task: string; index: number }): number {
   const owns = (item: TimelineItem) =>
@@ -396,7 +376,7 @@ function subagentCardIndex(items: TimelineItem[], tag: { task: string; index: nu
   return lastIndexOf(items, isSubagentCard)
 }
 
-/** 认领一张卡里的某条子运行：按任务名找，找不到就按 index 补一条（参数里没有的任务）。 */
+/** Claim a sub-run by task name, appending one by index when the arguments lack that task. */
 function runIndex(runs: SubagentRun[], tag: { task: string; index: number }): number {
   const at = runs.findIndex((run) => run.task === tag.task)
   if (at >= 0) return at
@@ -404,7 +384,7 @@ function runIndex(runs: SubagentRun[], tag: { task: string; index: number }): nu
   return byIndex
 }
 
-/** 这一批跑完了：子运行最后那段流式正文收笔——游标不能在面板里一直闪。 */
+/** Batch finished: close the sub-run's streaming text so the cursor stops blinking in the panel. */
 function closeRunStreams(item: TimelineItem): TimelineItem {
   if (item.kind !== 'tool' || item.status === 'running' || item.runs.length === 0) return item
   const runs = item.runs.map((run) => ({
@@ -416,7 +396,7 @@ function closeRunStreams(item: TimelineItem): TimelineItem {
   return { ...item, runs }
 }
 
-/** 子运行自己的段落增量：与父时间线**同一套**归并函数，只是列表换成它自己的。 */
+/** A sub-run's own item deltas: the same merge functions, applied to its own list. */
 function childItems(items: TimelineItem[], event: TimelineEvent, data: Record<string, unknown>): TimelineItem[] {
   switch (event.type) {
     case 'assistant_delta':
@@ -428,13 +408,14 @@ function childItems(items: TimelineItem[], event: TimelineEvent, data: Record<st
     case 'tool_call_denied':
       return applyToolEvent(items, event)
     default:
-      // 子运行的其余事件（run_status / run_started / stop_nudge…）不进它的正文：
-      // 状态与读数在父级那张卡上，正文只留"它说了什么、动了什么"。
+      // Other sub-run events (run_status / run_started / stop_nudge…) stay out of its body:
+      // status and readings live on the parent card; the body keeps only words and actions.
       return items
   }
 }
 
-/** 带 subagent 标记的事件归入它那一条子运行；找不到归属时返回 null，调用方退化成父级一行。 */
+/** Fold a tagged event into its sub-run; null when attribution fails, and the caller falls back
+ *  to a parent-level row. */
 function withChildEvent(
   items: TimelineItem[],
   event: TimelineEvent,
@@ -449,24 +430,24 @@ function withChildEvent(
   const current: SubagentRun =
     found >= 0 ? card.runs[found]! : { task: tag.task, index: tag.index, items: [] }
   const nextItems = childItems(current.items, event, event.data ?? {})
-  if (nextItems === current.items && found >= 0) return items // 与这条子运行无关的事件：不动列表
+  if (nextItems === current.items && found >= 0) return items // unrelated event: leave the list
 
   const runs =
     found >= 0
       ? replace(card.runs, found, { ...current, items: nextItems })
       : [...card.runs, { ...current, items: nextItems }]
-  // 卡已收尾（迟到的那一截）：收笔——不会再有事件来关它了
+  // Card already settled (a late delta): close the stream, no further event will
   return replace(items, at, closeRunStreams({ ...card, runs }))
 }
 
-/** 一条事件喂进列表；unknown 事件与 live-only 之外的状态事件原样返回。
- *  纯函数且幂等：同一事件重复投递不改变列表。 */
+/** One event into the list; unknown events and live-only status events return it unchanged.
+ *  Pure and idempotent: replaying the same event does not change the list. */
 export function applyEvent(items: TimelineItem[], event: TimelineEvent): TimelineItem[] {
   const data = event.data ?? {}
   const tag = subagentTag(data)
   if (tag) {
-    // 子运行的一切都折进它自己的段落列表（panel 画的就是它）：正文、思考、工具。
-    // 归属认不出时退回父级一行——宁可多一行，不能丢信息。
+    // Everything of a sub-run folds into its own item list (text, reasoning, tools); when
+    // attribution fails, fall back to one parent row — an extra row beats lost information.
     const folded = withChildEvent(items, event, tag)
     if (folded !== null) return folded
     if (event.type.startsWith('tool_call_')) return applyToolEvent(items, event)
@@ -493,10 +474,11 @@ export function applyEvent(items: TimelineItem[], event: TimelineEvent): Timelin
   }
 }
 
-/** 运行失败：就地落一段错误段（带 entry_id 时按身份去重，重读会话不会多出一条）。
- *  它是这次运行唯一的产出，界面必须留得住——「run 突然停了」的观感就是从"什么都没留下"来的。 */
+/** Run failure: append an error item in place (deduped by entry_id, so a reload adds no extra one);
+ *  it is the run's only output and must stay visible. */
 function applyRunFailed(items: TimelineItem[], data: Record<string, unknown>): TimelineItem[] {
-  // `text` 是内核拼好的展示句（与落盘那条一字不差）；`message` 是原始原因，作为兜底
+  // `text` is the kernel's display sentence (identical to the persisted entry);
+  // `message` is the raw cause, used as fallback
   const message = str(data.text) || str(data.message)
   if (!message) return items
   const entryId = str(data.entry_id) || null
@@ -517,8 +499,8 @@ function applyUserMessage(items: TimelineItem[], event: TimelineEvent, data: Rec
     ...(images.length ? { images } : {}),
     ts: event.ts,
   }
-  // 乐观气泡（发送时先画的那个）就地收编，不再多出一条。
-  // Images pair by text (the event carries no client id); pending inputs fold in by input_id.
+  // Fold the optimistic bubble in place instead of adding another; images pair by text (the
+  // event carries no client id) and pending inputs by input_id.
   const inputId = str(data.input_id)
   if (inputId) {
     const at = items.findIndex(
@@ -546,7 +528,8 @@ function applyAssistantMessage(
   let out = items
   const streaming = lastIndexOf(out, (item) => item.kind === 'assistant' && item.streaming)
   if (streaming >= 0) {
-    // 原地提交：流式段就是这条消息（重放时 delta 已丢失，这一段的正文以持久消息为准）。
+    // Commit in place: the persisted message is this streaming item (deltas are lost
+    // on replay, so durable wins).
     const item = out[streaming]
     if (item?.kind === 'assistant') {
       out = replace(out, streaming, { ...item, entryId, text: text || item.text, streaming: false, ts: event.ts })
@@ -572,7 +555,7 @@ function applyAssistantDelta(items: TimelineItem[], data: Record<string, unknown
   const at = lastIndexOf(out, (item) => item.kind === 'assistant' && item.streaming)
   const item = at >= 0 ? out[at] : undefined
   if (item?.kind === 'assistant') return replace(out, at, { ...item, text: item.text + text })
-  // 读数留给持久消息：这一段的正文与落库身份都以它为准，时间读数一起从它取。
+  // Reading, text and identity all come from the persisted message.
   return [...out, { kind: 'assistant', entryId: null, text, streaming: true, ts: null }]
 }
 
@@ -583,7 +566,8 @@ function applyReasoningDelta(
 ): TimelineItem[] {
   const text = str(data.text)
   if (!text) return items
-  // 只接着**紧邻尾部**的思考段生长：中间来过工具或正文，就是新的一段思考。
+  // A reasoning delta extends only the reasoning item at the very tail;
+  // text or tools in between start a new one.
   const at = items.length - 1
   const item = items[at]
   if (item?.kind === 'reasoning' && item.streaming) {
@@ -620,7 +604,8 @@ function applyToolEvent(raw: TimelineItem[], event: TimelineEvent): TimelineItem
     }
     const item = items[at]
     if (item?.kind !== 'tool' || item.status !== 'running') return items
-    // 参数以助手消息里的原文为准，这里只在它缺失时补（重新序列化会改动键序）。
+    // Arguments come from the assistant message; fill only when missing
+    // (re-serializing changes key order).
     return replace(items, at, { ...item, name: item.name || str(data.tool), args: item.args || JSON.stringify(data.arguments ?? {}) })
   }
 
@@ -634,10 +619,10 @@ function applyToolEvent(raw: TimelineItem[], event: TimelineEvent): TimelineItem
   return replace(items, at, closeRunStreams({ ...item, status, durationMs, result }))
 }
 
-// ---------------------------------------------------------------- 历史与运行归并
+// ---------------------------------------------------------------- history + run merge
 
-/** 把本次运行建出的段落并回会话历史：重复的持久段就地更新（运行期的读数更全），
- *  live-only 段按锚点插回原位——切走会话再切回来时，思考不会跑到列表尾巴上。 */
+/** Merge this run's items back into session history: duplicate persisted items update in place
+ *  (the live reading is fuller), live-only items return to their anchor. */
 export function mergeItems(history: TimelineItem[], run: TimelineItem[]): TimelineItem[] {
   const at = new Map<string, number>()
   const out = history.map((item, index) => {
@@ -656,8 +641,8 @@ export function mergeItems(history: TimelineItem[], run: TimelineItem[]): Timeli
       out[known] = overlay(out[known]!, item)
       return
     }
-    // 锚点：它前面的第一个持久段（历史里找得到）→ 插在它后面；
-    // 否则它后面的第一个持久段 → 插在它前面；都没有 → 追加到尾部。
+    // Anchor: the nearest persisted item before it (insert after), else the nearest one after
+    // it (insert before), else append at the tail.
     let anchor = -1
     for (let back = index - 1; back >= 0; back -= 1) {
       const backKey = identity(run[back]!)
@@ -692,7 +677,8 @@ export function mergeItems(history: TimelineItem[], run: TimelineItem[]): Timeli
   return [...merged, ...tail]
 }
 
-/** 同一条持久段的两份：位置与内容以历史为准，运行期的读数（状态、耗时、子步骤）叠加。 */
+/** Two copies of one persisted item: position and content come from history, live readings
+ *  (status, duration, sub-steps) overlay on top. */
 function overlay(base: TimelineItem, run: TimelineItem): TimelineItem {
   if (base.kind !== 'tool' || run.kind !== 'tool') return base
   const rank: Record<ToolStatus, number> = { running: 1, ok: 2, failed: 2 }
@@ -701,46 +687,45 @@ function overlay(base: TimelineItem, run: TimelineItem): TimelineItem {
     status: rank[run.status] > rank[base.status] ? run.status : base.status,
     result: run.result ?? base.result,
     durationMs: run.durationMs ?? base.durationMs,
-    // 明细是 live-only：历史端（重读会话）没有它，运行端有——谁有给谁
+    // Details are live-only: history (reload) lacks them, the run has them — whoever has them wins
     runs: run.runs.some((item) => item.items.length > 0) ? run.runs : base.runs,
   }
 }
 
-// ---------------------------------------------------------------- 一轮回话：分组与折叠
+// ---------------------------------------------------------------- one turn: grouping and folding
 
 /**
- * 一轮回话（两条用户消息之间的全部段落）+ 它的折叠判定材料。
- *
- * 折叠的是一条回话里的**过程**：跑完的轮只留收尾正文，过程收成一行
- * （「已完成，用时 13分11秒」，点开还原）。判定全在这里，渲染层只照做——
- * 于是「过程」与「收尾」折出同一个形状，刷新前后也一样。
+ * One turn (everything between two user messages) plus the material for its folding decision.
+ * Only the process folds: a finished turn keeps its closing text and collapses the process into one
+ * row; the decision lives here so the live and settled views fold into the same shape.
  */
 export type TurnGroup = {
-  /** 这一轮用户说的话；null = 窗口从半轮中间开始（更早的历史还没加载）。 */
+  /** What the user said this turn; null = window starts mid-turn (earlier history not loaded). */
   user: UserItem | null
-  /** 本轮全部段落（含用户段），顺序不变——复制整段回话按它拼。 */
+  /** All items of the turn, order preserved (copying a whole turn uses this order). */
   items: TimelineItem[]
-  /** 可折叠的过程：用户段与收尾正文之间的一切（思考 / 中间正文 / 工具）。 */
+  /** Collapsible process: everything between the user item and the closing text. */
   process: TimelineItem[]
-  /** 收尾正文：本轮**末段**且已落库的那段正文；null = 这一轮没有收尾，不折。 */
+  /** Closing text: the turn's persisted last assistant item; null = no closing, no fold. */
   answer: AnswerItem | null
-  /** 本轮用时（收尾读数 − 用户读数）；缺读数或时钟倒挂时为 null。 */
+  /** Turn duration (answer minus user reading); null if a reading is missing or time went back. */
   durationMs: number | null
-  /** 组在扁平列表里的起点：live-only 段的 key 靠它保持全局唯一。 */
+  /** Group start in the flat list; it keeps live-only keys globally unique. */
   offset: number
-  /** 折叠开关的身份：取用户段（半轮的组取收尾段）的落库身份，归并与重放都不换 key。 */
+  /** Fold-toggle identity: from the user item (or the answer for a half turn); it never changes. */
   key: string
 }
 
 type UserItem = Extract<TimelineItem, { kind: 'user' }>
 type AnswerItem = Extract<TimelineItem, { kind: 'assistant' }>
 
-/** 收尾正文：必须是末段——末尾是工具就是中断/失败，那一轮没有「大幅消息」可留，整轮铺着。 */
+/** Closing text must be the last item: trailing tools mean an interruption or failure,
+ *  so the turn stays flat. */
 function isAnswer(item: TimelineItem): item is AnswerItem {
   return item.kind === 'assistant' && item.entryId !== null && item.text.trim() !== ''
 }
 
-/** 段落列表 → 各轮分组。切点就是用户段：每条用户消息开启一轮，直到下一条用户消息。 */
+/** Items → turn groups; split points are user items: each opens a turn until the next one. */
 export function turnGroups(items: TimelineItem[]): TurnGroup[] {
   const groups: TurnGroup[] = []
   let start = 0
@@ -772,9 +757,9 @@ function makeGroup(items: TimelineItem[], offset: number): TurnGroup {
   }
 }
 
-// ---------------------------------------------------------------- 子运行：卡片折叠行与面板
+// ---------------------------------------------------------------- sub-runs: card rows and panel
 
-/** 卡片折叠行要的子步骤：把每条子运行里的工具段按任务摊平（顺序就是它调用的顺序）。 */
+/** The card's collapsed rows: each sub-run's tool items flattened by task, in call order. */
 export function subagentSteps(item: TimelineItem): SubagentStep[] {
   if (item.kind !== 'tool') return []
   const steps: SubagentStep[] = []
@@ -788,22 +773,20 @@ export function subagentSteps(item: TimelineItem): SubagentStep[] {
   return steps
 }
 
-/** 面板要的一条子运行（扁平行）。 */
+/** One sub-run as the panel wants it (flat row). */
 export type SubagentRunView = {
-  /** 派发它的那次 subagent 调用：面板的 key 用它 + index。 */
+  /** The subagent call that dispatched it; the panel's key is this + index. */
   callId: string
   task: string
   index: number
   items: TimelineItem[]
-  /** 这批还在跑：面板据此给运行中的标记；单条成败只在内核汇总的那段结果里。 */
+  /** Batch still running (the panel's marker); per-run success is only in the kernel summary. */
   running: boolean
 }
 
 /**
- * 整条时间线里所有子运行，按出现顺序摊平——面板读的就是它。
- *
- * 明细（`items`）不落库，所以刷新后的历史会话里它恒为空（只剩任务清单）；
- * 这一点面板要照实说，不能画一个空的时间线假装"它什么都没干"。
+ * Every sub-run in the timeline, flattened in order — the panel reads this.
+ * Details (`items`) are not persisted: a reloaded history shows task names with empty details.
  */
 export function subagentRuns(items: TimelineItem[]): SubagentRunView[] {
   const views: SubagentRunView[] = []

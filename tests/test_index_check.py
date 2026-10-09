@@ -1,8 +1,13 @@
-"""P6：校验与重建——把「索引可能怎么坏」逐条列全，再逐条给出反应。
+"""Index check and repair: every way the index can rot, and what check plus --fix do about it.
 
-这条清单就是验收标准（AGENTS.md §6 的隔离测试纪律）：文件没了 / 被截断 / 被追加 /
-被改写（长度不变）/ 行数与库不符 / 版本不认识 / 库说的是别的会话目录。
-每条都问两件事：check 认得出吗，--fix（或 rebuild）修得回来吗。
+Failure list (AGENTS.md §6), each with the finding kind and its fix:
+  - session file deleted -> missing_file / forget
+  - file truncated -> cursor_beyond_eof / rebuild
+  - file appended without a notification -> behind / reindex
+  - file rewritten at the same length -> touched / rebuild
+  - row count disagreeing with the file -> rows_mismatch / rebuild
+  - unknown storage version -> status / no fix
+  - index built over another session store -> other_store
 """
 
 from __future__ import annotations
@@ -60,7 +65,7 @@ def test_a_truncated_file_is_rebuilt(indexer, store):
     )
     indexer.index_all()
     lines = file.read_text(encoding="utf-8").splitlines(keepends=True)
-    file.write_text("".join(lines[:2]), encoding="utf-8")  # header + 第一次提交
+    file.write_text("".join(lines[:2]), encoding="utf-8")  # header + first commit
 
     report = index_check.check_index(indexer, roots=[store])
 
@@ -77,10 +82,10 @@ def test_a_truncated_file_is_rebuilt(indexer, store):
 
 
 def test_an_append_without_a_notification_shows_up_as_behind(indexer, store):
-    """通知丢了、进程被杀都落在这里：check 说「落后」，fix 追平。"""
+    """A lost notification or a killed process lands here: check says behind, fix catches up."""
     file = make_session(store, session_id="s-behind", messages=({"role": "user", "content": "一"},))
     indexer.index_all()
-    append_message(file, {"role": "assistant", "content": "二"})  # 没有 notify
+    append_message(file, {"role": "assistant", "content": "二"})  # no notify call
 
     report = index_check.check_index(indexer, roots=[store])
 
@@ -93,7 +98,7 @@ def test_an_append_without_a_notification_shows_up_as_behind(indexer, store):
 
 
 def test_a_rewrite_with_the_same_length_is_caught_by_mtime(indexer, store):
-    """长度没变但文件被改过：靠 mtime 与索引时刻比对（这是我们能拿到的最强信号）。"""
+    """Same length but edited content: caught by comparing mtime with the indexed moment."""
     file = make_session(store, session_id="s-touched", messages=({"role": "user", "content": "原话"},))
     indexer.index_all()
     before = file.stat().st_size
@@ -185,8 +190,7 @@ def test_fix_all_counts_what_it_did(indexer, store):
     tally = index_check.apply_fixes(indexer, report)
 
     assert tally.reindexed + tally.rebuilt + tally.forgotten + tally.skipped >= 1
-    # 那个不是会话文件的 gone.jsonl 会一直被如实报出来——索引不该悄悄删掉别人的文件，
-    # 所以修完只剩它一条（可修的都修完了）。
+    # gone.jsonl is not a session file and stays reported: the index never deletes foreign files
     assert [item.kind for item in index_check.check_index(indexer, roots=[store]).findings] == [
         "unreadable_file"
     ]

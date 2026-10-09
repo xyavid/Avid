@@ -10,20 +10,18 @@ logger = logging.getLogger("avid.agent.skills")
 
 SKILLS_SUBDIR = "skills"
 
-# frontmatter `always:` 认可的写法；其余值一律视为不常驻。
+# The frontmatter `always:` spellings this accepts; any other value means not always-resident.
 _ALWAYS_TRUTHY = {"true", "yes", "1", "on"}
 
 
 def default_skills_dir(root: str | Path | None = None) -> Path:
-    """Return `<root>/skills`, falling back to the process cwd when no root is given.
-
-    Resolved at call time, so a long-lived process serving several workspaces stays correct.
-    """
+    """Return `<root>/skills` or the process cwd when no root is given, resolved at call time so a
+    long-lived process serving several workspaces stays correct."""
     return (Path(root) if root is not None else Path.cwd()) / SKILLS_SUBDIR
 
 
 def _split_frontmatter(text: str) -> tuple[dict[str, str], str]:
-    """Parse a minimal leading block of single-line `key: value` pairs, without a YAML dependency."""
+    """Parse a minimal leading block of single-line `key: value` pairs, with no YAML dependency."""
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
         return {}, text
@@ -59,7 +57,7 @@ class SkillLoader:
         self.skills: dict[str, dict[str, Any]] = {}
 
     def scan(self) -> "SkillLoader":
-        """Rebuild the registry, skipping non-files and entries that resolve outside the skills root."""
+        """Rebuild the registry, skipping non-files and entries resolving outside the skills dir."""
         self.skills = {}
         root = self.skills_dir.resolve()
         if not root.is_dir():
@@ -95,11 +93,8 @@ class SkillLoader:
         return self
 
     def catalog(self) -> str:
-        """Render the name and description lines that stay resident in the system prompt.
-
-        Always skills are left out: their full text already sits in the prompt, so a
-        catalog entry would only invite a pointless load_skill call.
-        """
+        """Render the name and description lines that stay resident, leaving always skills out
+        because their full text already sits in the prompt."""
         return "\n".join(
             f"- {name}: {self.skills[name]['description']}"
             for name in sorted(self.skills)
@@ -107,11 +102,8 @@ class SkillLoader:
         )
 
     def always_bodies(self) -> list[tuple[str, str]]:
-        """Return sorted (name, body) for always skills, frontmatter stripped.
-
-        Uncapped: how much of this may enter the system prompt is a prompt-budget
-        decision, made by the assembler (context_manager) via policy.prompt.
-        """
+        """Return sorted (name, body) for always skills, frontmatter stripped and uncapped, since
+        how much may enter the prompt is the assembler's budget decision."""
         return [
             (name, self.skills[name]["body"])
             for name in sorted(self.skills)
@@ -125,5 +117,5 @@ class SkillLoader:
             return skill["content"]
 
         available = "、".join(sorted(self.skills)) or "（无）"
-        # Tool failures open with the Chinese error marker by convention, since the model reads this text.
+        # Tool failures open with the Chinese error marker by convention: the model reads this text.
         return f"错误：没有这个技能「{name}」。可用：{available}"

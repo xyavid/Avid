@@ -1,4 +1,5 @@
-"""Assembles the FastAPI application: routers, error envelope, static assets and the SPA fallback."""
+"""Assembles the FastAPI application: routers, error envelope, static assets and the SPA
+fallback."""
 
 from __future__ import annotations
 
@@ -43,7 +44,7 @@ LOOPBACK_HOSTS: frozenset[str] = frozenset({"127.0.0.1", "localhost", "::1"})
 # Escape hatch for non-loopback deployments, read as a comma-separated list of extra hostnames.
 ALLOWED_HOSTS_ENV = "AVID_ALLOWED_HOSTS"
 
-# Inline styles are needed because Radix injects scroll-lock styles at runtime; data: images are favicons.
+# Inline styles: Radix injects scroll-lock styles at runtime; data: images are favicons.
 SECURITY_HEADERS: dict[str, str] = {
     "Content-Security-Policy": (
         "default-src 'self'; "
@@ -52,8 +53,7 @@ SECURITY_HEADERS: dict[str, str] = {
         "img-src 'self' data:; "
         "font-src 'self'; "
         "connect-src 'self'; "
-        # 没有 frame-src：本页不内嵌任何站点，子框架落回 default-src 'self'。
-        # frame-ancestors 'none' 是另一个方向——拦的是别人把我们嵌进去。
+        # No frame-src: this page embeds nothing; frame-ancestors 'none' guards the other direction.
         "object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
     ),
     "Referrer-Policy": "no-referrer",
@@ -76,7 +76,7 @@ def _hostname_of(value: str) -> str:
 
 
 def trusted_hosts(extra: frozenset[str] | None = None) -> frozenset[str]:
-    """Collects the allowed hostnames: loopback, the environment variable, and any explicit extras."""
+    """Collects allowed hostnames: loopback, the environment variable, and any explicit extras."""
     allowed = set(LOOPBACK_HOSTS)
     for item in os.environ.get(ALLOWED_HOSTS_ENV, "").split(","):
         if item.strip():
@@ -154,7 +154,7 @@ def create_app(
         version=f"api-v{API_VERSION}",
         description="自建 agent 运行时（harness）的 Web API 与事件流",
     )
-    # 白名单挂上 state：WebSocket 端点（终端桥）做同样的信任校验要用同一份。
+    # On app.state so WebSocket endpoints (the terminal bridge) reuse the same allowlist.
     app.state.allowed_hosts = trusted_hosts(allowed_hosts)
     app.add_middleware(
         TrustBoundaryMiddleware, allowed_hosts=app.state.allowed_hosts

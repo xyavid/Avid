@@ -39,7 +39,7 @@ describe('Badge（组件墙 §徽章）', () => {
 
     const badge = screen.getByText('已编译').closest('span')
     expect(badge?.querySelector('svg')).toBeTruthy()
-    // 线性图标纪律：stroke 而非实心 fill
+    // linear-icon discipline: stroke, never a filled shape
     expect(badge?.querySelector('svg')?.getAttribute('fill')).toBe('none')
   })
 

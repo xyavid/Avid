@@ -1,8 +1,7 @@
-"""stdio MCP 客户端与它的裁决路径（阶段 30e）。
+"""stdio MCP client and its decision path.
 
-用一个**真的子进程**当假 server（tests/support/fake_mcp_server.py，同一份协议实现
-跑在两条测试里）：握手、列举、调用、isError、超时、进程清理都是真实的——stub 掉
-stdio 协议层只会测到我们自己写的 mock。
+Tests drive a real subprocess server (tests/support/fake_mcp_server.py), so handshake,
+listing, calls, isError, timeouts, and process cleanup are all real.
 """
 
 from __future__ import annotations
@@ -40,7 +39,7 @@ def workspace(tmp_path):
     return root
 
 
-# ---------------- 配置发现与进程生命周期 ----------------
+# ---- config discovery and process lifecycle ----
 
 
 def test_no_config_means_empty_toolset(workspace):
@@ -139,7 +138,7 @@ def test_close_terminates_servers(workspace):
     assert manager.processes_alive() == 0
 
 
-# ---------------- 裁决：阶段 51 起 MCP 直接执行，不再问人 ----------------
+# ---- decisions: MCP executes directly and never asks ----
 
 
 def _action_args():
@@ -147,7 +146,8 @@ def _action_args():
 
 
 def test_mcp_tools_execute_without_asking_or_using_the_ledger(workspace):
-    """阶段 51：MCP 工具直接执行——不问人、不记账本、不因重复调用改变答案。"""
+    """MCP tools execute directly: no asking, no ledger entry, and repeated calls get the
+    same answer."""
     write_config(workspace, CONFIG_OK)
     manager = McpManager(str(workspace))
     manager.start_all()
@@ -187,7 +187,8 @@ def test_full_run_allows_mcp_without_asking(workspace):
 
 
 def test_mcp_tools_are_not_questioned_even_without_an_answerer(workspace):
-    """MCP 语义不可静态分类，但轻量化后也不问人：有人可问、无人可问都直接执行。"""
+    """MCP semantics cannot be classified statically, but MCP tools never ask a human:
+    they execute whether or not an answerer exists."""
     write_config(workspace, CONFIG_OK)
     manager = McpManager(str(workspace))
     manager.start_all()

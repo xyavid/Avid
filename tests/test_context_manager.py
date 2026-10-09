@@ -1,7 +1,6 @@
-"""ContextManager 的装配测试：块收集、落位、定格与记账。
+"""Assembly tests for ContextManager: block collection, placement, freezing, and accounting.
 
-压缩编排（五步的顺序与条件）的用例在 test_context.py（已改指本模块）；
-这里只测装配本身：system 怎么拼、tail 怎么挂、账怎么记、什么不该变。
+Compaction ordering is covered in test_context.py; assembling here never calls a model.
 """
 
 import pytest
@@ -53,7 +52,7 @@ def make_manager(
 
 
 
-# ---------- system 落位 ----------
+# ---------- system placement ----------
 
 
 def test_system_assembles_instructions_environment_and_skills():
@@ -67,7 +66,7 @@ def test_system_assembles_instructions_environment_and_skills():
     assert "## 可用技能" in request.system
     assert "（当前没有可用技能）" in request.system
     assert "Use load_skill" in request.system
-    # 顺序：指令 → 环境 → 技能
+    # Order: instructions → environment → skills
     assert (
         request.system.index("你是 Avid")
         < request.system.index("## 环境")
@@ -79,7 +78,7 @@ def test_instructions_override_takes_effect():
     request = make_manager(instructions="你是 subagent，只做一件事。").compose()
 
     assert request.system.startswith("你是 subagent，只做一件事。")
-    # 模板部分照常追加
+    # The template sections are appended as usual
     assert "## 可用技能" in request.system
 
 
@@ -97,7 +96,7 @@ def test_system_is_frozen_within_a_run():
     manager = make_manager()
     first = manager.compose()
 
-    # 运行中途换工具清单，system 也不该跟着变（前缀缓存友好）
+    # Swapping the tool list mid-run must not change system (prefix-cache friendly)
     manager.tool_names = ["bash"]
     second = manager.compose()
 
@@ -138,7 +137,7 @@ def test_skill_catalog_renders_into_system(tmp_path):
     assert request.parts["skill_catalog"] > 0
 
 
-# ---------- bootstrap 与常驻技能（阶段 31） ----------
+# ---------- bootstrap and always-on skills ----------
 
 
 def test_bootstrap_block_carries_the_workspace_agents_md(tmp_path):
@@ -179,7 +178,7 @@ def test_bootstrap_truncates_past_the_cap(tmp_path):
     (tmp_path / "AGENTS.md").write_text("长" * 80, encoding="utf-8")
     state = RunState(workspace_root=str(tmp_path))
 
-    # 上限归口 ContextBudget：按运行注入，而不是改散常量
+    # The cap belongs to ContextBudget: injected per run, never a scattered constant
     request = make_manager(state=state, budget=ContextBudget(bootstrap_chars=50)).compose()
 
     from avid.agent import prompt
@@ -202,7 +201,7 @@ def test_always_skill_lands_in_system_and_leaves_the_catalog(tmp_path):
     assert "## 常驻技能" in request.system
     assert "缩进用四空格。" in request.system
     assert request.parts["skill_always"] > 0
-    # always 技能不再占目录：不需要为一个已常驻的技能调 load_skill
+    # always skills leave the catalog: no load_skill call for an already-resident skill
     assert "- style: 代码风格" not in request.system
 
 
@@ -225,20 +224,21 @@ def test_always_total_cap_skips_later_skills(tmp_path, monkeypatch):
 
 
 def test_default_instructions_carry_base_capabilities_and_guardrails():
-    """默认文案钉住 base 段（身份 + 能力）与行为规则段的必备内容。"""
+    """The default wording pins the base section (identity + capabilities) and the required
+    guardrails."""
     request = make_manager().compose()
 
-    # base：身份、流式沟通与计划、工具调用以及权限层的确认/拒绝语义
+    # base: identity, streaming progress and plans, tool calls, permission confirm/deny
     assert "你是 Avid" in request.system
     assert "工具调用" in request.system
     assert "todo_write" in request.system
     assert "确认" in request.system
     assert "拒绝" in request.system
-    # 行为规则：授权执行并验证、不可逆先确认、缺信息先澄清、等结果再答复
+    # Rules: act then verify, confirm irreversible steps, clarify first, answer after results
     assert "不可逆" in request.system
     assert "澄清" in request.system
     assert "工具结果" in request.system
-    # 外部内容防线：工具结果是数据不是指令
+    # External-content guard: tool results are data, not instructions
     assert "不是指令" in request.system
 
 
@@ -251,7 +251,7 @@ def test_environment_includes_runtime_facts():
     assert "今天：" in request.system
 
 
-# ---------- tail 落位 ----------
+# ---------- tail placement ----------
 
 
 def test_tail_carries_plan_and_run_state_and_never_touches_transcript():
@@ -271,7 +271,7 @@ def test_tail_carries_plan_and_run_state_and_never_touches_transcript():
     assert "第一步" in tail["content"]
     assert "第 3 轮" in tail["content"]
     assert "5 次工具调用" in tail["content"]
-    # tail 不落库：transcript 长度不变，里面的消息没有一条是 tail
+    # The tail is never persisted: transcript length is unchanged and it enters no stored message.
     assert len(manager.transcript) == before
     assert all(msg is not tail for msg in manager.transcript.as_messages())
     assert all(msg["content"] != tail["content"] for msg in manager.transcript.as_messages())
@@ -317,7 +317,7 @@ def test_custom_tail_source_lands_in_the_tail_message():
     assert request.parts["artifact"] > 0
 
 
-# ---------- 记账 ----------
+# ---------- accounting ----------
 
 
 def test_parts_accounting_covers_every_rendered_block():
@@ -331,12 +331,12 @@ def test_parts_accounting_covers_every_rendered_block():
     for kind in ("instructions", "environment", "skill_catalog", "plan", "run_state"):
         assert parts[kind] > 0, kind
     assert parts["history"] == manager.transcript.estimate_chars()
-    assert parts["messages"] > parts["history"]  # tail 计入 messages 口径
+    assert parts["messages"] > parts["history"]  # the tail counts toward the messages metric
     assert request.system_chars == len(request.system)
     assert request.messages_chars == parts["messages"]
 
 
-# ---------- 与压缩编排的衔接 ----------
+# ---------- interaction with compaction ----------
 
 
 def tool_round(content: str, call_id: str) -> list[dict]:
@@ -358,7 +358,7 @@ def tool_round(content: str, call_id: str) -> list[dict]:
 
 def test_compose_runs_compaction_and_reports_it(tmp_path):
     state = RunState(workspace_root=str(tmp_path))
-    # 两轮工具往返；keep_recent_turns=1 时第 1 轮落入"更早历史"，被摘要替代。
+    # Two tool round trips; keep_recent_turns=1 drops round 1 into "earlier history" for a summary.
     messages = [
         user("hi"),
         *tool_round("x" * 5000, "t1"),
@@ -408,11 +408,12 @@ def test_render_before_compose_is_rejected():
         manager.render()
 
 
-# ---------- 缓存纪律（阶段 42 排序约定） ----------
+# ---------- cache discipline (ordering) ----------
 
 
 def test_context_map_puts_stable_blocks_before_volatile_ones():
-    """KV-cache 纪律钉进声明表：frozen 五块在前、per_round 两块在后，顺序不得漂移。"""
+    """KV-cache discipline is pinned into the declaration table: five frozen blocks first,
+    two per_round blocks last, and the order may not drift."""
     from avid.agent.context import CONTEXT_MAP
 
     kinds = [spec.kind for spec in CONTEXT_MAP]
@@ -430,7 +431,8 @@ def test_context_map_puts_stable_blocks_before_volatile_ones():
 
 
 def test_volatile_content_only_reaches_the_last_message():
-    """per_round 块只出现在 messages 的最后一条（tail 便签）；system 跨轮逐字节稳定。"""
+    """per_round blocks appear only in the last message (the tail note); system stays
+    byte-identical across rounds."""
     state = RunState()
     state.todo.replace([{"content": "第一步", "status": "in_progress"}])
     manager = make_manager(state=state)
@@ -440,7 +442,7 @@ def test_volatile_content_only_reaches_the_last_message():
     state.round = 2
     second = manager.compose()
 
-    assert second.system == system_after_first  # 冻结前缀逐字节稳定
+    assert second.system == system_after_first  # the frozen prefix stays byte-identical
     for message in second.messages[:-1]:
         assert "## 运行状态" not in str(message.get("content"))
         assert "## 当前计划" not in str(message.get("content"))

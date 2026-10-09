@@ -1,17 +1,9 @@
 /**
- * 临时对话面板（阶段 54）：右列里从主对话岔出来的一次性支线。
- *
- * 生命周期就是面板的生命周期：挂上 → 建一个**临时会话**（内核从源会话拷一份投影消息当
- * 历史、并打上只读标记）；卸下 → 有活动运行先取消，再 `DELETE` 掉这个会话。所以
- * 「关闭后这个 session 删除消失」不是界面把东西藏起来了，是磁盘上的会话文件真没了。
- *
- * 只读是内核保证的（工具表摘掉写入工具 + 沙箱工作区只读）；模型那边由环境块里那句
- * 「这是临时对话」自己知道。面板里**不写说明性文字**（用户要求）：界面只摆操作需要的
- * 东西——这几件事实（带上几条上下文、只读、离开即删除）进 `title`，悬停才出现。
- *
- * 对话本身与主列同构：`listEntries` 拉历史 → `itemsFromEntries` 建段落 → 同一个
- * `Timeline` 渲染器；运行走同一个 `useRunStream`（第二实例，自己一条流）。差别只有：
- * 紧凑输入（没有模型选择 / 权限芯片 / 容量环），以及没有分支与「加载更早」。
+ * Scratch panel: a one-off read-only branch off the main conversation that lives exactly as long
+ * as the panel — mount creates a scratch session (the kernel copies a projection of the source
+ * history), unmount cancels any live run then `DELETE`s it, so closing really removes it from disk.
+ * Read-only comes from the kernel (write tools dropped, sandbox workspace read-only); the UI shows
+ * no explanatory text and puts the facts (context count, read-only, delete-on-leave) in `title`.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -25,20 +17,20 @@ import { cx } from '../../ui/cx'
 import { Icon } from '../../ui/Icon'
 
 export type ScratchPanelProps = {
-  /** 源会话：上下文取自它打开这一刻的样子。null = 还没有选中会话。 */
+  /** Source session: context is copied from it as of the moment the panel opens; null = none. */
   sourceSessionId: string | null
-  /** 工作区根：时间线里工具行的路径相对化用。 */
+  /** Workspace root: used to relativize tool-row paths in the timeline. */
   workspaceRoot: string | null
-  /** 这次运行用哪个模型与哪档强度：跟随主输入区（面板里不放第二个选择器）。 */
+  /** Model and effort for this run, following the main composer (no second selector here). */
   model: string | null
   effort: string | null
 }
 
-/** 拆掉临时会话：先让活动运行停下来，再删（会话有活动 run 时服务端会拒绝销毁）。 */
+/** Tear down the scratch session: stop the live run first; the server rejects a busy delete. */
 async function destroyScratch(sessionId: string, runId: string | null): Promise<void> {
   if (runId !== null) {
     await cancelRun(runId).catch(() => {})
-    // 取消是异步的：给它一点时间收尾，超时就让删除失败（残留的会话在列表里可见、可手动删）
+    // Cancellation is async: retry the delete briefly, then give up (the leftover stays listed).
     for (let i = 0; i < 10; i += 1) {
       await new Promise((resolve) => window.setTimeout(resolve, 200))
       const gone = await deleteSession(sessionId).then(() => true).catch(() => false)
@@ -55,12 +47,11 @@ export function ScratchPanel({ sourceSessionId, workspaceRoot, model, effort }: 
   const [history, setHistory] = useState<TimelineItem[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
-  // 卸载后才知道要删哪个：create 是异步的，StrictMode 下第一次挂载还会在 promise 落地前
-  // 就被卸载——那时 `sessionId` 还是 null，只有这两个 ref 还知道要收拾谁。
+  // create is async and StrictMode unmounts early; the refs remember the id and run to clean up.
   const idRef = useRef<string | null>(null)
   const aliveRef = useRef(true)
   const runRef = useRef<string | null>(null)
-  // 收尾回调经 ref 转一手：hook 的初始化表达式里拿不到它自己的返回值
+  // Settle callback behind a ref: the hook's initializer cannot see its own return value.
   const settledRef = useRef<() => void>(() => {})
   const live = useRunStream(sessionId, () => settledRef.current())
   settledRef.current = () => live.settle()
@@ -71,7 +62,7 @@ export function ScratchPanel({ sourceSessionId, workspaceRoot, model, effort }: 
     void createScratchSession(sourceSessionId ?? '')
       .then((created) => {
         idRef.current = created.id
-        // 已经卸载了（StrictMode 的第一次挂载）：建了就得拆，不能留在列表里
+        // Already unmounted (StrictMode's first mount): anything created must be torn down.
         if (!aliveRef.current) {
           void destroyScratch(created.id, null)
           return

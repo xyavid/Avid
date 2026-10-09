@@ -1,6 +1,4 @@
-/**
- * 应用装配根（阶段 4）：默认渲染对话表面；?gallery=1 打开组件墙速查板。
- */
+/** App assembly root: conversation surface by default, gallery page with `?gallery=1`. */
 
 import { ConversationPage } from '../surfaces/conversation/ConversationPage'
 import { GalleryPage } from '../ui/gallery/GalleryPage'

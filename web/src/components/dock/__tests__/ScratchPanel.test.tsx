@@ -11,7 +11,7 @@ const listEntries = vi.fn()
 const startRun = vi.fn()
 const subscribeRun = vi.fn()
 
-// vi.mock 的工厂会被提升到文件顶部，类定义必须跟着一起提升（vi.hoisted）。
+// vi.mock factories are hoisted, so the class must be hoisted too (vi.hoisted).
 const { FakeApiError } = vi.hoisted(() => {
   class FakeApiError extends Error {
     readonly code = 'session_not_found'
@@ -80,7 +80,7 @@ describe('临时对话面板', () => {
     expect(title).toContain('2 条上下文')
     expect(title).toContain('只读')
     expect(title).toContain('离开这个面板即删除')
-    // 版面里不该出现这些说明句
+    // These explanation sentences must not appear in the layout.
     expect(screen.queryByText(/已带上主对话的/)).toBeNull()
   })
 
@@ -94,7 +94,7 @@ describe('临时对话面板', () => {
     await waitFor(() =>
       expect(startRun).toHaveBeenCalledWith('s-scratch', expect.objectContaining({ prompt: '这里问一句' })),
     )
-    // 换行是 Shift+Enter：那一下不该发出去
+    // Shift+Enter is a newline and must not send.
     startRun.mockClear()
     fireEvent.change(box, { target: { value: '换行' } })
     fireEvent.keyDown(box, { key: 'Enter', shiftKey: true })

@@ -1,15 +1,9 @@
 /**
- * 会话列表项（组件墙 §会话列表项 + 报告 §7.1）：
- * - 常态透明，hover/active 转 accent 浅底；
- * - active 标题转 accent（字重 500——墙用 600，违反报告 §5「字重仅 400/500」，
- *   这里以纪律优先，色相是主信号）；
- * - 操作按钮「隐藏直到需要」：opacity-0，group-hover / 键盘 focus-within 淡入
- *   （duration-fast），用透明度而非墙单行模式的宽度展开，避免布局抖动；
- * - 两个动作都是真的（阶段 13）：重命名 = 行内编辑（Enter 提交 / Esc 取消），
- *   删除 = 行下确认条（销毁磁盘记录，不可恢复）。**不给回调就一个都不渲染**——
- *   组件墙的静态演示因此不会出现按不动的按钮；原先的置顶/归档是假动作（后端
- *   没有这个概念，也不造假分组），随本阶段下线；
- * - 流式会话带 5px accent 呼吸圆点（报告 §7.1，hana-pulse）。
+ * Session list item: rename is inline editing (Enter commits, Esc cancels) and delete opens a
+ * confirmation row, because it destroys the session file on disk and cannot be undone; neither
+ * action renders unless its callback is provided.
+ * Action buttons stay at opacity-0 until hover or keyboard focus, and a streaming session shows a
+ * 5px `hana-pulse` accent dot.
  */
 
 import { useState } from 'react'
@@ -23,11 +17,11 @@ export type SessionItemProps = {
   meta: string
   active?: boolean
   streaming?: boolean
-  /** 提供即整项可点（role=button + 键盘可达），focus-within 会点亮操作按钮 */
+  /** Providing it makes the whole row clickable (role=button, keyboard reachable). */
   onSelect?: () => void
-  /** 提供即出现「重命名」；提交的是 trim 过、非空且确有变化的名字。 */
+  /** Providing it shows rename; commits a trimmed, non-empty, actually changed name. */
   onRename?: (name: string) => void
-  /** 提供即出现「删除」；按一下先出确认条，确认才回调（删除不可恢复）。 */
+  /** Providing it shows delete; the confirmation row is accepted first (deletion is final). */
   onDelete?: () => void
   className?: string
 }
@@ -42,7 +36,7 @@ export function SessionItem({
   onDelete,
   className,
 }: SessionItemProps) {
-  /** 编辑草稿：null = 不在编辑；每次进编辑都以当前标题重新起稿（不继承上次的改动）。 */
+  /** Edit draft: null = not editing; each edit starts from the title, not the previous draft. */
   const [draft, setDraft] = useState<string | null>(null)
   const [confirming, setConfirming] = useState(false)
 
@@ -58,7 +52,7 @@ export function SessionItem({
       tabIndex={onSelect ? 0 : undefined}
       onClick={onSelect}
       onKeyDown={(e) => {
-        // 行内的输入框与按钮自己处理键盘；这里只管「整项可点」那条路径。
+        // The inline input and buttons handle their own keys; this is the row-activation path.
         if (!onSelect || e.target !== e.currentTarget) return
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault()

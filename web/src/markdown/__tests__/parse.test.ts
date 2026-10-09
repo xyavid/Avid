@@ -1,11 +1,7 @@
 /**
- * 解析用例：语法按 CommonMark/GFM 标准实现（`@lezer/markdown`），这里钉的是
- * **我们的翻译层**——哪些节点落到哪个 kind、以及四条显式约定的行为：
- *   1. 未识别节点按原文当纯文本（HTML 块/标签进不了 DOM）；
- *   2. 引用链接自己查定义（Lezer 不校验引用定义，查不到按字面文本）；
- *   3. 软换行渲染成断行（有意偏离，对话场景的选择）；
- *   4. 实体只解数值与常用名，表外按原文。
- * 末尾单独一组是**协议闸门**：模型输出里进 DOM 属性的只有链接与图片两处。
+ * Pins our translation layer, not the standard parser: which node becomes which kind, the
+ * deliberate deviations (softbreak as a line break, undefined refs as literal text, entities
+ * limited to numeric + the named table, unknown nodes as literal text), and the scheme gate.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -108,7 +104,7 @@ describe('块级：CommonMark/GFM 结构', () => {
 
   it('分隔线紧跟标题合成带线小节（阶段 33 的视觉规则）', () => {
     expect(kinds(parseBlocks('前文\n\n---\n\n## 选型决策线'))).toEqual(['paragraph', 'section'])
-    // 后面没跟标题就还是普通横线
+    // with no heading after it, the rule stays a plain horizontal rule
     expect(kinds(parseBlocks('甲\n\n---\n\n乙'))).toEqual(['paragraph', 'hr', 'paragraph'])
   })
 
@@ -187,7 +183,7 @@ describe('行内：标准写法与四条约定', () => {
   it('图片：alt 取纯文本；行内标签按原文', () => {
     const inline = paragraphIn('![图 **注**](https://a.example/x.png) 与 <b>粗</b>')
     expect(inline[0]).toMatchObject({ kind: 'image', src: 'https://a.example/x.png', alt: '图 注' })
-    // HTML 标签不在 DOM 里成元素：原样当文本
+    // HTML tags never become DOM elements: they stay text
     expect(textOf(inline)).toContain('<b>粗</b>')
   })
 })

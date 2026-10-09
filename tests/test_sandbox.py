@@ -1,7 +1,7 @@
-"""Sandbox Manager：探测、argv 组装、环境白名单、掩蔽、降级与真实执行。
+"""Sandbox manager: probing, argv assembly, env whitelist, masking, and degradation.
 
-最后一组用例**真的跑**一次沙箱（bwrap 不在的机器上自动跳过）：前面那些断言说的是
-"argv 里有没有那一行"，只有真跑才能证明"这些 flag 合起来确实拦住了"。
+The last group really runs bwrap (skipped when unavailable): an argv assertion only checks
+that a flag is present, and only a real run proves the flags together enforce anything.
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ def home(tmp_path: Path) -> Path:
     return host
 
 
-# ---------------------------------------------------------------- 探测
+# ---- probing ----
 
 
 def test_missing_binary_is_reported_with_a_reason(monkeypatch, tmp_path):
@@ -65,7 +65,7 @@ def test_missing_binary_is_reported_with_a_reason(monkeypatch, tmp_path):
 
 
 def test_probing_actually_runs_a_sandbox(monkeypatch, tmp_path):
-    """"命令存在"不等于"能用"：拿一个假 bwrap（`/bin/true`）去探，必须判为不可用。"""
+    """An existing binary is not a usable one: a fake bwrap exiting 1 probes as unavailable."""
     fake = tmp_path / "bwrap"
     fake.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
     fake.chmod(0o755)
@@ -80,14 +80,14 @@ def test_probing_actually_runs_a_sandbox(monkeypatch, tmp_path):
 
 
 def test_landlock_abi_is_reported_but_not_used_for_network():
-    """Landlock ABI 只上报：阶段 51 没有网络轴，ABI 也不参与任何分档。"""
+    """Landlock ABI is reported only: it gates no policy tier."""
     abi = landlock_abi()
     assert abi is None or abi >= 1
     if abi is not None:
-        assert abi < 4 or abi >= 4  # 只是说明"这个数会被如实报出去"
+        assert abi < 4 or abi >= 4  # the reading is reported as-is, not compared
 
 
-# ---------------------------------------------------------------- 规格装配
+# ---- spec assembly ----
 
 
 def test_workspace_policy_without_a_backend_is_degraded(tmp_path, home):
@@ -104,14 +104,14 @@ def test_workspace_policy_without_a_root_is_degraded(tmp_path, home):
 
 
 def test_disabled_policy_is_not_degraded(tmp_path, home):
-    """full 显式关沙箱：它不是"降级"，是一开始就不要这条边界。"""
+    """full disables the sandbox on purpose: not a degradation, the boundary was never wanted."""
     spec = build_spec(policy="disabled", root=str(tmp_path), home=home, probe=WORKING)
     assert (spec.policy, spec.degraded, spec.enforced) == ("disabled", False, False)
     assert spec.one_line() == "沙箱：已禁用（full）"
 
 
 def test_network_isolation_capability_no_longer_gates_the_policy(tmp_path, home):
-    """网络轴已删：探针报 network_isolation=False 也只是个上报字段，不降级工作区沙箱。"""
+    """network_isolation is a reported field only: False must not degrade the workspace policy."""
     spec = build_spec(
         policy="workspace",
         root=str(tmp_path),
@@ -143,11 +143,11 @@ def test_summary_shape_is_what_events_and_audit_carry(tmp_path, home):
         "read_only",
         "notes",
     }
-    # 只读是临时对话那一档（阶段 54）：它在 start 事件与会审记录里是可见事实
+    # read_only marks the ad-hoc conversation tier and is visible in start events and audit
     assert summary["read_only"] is False
 
 
-# ---------------------------------------------------------------- argv 组装
+# ---- argv assembly ----
 
 
 def argv(spec: SandboxSpec, command: list[str], **kwargs) -> list[str]:
@@ -164,18 +164,14 @@ def test_argv_mounts_system_read_only_and_workspace_writable(tmp_path, home):
     built = argv(spec, ["bash", "-c", "ls"])
     assert built[:3] == [str(spec.binary), "--ro-bind", "/"]
     assert "--bind" in built and str(tmp_path) in built
-    # 网络恒开：工作区沙箱只隔离文件系统与进程视图，不再 unshare 网络命名空间。
+    # Network stays on: the workspace sandbox isolates the filesystem and process view only.
     assert "--unshare-net" not in built
     assert "--clearenv" in built
 
 
 def test_empty_tmp_is_mounted_before_the_workspace_and_the_masks(tmp_path, home):
-    """挂载顺序是语义：空 /tmp 必须先挂，后面的工作区与掩蔽才盖得住它。
-
-    旧顺序（先工作区、后 /tmp）会让"工作区在 /tmp 下"的常见情形整个消失
-    （bwrap: Can't chdir to /tmp/...: No such file or directory）——这条断言就是那次
-    实测踩坑留下的钉子。
-    """
+    """Mount order is semantic: the empty /tmp goes first, since mounted last it makes a workspace
+    under /tmp vanish (bwrap: Can't chdir to /tmp/...)."""
     root = tmp_path / "ws"
     root.mkdir()
     spec = build_spec(policy="workspace", root=str(root), home=home, probe=WORKING)
@@ -188,12 +184,8 @@ def test_empty_tmp_is_mounted_before_the_workspace_and_the_masks(tmp_path, home)
 
 
 def test_masks_come_after_grants_so_a_grant_cannot_unmask(tmp_path, home):
-    """区外授权不能把它的掩蔽子目录掀开。
-
-    顺序反了就会出现：区外授权给了 `$HOME` → `--ro-bind $HOME $HOME` 盖住先前挂的
-    `--tmpfs $HOME/.ssh` → `.ssh` 又看得见了。掩蔽是宿主策略，授予是本次运行的能力，
-    冲突时掩蔽赢。
-    """
+    """A grant must not unmask its nested masked path: masks are host policy and grants per-run
+    capability, so a later --ro-bind of $HOME must not cover the earlier --tmpfs $HOME/.ssh."""
     spec = build_spec(policy="workspace", root=str(tmp_path / "ws"), home=home, probe=WORKING)
     built = argv(spec, ["bash", "-c", "ls"], grants=[(str(home), "ro")])
 
@@ -211,7 +203,7 @@ def test_masks_come_after_grants_so_a_grant_cannot_unmask(tmp_path, home):
 
 
 def test_masks_use_the_resolved_path_so_symlinks_do_not_break(tmp_path, home):
-    """WSL 里 `~/.aws` 是符号链接；bwrap 不能在符号链接上挂 tmpfs（实测）。"""
+    """bwrap cannot mount a tmpfs over a symlink (~/.aws on WSL): use the resolved path."""
     target = tmp_path / "mnt" / "aws"
     target.mkdir(parents=True)
     (home / ".aws").symlink_to(target)
@@ -229,7 +221,7 @@ def test_masks_are_skipped_when_the_workspace_lives_inside_them(tmp_path, home):
 
 
 def test_sessions_store_is_masked_wherever_it_is_configured(tmp_path, home, monkeypatch):
-    """会话文件就是对话历史，agent 的工具不该读自己的记录（阶段 56）。"""
+    """The session store is the conversation history: tools must not read their own record."""
     store = tmp_path / "somewhere" / "avid-sessions"
     monkeypatch.setenv("AVID_SESSIONS_DIR", str(store))
 
@@ -239,7 +231,7 @@ def test_sessions_store_is_masked_wherever_it_is_configured(tmp_path, home, monk
 
 
 def test_default_sessions_store_under_the_avid_home_is_not_masked_twice(tmp_path, monkeypatch):
-    """生产形态：默认会话目录就住在 ~/.avid 里，那条掩蔽已经盖住它，不重复挂一次。"""
+    """The default store lives under ~/.avid; that mask already covers it, never mounted twice."""
     monkeypatch.setenv("AVID_HOME", str(tmp_path / "host-home" / ".avid"))
 
     spec = build_spec(
@@ -251,7 +243,7 @@ def test_default_sessions_store_under_the_avid_home_is_not_masked_twice(tmp_path
 
 
 def test_the_relocated_avid_home_is_masked_not_only_dot_avid(tmp_path, home, monkeypatch):
-    """掩蔽名单里那句 ~/.avid 是常量，而 AVID_HOME 能把它搬到别处：密钥/审计/索引跟着走，就得跟着掩。"""
+    """AVID_HOME relocates ~/.avid; secrets, audit and index move with it, and so does the mask."""
     relocated = tmp_path / "elsewhere" / "avid-home"
     monkeypatch.setenv("AVID_HOME", str(relocated))
     monkeypatch.setenv("AVID_SESSIONS_DIR", str(relocated / "sessions"))
@@ -259,13 +251,13 @@ def test_the_relocated_avid_home_is_masked_not_only_dot_avid(tmp_path, home, mon
     spec = build_spec(policy="workspace", root=str(tmp_path / "ws"), home=home, probe=WORKING)
 
     assert str(relocated) in spec.mask_dirs
-    assert str(relocated / "sessions") not in spec.mask_dirs  # 已被上面那条盖住，不重复挂
+    assert str(relocated / "sessions") not in spec.mask_dirs  # already covered above
 
 
 def test_sessions_store_inside_the_workspace_is_masked_after_the_workspace_bind(
     tmp_path, home, monkeypatch
 ):
-    """工作区内的会话目录要挂在工作区之后：不然那次绑定会把掩蔽盖掉。"""
+    """A store inside the workspace is masked after the bind, or that bind covers the mask."""
     root = tmp_path / "ws"
     store = root / "sessions"
     store.mkdir(parents=True)
@@ -294,10 +286,10 @@ def test_grants_are_mounted_and_masked_targets_are_refused(tmp_path, home):
     spec = build_spec(policy="workspace", root=str(tmp_path / "ws"), home=home, probe=WORKING)
 
     built = argv(spec, ["bash", "-c", "cat"], grants=[(str(outside), "ro")])
-    assert built.count(str(outside)) == 2  # 源与目标各一次
+    assert built.count(str(outside)) == 2  # source and target once each
     assert "--ro-bind" in built
 
-    # 掩蔽路径上的授予被拒：目标只出现在那条掩蔽里（没有额外的 bind 挂载）
+    # A grant on a masked path is refused: the target appears only in that mask
     masked = argv(spec, ["bash", "-c", "ls"], grants=[(str(home / ".ssh"), "rw")])
     assert masked.count(str(home / ".ssh")) == 1
 
@@ -309,7 +301,7 @@ def test_grants_are_ignored_when_not_enforced(tmp_path, home):
     assert argv(spec, ["bash", "-c", "ls"], grants=[(str(outside), "rw")]) == ["bash", "-c", "ls"]
 
 
-# ---------------------------------------------------------------- 环境
+# ---- environment ----
 
 
 def test_env_whitelist_drops_secrets_and_desktop_access(home, tmp_path):
@@ -346,13 +338,14 @@ def test_env_whitelist_drops_secrets_and_desktop_access(home, tmp_path):
 
 
 def test_env_home_is_the_host_we_computed_the_masks_for(home, tmp_path):
-    """掩蔽清单与 ``HOME`` 必须指向同一个家：各算各的会变成"掩蔽 A 家、用 B 家"。"""
+    """The mask list and HOME must name one home, or the sandbox masks A and uses B."""
     spec = build_spec(policy="workspace", root=str(tmp_path), home=home, probe=WORKING)
     assert spec.apply_env({"PATH": "/usr/bin", "HOME": "/somewhere/else"})["HOME"] == str(home)
 
 
 def test_child_env_full_inherits_and_degraded_scrubs(tmp_path, home):
-    """full 显式信任整体继承（env=None，凭据可用）；降级走黑名单；强制走白名单。"""
+    """full inherits everything on purpose (env=None, credentials usable); degraded uses the
+    blacklist; enforced uses the whitelist."""
     full = build_spec(policy="disabled", root=str(tmp_path), home=home, probe=WORKING)
     assert full.child_env({"PATH": "/usr/bin", "GITHUB_TOKEN": "x"}) is None
 
@@ -370,7 +363,7 @@ def test_env_allow_list_is_explicit():
     assert all(isinstance(item, str) for item in DEFAULT_MASK_DIRS + DEFAULT_MASK_FILES)
 
 
-# ---------------------------------------------------------------- 真跑一次
+# ---- one real run ----
 
 
 @pytest.fixture
@@ -403,17 +396,14 @@ def test_real_run_cannot_read_the_masked_credentials(real_spec, home):
 
 
 def test_real_run_cannot_read_the_session_store(tmp_path, home, monkeypatch):
-    """真跑：会话文件在沙箱里既读不到也列不出——工具视野里没有自己的对话历史。
-
-    会话库**必须放在 /tmp 之外**：沙箱里 /tmp 是一块空 tmpfs，放那儿的话这条断言与
-    会话目录掩蔽无关（把掩蔽代码删掉照样过——评审抓到的空转）。
-    """
+    """A real run: session files are neither readable nor listable in the sandbox, and the store
+    must live outside /tmp (an empty tmpfs there would mask nothing)."""
     found = probe_backend()
     if not found.available:
         pytest.skip(f"这台机器上没有可用的 bwrap：{found.reason}")
     root = tmp_path / "ws"
     root.mkdir()
-    store = home.parent / "avid-sessions"  # /tmp 之外
+    store = home.parent / "avid-sessions"  # outside /tmp
     store.mkdir(exist_ok=True)
     (store / "2026-10-09T00-00-00-000_s-1.jsonl").write_text(
         '{"kind": "header", "id": "s-1"}\n', encoding="utf-8"
@@ -428,12 +418,8 @@ def test_real_run_cannot_read_the_session_store(tmp_path, home, monkeypatch):
 
 
 def test_real_run_cannot_write_outside_the_workspace(real_spec, home, tmp_path):
-    """区外目标必须**真实存在**才测得到"写不进去"。
-
-    为什么放 `/var/tmp`：沙箱里 `/tmp` 是一块空 tmpfs，测试夹具（tmp_path）又在 /tmp 下，
-    于是"往 /tmp 某个不存在的文件写"会在那层临时文件系统里成功——那是隔离生效的表现，
-    却会让断言误判成"能写到区外"。用一个真正在 ro-bind 里的路径才问得出这个问题。
-    """
+    """The target must really exist to test a refused write: /tmp is an empty tmpfs in the sandbox
+    (so writes there falsely succeed), while /var/tmp sits inside the read-only bind."""
     target = Path("/var/tmp") / f"avid-outside-{tmp_path.name}.txt"
     target.write_text("outside\n", encoding="utf-8")
     try:
@@ -446,9 +432,8 @@ def test_real_run_cannot_write_outside_the_workspace(real_spec, home, tmp_path):
 
 
 def test_real_run_has_network(real_spec):
-    """网络恒开（阶段 51）：argv 里没有 --unshare-net，沙箱里的连接能到达宿主在听的端口。
-
-    用宿主自己开的回环监听来证明——不依赖外网，也不会有"外网刚好不通"的假红。
+    """Network is always on: no --unshare-net, so a sandboxed connection reaches a host
+    loopback listener opened by the test itself (no external network involved).
     """
     server = socket.socket()
     server.bind(("127.0.0.1", 0))
@@ -461,7 +446,7 @@ def test_real_run_has_network(real_spec):
             connection, _ = server.accept()
             accepted.append(True)
             connection.close()
-        except OSError:  # 沙箱里没连过来：由下面的断言给出失败原因
+        except OSError:  # no connection from the sandbox: the assertion below reports why
             pass
 
     thread = threading.Thread(target=accept_one, daemon=True)
@@ -497,7 +482,7 @@ def test_real_run_can_read_a_granted_path_read_only(real_spec, tmp_path):
     target.unlink(missing_ok=True)
 
 
-# ---------------------------------------------------------------- 降级环境黑名单（shell 适配三）
+# ---- degraded env blacklist ----
 
 
 def test_scrubbed_env_drops_credential_shaped_names():

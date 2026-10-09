@@ -1,21 +1,8 @@
 /**
- * markdown 渲染：把 `parse.ts` 的渲染模型画成 React 元素。
- *
- * 设计约束（三条，都是这个仓库的既有纪律）：
- *   1. **不注入 HTML**：全程 React 元素，`dangerouslySetInnerHTML` 一次都不用——
- *      模型输出是外部内容，进 DOM 的唯一通路就是文本节点与属性；解析器认不出的
- *      写法（HTML 块、行内标签）也只当纯文本显示；
- *   2. **SVG 走 <img> 数据地址**：`<img>` 里的 SVG 是隔离的（不执行脚本、不外链），
- *      所以模型给的图能直接看，而不用把它内联进文档；外链图片同理降级成链接
- *      （CSP 的 img-src 只允许 self 与 data:，何况外链图是追踪像素的现成载体）；
- *   3. **样式只引用 token**：纸本语言里没有「深色代码块」，代码块是纸面上凹下去的一块
- *      （overlay 底 + 发丝线），标题走衬线栈，字重只用 400 / 500。
- *
- * 两处渲染期的取舍：**软换行渲染成断行**（对话场景：模型排版里的换行是内容的一部分），
- * **列表的紧凑/松散渲染成同一副样子**（列表项只有一个段落时不套 `<p>`，避免聊天里
- * 出现一整屏的段间距）。解析交给标准实现，见 `parse.ts` 的模块注释。
- *
- * 解析结果按文本记忆化：流式追加时每帧都会重渲染，但只有文本变了才重新解析。
+ * Renders the `parse.ts` model as React elements; no HTML is ever injected
+ * (`dangerouslySetInnerHTML` is unused) and every class comes from a tokens.css token.
+ * Deliberate deviations: soft breaks render as line breaks, and external images become links
+ * because CSP `img-src` allows self/data only.
  */
 
 import { useMemo, useState, type ReactNode } from 'react'
@@ -28,7 +15,7 @@ import { parseBlocks } from './parse'
 
 export type MarkdownProps = {
   children: string
-  /** 追加在**最后一个块内部**的内容（流式光标）。挂在外面会另起一行，光标就跟丢了。 */
+  /** Appended inside the last block (streaming cursor); outside it would start its own line. */
   trailing?: ReactNode
 }
 
@@ -55,8 +42,7 @@ function renderBlock(block: Block, key: number, trailing?: ReactNode) {
       )
     case 'heading': {
       const Tag = (`h${block.level}` as unknown) as 'h2'
-      // 普通标题：一律左对齐。居中留给「带线小节标题」（section）——按层级写死居中
-      // 会很死板，模型随手写的二级标题也会被居中。
+      // Plain headings stay left-aligned; centering is reserved for `section` blocks.
       return (
         <Tag
           key={key}
@@ -68,8 +54,7 @@ function renderBlock(block: Block, key: number, trailing?: ReactNode) {
       )
     }
     case 'section': {
-      // 一节的开头：线在上、标题居中。线是这一节的一部分（原文里的那条 ---），
-      // 所以不另画横线。
+      // A section opens here: rule above a centered heading — the rule is the original `---`.
       const Tag = (`h${block.level}` as unknown) as 'h2'
       return (
         <div key={key} className="mt-a24 mb-a12 first:mt-0">
@@ -145,7 +130,7 @@ function renderBlock(block: Block, key: number, trailing?: ReactNode) {
     case 'hr':
       return <hr key={key} className="my-a16 border-t border-hair" />
     case 'literal':
-      // 解析器认不出的块（HTML 块等）：原样当纯文本，保留它自己的换行。
+      // Unrecognized block (HTML etc.): plain text, keeping its own newlines.
       return (
         <p key={key} className="my-a8 whitespace-pre-wrap break-words font-mono text-caption text-ink-muted">
           {block.text}
@@ -155,7 +140,7 @@ function renderBlock(block: Block, key: number, trailing?: ReactNode) {
 }
 
 function renderItem(item: ListItem, key: number) {
-  // 单个段落的列表项不套 <p>：紧凑与松散在聊天里渲染成同一副样子。
+  // A single-paragraph item skips <p> on purpose: tight and loose lists look the same.
   const only = item.blocks.length === 1 && item.blocks[0]?.kind === 'paragraph' ? item.blocks[0] : null
   return (
     <li key={key} className="my-a4">
@@ -165,7 +150,7 @@ function renderItem(item: ListItem, key: number) {
   )
 }
 
-/** GFM 任务框：纸面语言里不用原生 checkbox（表单控件与纸面不合），画一个小方框。 */
+/** GFM task box, drawn rather than a native checkbox. */
 function Checkbox({ checked }: { checked: boolean }) {
   return (
     <span
@@ -178,7 +163,7 @@ function Checkbox({ checked }: { checked: boolean }) {
   )
 }
 
-/** 标题字号：按正文拉档差（token 在 tokens.css；h5/h6 与正文同号，靠字重与衬线区分）。 */
+/** Heading sizes; h5/h6 match body size and differ by weight and serif (tokens in tokens.css). */
 function headingSize(level: HeadingLevel): string {
   switch (level) {
     case 1:
@@ -213,7 +198,7 @@ function renderInline(nodes: Inline[]): ReactNode {
           </code>
         )
       case 'strong':
-        // 字重只用 400 / 500（纸本纪律），所以加粗落在 medium 上而不是 bold
+        // Weights are 400/500 only, so bold lands on medium, not bold
         return (
           <strong key={i} className="font-medium text-ink">
             {renderInline(node.children)}
@@ -249,9 +234,8 @@ function renderInline(nodes: Inline[]): ReactNode {
 }
 
 /**
- * 图片：`data:` 地址直接画（自带内容、不产生请求），外链降级成链接。
- * 外链不画进正文不是漏做——CSP 的 img-src 只允许 self 与 data:，
- * 何况模型给的远端图正是追踪像素的现成载体；点开由用户自己决定。
+ * Images: `data:` sources draw inline, external ones become links on purpose — CSP `img-src`
+ * allows self/data only, and remote images are ready-made tracking pixels.
  */
 function inlineImage(src: string, alt: string, key: number) {
   if (src.startsWith('data:') && src.startsWith('data:image/')) {
@@ -270,7 +254,7 @@ function inlineImage(src: string, alt: string, key: number) {
   )
 }
 
-/** 语言标是 svg、或 html 块里其实是 <svg>：都按图渲染。 */
+/** `svg` fence, or an `html` fence whose body is an `<svg>`: both render as a figure. */
 function isSvgFence(lang: string | null, text: string): boolean {
   const body = text.trimStart().toLowerCase()
   if (!body.startsWith('<svg')) return false
@@ -278,11 +262,8 @@ function isSvgFence(lang: string | null, text: string): boolean {
 }
 
 /**
- * 把模型给的 SVG 渲染成图。
- *
- * 用 `<img src="data:image/svg+xml;base64,…">` 而不是内联：`<img>` 里的 SVG 拿不到
- * 文档上下文（脚本不执行、外链不加载），这是「能看图」与「不引入执行面」之间成本最低的一刀。
- * 缺 xmlns 时补上——`<img>` 要求独立 SVG 自带命名空间，模型经常不写。
+ * SVG from the model, drawn via an `<img>` data URL so it cannot run scripts or load externals;
+ * a missing `xmlns` is added because `<img>` needs a standalone SVG.
  */
 function SvgFigure({ source }: { source: string }) {
   const [showSource, setShowSource] = useState(false)

@@ -21,7 +21,7 @@ AVID_HOME_ENV = userdirs.AVID_HOME_ENV
 REGISTRY_FILE = "workspaces.json"
 # Stamped into every file so the on-disk shape is self-describing.
 REGISTRY_VERSION = 1
-# Session stores live in one shared directory, one subdirectory per workspace id (阶段 56）。
+# Session stores live in one shared directory, one subdirectory per workspace id.
 # The id is a digest of the resolved path, so a store survives a renamed or unregistered
 # workspace; losing the registry loses the names, never the sessions.
 
@@ -59,10 +59,9 @@ def derive_id(root: str | Path) -> str:
 
 @dataclass(frozen=True)
 class Workspace:
-    """A registered directory with its display name and timestamps.
-
-    阶段 51 起没有「工作区默认权限」：它是索引不是权威，权限只由每次运行的显式
-    参数决定。旧文件里的 default_permission 字段读时忽略、下次写入自然消失。
+    """A registered directory with its display name and timestamps; the registry is an index, not
+    an authority, so permissions come only from each run's explicit arguments (a legacy
+    default_permission field is ignored on read and disappears on the next write).
     """
 
     id: str

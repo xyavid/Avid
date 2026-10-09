@@ -1,8 +1,7 @@
 /**
- * 图标按钮（报告 §7.6）：26px、圆角 sm。
- * ghost（默认）：hover 用 overlay-light 轻压痕；primary（阶段 4 补件）：
- * accent 填充（composer 发送钮）——hover 落 accent-hover。
- * 必须给 label——图标按钮没有文字，这是无障碍的硬要求（aria-label + title）。
+ * Icon button: 26px, ghost is the default and primary is the accent-filled variant.
+ * `label` is required and feeds both `aria-label` and `title` — an icon-only control has
+ * no other accessible name.
  */
 
 import type { ButtonHTMLAttributes } from 'react'

@@ -15,7 +15,7 @@ function toolCall(id: string, name: string, args: Record<string, unknown>) {
   return { id, type: 'function', function: { name, arguments: JSON.stringify(args) } }
 }
 
-/** 手搭一段「一轮跑完」的段落：读数显式给，折叠行的用时才可断言。 */
+/** Hand-built "finished turn" items with explicit readings, so the duration is assertable. */
 function turn(): TimelineItem[] {
   return [
     { kind: 'user', entryId: 'e1', text: '跑一下', ts: 1_000 },
@@ -198,7 +198,7 @@ describe('Timeline（段落 → 对话列）', () => {
     ]
     render(<Timeline items={items} workspaceRoot="/w" onBranch={onBranch} />)
 
-    // 用户那句话一行，整段回话一行——中间那段正文不各挂一排
+    // One line for the user message, one action row for the whole reply (not per text segment).
     expect(screen.getAllByRole('button', { name: '复制' })).toHaveLength(2)
     expect(screen.getAllByRole('button', { name: '分支' })).toHaveLength(1)
 
@@ -255,7 +255,7 @@ describe('Timeline（段落 → 对话列）', () => {
 
     const row = container.querySelector('[data-item=error]')
     expect(row?.textContent).toBe('运行失败：请求超时')
-    // 没有「已完成」折叠行：末尾不是收尾正文，过程照常铺着
+    // No "done" summary row: the turn does not end in answer text, so the process stays open.
     expect(screen.queryByRole('button', { name: /已完成/ })).toBeNull()
     expect(screen.getByText('执行')).toBeTruthy()
   })
@@ -366,7 +366,7 @@ describe('Timeline（段落 → 对话列）', () => {
     fireEvent.click(screen.getByRole('button', { name: /子智能体/ }))
 
     expect(onOpenSubagents).toHaveBeenCalledOnce()
-    // 一次点击两个动作：卡片也展开（子步骤由 runs 派生）
+    // One click does two things: the card expands (sub-steps derive from the run).
     expect(screen.getByText('读取')).toBeTruthy()
     expect(screen.getByText('a.py')).toBeTruthy()
   })
@@ -388,7 +388,7 @@ describe('Timeline（段落 → 对话列）', () => {
     ]
     const { container } = render(<Timeline liveTail items={items} workspaceRoot="/w" />)
 
-    // 折叠态只有一行，差异在点开之后
+    // Collapsed is one row; the difference appears only after expanding.
     expect(container.querySelectorAll('[data-diff]')).toHaveLength(0)
     fireEvent.click(screen.getByRole('button', { name: /编辑/ }))
 

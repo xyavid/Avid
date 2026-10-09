@@ -1,14 +1,10 @@
-"""ask_user：信息不全时问一句，而不是猜。
+"""ask_user: the only tool that asks the human a question.
 
-它是**唯一**会主动向人提问的工具。三条分寸写在这里：
-
-- 没有通道（非交互运行、子运行没接通道）→ 明说「问不到人」，让模型基于现有信息继续，
-  而不是编一个答案或直接失败；
-- 没人作答（超时/取消/运行结束）→ 同上，且措辞里写清「没有回答」而不是「拒绝」；
-- 有选项时把选项渲染给界面，答案是文本（用户也可以自由输入）——校验交给通道，
-  工具只把答案原样带回给模型。
-
-concurrency 是 exclusive：一次问两个问题等于把界面切成两半，而且答案的顺序没有意义。
+With no channel (a non-interactive run, or a child without one) the model is told the
+question cannot be asked and continues on existing information; an unanswered question
+(timeout or cancel) gets the same note, worded as "no answer" rather than a refusal.
+Concurrency is exclusive because two open questions split the interface and their answer
+order means nothing.
 """
 
 from __future__ import annotations
@@ -20,7 +16,7 @@ from .registry import tool
 if TYPE_CHECKING:  # annotation only: tools must not depend on runtime at run time
     from ..state import RunState
 
-#: 问题长度与选项数量上限：护栏与界面同宽（超过就不是「问一句」了）。
+#: Question, option-count and option-length caps; the interface mirrors these numbers.
 MAX_QUESTION_CHARS = 500
 MAX_OPTIONS = 6
 MAX_OPTION_CHARS = 80

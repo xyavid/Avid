@@ -1,12 +1,7 @@
-"""BYOK 连通校验：两步（最小对话 + 工具冒烟）与错误分类。
+"""BYOK connectivity check: a chat probe at ``max_tokens=1``, then a tool smoke test.
 
-契约要点：
-- ① 最小对话 `max_tokens=1`，验证密钥（若已配置）、端点与网络；
-- ② 工具冒烟带一个工具定义，模型没回 tool_calls 就是失败——「能聊天不能干活」
-  的模型在这一步被筛掉，而不是接进 agent 后每次运行都废；
-- 错误分类只认 LLMError 消息里的已知信号（HTTP 状态码 / 网络措辞），认不出时原样
-  透出消息摘录，绝不编造原因；
-- 配置解析失败（ConfigError）不算端点问题，也走报告而不是异常——调用方是设置界面。
+The smoke step fails unless the model returns tool_calls; errors are classified only from known
+LLMError signals (HTTP status, network wording) and ConfigError is reported rather than raised.
 """
 
 from __future__ import annotations
@@ -21,7 +16,7 @@ from avid.providers.protocol import LLMError, Turn, Usage
 
 @pytest.fixture(autouse=True)
 def wired_secret(tmp_path, monkeypatch):
-    """密钥文件指到临时目录并预置一条：verify 走的是「密钥齐全后的端点探测」。"""
+    """Point the secrets file at a temp dir with one entry, so verify probes a wired endpoint."""
     monkeypatch.setenv("AVID_BYOK_SECRETS", str(tmp_path / "secrets.json"))
     set_secret("deepseek", "sk-test")
 
@@ -50,7 +45,7 @@ def make_turn(tool_calls: list[dict] | None = None) -> Turn:
 
 
 def script_chat(steps: list[Turn | Exception]):
-    """按调用次序吐 Turn 或抛异常的假 chat_completion。"""
+    """A fake chat_completion that yields Turns (or raises) in call order."""
 
     def fake(config, messages, *, system=None, tools=None, max_tokens=None, client=None):
         step = steps.pop(0)
@@ -61,7 +56,7 @@ def script_chat(steps: list[Turn | Exception]):
     return fake
 
 
-# ---------------- 两步通过 ----------------
+# ---------------- both steps pass ----------------
 
 
 def test_both_steps_pass(monkeypatch):
@@ -78,12 +73,12 @@ def test_both_steps_pass(monkeypatch):
     assert report.ok is True
     assert [s.step for s in report.steps] == ["chat", "tool"]
     assert all(s.ok for s in report.steps)
-    # ① 最小对话必须 max_tokens=1 且不带工具；② 冒烟必须带工具定义
+    # chat probe: max_tokens=1 and no tools; smoke: a tool definition is required
     assert seen[0]["max_tokens"] == 1 and seen[0]["tools"] is None
     assert seen[1]["tools"] and seen[1]["max_tokens"] != 1
 
 
-# ---------------- 冒烟失败 ----------------
+# ---------------- smoke failure ----------------
 
 
 def test_chat_works_but_no_tool_calls_fails_the_smoke_step(monkeypatch):
@@ -100,7 +95,7 @@ def test_chat_works_but_no_tool_calls_fails_the_smoke_step(monkeypatch):
     assert "工具" in tool.detail
 
 
-# ---------------- 错误分类 ----------------
+# ---------------- error classification ----------------
 
 
 @pytest.mark.parametrize(

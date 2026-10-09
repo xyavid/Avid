@@ -1,7 +1,8 @@
-"""条目 → messages 的投影：完整链原样返回；没等到结果的工具批补上「结果未落盘」的合成结果（只存在于投影返回值，不落库）。
+"""Entry-to-messages projection: complete chains come back as-is, and a tool batch whose results
+never landed gets synthesized "result not on disk" entries.
 
-判据是硬的：投影结果必须能通过 ``Transcript`` 的结构校验——否则"续接"
-在真实运行里会直接抛错。
+Synthetic entries exist only in the return value, never in the log, and the projection must pass
+``Transcript`` validation or resuming in a real run would raise.
 """
 
 from __future__ import annotations
@@ -54,14 +55,14 @@ def tool(call_id="c1", content="结果"):
     return {"role": "tool", "tool_call_id": call_id, "content": content}
 
 
-# 与实现的合成文案逐字一致：恢复语义是契约，内容漂移必须被这里拦住。
+# Verbatim copy of the implementation's text: recovery is a contract, drift must fail here.
 CUT_OFF = (
     "（此调用的结果没有落盘：运行在结果记录前被切断，执行状态未知，"
     "可能已生效。请先核实实际状态（读文件/查状态）再决定是否重做。）"
 )
 
 
-# ---------------- 压缩游标（诊断 C2：splice 只改内存，投影时应用） ----------------
+# ---- compaction cursor (splice only changes memory; applied at projection) ----
 
 
 def test_compaction_record_replaces_covered_prefix_with_summary():
@@ -123,7 +124,7 @@ def test_a_second_compaction_record_overwrites_the_first():
     assert [m["content"] for m in messages] == ["[历史摘要] 二", "又干了点活"]
 
 
-# ---------------- 投影 ----------------
+# ---- projection ----
 
 
 def test_missing_branch_projects_to_nothing():
@@ -162,7 +163,7 @@ def test_entries_to_messages_skips_non_message_entries():
     session.close()
 
 
-# ---------------- 修复规则 ----------------
+# ---- repair rules ----
 
 
 def test_complete_batches_pass_through():
@@ -171,7 +172,7 @@ def test_complete_batches_pass_through():
 
 
 def test_trailing_incomplete_batch_gets_synthesized_results():
-    # 链尾未完成批：assistant 保留，每个缺失 call 按原顺序补一条合成结果。
+    # Incomplete batch at the tail: keep the assistant, synthesize one result per missing call.
     messages = [user(), assistant("", [call("c2"), call("c1")])]
     projected = repair_incomplete_batches(messages)
     assert projected == [
@@ -183,7 +184,7 @@ def test_trailing_incomplete_batch_gets_synthesized_results():
 
 
 def test_incomplete_batch_in_the_middle_is_completed_and_the_rest_kept():
-    # 崩溃之后又续接出来的轮次必须保留：半截批补全（缺的补合成结果），后面照常。
+    # Rounds resumed after a crash are kept: half a batch is completed, the rest passes through.
     messages = [
         user("一"),
         assistant("", [call("c1"), call("c2")]),
@@ -210,7 +211,7 @@ def test_partial_results_are_kept_verbatim_and_missing_ones_synthesized():
         tool("c1", "已到的结果"),
         tool("c2", CUT_OFF),
     ]
-    # 合成结果只追加在返回值里，入参列表不动：落库由 recorder 决定，投影永不写。
+    # Synthesized results go into the return value only: projection never writes to the log.
     assert len(messages) == 3
 
 
@@ -231,7 +232,7 @@ def test_chain_completed_with_synthesized_results_passes_transcript_validation()
 
 
 def test_crash_tail_is_completed_after_projection():
-    """崩在工具结果之前：投影补上「结果未落盘」的合成结果，模型先核实再决定是否重做。"""
+    """Crash before results: projection synthesizes a "not on disk" note so the model verifies."""
     _, session = make_session()
     recorder = SessionRecorder(session)
     recorder.on_message(user("问题"))
@@ -241,6 +242,6 @@ def test_crash_tail_is_completed_after_projection():
     projected = messages_for_branch(session)
     assert projected == [user("问题"), assistant("", [call()]), tool("c1", CUT_OFF)]
     assert Transcript(projected).validate() == []
-    # 合成结果不落库：条目数不变
+    # Synthesized results are not persisted: entry count is unchanged
     assert session.get_stats().message_count == 2
     session.close()

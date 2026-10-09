@@ -262,11 +262,8 @@ class McpServer:
 
 
 def _schema_of(server_name: str, tool: dict[str, Any]) -> dict[str, Any]:
-    """Converts a remote tool declaration into a function-calling envelope.
-
-    Properties and required list are kept, with the additionalProperties flag added and
-    unknown required names dropped.
-    """
+    """Converts one remote tool declaration into a function-calling envelope, dropping any
+    required name that has no matching property."""
     raw = tool.get("inputSchema")
     raw = raw if isinstance(raw, dict) else {}
     schema_properties = raw.get("properties")

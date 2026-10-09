@@ -1,8 +1,8 @@
-"""stop.py：终止路径的契约。
+"""Contract of the stop path: a round without tool_calls, already appended to the transcript, plus
+the Stop hook verdict goes in; the final text or a nudge comes out.
 
-输入「无 tool_calls 的那一轮」（已 append 进 transcript）＋ Stop hook 裁决，
-输出最终答复文本或补问信号（final=None，nudge 已入 transcript，调用方续轮）。
-补问预算 max_blocks 防止写坏的回调或连续空答复把循环拖成死循环。
+A nudge returns final=None with the nudge already in the transcript and the caller continues; the
+max_blocks budget keeps a broken callback or repeated blank answers from looping forever.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ def make_state(**kwargs):
 
 
 def append_and_decide(state, transcript, turn, *, max_blocks=MAX_STOP_BLOCKS, emitted=None):
-    """按真实时序先把轮次消息入 transcript，再走终止裁决。"""
+    """Real ordering: append the round to the transcript, then run the stop verdict."""
     transcript.append(turn.message)
     sink = emitted if emitted is not None else []
     return decide(
@@ -70,9 +70,9 @@ def test_blank_answer_triggers_one_nudge_then_closes_with_notice():
         if m["role"] == "user" and m["content"].startswith("上一轮没有可见正文")
     ]
     assert len(nudges) == 1
-    assert len(emitted) == 1  # nudge 消息走 on_message 通道
+    assert len(emitted) == 1  # the nudge goes through the on_message channel
 
-    # 预算用尽：再次空答复以可见 notice 收尾（不静默）
+    # Budget spent: another blank answer closes with a visible notice, never silently.
     second = append_and_decide(state, transcript, make_turn(""), emitted=emitted)
     assert second.reason == STOP_BLANK_NOTICE
     assert second.text.startswith("（本次运行没有产生可见答复")
@@ -123,7 +123,7 @@ def test_block_budget_exhausted_returns_text_and_stops_counting():
     assert first is None
     second = append_and_decide(state, transcript, make_turn("二"))
     assert second == RunOutcome(text="二", reason=STOP_HOOK_BUDGET_EXIT)
-    assert state.stop_blocks == 1  # 预算用尽后不再累加
+    assert state.stop_blocks == 1  # no further counting once the budget is spent
 
 
 def test_blank_reason_names_thinking_truncation_or_empty():

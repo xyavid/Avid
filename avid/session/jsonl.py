@@ -746,12 +746,9 @@ class JsonlSessionRepo:
             raise SessionAlreadyOpenError(metadata.id)
         path = self._locate(metadata)
         storage = JsonlStorage.open(path, now=self._now)
-        # 守卫段：任何拒绝都必须先 close storage——flock 从 open 起就持有，
-        # 这里漏一句，会话在本进程里就永远打不开了（锁泄漏）。
+        # Every rejection below must close storage first, or the flock leaks for this process.
         try:
-            # metadata.path alone would let a repository open a file that belongs to
-            # another workspace. 文件头记录的 id 可能是重新登记前的旧值：只要文件
-            # 就在本仓库的 sessions 目录里，位置即归属，放行（旧 id 不迁移）。
+            # Location decides ownership: a stale header id does not block a file under this root.
             foreign = (
                 storage.header.workspace is not None
                 and self.workspace is not None
@@ -796,15 +793,14 @@ class JsonlSessionRepo:
         resolved_root = self.root.resolve()
         for path in sorted(self.root.glob(f"*{SUFFIX}")):
             seen.add(path.name)
-            # 符号链接穿透守卫：真实落点不在本仓库目录里的文件不是自家的，
-            # 不列（否则别家工作区的会话会被自动捡进列表并经链接打开）。
+            # Symlink guard: a file whose real path is outside this root is not ours to list.
             if path.is_symlink() and path.resolve().parent != resolved_root:
                 continue
             metadata = self._metadata_of(path)
             if metadata is not None:
                 found.append(metadata)
         found.sort(key=lambda item: (-item.created_at, item.id))
-        # 删掉的会话不留记忆：长驻进程（Web 服务）里只会删不会清，凭这个列表顺手收掉。
+        # Deleted sessions leave no cache entry, so each listing prunes both caches.
         for name in [name for name in self._metadata if name not in seen]:
             del self._metadata[name]
         alive = {item.id for item in found}

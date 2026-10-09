@@ -1,3 +1,5 @@
+"""SkillLoader: frontmatter scan, catalog rendering, name-keyed loading, and the always tier."""
+
 from pathlib import Path
 
 from avid.agent.skills import SkillLoader
@@ -73,7 +75,7 @@ def test_scan_clears_the_registry_first(tmp_path):
 
 def test_skips_entries_that_are_not_files(tmp_path):
     (tmp_path / "weird").mkdir()
-    (tmp_path / "weird" / "SKILL.md").mkdir()  # 目录，不是文件
+    (tmp_path / "weird" / "SKILL.md").mkdir()  # a directory, not a file
     write_skill(tmp_path, "good", "---\ndescription: 好的\n---\n")
 
     assert set(SkillLoader(tmp_path).scan().skills) == {"good"}
@@ -108,11 +110,11 @@ def test_catalog_lists_name_and_description_sorted(tmp_path):
     assert SkillLoader(tmp_path).scan().catalog() == "- alpha: 第一个\n- beta: 第二个"
 
 
-# ---------- 技能目录（渲染在 runtime/context_manager，用例见 test_context_manager） ----------
+# ---- catalog (rendered into the system prompt by ContextManager) ----
 
 
 def test_catalog_follows_directory_changes(tmp_path):
-    """验收项：技能目录变化后，下一次扫描出的目录就是新的。"""
+    """After the directory changes, the next scan's catalog is the new one."""
     loader = SkillLoader(tmp_path)
     assert "code-review" not in loader.scan().catalog()
 
@@ -158,7 +160,7 @@ def test_load_treats_the_name_as_a_key_not_a_path(tmp_path):
     assert loader.load("alpha/SKILL.md").startswith("错误：没有这个技能")
 
 
-# ---------- always 层级：正文常驻 system prompt（阶段 31） ----------
+# ---------- always tier: bodies pinned into the system prompt ----------
 
 
 def test_always_flag_is_parsed_from_frontmatter(tmp_path):
@@ -217,7 +219,7 @@ def test_load_still_returns_the_full_file_for_an_always_skill(tmp_path):
     assert loader.always_bodies() == [("a", "含 frontmatter 的全文")]
 
 
-# ---------- 运行隔离：每个 RunState 自带一份注册表 ----------
+# ---------- run isolation: each RunState carries its own registry ----------
 
 
 def test_two_loaders_do_not_share_state(tmp_path):
@@ -240,7 +242,7 @@ def test_each_scan_produces_its_own_registry(tmp_path):
     assert first.skills is not second.skills
 
 
-# ---------- 仓库里真实的技能 ----------
+# ---------- the real skills in this repo ----------
 
 
 def test_repository_skills_are_scanned():
@@ -260,11 +262,8 @@ def test_repository_catalog_shape():
 
 
 def test_default_skills_dir_is_resolved_at_construction_time(monkeypatch, tmp_path):
-    """默认目录 = `<cwd>/skills`，且**构造时**求值。
-
-    以前是模块级 `SKILLS_DIR = Path.cwd() / "skills"`：import 时绑定，之后换目录
-    （或一个进程服务多个工作区）都不生效。
-    """
+    """Default dir is `<cwd>/skills`, evaluated at construction time (a process serves many
+    workspaces)."""
     monkeypatch.chdir(tmp_path)
 
     assert SkillLoader().skills_dir == tmp_path / "skills"
@@ -272,7 +271,7 @@ def test_default_skills_dir_is_resolved_at_construction_time(monkeypatch, tmp_pa
 
 
 def test_default_skills_dir_follows_the_workspace_root(tmp_path):
-    """有运行级工作区根时，技能目录跟着它走（阶段 18 的落点之一）。"""
+    """With a run-level workspace root, the skills dir follows it."""
     from avid.agent.skills import default_skills_dir
 
     assert default_skills_dir(tmp_path) == tmp_path / "skills"

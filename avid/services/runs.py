@@ -122,11 +122,11 @@ class RunRecord:
     cancel_requested: bool = False
     cancel_reason: str | None = None
     finished_at: int | None = None
-    # 本次运行的模型覆盖（界面选的那个）；None = 按设置解析。
+    # Per-run model override chosen in the UI; None resolves from the config.
     model: str | None = None
-    # 本次运行的推理强度（必须在该模型声明的档位列表里）；None = 不带这个参数。
+    # Per-run effort, which must appear in the model's declared levels; None omits the parameter.
     effort: str | None = None
-    # 会话内命令（"compact" / "rewind" / "unknown"）；None = 普通运行。
+    # In-session command ("compact" / "rewind" / "unknown"); None is an ordinary run.
     command: str | None = None
 
     # Event buffer holding durable and transient events; deltas never take part in replay.
@@ -199,7 +199,7 @@ class RunRegistry:
         indexer: SessionIndexer | None = None,
     ) -> None:
         self.workspaces = workspaces
-        # 会话写成功之后通知它（索引可以落后；None 表示这个进程不索引）。
+        # Notified after a session write succeeds (the index may lag); None means no indexing.
         self.indexer = indexer
         self.chat = chat
         # The tool registry is injectable so tests can stub bash; empty means the real one.
@@ -287,7 +287,7 @@ class RunRegistry:
         effort: str | None = None,
     ) -> RunRecord:
         """Register a run and start its thread; raises RunBusy or SessionNotFound."""
-        # The branch decides which chain the run appends to; full_ack 直接决定完全访问。
+        # The branch decides which chain the run appends to; full_ack is what grants full access.
         found = self.workspaces.find_session(session_id)
         if found is None:
             raise SessionNotFound(f"没有这个会话：{session_id}")
@@ -301,8 +301,9 @@ class RunRegistry:
                 raise AttachmentRejected(str(exc)) from exc
             self._ensure_vision(content, model)
 
-        # 会话内命令（内核单点解析）：/<技能名> 把全文当作用户输入（正常运行），
-        # /compact 与未知命令走 _run 的命令分支（不调模型，直接以文本收尾）。
+        # In-session commands come from the kernel's single parser: /<skill> turns the whole text
+        # into user input (an ordinary run), while /compact and unknown commands take the command
+        # branch in _run (no model call, one text reply).
         # A message with images is never a command, even when it starts with "/".
         command: str | None = None
         if prompt.startswith("/") and not images:
@@ -879,7 +880,8 @@ class RunRegistry:
             root=workspace.root,
             run_tag=record.run_id,
             run_id=record.run_id,
-            # 临时对话：工作区在沙箱里只读（写入类工具另有工具表摘除，两道互不替代）
+            # Scratch conversations: the workspace is read-only in the sandbox; writer tools are
+            # also removed from the tool table, and neither measure replaces the other.
             read_only=scratched,
         )
         state_spec = safety.summary()
@@ -914,7 +916,7 @@ class RunRegistry:
             history = messages_for_branch(session, recorder.branch)
             messages = [*history, {"role": "user", "content": content}]
 
-            # 命令分支：不调模型，结果以一条 assistant 条目收尾（SSE 生命周期不变）。
+            # Command branch: no model call, ending in one assistant entry (SSE lifecycle intact).
             if record.command == "compact":
                 report = commands_module.compact_session(
                     history=list(history),
@@ -947,7 +949,8 @@ class RunRegistry:
                         session.delete_value(branch_tip(recorder.branch))
                     else:
                         session.set_value(branch_tip(recorder.branch), target.parent_id)
-                    # 游标覆盖的前缀属于被回滚的旧链：不清则投影把摘要接在残链上。
+                    # The prefix covered by the compaction cursor belongs to the rewound-away
+                    # chain; if it is not cleared the projection splices the summary onto a stub.
                     session.delete_value(branch_compaction(recorder.branch))
                     lines = restore(
                         root=Path(workspace.root),
@@ -976,7 +979,7 @@ class RunRegistry:
             state = RunState.for_run(
                 auto_approve=auto_approve,
                 ask=record.approvals.request if record.approvals is not None else None,
-                # 同一条待决表、同一个界面槽：模型的提问也在这里挂起等人。
+                # Same pending table, same UI slot: model questions also wait for a human here.
                 question=record.approvals.ask if record.approvals is not None else None,
                 # Steers: claimed by the run thread at turn boundaries; claiming dequeues them.
                 steers=lambda: self._take_steers(record),
@@ -984,7 +987,7 @@ class RunRegistry:
                 full=full_ack,
                 workspace_root=workspace.root,
                 scratch=scratched,
-                # 子运行要用同一份模型与档位（见 RunState 的字段注释）
+                # Child runs reuse this model and effort (see the RunState field comments).
                 model_ref=record.model,
                 effort=record.effort,
                 # The very same spec as in run_started: the event and the enforcement agree.
@@ -992,9 +995,9 @@ class RunRegistry:
                 # The utilization denominator follows this run's actual model configuration.
                 context_window=config.context_window,
             )
-            # 写前快照接线：files 工具的两个写路径在覆盖前把原内容落进本会话的检查点
-            # 目录。probe 指向本会话的 recorder；subagent 透传共享同一个 sink，父运行
-            # 在等待期内会话一直打开。
+            # Write-ahead snapshots: both write paths of the files tool land the previous content
+            # in this session's checkpoint directory. Subagents share this same sink, and the
+            # parent session stays open while they run.
             state.checkpoint = DirCheckpointSink(
                 root=Path(workspace.root),
                 session_id=session.metadata.id,
@@ -1020,7 +1023,7 @@ class RunRegistry:
             if self.tool_registry is not None:
                 # An injected registry (tests, benchmarks) keeps its old meaning: no MCP tools.
                 schemas, impls = TOOLS, self.tool_registry
-                if scratched:  # 只读这条约束不管表是谁给的
+                if scratched:  # read-only applies no matter who supplied the table
                     schemas, impls = without_writers(schemas, impls)
             else:
                 schemas, impls = mcp_schemas, mcp_impls
@@ -1240,14 +1243,11 @@ class RunRegistry:
             logger.info("回收 %d 条已结束的运行记录", len(victims))
 
     def _fail(self, record: RunRecord, code: str, message: str) -> None:
-        """失败也要留痕：往会话里记一条 error 条目（阶段 55）。
-
-        为什么必须落盘：运行失败是这个运行唯一的产出，不写下来，界面刷新之后只剩「用户那句话
-        + 什么都没发生」——「run 突然停了」的观感就是从这儿来的。它不进模型上下文（见 ERROR_ENTRY），
-        只给人看；entry_id 随 run_failed 出去，前端据此把这条记账与随后重读会话的结果对齐。
+        """Persist a failure as an error entry in the session; it stays out of the model context and
+        its entry_id rides run_failed so the client can reconcile it with a session re-read.
         """
         record.error = {"code": code, "message": message}
-        # 展示文本由内核拼一次：落盘的条目与实时事件用同一句，前端不必自己补前缀
+        # The kernel composes the display text once, so the entry and the live event match.
         text = f"运行失败：{message}"
         entry_id = self._record_failure(record, text)
         self._finish(record, RUN_FAILED, code=code, message=message, text=text, entry_id=entry_id)
@@ -1261,7 +1261,7 @@ class RunRegistry:
             entry_id = recorder.on_message(
                 {"role": "assistant", "content": text}, entry_type=ERROR_ENTRY
             )
-        except SessionError:  # 记账失败不能盖掉真正的失败原因
+        except SessionError:  # a failed bookkeeping write must not mask the real failure
             logger.warning("运行 %s 的失败没能写进会话", record.run_id, exc_info=True)
             return None
         self.notify_index(record.session_id)

@@ -1,15 +1,8 @@
 /**
- * 差异视图（文件类工具卡详情）：参考代码编辑器那种「一次改动长什么样」。
- *
- * 三处与参考界面同形：未改动行留作上下文、隔得远的折成「… 其余 N 行」；
- * 增删行带底色与左侧色条；表头给语言标与 +N / -M。
- *
- * 纪律：
- *   · 颜色只取 token（增 = ok 墨绿、删 = danger 深朱，都压一层浅底），不用代码高亮——
- *     差异视图要读的是「哪几行动了」，给每行再上语法色是两层信号抢同一个位置；
- *   · 复制按钮复制的是**差异全文**（`diffLines().text`：+ / - / 空格 逐行，不含省略行、
- *     不截断）——显示可以省，拿走的是完整的；
- *   · 差异行不折行、横向滚动（与 CodeBlock 同规矩）：折行会让「一行」与「一屏」错位。
+ * Diff view for file-tool card details: context lines kept, distant runs elided, add / del
+ * rows tinted and marked. Colors come from tokens only (add = ok, del = danger); the copy
+ * button takes the full `diffLines().text` (elision and truncation are display-only), and
+ * rows scroll horizontally instead of wrapping.
  */
 
 import { useMemo, useState } from 'react'
@@ -47,7 +40,7 @@ function Row({ row }: { row: DiffRow }) {
   }
   const mark = row.kind === 'add' ? '+' : row.kind === 'del' ? '-' : ' '
   return (
-    // 上下文行也留出 2px 色条位（透明）——不然增删行会比它们右移 2px，整片对不齐
+    // Context rows keep a transparent 2px bar so add / del rows stay aligned.
     <div data-diff={row.kind} className={cx('border-l-2 px-a8 whitespace-pre', ROW_CLASS[row.kind])}>
       <span aria-hidden className={MARK_CLASS[row.kind]}>
         {mark}
@@ -59,7 +52,7 @@ function Row({ row }: { row: DiffRow }) {
 
 export function DiffView({ before, after, lang }: DiffViewProps) {
   const [copied, setCopied] = useState(false)
-  // 差异只在展开时算：一次改动两段文本，LCS 是纯函数但没必要每帧跟着时间线重算
+  // The card only mounts this view when expanded, so the LCS runs then, not on every render.
   const diff = useMemo(() => diffLines(before, after), [before, after])
 
   const onCopy = () => {
@@ -88,7 +81,7 @@ export function DiffView({ before, after, lang }: DiffViewProps) {
       </div>
       <div className="scroll-auto overflow-x-auto py-a4 font-mono text-caption leading-[1.6] text-ink">
         {diff.rows.map((row, index) => (
-          // 差异行没有身份（同一次改动里可能有多行一字不差），按下标作 key 是稳的
+          // Diff rows have no identity (duplicate lines), so the index is the stable key.
           <Row key={index} row={row} />
         ))}
       </div>

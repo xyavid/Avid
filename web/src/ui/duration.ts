@@ -1,4 +1,4 @@
-/** 毫秒 → 一眼能读过的时长（思考段与工具行共用）。 */
+/** Milliseconds → compact duration label (thinking block and tool row share it). */
 
 export function durationLabel(ms: number): string {
   if (ms < 1000) return `${Math.max(1, Math.round(ms))}ms`
@@ -8,11 +8,9 @@ export function durationLabel(ms: number): string {
 }
 
 /**
- * 毫秒 → 收尾折叠行的「用时」（参考界面的中文读数：13分11秒 / 45秒 / 1小时2分）。
- *
- * 与 `durationLabel` 分家是因为用途不同：那个是过程里的紧凑读数（3.2s），
- * 这个是**一条回话的总账**，要能一眼说出「这轮跑了多久」，所以先四舍五入到秒
- * 再进位（59.6 秒是 1 分，不是「60秒」），整分 / 整小时不带零头。
+ * Milliseconds → total time for the collapsed turn footer, in whole Chinese units (seconds /
+ * minutes+seconds / hours+minutes); rounding happens before carrying, so 59.6s yields one minute —
+ * never "60 seconds" — and whole minutes or hours carry no zero remainder.
  */
 export function elapsedLabel(ms: number): string {
   const sec = Math.max(1, Math.round(ms / 1000))

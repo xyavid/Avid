@@ -1,12 +1,8 @@
-"""B4 / B5 / B6 / B7：审批挂起-答复-恢复、幂等、超时失败关闭、取消粒度。
+"""Approval suspend / answer / resume over real HTTP: idempotency, timeout, cancellation.
 
-审批是**请求/响应**语义，所以这里走真的 HTTP 往返（``TestClient``），工具换成
-记录器——「工具到底执行了几次」必须与事件计数双断言。
-
-**命令为什么是 ``rm -rf /``**（阶段 51）：默认直接跑，危险类别（sudo、区外写、
-MCP 等）不再问人——那正是轻量化的意义：审批只为**毁灭级命令**保留。要测审批机制
-本身，就得给一条真的会问人的命令——``rm -rf /`` 命中 DENY 表（唯一会询问的类别）。
-用 ``sudo ls`` 之类的命令会变成"压根没有审批可测"。
+Only destructive commands ask (``rm -rf /`` hits the DENY table, the sole asking category), so an
+approval test needs one; tools are replaced with a recorder and both execution counts and event
+counts are asserted.
 """
 
 from __future__ import annotations
@@ -38,7 +34,7 @@ from avid.web import create_app
 
 
 class GateChat:
-    """第一次调用阻塞，直到测试放行——用来把「取消发生在模型调用期间」变成确定性事实。"""
+    """The first call blocks until the test releases it, making a mid-call cancel deterministic."""
 
     def __init__(self, turn, entered: threading.Event, release: threading.Event) -> None:
         self.turn = turn
@@ -93,9 +89,6 @@ def wait_run(client: TestClient, run_id: str, status: str, timeout: float = 5.0)
     return wait_for(lambda: run_status(client, run_id) == status, timeout)
 
 
-# ---------------- B4 ----------------
-
-
 def test_approval_suspends_then_resumes(make_client):
     chat = ScriptedChat(
         make_turn("", [tool_call("bash", '{"command": "rm -rf /"}')]), make_turn("做完了")
@@ -122,7 +115,7 @@ def test_approval_suspends_then_resumes(make_client):
     assert wait_for(lambda: run_status(client, run_id) == "finished"), run_status(client, run_id)
     assert tools.calls == [("bash", {"command": "rm -rf /"})]
 
-    # seq 连续无洞
+    # event seq has no holes
     got = collect(services, run_id)
     seqs = [event.seq for event in got if event.seq is not None]
     assert seqs == list(range(1, len(seqs) + 1))
@@ -130,7 +123,7 @@ def test_approval_suspends_then_resumes(make_client):
     assert APPROVAL_REQUESTED in types and APPROVAL_RESOLVED in types
     resolved = [e for e in got if e.type == APPROVAL_RESOLVED][0]
     assert resolved.data["decision"] == "allow"
-    # 运行结束后待决表清空
+    # the pending table is empty once the run ends
     assert client.get(f"/api/runs/{run_id}/approvals").json()["approvals"] == []
 
 
@@ -154,13 +147,9 @@ def test_deny_stops_the_tool_message(make_client):
     got = collect(services, run_id)
     assert TOOL_CALL_DENIED in [event.type for event in got]
     denied = [event for event in got if event.type == TOOL_CALL_DENIED][0]
-    # 分档是"为什么被拒"，不是"谁拒的"：`rm -rf /` 走的是毁灭级类别，所以这里是 danger
-    # （旧版本里所有用户拒绝都记 user，于是界面分不出"危险"和"这次不行"）。
+    # kind records why it was denied, not who: rm -rf / is the danger class
     assert denied.data["kind"] == "danger"
     assert any(event.type == TOOL_RESULT_MESSAGE for event in got)
-
-
-# ---------------- B5 ----------------
 
 
 def test_repeated_answer_does_not_approve_twice(make_client):
@@ -221,9 +210,6 @@ def test_conflicting_answer_is_409_and_unknown_is_404(make_client):
     assert wait_for(lambda: run_status(client, run_id) == "finished")
 
 
-# ---------------- B6 ----------------
-
-
 def test_timeout_fails_closed(make_client):
     chat = ScriptedChat(
         make_turn("", [tool_call("bash", '{"command": "rm -rf /"}')]), make_turn("结束了")
@@ -241,16 +227,13 @@ def test_timeout_fails_closed(make_client):
     assert resolved.data["reason"] == "timeout"
     assert TOOL_CALL_DENIED in [event.type for event in got]
 
-    # 过期后再答复 → 410
+    # answering after expiry is 410
     approval_id = resolved.data["approval_id"]
     late = client.post(
         f"/api/runs/{run_id}/approvals/{approval_id}", json={"decision": "allow"}
     )
     assert late.status_code == 410
     assert late.json()["error"]["code"] == "approval_expired"
-
-
-# ---------------- B7 ----------------
 
 
 def test_cancel_does_not_lose_messages_nor_fabricate_results(make_client):

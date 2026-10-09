@@ -21,7 +21,7 @@ describe('PermissionButton（输入区权限按钮）', () => {
 
     rerender(<PermissionButton full onToggleFull={() => {}} />)
     expect(screen.getByText('完全访问')).toBeTruthy()
-    // 完全访问是关闭边界的危险态，chip 用 danger 色
+    // Full access is the dangerous state of the boundary toggle, so the chip turns danger.
     expect(screen.getByRole('button', { name: /权限/ }).className).toContain('text-danger')
   })
 
@@ -32,9 +32,9 @@ describe('PermissionButton（输入区权限按钮）', () => {
     const dialog = screen.getByRole('dialog', { name: '权限' })
     expect(within(dialog).getByText('默认')).toBeTruthy()
     expect(within(dialog).getByText('完全访问')).toBeTruthy()
-    // 默认项说清代价：毁灭级命令会问你一次
+    // The default option spells out the cost: destructive commands ask once.
     expect(within(dialog).getByText('毁灭级命令会问你一次')).toBeTruthy()
-    // 两个选项图标 + 当前项（默认）的勾 = 3
+    // Two option icons plus the check on the current (default) option = 3.
     expect(dialog.querySelectorAll('svg').length).toBe(3)
   })
 
@@ -57,7 +57,7 @@ describe('PermissionButton（输入区权限按钮）', () => {
     expect(onToggleFull).not.toHaveBeenCalled()
     expect(screen.getByText(/跳过毁灭级确认/)).toBeTruthy()
 
-    // 取消：确认块收回，仍停在第一步，没有回调
+    // Cancel retracts the confirm block, stays on step one, and fires nothing.
     fireEvent.click(screen.getByRole('button', { name: '取消' }))
     expect(screen.queryByText(/跳过毁灭级确认/)).toBeNull()
     expect(screen.getByRole('dialog', { name: '权限' })).toBeTruthy()

@@ -1,8 +1,8 @@
-"""运行级工作区根：一个进程服务多个工作区时，所有落点都必须跟着 state 走。
+"""Run-level workspace root: with several workspaces in one process every write must follow
+RunState instead of the module-global WORKSPACE_ROOT.
 
-这是阶段 18 风险最高的一处重构——模块全局 ``WORKSPACE_ROOT`` 有多个读取点，
-漏掉任何一个都会让"这次运行在哪个工作区"出现两套答案（模型看到的路径、bash 的
-cwd、文件工具、压缩落盘可能各说各话），而单工作区的测试发现不了。
+One missed reader yields two answers to "which workspace is this run in" (prompt paths, bash cwd,
+file tools, compaction spill), and single-workspace tests cannot see it.
 """
 
 from __future__ import annotations
@@ -30,8 +30,8 @@ def system_of(state):
 
 @pytest.fixture
 def other(tmp_path):
-    """第二块工作区：与 sandbox（进程默认根）不同，且**不在它里面**——
-    否则 str(sandbox) 是 str(other) 的前缀，"路径含不含"这类断言全是假绿。"""
+    """A second workspace, outside ``sandbox``: a prefix relationship would make the "path
+    inside?" assertions pass vacuously."""
     path = tmp_path.parent / f"second-{tmp_path.name}"
     path.mkdir()
     return path
@@ -74,7 +74,7 @@ def test_compaction_spills_into_the_run_root(sandbox, other):
 
 
 def test_without_a_run_root_everything_falls_back_to_the_process_root(sandbox):
-    """没有运行级根时行为与改动前一致——单工作区路径不受影响。"""
+    """Without a run root everything falls back to the process root (single-workspace path)."""
     state = RunState.for_run()
 
     write_file({"path": "fallback.txt", "content": "默认根"}, state=state)

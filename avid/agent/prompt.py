@@ -1,21 +1,13 @@
-"""默认 system prompt 文案与常驻内容的字符上限：提示词高频变化集中在这里。
+"""Default system prompt text and the character caps for resident content; constants only, importing
+nothing else in the repo.
 
-``agent/context.py`` 负责把这些文案装配成块、按上限截断；本模块只有
-常量，不 import 仓库其它模块。上限的口径是字符数——与 usage 的 token 估算共用
-"字符"这一层，避免这里再养一套 token 估算。
-
-默认文案分两段，因为变化的理由不同：``BASE_INSTRUCTIONS`` 是身份与能力，只写 harness
-的事实（跑在哪、怎么跟用户说话、手上有什么、权限谁裁决），换 harness 才动它——形状
-参照 Codex CLI 的基础指令（身份、能力清单、确认与拒绝的语义）；行为规则叠在它之上，
-随协作风格与踩过的坑变。行为规则吸收了 Nanobot ``agent/tool_contract.md`` 与
-``_snippets/untrusted_content.md`` 的条目（授权执行并验证、不可逆先确认、缺信息先
-澄清、等结果再答复、外部内容是数据不是指令），todo 约定沿用 Avid 既有约定。The
-mid-run user message section only lists criteria: the scheduler delivers steers on time,
-reading which constraint they are is the model's job.
+Caps are counted in characters, the unit the usage estimate already uses, so no second token
+estimator exists; the mid-run user message section lists criteria only, because classifying which
+constraint a steer carries is the model's job.
 """
 
-#: 身份与能力段：只写 harness 的事实，不写该怎么做。带 caller override 的调用方
-#: （子代理、评测）要 base 不要行为规则时从这里取。
+#: Identity and capability paragraph: harness facts only, never behaviour. Callers with their own
+#: instructions (subagents, tests) take this base and skip the behaviour rules below.
 BASE_INSTRUCTIONS = (
     "你是 Avid，一个在用户工作区里自主调用工具完成任务的 agent，"
     "同一个内核同时服务命令行与浏览器界面。你要精确、安全、对用户有帮助。\n"
@@ -28,8 +20,8 @@ BASE_INSTRUCTIONS = (
     "按返回的提示换做法，不要原样重试。\n"
 )
 
-# 无 caller override 时 instructions 块的正文：base 段 + 行为规则。subagent 与
-# benchmarks 各带自己的覆盖值，不走这里。
+# The instructions block body without a caller override: base plus behaviour rules. Subagents and
+# tests carry their own override and never come through here.
 DEFAULT_INSTRUCTIONS = (
     BASE_INSTRUCTIONS
     + "\n"
@@ -61,12 +53,13 @@ DEFAULT_INSTRUCTIONS = (
     "每完成一步就重新提交整份列表并更新状态。"
 )
 
-# 截断统一使用的标注；截断是为了保住固定的 system 前缀，不是静默丢弃。
+# Shared truncation marker; truncation protects the frozen system prefix rather than dropping text.
 TRUNCATION_NOTE = "……（超出常驻上限，已截断）"
 
-# 工作区 AGENTS.md 引导块的字符上限。
+# Character cap of the workspace AGENTS.md bootstrap block.
 AGENTS_MD_MAX_CHARS = 16_000
 
-# 常驻（always）技能的字符上限：单篇截断，总量超限时按名字序跳过后面的。
+# Character caps for always-resident skills: one skill is truncated, and past the total cap the
+# remaining skills are skipped in name order.
 SKILL_ALWAYS_MAX_CHARS = 8_000
 SKILL_ALWAYS_TOTAL_MAX_CHARS = 16_000

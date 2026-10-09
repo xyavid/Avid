@@ -1,11 +1,9 @@
-"""压缩子系统测试：触发线（reserve 语义）、切点（安全边界）、单一压缩通路。
+"""Compaction subsystem: the trigger line (reserve semantics), the cut point that never
+splits a tool batch, and the single compaction path.
 
-修复前这里是五步阶梯（tool_result_budget / snip / micro / compact_history /
-reactive）各自的用例；按用户裁定收敛为一条 Pi 式通路——保留最近 N 轮完整
-历史，更早部分经一次 summarize 压成一条检查点消息，切点绝不落在工具批中间。
-
-检查点分两份 prompt：首次压缩按 <original-request>/<conversation> 写新检查点；
-transcript 头部已是检查点时走更新路径，拿上一份 + 新素材 + 仓库现状刷新它。
+The path keeps the recent N rounds and summarizes older history into one checkpoint message,
+created from <original-request>/<conversation> or refreshed from the previous checkpoint,
+new material and the repo state.
 """
 
 
@@ -46,7 +44,7 @@ CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
 
 @pytest.fixture(autouse=True)
 def spill_root(tmp_path, monkeypatch):
-    """落盘写到临时工作区，测试不污染仓库。"""
+    """Spills go to a temp workspace so tests do not dirty the repo."""
     from avid.agent.tools import workspace
 
     monkeypatch.setattr(workspace, "WORKSPACE_ROOT", tmp_path)
@@ -102,7 +100,7 @@ def tool(call_id="c1", content="结果"):
 
 
 def rounds(count, content="x" * 200):
-    """构造 count 轮：每轮一条 assistant（带工具调用）加一条工具结果。"""
+    """Build count rounds: one assistant with a tool call plus one tool result each."""
     messages = [user("任务")]
     for index in range(count):
         messages.append(assistant("", [call(f"c{index}")]))
@@ -110,7 +108,7 @@ def rounds(count, content="x" * 200):
     return messages
 
 
-# ---------- Transcript 基础（estimate / validate） ----------
+# ---- transcript basics (estimate / validate) ----
 
 
 def test_estimate_counts_content_and_tool_calls():
@@ -133,7 +131,7 @@ def test_orphan_tool_result_is_a_violation():
     assert validate([user(), tool()]) != []
 
 
-# ---------- 落盘通道 ----------
+# ---- spill channel ----
 
 
 def test_spill_names_are_unique_per_tag_and_sequence(spill_root):
@@ -152,11 +150,11 @@ def test_spill_writes_and_returns_workspace_relative_path(spill_root):
     assert (spill_root / path).read_text(encoding="utf-8") == "x" * 500
 
 
-# ---------- 触发线（reserve 语义） ----------
+# ---- trigger line (reserve semantics) ----
 
 
 def test_trigger_is_window_minus_reserve_times_measured_rate():
-    # window 200k，reserve 16384，实测 0.515 字符/token，system+tools 1500 字符
+    # window 200k, reserve 16384, measured 0.515 chars/token, system+tools 1500 chars
     trigger = trigger_chars(
         window=200_000,
         prompt_tokens=100_000,
@@ -168,7 +166,7 @@ def test_trigger_is_window_minus_reserve_times_measured_rate():
 
 
 def test_trigger_without_a_reading_uses_the_default_rate():
-    """有窗口但没有读数：按 2.0 字符/token 的保守默认比率折算，而不是整个放弃派生。"""
+    """With a window but no reading, fall back to the conservative 2.0 chars/token default."""
     trigger = trigger_chars(window=200_000, prompt_tokens=None, chars=None, reserve_tokens=16_384)
     assert trigger == (200_000 - 16_384) * 2
 
@@ -184,10 +182,10 @@ def test_trigger_scales_with_reserve():
     big = trigger_chars(
         window=200_000, prompt_tokens=100_000, chars=(1000, 500, 50_000), reserve_tokens=1_000
     )
-    assert big > small  # reserve 越大，留给历史的空间越小
+    assert big > small  # a larger reserve leaves less room for history
 
 
-# ---------- 切点 ----------
+# ---- cut point ----
 
 
 def test_cut_point_walks_back_full_rounds():
@@ -196,7 +194,7 @@ def test_cut_point_walks_back_full_rounds():
 
     cut = cut_point(transcript, keep_recent_turns=10)
 
-    # 切点前是任务消息 + 前 2 轮；切点后保留最近 10 轮（20 条消息）
+    # Before the cut: task message + first 2 rounds; after: the 10 most recent (20 messages)
     assert messages[cut - 1]["role"] == "tool"
     assert messages[cut]["role"] == "assistant"
     assert len(messages) - cut == 20
@@ -217,11 +215,11 @@ def test_cut_point_returns_zero_when_fewer_rounds_than_the_window():
     assert cut_point(transcript, keep_recent_turns=10) == 0
 
 
-# ---------- 检查点 prompt ----------
+# ---- checkpoint prompt ----
 
 
 def test_checkpoint_structure_is_the_documented_order():
-    """结构是给下一个 agent 读的契约：段名与顺序都是接口，不是排版。"""
+    """The structure is a contract for the next agent: section names and order are an interface."""
     assert CHECKPOINT_STRUCTURE.splitlines() == [
         "## Goal",
         "## Constraints & Preferences",
@@ -239,7 +237,7 @@ def test_checkpoint_structure_is_the_documented_order():
 
 
 def test_both_tasks_share_one_structure():
-    """创建与更新写同一份骨架：第二次压缩不能把检查点换成另一套段名。"""
+    """Create and update share one skeleton: a second compaction must not change section names."""
     assert CHECKPOINT_STRUCTURE in CREATE_TASK
     assert CHECKPOINT_STRUCTURE in UPDATE_TASK
 
@@ -263,12 +261,12 @@ def test_no_prompt_may_invent_facts():
 
 
 def test_findings_separate_verified_from_hypotheses():
-    """假设必须带标签：写成陈述句的假设，下一个 agent 会当事实用。"""
+    """Hypotheses must stay labelled: a plain declarative one would be read as fact downstream."""
     assert "## Findings" in CHECKPOINT_STRUCTURE
     assert "### Verified" in CREATE_TASK and "### Hypotheses" in CREATE_TASK
     assert "[hypothesis]" in CREATE_TASK
     assert "[rejected]" in CREATE_TASK
-    # 更新路径同样不许把假设升格成事实
+    # The update path must not promote hypotheses to facts either
     assert "[rejected]" in UPDATE_TASK and "Verified" in UPDATE_TASK
 
 
@@ -288,9 +286,9 @@ def test_render_conversation_keeps_roles_calls_and_tool_names():
 
     assert "[user]\n把 A 做完" in text
     assert "[assistant]\n先跑一遍测试" in text
-    # 精确命令与参数照抄：检查点里丢掉参数，下一个 agent 就得重猜
+    # Exact command and arguments are copied: dropping them makes the next agent guess
     assert '[tool call] bash({"command": "pytest -q"})' in text
-    # 工具结果要标出是哪个工具的结果，光有 call_id 读不出来
+    # Tool results carry the tool name; a call_id alone is unreadable
     assert "[tool result: bash]\n1 passed" in text
 
 
@@ -319,7 +317,7 @@ def test_create_prompt_carries_the_request_the_history_and_the_task(spill_root):
     request = chat.requests[0]
     body = request["messages"][0]["content"]
     assert request["system"].startswith("You are a context-compaction engine")
-    # rounds() 的首条消息就是最初请求
+    # rounds()'s first message is the original request
     assert "<original-request>\n任务\n</original-request>" in body
     assert "<conversation>" in body and "</conversation>" in body
     assert "<compaction-task>" in body
@@ -343,7 +341,7 @@ def test_create_prompt_asks_for_every_section(spill_root):
 
 
 def test_create_prompt_never_probes_the_repo(spill_root, monkeypatch):
-    """仓库现状只有更新路径要：首次压缩多跑一次 git 是白花。"""
+    """Only the update path needs the repo state: a first compaction must not shell out to git."""
     monkeypatch.setattr(
         compaction_module, "repo_state", lambda root: pytest.fail("首次压缩不该探仓库")
     )
@@ -377,10 +375,8 @@ def test_previous_checkpoint_only_recognises_the_transcript_head():
 
 
 def compaction_after_more_work(chat, state, limits=None):
-    """先压一次，再干几轮，然后强制压第二次——第二次就是更新路径。
-
-    返回 transcript 与那个 FakeChat：requests[0] 是首次压缩，requests[1] 是更新。
-    """
+    """Compact, work a few more rounds, force a second compaction (the update path), and return
+    the transcript and FakeChat: requests[0] is the create, requests[1] the update."""
     limits = limits or budget()
     transcript = Transcript(rounds(12))
     run_compaction(
@@ -416,16 +412,16 @@ def test_second_compaction_updates_the_previous_checkpoint(spill_root, monkeypat
 
     body = chat.requests[1]["messages"][0]["content"]
     assert "<previous-checkpoint>\n## Goal\n把 A 做完\n</previous-checkpoint>" in body
-    # 最初的请求已经并进上一份检查点，再喂一遍会把方向拉回去
+    # The original request is inside the previous checkpoint; feeding it again pulls back
     assert "<original-request>" not in body
     assert "<conversation>" in body and "新结果" in body
-    # 上一份的内容只出现一次：同一段内容不喂两遍（骨架里也有 ## Goal，按正文断言）
+    # The previous checkpoint body appears once: no content is fed twice
     assert body.count("把 A 做完") == 1
     assert "<update-task>" in body
     assert "Update the existing structured summary" in body
-    # 引擎提示只有一份：模式由任务块区分，系统提示不跟着模式漂
+    # One engine prompt only: the task block selects the mode, the system prompt stays put
     assert chat.requests[1]["system"] == chat.requests[0]["system"]
-    # 更新后的检查点回到 transcript 头部
+    # The updated checkpoint returns to the transcript head
     assert "（已更新）" in transcript.as_messages()[0]["content"]
 
 
@@ -457,7 +453,7 @@ def test_update_prompt_omits_a_missing_repo_state(spill_root, monkeypatch):
 
 
 def test_update_prompt_reports_an_empty_conversation(spill_root, monkeypatch):
-    """连着压两次时新素材是空的：明说，别让模型对着空块猜该更新什么。"""
+    """Two compactions back to back leave no new material: say so instead of an empty block."""
     monkeypatch.setattr(compaction_module, "repo_state", lambda root: None)
     chat = FakeChat("## Goal\n把 A 做完")
     transcript = Transcript(rounds(12))
@@ -509,12 +505,12 @@ def test_repo_state_reports_branch_tracked_changes_and_diff_stat(tmp_path):
 
 
 def test_repo_state_is_silent_outside_a_repo(tmp_path):
-    """探针是锦上添花：不是仓库、没有 git 都只是没有这一段，不该让压缩失败。"""
+    """The probe is best effort: no repo or no git omits the section, never fails compaction."""
     assert repo_state(tmp_path) is None
     assert repo_state(None) is None
 
 
-# ---------- 压缩通路 ----------
+# ---- compaction path ----
 
 
 def budget(**overrides):
@@ -557,10 +553,10 @@ def test_above_trigger_summarizes_older_history_and_keeps_recent_turns(spill_roo
 
     assert report is not None
     messages = transcript.as_messages()
-    assert len(messages) == 1 + 20  # 摘要一条 + 最近 10 轮
+    assert len(messages) == 1 + 20  # one summary + the last 10 rounds
     assert messages[0]["content"].startswith("[历史摘要]")
     assert validate(messages) == []
-    # 摘要请求带上了被压缩的更早历史（渲染成带标签的文本，见下面的 prompt 用例）
+    # The summarize request carries the compacted older history as tagged text
     assert "x" * 200 in chat.requests[0]["messages"][0]["content"]
     assert transcript.estimate_chars() < before_chars
 
@@ -627,7 +623,7 @@ def test_auto_path_compacts_at_most_once_per_run(spill_root):
     )
 
     assert first is not None
-    assert second is None  # 每运行一次：防摘要失败后的逐轮重试风暴
+    assert second is None  # once per run: prevents a retry storm after a failed summary
     assert state.compacted is True
 
 
@@ -643,7 +639,7 @@ def test_force_bypasses_threshold_and_the_once_guard(spill_root):
         transcript=transcript, state=state, config=CONFIG, chat=chat, limits=budget(), force=True
     )
 
-    assert first is not None and second is not None  # force 不受守护限制
+    assert first is not None and second is not None  # force bypasses the guard
 
 
 def test_cursor_hook_receives_summary_and_kept_count(spill_root):
@@ -662,7 +658,7 @@ def test_cursor_hook_receives_summary_and_kept_count(spill_root):
     assert len(covered) == 1
     summary, keep = covered[0]
     assert summary["content"].startswith("[历史摘要]")
-    assert keep == 20  # 最近 10 轮 = 20 条消息
+    assert keep == 20  # 10 rounds = 20 messages
 
 
 def test_announce_records_ledger_and_event():
@@ -680,7 +676,8 @@ def test_announce_records_ledger_and_event():
 
 
 def test_summary_call_is_not_capped(spill_root):
-    """摘要也是模型调用：写死的上限会被推理吃光，摘要变空 → 这一步静默失效。"""
+    """The summary is a model call too: a fixed cap is spent on reasoning, the summary comes
+    back empty and this step silently stops working."""
 
     class LongChat:
         def __call__(self, config, messages, **kwargs):

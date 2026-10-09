@@ -1,9 +1,9 @@
-"""OpenAI Responses API（/responses）：item 式输入输出 + 类型化 SSE 事件。
+"""OpenAI Responses API (/responses): item-shaped input/output plus typed SSE events.
 
-与 /chat/completions 的差异只在本模块内部消化：messages 翻译成 input items
-（工具结果 → function_call_output、assistant 的工具调用 → function_call），
-响应 output 数组翻回同形 Turn（正文 + chat-completions 形状的 tool_calls），
-流式的类型化事件折进同一份 StreamState。循环与 transcript 对协议无感。
+The differences from /chat/completions are absorbed here: messages become input items (tool
+results to function_call_output, assistant tool calls to function_call), the output array maps
+back to the same Turn shape, and typed stream events fold into one StreamState, so the loop and
+transcript never see the protocol.
 """
 
 from __future__ import annotations
@@ -40,11 +40,9 @@ def endpoint_url(config: Config) -> str:
 
 
 def _input_items(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Translate chat-completions messages into Responses input items.
-
-    工具结果与工具调用是 item 类型（function_call_output / function_call），
-    普通消息保持 role + 纯文本内容。With images the content is an input-block array.
-    """
+    """Translate chat-completions messages into Responses items: tool results and calls become
+    function_call_output/function_call, plain messages keep role + text, images make a block
+    array."""
     items: list[dict[str, Any]] = []
     for message in messages:
         role = str(message.get("role") or "user")
@@ -131,7 +129,7 @@ def build_request(
     flattened = _tool_schemas(tools)
     if flattened:
         request["tools"] = flattened
-    # 推理强度：Responses API 把它收在 reasoning 对象里（同一个三档语义）
+    # Reasoning effort travels inside the reasoning object here.
     if config.reasoning_effort:
         request["reasoning"] = {"effort": config.reasoning_effort}
     # BYOK passthrough merges last: an explicit override is deliberate.

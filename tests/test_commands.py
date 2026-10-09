@@ -1,4 +1,4 @@
-"""会话内命令：解析规则、技能文本、/compact 执行体。"""
+"""In-session commands: parse rules, skill text, and the /compact executor."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ def rounds(count):
     return messages
 
 
-# ---------- 解析规则 ----------
+# ---------- parse rules ----------
 
 
 def test_paths_and_plain_text_are_not_commands():
@@ -87,7 +87,7 @@ def test_help_text_lists_commands_and_skills(tmp_path):
     assert "/compact" in text and "/rewind" in text and "/pdf" in text
 
 
-# ---------- 技能文本 ----------
+# ---------- skill text ----------
 
 
 def test_skill_text_reads_the_workspace_skill(tmp_path):
@@ -102,7 +102,7 @@ def test_skill_text_reads_the_workspace_skill(tmp_path):
     assert commands.skill_text("never-exists", workspace_root=str(tmp_path)) is None
 
 
-# ---------- /compact 执行体 ----------
+# ---------- /compact executor ----------
 
 
 def test_compact_session_forces_and_persists(tmp_path):
@@ -122,7 +122,7 @@ def test_compact_session_forces_and_persists(tmp_path):
     assert len(covered) == 1
     summary, keep = covered[0]
     assert summary["content"].startswith("[历史摘要]")
-    assert keep == 20  # 默认保留最近 10 轮
+    assert keep == 20  # 10 rounds kept by default
 
 
 def test_compact_session_with_short_history_does_nothing():

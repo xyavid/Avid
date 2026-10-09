@@ -1,12 +1,8 @@
-"""一次性迁移：把旧布局里的会话搬进集中会话目录（阶段 56）。
-
-旧布局 = 每个工作区根下的 ``.avid/sessions``；新布局 = ``<会话目录>/<工作区 id>/``。
-归属只认文件 header 里的 workspaceId（没有就按来源目录推），目标同名文件一律不覆盖，
-正被别的进程持有的会话也不搬——迁移不是抢占。搬完只删空的旧目录（``.avid`` 下还有
-checkpoints 与 context 溢写，留着）。
-
-借用会话层的三个内部件是有意的：header 编解码是磁盘格式的唯一真相、旁挂锁是
-「有没有人在用」的唯一判据、文件后缀决定什么算会话文件。它们不能在这儿重写一份。
+"""One-shot migration of sessions from the legacy ``<workspace root>/.avid/sessions`` layout into
+the shared ``<session dir>/<workspace id>/`` store. Ownership comes from the header's workspaceId
+(falling back to the source directory), an existing target is never overwritten and a session
+held by another process is never moved, so migration never preempts; the session package's header
+codec, sidecar lock and file suffix are reused as the only truth of what a session file is.
 """
 
 from __future__ import annotations
@@ -24,9 +20,9 @@ from ..session.errors import SessionError, SessionLockedError, SessionStorageErr
 from ..session.jsonl import SUFFIX, SessionFileLock, read_header
 from .workspace_registry import derive_id
 
-# 旧布局里会话目录相对于工作区根的位置。
+# Legacy session directory relative to the workspace root.
 LEGACY_RELPATH = Path(".avid") / "sessions"
-# 集中目录下按工作区 id 命名的子目录前缀（derive_id 的产物）。
+# Prefix of the per-workspace subdirectories under the shared store (derive_id's output).
 WORKSPACE_DIR_PREFIX = "w-"
 
 
@@ -45,7 +41,7 @@ class Skip:
 
 @dataclass(frozen=True)
 class MigrationPlan:
-    """搬迁清单：只描述，不动盘（执行是 apply_migration）。"""
+    """A migration plan: description only, nothing touched on disk (executed by apply_migration)."""
 
     store: Path
     moves: tuple[Move, ...]
@@ -53,7 +49,7 @@ class MigrationPlan:
 
     @property
     def source_dirs(self) -> tuple[Path, ...]:
-        """搬空后可能可以删掉的旧目录（按首次出现的顺序去重）。"""
+        """Legacy directories that may become removable once emptied, deduplicated in order."""
         seen: dict[Path, None] = {}
         for move in self.moves:
             seen.setdefault(move.source.parent, None)
@@ -73,11 +69,9 @@ def plan_migration(
     roots: Iterable[str | Path] = (),
     from_dir: str | Path | None = None,
 ) -> MigrationPlan:
-    """扫描旧目录并列出搬迁清单；不写盘。
-
-    ``roots`` 是工作区根（取各自的 ``.avid/sessions``，归属兜底按根路径摘要算）；
-    ``from_dir`` 额外给一个目录：下面有 ``w-*`` 子目录时当成集中目录逐个扫（id 取子目录名），
-    否则当成一个平铺目录（归属只认 header）。
+    """Scan the legacy locations and list the moves without writing to disk: each root contributes
+    its ``.avid/sessions`` (ownership falls back to the path digest), while ``from_dir`` is scanned
+    as a shared store when it holds ``w-*`` subdirectories and as a flat directory otherwise.
     """
     target_store = (
         Path(store).expanduser() if store is not None else userdirs.sessions_dir()
@@ -89,8 +83,8 @@ def plan_migration(
         candidates.append((path / LEGACY_RELPATH, derive_id(path)))
     if from_dir is not None:
         given = Path(from_dir).expanduser()
-        # 两种形状都扫：集中目录的子目录（id 取目录名）与直接躺在这一层的平铺会话。
-        # 只挑一种会让混合目录里的另一批静默漏掉（用户只会看到「没有可搬的会话」）。
+        # Both shapes are scanned, shared-store subdirectories and flat files in this same
+        # directory; picking one would silently miss the other half of a mixed directory.
         subdirs = [
             child
             for child in sorted(given.glob(f"{WORKSPACE_DIR_PREFIX}*"))
@@ -118,11 +112,10 @@ def plan_migration(
 
 
 def apply_migration(plan: MigrationPlan) -> MigrationTally:
-    """按清单搬：同设备 rename，跨设备复制校验后再删源；只删搬空的旧目录。
-
-    计划与执行之间可能有别人插进来（建了同名会话、或打开了同一个会话），所以每一步
-    都复查一次而不是相信计划——复查只缩小窗口，不消除竞态：这是本地单用户工具，
-    真要有并发写，旁挂锁会在更早的地方拦住（同一个会话同一时刻只允许一个写入者）。
+    """Execute the plan: rename within one device, copy-verify-then-delete across devices, and
+    remove only the emptied legacy directories; every step is re-checked rather than trusted,
+    which narrows the race window without closing it, while the sidecar lock keeps a session
+    single-writer.
     """
     moved: list[Move] = []
     skipped: list[Skip] = list(plan.skips)
@@ -148,7 +141,7 @@ def apply_migration(plan: MigrationPlan) -> MigrationTally:
     for directory in plan.source_dirs:
         try:
             directory.rmdir()
-        except OSError:  # 还有别的东西，或已经不在了：留着
+        except OSError:  # something else is still there, or it is gone: keep it
             continue
         removed.append(directory)
     return MigrationTally(
@@ -166,17 +159,19 @@ def _plan_one(file: Path, *, fallback: str | None, store: Path) -> tuple[Move | 
     if not owner:
         return None, Skip(file, "header 里没有 workspaceId，认不出归属")
     if not _safe_component(owner):
-        # 归属来自文件内容，而文件可能来自别人的仓库：它不能当路径分量使。
+        # Ownership comes from file content that may come from someone else's repository, so it
+        # cannot be used as a path component.
         return None, Skip(file, f"header 里的 workspaceId 不能当目录名：{owner!r}")
 
     if file.is_symlink():
-        # 搬链接只会把链接搬过去（真身留在原处），而列表的符号链接守卫会把这种条目藏起来
-        # ——用户会以为搬成功了却永远看不到它。让真身自己来。
+        # Moving a symlink moves only the link while the listing's symlink guard hides such an
+        # entry, so the user would see a successful move that never appears; the real file must
+        # come on its own.
         return None, Skip(file, "是符号链接：先自己决定用真身还是链接，这里不搬")
 
     target = store / owner / file.name
     if target.resolve() == file.resolve():
-        return None, None  # 已经在新位置（--from 指到集中目录自身）
+        return None, None  # already in place (--from pointed at the shared store itself)
     if target.exists():
         return None, Skip(file, f"目标已存在：{target}")
     in_use, reason = _in_use(file)
@@ -193,11 +188,9 @@ def _safe_component(value: str) -> bool:
 
 
 def _in_use(path: Path) -> tuple[bool, str | None]:
-    """(在用吗, 别的原因)。
-
-    计划阶段**不写盘**：锁文件不存在就说明从来没有进程打开过这个会话（写者一打开就会建它），
-    不必为了探一下而把 `.lock` 造出来。锁文件在、但拿不到 → 真有人在用；开不了锁文件本身
-    （权限/磁盘）→ 如实报原因，别谎报成「正在被使用」。
+    """(in use, other reason); planning never writes, so a missing lock file means no process
+    ever opened the session, and a lock that cannot be taken reports its true reason instead of
+    claiming the session is in use.
     """
     lock = SessionFileLock(path)
     if not lock.path.exists():
@@ -213,7 +206,9 @@ def _in_use(path: Path) -> tuple[bool, str | None]:
 
 
 def _drop_lock(source: Path) -> None:
-    """顺手清掉旁挂锁文件；拿不到就留着（真有别人在用，删了等于把互斥拆了）。"""
+    """Drop the sidecar lock file when it can be taken; otherwise leave it, since deleting a
+    held lock would tear down the mutual exclusion.
+    """
     lock = SessionFileLock(source)
     if not lock.path.exists():
         return
@@ -227,7 +222,9 @@ def _drop_lock(source: Path) -> None:
 
 
 def _move_file(source: Path, target: Path) -> None:
-    """同设备一步改名；跨设备先写到临时名、fsync、改名，最后才删源。"""
+    """Rename in one step on one device; across devices write a temp file, fsync, rename, then
+    delete the source last.
+    """
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
         os.rename(source, target)

@@ -1,8 +1,7 @@
-"""``subscribe_async``：不占线程池线程的事件订阅（阶段 30d）。
+"""``subscribe_async``: event subscription that does not hold a threadpool thread.
 
-语义与同步 ``subscribe`` 同源（重放/缺口/resync 都在 ``svc/runs.py`` 一处），
-这里的用例钉三件事：**同形**（同一份运行，两个订阅者拿到同一条事件序列）、
-**活订阅**（桥线程真能唤醒事件循环）、**清理**（生成器关闭后 watcher 摘除）。
+Replay / gap / resync semantics match the sync ``subscribe`` (one source in ``svc/runs.py``); the
+cases below pin the same sequence for both, live wakeups through the bridge, and watcher cleanup.
 """
 
 from __future__ import annotations
@@ -22,7 +21,7 @@ def build(root, chat, **kwargs) -> Services:
 
 
 def drain_async(services: Services, run_id: str, *, after: int = 0, timeout: float = 5.0):
-    """在独立事件循环里跑完一个异步订阅，返回事件列表。"""
+    """Drain one async subscription in a fresh event loop; returns the events."""
 
     async def one():
         got = []
@@ -55,7 +54,7 @@ def test_async_subscription_replays_the_same_sequence_as_sync(sandbox):
 
 
 def test_async_subscription_follows_live_events_via_the_bridge(sandbox):
-    """订阅先挂上、事件后发生：桥线程必须把运行线程的 emit 唤醒到事件循环。"""
+    """Subscription first, events later: the bridge must wake the loop on the run thread's emit."""
     gate = threading.Event()
 
     def chat(config, messages, **kwargs):
@@ -104,7 +103,7 @@ def test_watcher_is_removed_when_the_generator_closes(sandbox):
     async def one():
         agen = services.runs.subscribe_async(record.run_id)
         async for _ in agen:
-            break  # 只拿一条就关
+            break  # take one event, then close
         await agen.aclose()
 
     asyncio.run(asyncio.wait_for(one(), 5.0))
@@ -113,7 +112,7 @@ def test_watcher_is_removed_when_the_generator_closes(sandbox):
 
 
 def test_many_concurrent_async_subscribers_all_get_full_replay(sandbox):
-    """40 条并发订阅（高于旧上限 24）：异步路径不占线程，全量重放互不干扰。"""
+    """40 concurrent subscribers: the async path holds no threads, so replays never interfere."""
     services = build(sandbox, ScriptedChat(make_turn("完成")))
     session_id = new_session(services)
     record = services.runs.start(session_id, "跑一下")
@@ -143,5 +142,5 @@ def test_many_concurrent_async_subscribers_all_get_full_replay(sandbox):
 
 
 def test_stream_cap_is_now_a_guardrail_not_a_threadpool_shadow():
-    """上限放开到 256：它防的是失控客户端，不再是 REST 被线程饿死的那道墙。"""
+    """The cap is 256: it guards against runaway clients, not a threadpool starving REST."""
     assert MAX_CONCURRENT_STREAMS >= 256

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { highlight } from '../highlight'
 
-/** 取某一类 token 的原文，方便断言。 */
+/** Texts of the tokens of one kind, for assertions. */
 function ofKind(code: string, lang: string | null, kind: string): string[] {
   return highlight(code, lang)
     .filter((t) => t.kind === kind)

@@ -29,8 +29,7 @@ describe('AppShell 骨架（阶段 1 立，阶段 48 支持无 rail 两列）', 
   it('插槽缺省时只有区域标注，不含任何真实构件', () => {
     const { container } = render(<AppShell />)
 
-    // 默认态没有任何**交互**构件（按钮/输入）——真实内容全部由表面插槽注入。
-    // header 里只剩顶栏那一张标识图：它是字标的一部分，不是可交互图标。
+    // Default state renders no interactive widgets; surfaces inject all real content via slots.
     expect(container.querySelectorAll('button, input, svg')).toHaveLength(0)
     expect(container.querySelectorAll('img')).toHaveLength(1)
     expect(screen.getByText(/侧栏 240px/)).toBeTruthy()
@@ -78,14 +77,14 @@ describe('两侧列可拖（阶段 52）', () => {
     expect(wider).not.toBe(before)
     expect(Number.parseInt(wider, 10)).toBeGreaterThan(Number.parseInt(before, 10))
 
-    // 左列的方向键是「往哪边长」：ArrowLeft 变窄，且夹在下限上
+    // Sidebar arrow keys: ArrowLeft narrows and clamps at the lower bound.
     for (let i = 0; i < 20; i += 1) {
       fireEvent.keyDown(screen.getByRole('separator', { name: '调整侧栏宽度' }), { key: 'ArrowLeft' })
     }
     const floored = grid(container).style.gridTemplateColumns
     expect(Number.parseInt(floored, 10)).toBe(180)
 
-    // 右列：ArrowLeft 变宽
+    // Rail grows with ArrowLeft.
     fireEvent.keyDown(screen.getByRole('separator', { name: '调整侧边栏宽度' }), { key: 'ArrowLeft' })
     expect(JSON.parse(localStorage.getItem('avid.columns') ?? '{}').rail).toBeGreaterThan(280)
   })

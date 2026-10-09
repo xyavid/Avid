@@ -1,7 +1,5 @@
-"""全文检索：中文（trigram）、两字词（LIKE 回落）、定位、作用域、把输入当字面量。
-
-这组用例同时钉住「索引哪些文本」这条规则（extract.py 的取舍）——搜得到什么、
-搜不到什么，都是有意为之而不是副作用。
+"""Full-text search: Chinese (trigram), two-character words (LIKE fallback), locating hits,
+scoping, and user input kept literal; what extract.py indexes is pinned here as well.
 """
 
 from __future__ import annotations
@@ -32,7 +30,7 @@ def test_finds_a_chinese_phrase_and_hands_back_a_snippet(indexer, store):
 
 
 def test_a_two_character_query_goes_through_the_fallback(indexer, store):
-    """trigram 看不见两字词：查询侧对 <3 字回落 LIKE 扫描（中文里两字词最常见）。"""
+    """Trigram cannot see two-character words: queries under 3 chars fall back to a LIKE scan."""
     make_session(store, session_id="s-two", messages=({"role": "user", "content": "把索引建起来"},))
     indexer.index_all()
 
@@ -42,7 +40,7 @@ def test_a_two_character_query_goes_through_the_fallback(indexer, store):
 
 
 def test_a_hit_can_be_read_back_from_the_file(indexer, store):
-    """命中 = 能跳回原文：会话 + 条目 id + 行偏移，全都在。"""
+    """A hit can be read back from the file: session, entry id and byte offset all match."""
     file = make_session(
         store, session_id="s-jump", messages=({"role": "user", "content": "记住这句话：紫色犀牛"},)
     )
@@ -73,7 +71,7 @@ def test_search_scopes_to_a_session_and_a_workspace(indexer, store):
 
 
 def test_input_is_treated_as_literal_text(indexer, store):
-    """FTS 语法不进用户手里：引号、AND、星号都只当字符（不能既报错又给错表达式）。"""
+    """FTS syntax never reaches the user: quotes, AND and stars are plain characters."""
     make_session(
         store,
         session_id="s-literal",
@@ -87,13 +85,13 @@ def test_input_is_treated_as_literal_text(indexer, store):
     assert queries.search_entries(indexer.conn, '"引号里的东西"')
     assert queries.search_entries(indexer.conn, "AND")
     assert queries.search_entries(indexer.conn, "星号 *")
-    # 只有标点、没有词元：空结果而不是语法错误
+    # Punctuation only, no tokens: an empty result rather than a syntax error
     assert queries.search_entries(indexer.conn, "***") == []
     assert queries.search_entries(indexer.conn, "") == []
 
 
 def test_tool_output_is_indexed_up_to_the_limit(indexer, store):
-    """工具结果截前 2000 字符：够定位，不值得为全文付体积与敏感面。"""
+    """Tool output is indexed as its first 2000 chars."""
     head, tail = "浅色开头" * 10, "深色结尾"
     make_session(
         store,
@@ -158,7 +156,7 @@ def test_notice_and_error_entries_are_searchable(indexer, store):
 
 
 def test_a_session_name_is_not_searchable_text(indexer, store):
-    """标题是会话级字段，不是条目文本——value 行不进 search_text（否则搜标题会命中一堆会话）。"""
+    """A title is a session-level field, not entry text: value lines never enter search_text."""
     make_session(
         store,
         session_id="s-title",
@@ -209,7 +207,7 @@ def test_index_stats_counts_what_check_needs(indexer, store):
     assert stats["statuses"] == {"ok": 1}
 
 
-# ---------------- 出口：CLI 与 REST（这一层只读索引，不调模型） ----------------
+# ---------------- exits: CLI and REST (read the index, no model calls) ----------------
 
 
 def test_cli_search_prints_hits_and_their_location(indexer, store, capsys, monkeypatch):
@@ -302,18 +300,18 @@ def test_rest_search_rejects_an_empty_query(tmp_path):
         services.close()
 
 
-# ---------------- 评审修复（2026-10-09）：混合长短词必须是 AND ----------------
+# ---------------- a mixed long/short-word query must be AND ----------------
 
 
 def test_a_mixed_query_requires_every_word(indexer, store):
-    """长词 + 短词：两路各查一遍再合并只能得并集，与「多个词按 AND」的承诺矛盾。"""
+    """Long word + short word: querying each path and merging would give a union, not the AND."""
     make_session(store, session_id="s-both", messages=({"role": "user", "content": "alpha 配置都在这儿"},))
     make_session(store, session_id="s-only-long", messages=({"role": "user", "content": "只有 alpha"},))
     make_session(store, session_id="s-only-short", messages=({"role": "user", "content": "只有配置"},))
     indexer.index_all()
 
     def hits_of(query: str) -> list[str]:
-        # 三个会话的 updated_at 可能落在同一毫秒：只比集合，不比顺序（顺序另有用例管）。
+        # updated_at may land in the same millisecond: compare sets, not order
         return sorted(hit.session_id for hit in queries.search_entries(indexer.conn, query))
 
     assert hits_of("alpha 配置") == ["s-both"]
@@ -322,7 +320,7 @@ def test_a_mixed_query_requires_every_word(indexer, store):
 
 
 def test_a_compaction_summary_is_searchable(indexer, store):
-    """压缩摘要在会话里只落在 value（游标值），不是条目——但它概括了被压掉的历史，得能搜到。"""
+    """A compaction summary lives as a cursor value, not an entry, but must stay searchable."""
     from avid.session import JsonlSessionRepo
     from avid.session.values import branch_compaction
 
@@ -346,7 +344,7 @@ def test_a_compaction_summary_is_searchable(indexer, store):
         repo.close()
 
     indexer.index_all()
-    assert indexer.reconcile().failed == 0  # 再扫一遍：派生 id 要稳定，不能重复
+    assert indexer.reconcile().failed == 0  # rescan: derived ids must stay stable
 
     hits = queries.search_entries(indexer.conn, "检索出口")
     assert [hit.session_id for hit in hits] == ["s-compact"]
@@ -356,7 +354,7 @@ def test_a_compaction_summary_is_searchable(indexer, store):
 
 
 def test_an_image_message_is_searchable_by_its_marker_but_not_its_bytes(indexer, store):
-    """Only the marker (name + mime + size) is indexed, not base64: screenshots are findable without bloating the index."""
+    """Only the image marker (name + mime + size) is indexed, never the base64 bytes."""
     from avid.attachments import image_part
 
     part = image_part(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64, name="设计稿.png")

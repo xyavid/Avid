@@ -1,13 +1,9 @@
-"""会话内命令：`/compact`、`/rewind` 与 `/<技能名>`（内核单点解析，CLI 与 Web 共用）。
+"""Session commands (`/compact`, `/rewind`, `/<skill name>`), parsed here once for CLI and Web.
 
-规则：`/name` **单 token**（名字形如 `[a-z][a-z0-9_-]*`，无嵌套斜杠与点）才落
-进命令命名空间——`/home/x` 这类路径与含空白的文本原样透传。落在命名空间内：
-命中已注册命令或当前工作区的技能名 → 命令；否则 unknown（调用方给提示，
-不发给模型）。
-
-执行体分两类：`compact_session` 与 `skill_text` 在这里（会话写入由调用方落库）；
-`rewind` 只在本模块注册名字——它要回移分支 tip、清压缩游标，会话访问由调用方
-接线（CLI 与 svc 各自实现，本模块不 import session 包）。
+Only a single-token `/name` enters the command namespace, since paths and free text must pass
+through and an unmatched name must come back as unknown instead of reaching the model; `rewind`
+registers its name only, because moving the branch tip and clearing the compaction cursor are the
+caller's wiring and this module never imports the session package.
 """
 
 from __future__ import annotations
@@ -20,10 +16,10 @@ from typing import Any
 from .compaction import CompactReport, ContextBudget, run_compaction
 from .skills import SkillLoader, default_skills_dir
 
-#: 命令命名空间：单 token 的 /name；路径（多段斜杠）与散文本都落在命名空间外。
+#: Command namespace: a single-token /name; paths (multiple slashes) and free text stay outside it.
 _TOKEN = re.compile(r"^/([a-z][a-z0-9_-]*)$")
 
-#: 已注册命令（技能名不与它们冲突时按技能解析）。
+#: Registered commands; a skill name only resolves when it does not collide with one.
 COMMANDS = ("compact", "rewind")
 
 KIND_COMMAND = "command"
@@ -33,14 +29,14 @@ KIND_UNKNOWN = "unknown"
 
 @dataclass(frozen=True)
 class CommandMatch:
-    """一次输入的解析结果：name 与它的归属。"""
+    """The parse result of one input: the name and what it belongs to."""
 
     name: str
     kind: str  # command | skill | unknown
 
 
 def match_command(text: str, *, skill_names: Iterable[str] = ()) -> CommandMatch | None:
-    """把一条输入解析成命令；None = 不是命令，按普通用户输入处理。"""
+    """Parse one input as a command; None means it is ordinary user input."""
     found = _TOKEN.match(text.strip())
     if found is None:
         return None
@@ -53,13 +49,13 @@ def match_command(text: str, *, skill_names: Iterable[str] = ()) -> CommandMatch
 
 
 def skill_names(*, workspace_root: str | None) -> list[str]:
-    """当前工作区可见的技能名（排序）。"""
+    """Skill names visible in this workspace, sorted."""
     loader = SkillLoader(default_skills_dir(workspace_root)).scan()
     return sorted(loader.skills)
 
 
 def skill_text(name: str, *, workspace_root: str | None) -> str | None:
-    """技能全文；未知技能返回 None（调用方给可用清单）。"""
+    """Full skill text; an unknown name returns None so the caller can list what exists."""
     loader = SkillLoader(default_skills_dir(workspace_root)).scan()
     if name not in loader.skills:
         return None
@@ -67,7 +63,7 @@ def skill_text(name: str, *, workspace_root: str | None) -> str | None:
 
 
 def help_text(*, workspace_root: str | None) -> str:
-    """未知命令时的提示：可用命令与当前工作区的技能。"""
+    """Hint for an unknown command: the available commands and workspace skills."""
     skills = skill_names(workspace_root=workspace_root)
     skill_part = "、".join(f"/{name}" for name in skills) if skills else "（当前没有技能）"
     return f"可用命令：/compact、/rewind；可用技能：{skill_part}"
@@ -81,12 +77,8 @@ def compact_session(
     workspace_root: str | None = None,
     on_compaction: Callable[[dict[str, Any], int], None] | None = None,
 ) -> CompactReport | None:
-    """对会话当前历史强制压缩一次（/compact 的执行体）。
-
-    force=True：跳过触发线与每运行一次的守护——用户明确要求压缩就压缩。
-    摘要调用由调用方注入（CLI 用非流式 chat；Web 同）。历史不足一个保留窗口
-    时返回 None（没有「更早历史」可摘要）。
-    """
+    """Force one compaction of the session history for /compact, skipping the trigger line and the
+    once-per-run guard; None means no earlier history exists to summarize."""
     from .state import RunState
     from .transcript import Transcript
 

@@ -1,7 +1,8 @@
-"""B10 – B16 与端点契约：用 httpx/TestClient 打真端点。
+"""B10 - B16 and endpoint contracts, exercised through httpx/TestClient.
 
-覆盖：未知 ``/api`` 不回落到 SPA、一个会话一个 run、会话 CRUD、条目分页有界、
-SSE 分帧与 ``Last-Event-ID`` 重放、事件契约与特性表、构建戳缺失时的行为。
+Covers unknown /api paths not falling back to the SPA, one run per session, session CRUD,
+bounded entry pagination, SSE framing and Last-Event-ID replay, the event/feature contract,
+and the behavior when no static build exists.
 """
 
 from __future__ import annotations
@@ -41,8 +42,8 @@ def bundle(sandbox):
             **kwargs,
         )
         services.append(instance)
-        # 静态目录显式指向一个不存在的路径：否则默认目录里一旦有构建产物，
-        # 断言就会随环境变化（现在是「未构建 → 503」的确定性用例）。
+        # static_dir points at a nonexistent path: a real build in the default directory would
+        # make the 503 assertions environment-dependent.
         return TestClient(
             create_app(services=instance, static_dir=sandbox / "static-not-built"),
             base_url="http://127.0.0.1:8765",
@@ -64,15 +65,12 @@ def finish_run(client: TestClient, chat, tools=None, prompt: str = "问题") -> 
     return session["id"], run_id
 
 
-# ---------------- 事件流的并发额度（P2-13） ----------------
+# ---------------- event stream concurrency slots ----------------
 
 
 def test_stream_slots_refuse_over_the_limit_and_release(bundle):
-    """额度用尽回 503，释放后能再开。
-
-    为什么是"限额"而不是"异步化"：同步生成器的 `next()` 会阻塞到下一个事件或心跳，
-    Starlette 因此长期占住一个池线程。改成异步要在 60fps 的 delta 投递与 anyio 之间
-    加一层队列桥，本地单用户工具不值这个风险——于是把占用封顶、超出的显式拒绝。
+    """An exhausted slot answers 503 and release restores it: a sync generator's next() blocks
+    until the next event or heartbeat, holding a Starlette pool thread the whole time.
     """
     from avid.services import StreamSlots
 
@@ -88,12 +86,12 @@ def test_stream_slots_refuse_over_the_limit_and_release(bundle):
 
     slots.release()
     slots.release()
-    slots.release()  # 多release不该把计数带成负数
+    slots.release()  # extra releases must not drive the count negative
     assert slots.active == 0
 
 
 def test_an_over_limit_event_stream_gets_a_503(bundle, monkeypatch):
-    """额度为 0 时任何事件流都回 503 `too_many_streams`（而不是排队占线程）。"""
+    """With the limit at 0 every stream answers 503 too_many_streams instead of queueing."""
     from avid.services import TooManyStreams
 
     client, services = bundle(chat=ScriptedChat(make_turn("答")))
@@ -107,29 +105,29 @@ def test_an_over_limit_event_stream_gets_a_503(bundle, monkeypatch):
 
 
 def test_a_finished_stream_gives_its_slot_back(bundle):
-    """流跑完（或断连）必须归还额度：否则连接泄漏会把额度耗光。"""
+    """A finished (or disconnected) stream must give its slot back, or the leak exhausts it."""
     client, services = bundle(chat=ScriptedChat(make_turn("答")))
     _, run_id = finish_run(client, None)
     services.streams.limit = 1
 
-    # 第一条：读到底，生成器走完 finally。
+    # first connection: read to the end so the generator runs its finally
     with client.stream("GET", f"/api/runs/{run_id}/events") as response:
         assert response.status_code == 200
         list(response.iter_lines())
     assert services.streams.active == 0, "流结束后额度没归还"
 
-    # 因此第二条还能开（额度只有 1）。
+    # so a second connection can still open (the limit is 1)
     with client.stream("GET", f"/api/runs/{run_id}/events") as response:
         assert response.status_code == 200
         assert next(response.iter_lines(), None) is not None
 
 
-# ---------------- 错误面不外泄细节（P2-10） ----------------
+# ---------------- error surface leaks no internals ----------------
 
 
 def test_internal_errors_only_expose_a_correlation_id(bundle):
-    """500 只回错误码 + 关联 id：以前回 `f"{type(exc).__name__}: {exc}"`，
-    等于把内核内部细节（可能含绝对路径）贴到界面上。"""
+    """A 500 returns only a code plus a correlation id: exception type and message (possibly
+    absolute paths) must not reach the client."""
     from fastapi.testclient import TestClient
 
     from avid.web import create_app
@@ -139,11 +137,11 @@ def test_internal_errors_only_expose_a_correlation_id(bundle):
     def boom():
         raise RuntimeError("内部细节：/home/someone/secret/path.py 打不开")
 
-    # 让一个端点稳定抛异常：直接换掉 meta 的实现
+    # make one endpoint raise deterministically by replacing meta
     services.meta = boom  # type: ignore[method-assign]
 
-    # bundle 的 client 是"测试模式"（会重抛异常）；这一条要的是**真实部署下客户端
-    # 看到什么**，所以自建一个不重抛的。
+    # The bundle client re-raises (test mode); this case wants what a real deployment returns,
+    # so build one with raise_server_exceptions=False.
     client = TestClient(
         create_app(services=services, static_dir="/tmp/unbuilt"),
         base_url="http://127.0.0.1:8765",
@@ -159,7 +157,7 @@ def test_internal_errors_only_expose_a_correlation_id(bundle):
 
 
 def test_security_headers_are_set_on_every_response(bundle):
-    """CSP / Referrer-Policy / nosniff：与产物形状对齐（无内联脚本）。"""
+    """CSP / Referrer-Policy / nosniff on every response, matching the no-inline-script build."""
     client, _ = bundle()
 
     for path in ("/api/meta", "/api/nope"):
@@ -170,13 +168,12 @@ def test_security_headers_are_set_on_every_response(bundle):
         assert headers["x-content-type-options"] == "nosniff"
 
 
-# ---------------- 输入面：长度上限（P2-24） ----------------
+# ---------------- input surface: length caps ----------------
 
 
 def test_oversized_inputs_are_rejected_at_the_schema(bundle):
-    """请求体以前没有任何长度上限：一次请求就能写进任意大的字符串。
-
-    上限在 schema 层（422），不进服务层——和"非法权限模式"同一条路子。
+    """Oversized bodies are rejected at the schema layer with 422 before the service layer:
+    no single request may write an arbitrarily large string.
     """
     from avid.web.schemas import MAX_NAME_CHARS, MAX_PROMPT_CHARS
 
@@ -201,7 +198,7 @@ def test_oversized_inputs_are_rejected_at_the_schema(bundle):
     )
     assert too_long_prompt.status_code == 422, too_long_prompt.status_code
 
-    # 正常长度照常受理（上限只拦"明显不是人打出来的"输入）。
+    # normal lengths still pass: the cap only stops input no human would type
     ok = client.post(
         f"/api/sessions/{session_id}/runs",
         json={"prompt": "正常问题", "auto_approve": True},
@@ -209,11 +206,11 @@ def test_oversized_inputs_are_rejected_at_the_schema(bundle):
     assert ok.status_code == 201
 
 
-# ---------------- 只读端点的磁盘 IO（P2-5） ----------------
+# ---------------- disk IO on read-only endpoints ----------------
 
 
 def test_meta_caches_the_skills_scan(bundle, monkeypatch):
-    """技能目录带短缓存：`/api/meta` 会被界面反复取，扫目录是磁盘 IO。"""
+    """The skills scan behind /api/meta has a short TTL cache: the UI polls it repeatedly."""
     from avid.agent import skills as skills_module
 
     scans: list[int] = []
@@ -232,7 +229,7 @@ def test_meta_caches_the_skills_scan(bundle, monkeypatch):
 
 
 def test_event_stream_does_not_read_the_meta_endpoint(bundle, monkeypatch):
-    """每条 SSE 连接以前都调 `services.meta()`，只为拿心跳常量——连带扫技能目录。"""
+    """An SSE connection must not call services.meta() just for the heartbeat constant."""
     client, services = bundle(chat=ScriptedChat(make_turn("答")))
     _, run_id = finish_run(client, None)
 
@@ -259,11 +256,12 @@ def test_health_does_not_read_the_meta_endpoint(bundle, monkeypatch):
     assert response.json()["api_version"] == 1
 
 
-# ---------------- 信任边界（P1-21） ----------------
+# ---------------- trust boundary ----------------
 
 
 def test_host_outside_the_allowlist_is_rejected(bundle):
-    """DNS rebinding：恶意域名解析到 127.0.0.1 时，浏览器认为它同源——Host 会露馅。"""
+    """DNS rebinding: a hostile name resolving to 127.0.0.1 looks same-origin to the browser,
+    but the Host header gives it away."""
     client, _ = bundle()
     response = client.get("/api/meta", headers={"Host": "evil.example.com"})
 
@@ -272,10 +270,10 @@ def test_host_outside_the_allowlist_is_rejected(bundle):
 
 
 def test_cross_site_origin_is_rejected_even_without_a_body(bundle):
-    """CSRF：无 body 的 POST 是"简单请求"，不做预检就能打到写端点。
-
-    真实后果：任意网站都能让本机弹文件夹选择器（`/workspaces/pick`）或取消正在跑
-    的任务（`/runs/{id}/cancel`）。跨源请求一定带 Origin，白名单外拒掉。
+    """CSRF: a body-less POST is a "simple request" that reaches write endpoints without
+    preflight, so any site could pop the local folder picker (/api/workspaces/pick) or cancel
+    runs (/api/runs/{id}/cancel); cross-origin requests always carry Origin, so off-allowlist
+    origins are rejected.
     """
     client, _ = bundle()
 
@@ -285,8 +283,8 @@ def test_cross_site_origin_is_rejected_even_without_a_body(bundle):
     assert rejected.status_code == 403
     assert rejected.json()["error"]["code"] == "origin_rejected"
 
-    # 回环来源（界面自己的源）放行；命令行不带 Origin 也放行。
-    # 用"不存在的 run"当探针：404 说明过了信任边界，而不是被 403 拦下。
+    # Loopback origins pass, as do requests without Origin (CLI); a nonexistent run probes the
+    # boundary: 404 means it got past it rather than being stopped by 403.
     allowed = client.post(
         "/api/runs/run_nope/cancel",
         headers={"Origin": "http://127.0.0.1:8765"},
@@ -296,7 +294,7 @@ def test_cross_site_origin_is_rejected_even_without_a_body(bundle):
 
 
 def test_an_extra_host_can_be_allowed_explicitly(bundle, monkeypatch):
-    """非回环部署的逃生口：`AVID_ALLOWED_HOSTS` 显式放行。"""
+    """Non-loopback deployments can allow extra hosts through AVID_ALLOWED_HOSTS."""
     monkeypatch.setenv("AVID_ALLOWED_HOSTS", "avid.internal:8765")
     client, _ = bundle()
 
@@ -309,11 +307,8 @@ def test_an_extra_host_can_be_allowed_explicitly(bundle, monkeypatch):
 
 
 def test_session_list_does_not_replay_the_sessions(bundle, monkeypatch):
-    """列表页读名字与条数，但**不该**逐个重放整个会话。
-
-    以前每个会话都 open() 一次（逐行重放 + 建对象 + 抢会话句柄）：20 个会话
-    5.9 MB 实测 54 ms，会话一多首屏与"每次运行结束重取列表"都变成秒级。
-    这里用"open 次数必须为 0"把快速路径钉住，同时断言三个字段仍然正确。
+    """The list endpoint reads names and counts without opening each session (zero open() calls),
+    while id, message_count, truncated_tail and active_run_id stay correct.
     """
     from avid.session import jsonl as session_jsonl
 
@@ -333,7 +328,7 @@ def test_session_list_does_not_replay_the_sessions(bundle, monkeypatch):
 
     assert opened == [], f"列表页不该打开会话：{opened}"
     entry = next(item for item in listed if item["id"] == session_id)
-    assert entry["message_count"] >= 2  # 用户消息 + 助手消息
+    assert entry["message_count"] >= 2  # user message + assistant message
     assert entry["truncated_tail"] is False
     assert entry["active_run_id"] is None
 
@@ -345,7 +340,7 @@ def test_unknown_api_is_json_404(bundle):
     assert response.headers["content-type"].startswith("application/json")
     assert response.json()["error"]["code"] == "not_found"
 
-    # 没有静态产物时，根路径回 503 与 static_missing，而不是 500
+    # with no static build the root answers 503 static_missing, not 500
     root = client.get("/")
     assert root.status_code == 503
     assert root.json()["error"]["code"] == "static_missing"
@@ -385,7 +380,7 @@ def test_run_for_unknown_session_is_404(bundle):
     assert response.json()["error"]["code"] == "session_not_found"
 
 
-# ---------------- 会话 CRUD ----------------
+# ---------------- session CRUD ----------------
 
 
 def test_session_lifecycle(bundle):
@@ -473,29 +468,29 @@ def test_meta_matches_kernel_and_features_match_endpoints(bundle):
     assert isinstance(meta["capabilities"]["skills"], list)
     assert meta["stream"]["heartbeat_seconds"] > 0
 
-    # 特性表声明的能力必须真的有端点
+    # every capability the feature table declares must have a real endpoint
     assert client.get("/api/skills").status_code == 200
     if FEATURES["approvals"]:
-        assert client.get("/api/runs/run_x/approvals").status_code == 404  # 存在但 run 未知
+        assert client.get("/api/runs/run_x/approvals").status_code == 404  # exists, run unknown
     if FEATURES["cancel"]:
         assert client.post("/api/runs/run_x/cancel").status_code == 404
     if FEATURES["deltas"]:
-        # 声明可用就得真的可用：端点接受 ?deltas=1（未知 run 仍是 404，说明路由在）
+        # declared means usable: the route accepts ?deltas=1 (unknown run is still 404)
         assert client.get("/api/runs/run_x/events?deltas=1").status_code == 404
     else:
-        assert "assistant_delta" in meta["event_types"]  # 类型已定义，只是不投递
+        assert "assistant_delta" in meta["event_types"]  # type defined, just not delivered
     if FEATURES["workspaces"]:
-        # 工作区是**端点型**特性：路由在就返回列表。
+        # workspaces is endpoint-shaped: the route returns the list
         listed = client.get("/api/workspaces")
         assert listed.status_code == 200
         assert listed.json()["workspaces"]
     if FEATURES["danger_confirm"]:
-        # 毁灭级确认是**行为型**特性，没有新端点：机制是审批（只有毁灭级命令才产生
-        # 审批请求）。声明了就必须真的在服务它——审批端点存在（未知 run 是 404）。
+        # danger confirmation is behavior-shaped with no new endpoint: declaring it means the
+        # approvals route is really served (unknown run is 404).
         assert client.get("/api/runs/run_x/approvals").status_code == 404
     if FEATURES["full_access"]:
-        # full 是**参数型**特性：模式入口已删——旧的 permission 字段被 extra="forbid"
-        # 拒收；完全访问只能由 full_access_ack 授予（类型错误的值同样被拒）。
+        # full access is parameter-shaped: the old permission field is rejected by
+        # extra="forbid", and only full_access_ack grants it (wrong types rejected too).
         session = create_session(client).json()
         runs_url = f"/api/sessions/{session['id']}/runs"
         rejected = client.post(
@@ -515,7 +510,7 @@ def test_health(bundle):
     assert body["uptime_ms"] >= 0
 
 
-# ---------------- F4：分支端点 ----------------
+# ---------------- branch endpoints ----------------
 
 
 def test_branch_endpoints_list_fork_and_reject_conflicts(bundle):
@@ -547,13 +542,13 @@ def test_branch_endpoints_list_fork_and_reject_conflicts(bundle):
     assert body["entry_count"] == 2
     assert body["is_default"] is False
 
-    # 重名 409（悄悄重建会丢掉原来那条链）；未知分叉点 400（它只是请求体里的一个坏值）
+    # duplicate name 409 (rebuilding would silently drop that chain); bad fork point 400
     duplicate = client.post(f"/api/sessions/{session_id}/branches", json={"name": "b2"})
     assert duplicate.status_code == 409
     assert duplicate.json()["error"]["code"] == "branch_exists"
     assert client.post(f"/api/sessions/{session_id}/branches", json={"at": "e_missing"}).status_code == 400
 
-    # 在分支上起运行：请求体带 branch，main 的链条一个字都不变
+    # run on a branch: the body carries branch and main's chain stays untouched
     def main_chain() -> list[str]:
         page = client.get(
             f"/api/sessions/{session_id}/entries?branch=main&order=asc"
@@ -582,14 +577,12 @@ def test_branch_endpoints_list_fork_and_reject_conflicts(bundle):
     assert listed["b2"]["entry_count"] == 4
 
 
-# ---------------- 注入提醒的线格式 ----------------
+# ---------------- wire format of injected reminders ----------------
 
 
 def test_injected_reminder_keeps_its_notice_type_on_the_wire(bundle):
-    """前端按这个字符串分辨「内核注入的提醒」与「用户说的话」，所以钉住线格式。
-
-    它的 ``role`` 确实是 ``user``（对模型而言它就是一条 user 消息），文本上也认不出来
-    ——Stop nudge 的文本由 hook 任意给定——所以判别只能靠条目类型。
+    """The frontend tells kernel-injected reminders from user speech by the entry type string:
+    role is genuinely "user" and the nudge text is hook-chosen, so only the type distinguishes.
     """
     client, services = bundle()
     session_id = create_session(client).json()["id"]
@@ -610,7 +603,7 @@ def test_injected_reminder_keeps_its_notice_type_on_the_wire(bundle):
     assert [entry["message"]["role"] for entry in entries] == ["user", "user"]
 
 
-# ---------------- B16 与分页 ----------------
+# ---------------- B16 and pagination ----------------
 
 
 def fill(sandbox, services: Services, session_id: str, count: int) -> None:
@@ -667,7 +660,7 @@ def test_entries_pagination_walks_the_chain(bundle):
         item["entry_id"] for item in second["entries"]
     } == set()
 
-    # asc 与 desc 是同一批条目的两个方向
+    # asc and desc are the same entries in opposite directions
     ascending = client.get(
         f"/api/sessions/{session_id}/entries", params={"order": "asc", "limit": 500}
     ).json()
@@ -677,10 +670,8 @@ def test_entries_pagination_walks_the_chain(bundle):
 
 
 def test_a_failed_run_leaves_a_durable_error_entry(bundle):
-    """运行失败要落一条 error 条目（阶段 55）：刷新之后还看得见「为什么停了」。
-
-    它不进模型上下文（投影只取 message/notice），也不当作中断提示（有原因的记录在，
-    那句含糊的「上次运行在此中断」就不必要了）。
+    """A failed run persists an error entry so the reason survives a refresh; it never enters the
+    model context (the projection takes message/notice only).
     """
     from avid.providers.protocol import LLMError
 
@@ -708,10 +699,10 @@ def test_a_failed_run_leaves_a_durable_error_entry(bundle):
     assert [entry["type"] for entry in entries] == ["message", "error"]
     assert entries[-1]["message"]["content"].startswith("运行失败：")
 
-    # 落盘的记账替代了那句含糊的中断提示
+    # the persisted record replaces the vague interruption notice
     assert client.get(f"/api/sessions/{session_id}").json()["truncated_tail"] is False
 
-    # 事件的载荷带上 entry_id：前端据此把实时那条与随后重读会话的结果对齐
+    # the payload carries entry_id so the UI aligns the live row with the re-read session
     body = client.get(f"/api/runs/{run_id}/events").text
     finished = [
         json.loads(line[len("data: ") :])
@@ -722,10 +713,8 @@ def test_a_failed_run_leaves_a_durable_error_entry(bundle):
 
 
 def test_truncated_tail_covers_a_run_that_left_nothing(bundle):
-    """末尾是用户消息（这一轮一个回复都没有）也算中断——首个模型调用就失败时就是这个形状。
-
-    真实案例：一次 run 在第一次模型调用上超时失败，会话里只留下用户那句话；界面上一刷新
-    什么都看不到，像是"什么都没发生"。运行**中**的会话不算（那半截是理所应当的）。
+    """A trailing user message counts as a truncated tail even when the round produced no reply
+    at all (the shape left by a first model call that failed); a live run does not count.
     """
     client, services = bundle()
     session_id = create_session(client).json()["id"]
@@ -737,7 +726,7 @@ def test_truncated_tail_covers_a_run_that_left_nothing(bundle):
 
     assert client.get(f"/api/sessions/{session_id}").json()["truncated_tail"] is True
 
-    # 运行中的会话不算：那一刻的"没有回复"是当然的
+    # a run in progress does not count: no reply yet is expected there
     original = services.runs.active_run_id
     services.runs.active_run_id = lambda _session_id: "run_fake"  # type: ignore[method-assign]
     try:
@@ -803,7 +792,7 @@ def test_sse_frames_durable_events_with_ids(bundle):
     assert "event: run_finished" in body
     assert body.endswith("\n\n")
 
-    # 第一帧的 data 是合法 JSON 且带 run_id / session_id / seq / type / data
+    # the first frame's data is valid JSON with run_id / session_id / seq / type / data
     first = body.split("\n\n")[0]
     lines = dict(
         line.split(": ", 1) for line in first.splitlines() if ": " in line
@@ -828,7 +817,7 @@ def test_sse_replays_after_last_event_id(bundle):
     assert lines[0] == "id: 3"
     assert "id: 2\n" not in response.text
 
-    # 显式 ?after= 优先于 header
+    # explicit ?after= wins over the header
     explicit = client.get(
         f"/api/runs/{run_id}/events", params={"after": 0}, headers={"Last-Event-ID": "2"}
     )
@@ -837,7 +826,7 @@ def test_sse_replays_after_last_event_id(bundle):
     assert client.get("/api/runs/run_nope/events").status_code == 404
 
 
-# ---------------- 工具状态判定单点 ----------------
+# ---------------- single point of tool-status classification ----------------
 
 
 def test_classify_tool_status_is_single_point(bundle):
@@ -873,7 +862,8 @@ def test_tool_status_reaches_the_wire(bundle):
 
 
 def test_child_tool_result_rides_the_wire_truncated():
-    """子运行的工具结果只能走这条线（它不落库、没有 durable 结果通道），父运行照旧只报长度。"""
+    """A child run's tool result travels only this wire (not persisted, no durable channel);
+    the parent's own results still report length only."""
     from avid.agent.events import TOOL_CALL_FINISHED, RunEvent
     from avid.web.schemas import SUBAGENT_CONTENT_CHARS, event_payload
 
@@ -903,7 +893,7 @@ def test_child_tool_result_rides_the_wire_truncated():
     assert "content" not in event_payload(parent, "s1")["data"]
 
 
-# ---------------- 静态与 SPA fallback（§4.3） ----------------
+# ---------------- static files and SPA fallback ----------------
 
 
 def test_spa_fallback_serves_index_but_missing_assets_are_404(sandbox):
@@ -918,16 +908,16 @@ def test_spa_fallback_serves_index_but_missing_assets_are_404(sandbox):
         base_url="http://127.0.0.1:8765",
     )
     try:
-        # 深链接回落到 SPA 外壳（前端路由接管）
+        # deep links fall back to the SPA shell (frontend routing takes over)
         deep = client.get("/settings")
         assert deep.status_code == 200 and "SPA" in deep.text
 
-        # 真实静态文件按原类型返回
+        # real static files come back with their own content type
         asset = client.get("/assets/app-abc123.js")
         assert asset.status_code == 200
         assert "javascript" in asset.headers["content-type"]
 
-        # 带扩展名但不存在 → 显式 404（不能让浏览器拿 HTML 当 JS）
+        # a missing asset with an extension is an explicit 404 (a browser must not get HTML)
         missing = client.get("/assets/stale-000.js")
         assert missing.status_code == 404
         assert missing.json()["error"]["code"] == "asset_not_found"
@@ -935,14 +925,14 @@ def test_spa_fallback_serves_index_but_missing_assets_are_404(sandbox):
         services.close()
 
 
-# ---------------- 阶段 22：用量快照 ----------------
+# ---------------- usage snapshots ----------------
 
 def test_branch_list_carries_persisted_usage(bundle):
-    """落盘的用量随分支列表回来：进会话、切会话、重启服务后都能看到。"""
+    """Persisted usage comes back with the branch list, surviving switches and restarts."""
     client, _ = bundle(chat=ScriptedChat(make_turn("答")))
     session_id = create_session(client).json()["id"]
 
-    # 还没跑过：null（界面显示「—」），不是一份零值报告。
+    # never run: null (the UI shows "-"), not a zero report
     fresh = client.get(f"/api/sessions/{session_id}/branches").json()["branches"][0]
     assert fresh["usage"] is None
 
@@ -953,10 +943,10 @@ def test_branch_list_carries_persisted_usage(bundle):
     assert wait_for(lambda: client.get(f"/api/runs/{run_id}").json()["status"] == "finished")
 
     run = client.get(f"/api/runs/{run_id}").json()
-    # 脚本模型的用量是 prompt=1 / completion=2 / total=3（support.make_turn）。
+    # scripted model usage is prompt=1 / completion=2 / total=3 (support.make_turn).
     assert run["usage"]["context"]["tokens"] == 1
     assert run["usage"]["cache"]["hit_ratio"] is None
-    # 没有 AVID_CONTEXT_WINDOW，模型名 test-model 也不在内置表里 → 没有分母，不猜占用率。
+    # no AVID_CONTEXT_WINDOW and test-model is not in the built-in table: no guessed utilization
     assert run["usage"]["context"]["window"] is None
     assert run["usage"]["context"]["utilization"] is None
 
@@ -966,7 +956,7 @@ def test_branch_list_carries_persisted_usage(bundle):
 
 
 def test_usage_is_per_branch_not_per_session(bundle):
-    """切换分支时看到的是那条链自己的读数；没跑过的分支是 null。"""
+    """Usage is per branch: switching shows that chain's own reading, a never-run branch is null."""
     client, _ = bundle(chat=ScriptedChat(make_turn("主线"), make_turn("分支上")))
     session_id = create_session(client).json()["id"]
 
@@ -983,7 +973,7 @@ def test_usage_is_per_branch_not_per_session(bundle):
     fork = client.post(
         f"/api/sessions/{session_id}/branches", json={"at": entries[-1]["entry_id"]}
     ).json()
-    assert fork["usage"] is None  # 新分支还没跑过
+    assert fork["usage"] is None  # the new branch has not run yet
 
     branches = {
         item["name"]: item

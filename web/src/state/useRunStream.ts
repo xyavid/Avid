@@ -1,19 +1,9 @@
 /**
- * 一次运行的生命周期 hook（发送 → 订阅 → 段落归并 → 终态收尾）。
- *
- * 阶段：idle → starting（POST run）→ running（SSE 订阅中）→ settling（收到终态事件，
- * 页面回拉 durable 后调 settle 回 idle）；error = 发送/订阅失败。
- *
- * 它持有的是**本次运行产出的段落**（`items`），不是整个会话的时间线：页面把
- * 这份段落并回会话历史（`timeline.mergeItems`），过程与收尾共用同一个渲染器。
- * 事件怎么变成段落全在 `timeline.applyEvent`（纯函数，按 entry_id / tool_call_id
- * 幂等——中途刷新附着会从 seq 0 重放，重复投递不能变成重复段落）。
- *
- * 收尾**不清 items**：清了就等于「过程一个样、最后另起一个样」，那正是这次要治的病。
- * 段落一直留到会话切换/刷新（那时页面按会话条目重建，live-only 段——思考与子 agent
- * 步骤——随之消失，见 timeline.ts 的注释）。
- *
- * 流异常断开：轮询 getRun 到终态（终端兜底），不无限重连。
+ * Lifecycle of one run: send → subscribe → merge items → settle. Phases: idle → starting (POST run)
+ * → running (SSE subscribed) → settling (terminal event received; the page refetches durable and
+ * calls settle) → idle; `error` = send or subscribe failure. Holds only this run's items — settle
+ * keeps them and the page merges them into history via `timeline.mergeItems`; a broken stream polls
+ * getRun to a terminal state instead of reconnecting forever.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -37,24 +27,24 @@ import type { DraftImage } from './imagePrep'
 
 export type RunPhase = 'idle' | 'starting' | 'running' | 'settling' | 'error'
 
-/** 合帧缓冲里「父运行」那一份的键：子运行的键是 `{task}\u0000{index}`。 */
+/** Frame-buffer key of the parent run; a sub-run's key is `{task}\u0000{index}`. */
 const PARENT_KEY = ''
 
-/** 一截待刷的流式增量：文本 + 首片到达的时间 + 它的来源（null = 父运行）。 */
+/** One pending streaming delta: text, first-piece arrival time, origin (null = parent run). */
 type PendingDelta = { text: string; ts: number; tag: { task: string; index: number } | null }
 
-/** 一条待决项：kind='approval' 等裁决、'question' 等回答（两者共用同一个界面槽）。 */
+/** One pending decision: kind='approval' wants a decision, 'question' an answer (one UI slot). */
 export type LiveApproval = {
   approvalId: string
   kind: 'approval' | 'question'
   tool: string
   arguments: string
   reason: string
-  /** 选择题的选项（空 = 自由回答）。 */
+  /** Choice options (empty = free-form answer). */
   options: string[]
 }
 
-/** 事件里的 arguments 可能是字符串也可能是对象：都念成人看的样子，别显示 [object Object]。 */
+/** Event arguments may be a string or an object: render both readably, never `[object Object]`. */
 function argumentsText(value: unknown): string {
   if (typeof value === 'string') return value
   if (value === null || value === undefined) return ''
@@ -65,7 +55,7 @@ function argumentsText(value: unknown): string {
   }
 }
 
-/** 事件帧：只读这四处；`ts` 用来算思考段的时长。 */
+/** Event frame: only these four fields are read; `ts` measures a reasoning block's duration. */
 type EventFrame = { type: string; ts: number; data?: Record<string, unknown> }
 
 export type RunStream = ReturnType<typeof useRunStream>
@@ -74,14 +64,14 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
   const [phase, setPhase] = useState<RunPhase>('idle')
   const [runId, setRunId] = useState<string | null>(null)
   const [items, setItems] = useState<TimelineItem[]>([])
-  // items 属于哪个会话：切走会话后它的段落不跟过去，切回来时按 entry_id 去重后重并。
+  // Which session items belong to: they do not follow a session switch, and switching
+  // back merges by entry_id.
   const [attachedSession, setAttachedSession] = useState<string | null>(null)
   const [approvals, setApprovals] = useState<LiveApproval[]>([])
-  // 每轮的用量快照（run_status 带，run_finished 再兜一次）：上下文环要吃它才"动态"——
-  // 落盘的那份只在本轮结束时刷新，运行中会一直停在上一轮。
+  // Per-round usage snapshot (run_status, then run_finished): keeps the context ring live.
   const [usage, setUsage] = useState<UsageReport | null>(null)
   const [error, setError] = useState<string | null>(null)
-  // 内核在 run_started 里记录的实际权限形态（normal/full）；null = 还没有这个事实。
+  // Actual permission form reported by run_started (normal/full); null = not known yet.
   const [runPermission, setRunPermission] = useState<RunPermission | null>(null)
 
   const runIdRef = useRef<string | null>(null)
@@ -89,17 +79,12 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
   sessionRef.current = attachedSession
   const subRef = useRef<{ abort: () => void } | null>(null)
   const settlingRef = useRef(false)
-  // delta 合帧：增量文本先进 ref，rAF 每帧至多刷一次 state——流式重渲染从
-  // 「每 token 两次」（正文/思考各一次）降到「每帧至多一次」，
-  // Markdown 的重解析随之合帧（它是按文本记忆化的，state 不变就不重算）。
-  // 哨兵用独立布尔而非帧句柄：句柄赋值发生在 rAF 注册之后，同步执行的
-  // 测试桩会把「已消费」的句柄覆盖回非空，卡死后续所有增量。
-  // 后台标签页 rAF 停发，另挂 1s 定时器兜底：增量最迟一秒落 state，
-  // 不丢不重，也不会在隐藏页里无界积压（评审 L5）。
-  //
-  // 合帧**按来源分组**（阶段 53：子运行也流式，两边的增量会交错到达）：
-  // 父运行的正文与每条子运行的正文各自成串——一面之词混进另一条时间线，
-  // 就是「子 agent 说的话算在主 agent 头上」这种脏数据。
+  // Deltas buffer in a ref and flush at most once per animation frame, collapsing markdown
+  // re-parsing with them. Background tabs get a 1s fallback timer (no frames there), so delta text
+  // lands within a second: never lost, never unbounded. Buffering is per origin — the parent and
+  // each sub-run form separate streams, so one run's text never mixes into another's timeline.
+  // The pending flag is a boolean, not the frame handle: a synchronous rAF stub would overwrite a
+  // consumed handle and stall every later delta.
   const pendingFrameRef = useRef(false)
   const frameHandleRef = useRef<number | null>(null)
   const fallbackTimerRef = useRef<number | null>(null)
@@ -142,7 +127,7 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
     frameHandleRef.current = requestAnimationFrame(flush)
     fallbackTimerRef.current = window.setTimeout(flush, 1000)
   }, [flushDeltas])
-  /** 任一来源的未刷帧增量作废（终态 / 重置）。 */
+  /** Invalidate every origin's unflushed deltas (terminal state / reset). */
   const discardPendingDeltas = useCallback(() => {
     pendingFrameRef.current = false
     if (frameHandleRef.current !== null) {
@@ -155,19 +140,17 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
     }
     pendingRef.current.clear()
   }, [])
-  /** 只作废**父运行**的未刷帧增量：父的持久消息到了，它那截流式残段就没有意义了；
-   *  子运行的增量还在路上，不能被一起丢掉。 */
+  /** Invalidate only the parent run's unflushed deltas: its persisted message supersedes them,
+   *  while a sub-run's deltas are still in flight and must not be dropped. */
   const discardParentDeltas = useCallback(() => {
     pendingRef.current.delete(PARENT_KEY)
   }, [])
   useEffect(() => () => discardPendingDeltas(), [discardPendingDeltas])
 
   /**
-   * 收尾：收订阅、清运行态，**保留 items**（时间线不跳变）；下次发送或切会话再收拾。
-   *
-   * `error` 不在这里清：运行失败（run_failed）的原因是这个运行唯一的痕迹——清掉它，
-   * 界面就只剩「用户那句话 + 什么都没发生」，那正是「run 突然停了」的观感。
-   * 它留到下一次 `send`（新一次运行）或 `attach`（换一条流）时才清。
+   * Settle: drop subscription and run state but keep `items` (the timeline must not jump).
+   * `error` is not cleared either — a run failure is that run's only trace — only the next `send`
+   * or `attach` clears it.
    */
   const settle = useCallback(() => {
     subRef.current?.abort()
@@ -180,9 +163,8 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
     setPhase('idle')
   }, [discardPendingDeltas])
 
-  /** 事件里带的用量快照：形状由内核保证（usage_report 一个出口），这里只挡非对象。
-   *  带 subagent 标记的事件是**子运行**的读数（它就是同一个事件名 + 标记）——子运行的
-   *  上下文占用与父运行不是一回事，拿它顶替父读数会让容量环跳来跳去。 */
+  /** Usage snapshot carried by an event (shape guaranteed by the kernel); a subagent-tagged one
+   *  belongs to a sub-run and must not replace the parent's reading. */
   const takeUsage = (data: Record<string, unknown>) => {
     if (data.subagent !== undefined) return
     const report = data.usage
@@ -194,8 +176,8 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
       const data = (e.data ?? {}) as Record<string, unknown>
       switch (e.type) {
         case 'run_started': {
-          // 两值口径：normal = 默认形态（毁灭级命令问一次）；full = 完全访问。
-          // 沙箱事实在 sandbox_state/sandbox_notes 里，界面暂不展示，只留权限这一条。
+          // normal = default (destructive commands ask once); full = full access.
+          // Sandbox facts live in sandbox_state / sandbox_notes and are not shown yet.
           if (data.permission === 'normal' || data.permission === 'full') {
             setRunPermission(data.permission)
           }
@@ -213,8 +195,8 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
           return
         }
         case 'assistant_message': {
-          // 父运行的持久消息取代增量累积（重放时 delta 已丢失，durable 是权威）；
-          // 子运行的增量不受影响——它们不属于这一条消息。
+          // The parent's persisted message supersedes accumulated deltas (on replay deltas are
+          // lost, durable is authoritative); a sub-run's deltas are unaffected.
           discardParentDeltas()
           setItems((cur) => applyEvent(cur, { type: e.type, ts: e.ts, data }))
           return
@@ -247,8 +229,8 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
           takeUsage(data)
           if (e.type === 'run_failed') {
             setError(String(data.message ?? '运行失败'))
-            // 失败段进时间线（带 entry_id，与重读会话后的那条对齐）；外面那行提示留一份，
-            // 覆盖"这条记账还没落盘"的窗口（事件与条目之间只差一次写盘）
+            // The failure item enters the timeline (with entry_id, aligned with the reloaded
+            // entry); the outer error line covers the window before that entry is written.
             setItems((cur) => applyEvent(cur, { type: e.type, ts: e.ts, data }))
           }
           setPhase('settling')
@@ -257,8 +239,8 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
           return
         }
         default: {
-          // 其余全交给归并：不相关的事件类型是空操作，返回同一个数组引用，
-          // React 也不会因为一次无关事件重渲染。带 usage 的事件（run_status）顺手收下。
+          // Everything else goes to the merge: unrelated types are no-ops returning the same array,
+          // so React does not re-render; usage-carrying events (run_status) are taken in passing.
           takeUsage(data)
           setItems((cur) => applyEvent(cur, { type: e.type, ts: e.ts, data }))
         }
@@ -274,7 +256,7 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
           const run = await getRun(id)
           if (['finished', 'failed', 'cancelled'].includes(run.status)) break
         } catch {
-          break // 连 getRun 都够不着：放弃轮询，用户刷新兜底
+          break // cannot even reach getRun: stop polling, a user refresh is the fallback
         }
         await new Promise((r) => setTimeout(r, 1500))
       }
@@ -319,7 +301,7 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
       setPhase('starting')
       setError(null)
       discardPendingDeltas()
-      // 换会话就另起一条：上一条会话的段落不跟着走。
+      // A different session starts a fresh list: the previous session's items do not follow.
       const optimistic = images.map((image) => ({
         source: 'local' as const,
         url: image.url,
@@ -336,17 +318,17 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
       try {
         const created = await startRun(sessionId, {
           prompt,
-          // 没有图就不带这个字段：纯文本请求的载荷与旧行为逐字一致
+          // Omit when there are no images: a text-only request must not carry an empty images field
           ...(images.length
             ? { images: images.map((image) => ({ name: image.name, data: image.data })) }
             : {}),
-          // 只在选了覆盖时才带 model：不带 = 服务端按设置解析（与旧行为逐字一致）
+          // Send model only when overridden; omitting it lets the server resolve from settings
           ...(model ? { model } : {}),
-          // 同理只在选了档位时才带：不带 = 这次请求不发这个参数
+          // Same for the level: omitting it means the parameter is not sent at all
           ...(effort ? { reasoning_effort: effort } : {}),
-          // 只在非主线时才带 branch：不带 = 服务端默认 main，载荷与旧行为逐字一致
+          // Send branch only when it is not main; main is the server default
           ...(branch && branch !== 'main' ? { branch } : {}),
-          // 完全访问的唯一凭据；默认形态不带这个字段。
+          // The only full-access credential; the default form does not send this field.
           ...(full ? { full_access_ack: true } : {}),
         })
         runIdRef.current = created.run_id
@@ -364,7 +346,7 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
   const attach = useCallback(
     (id: string) => {
       settle()
-      setError(null) // 换一条流：上一条的失败不再挂在界面上
+      setError(null) // a new stream: the previous one's failure no longer applies
       setItems([])
       setAttachedSession(sessionId)
       runIdRef.current = id
@@ -455,7 +437,7 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
     [],
   )
 
-  /** 回答一次提问：与裁决共用端点，载荷换 answer。 */
+  /** Answer a question: same endpoint as a decision, payload swaps to `answer`. */
   const answer = useCallback(async (approvalId: string, text: string) => {
     const id = runIdRef.current
     if (!id) return

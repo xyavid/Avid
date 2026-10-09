@@ -1,9 +1,6 @@
 /**
- * 时间线纯函数用例。
- *
- * 核心是那条不变量：**同一次运行，事件流逐条建出的段落与「重新读会话」建出的
- * 段落逐项同形**（live-only 段除外）。它守住「过程与收尾同一套渲染」——
- * 两边一旦漂移，收尾就会跳变，而这正是本阶段要治的病。
+ * Timeline pure-function cases. The core invariant: for one run, items built from the event stream
+ * and items rebuilt by reloading the session are item-by-item identical (live-only items aside).
  */
 
 import { describe, expect, it } from 'vitest'
@@ -35,7 +32,7 @@ function answerItem(entryId: string | null, text: string, ts: number | null = nu
   return { kind: 'assistant', entryId, text, streaming, ts }
 }
 
-/** 段落身份（与 timeline.ts 的 identity 同口径）：只给用例读。 */
+/** Item identity (same rule as `identity` in timeline.ts), for assertions only. */
 function identityOf(item: TimelineItem): string {
   return item.kind === 'tool' ? `tool:${item.callId}` : item.kind === 'reasoning' ? 'live' : `entry:${item.entryId}`
 }
@@ -50,7 +47,7 @@ function ev(type: string, ts: number, data: Record<string, unknown> = {}): Timel
 
 type RawCall = { id: string; name: string; args: string }
 
-/** 助手消息事件的载荷：与 svc 的 _message_sink 同形（entry_id + message）。 */
+/** Assistant-message event payload, same shape as svc's `_message_sink` (entry_id + message). */
 function assistantEvent(entryId: string, content: string, calls: RawCall[] = [], ts = 0) {
   return ev('assistant_message', ts, {
     entry_id: entryId,
@@ -86,9 +83,8 @@ function assistantEntry(seq: number, content: string, calls: RawCall[] = []): En
   })
 }
 
-/** 两条路径必须一致的那部分：live-only 段、只属于运行期的读数（工具耗时、流式标记），
- *  以及时间读数本身——live 吃事件 ts、重读吃条目 timestamp，同一个写入的两次取时钟，
- *  相差就是写盘那几毫秒，显示精度是秒，折叠行的用时不会因此换一个档。 */
+/** The part both paths must agree on: live-only items dropped, run-only readings (tool duration,
+ *  streaming flag) and raw timestamps excluded — those differ by disk-write latency only. */
 function durableShape(items: TimelineItem[]) {
   return items
     .filter((item) => item.kind !== 'reasoning')
@@ -146,7 +142,7 @@ describe('itemsFromEntries：会话条目 → 段落', () => {
 
     expect(items.map((i) => i.kind)).toEqual(['user', 'error', 'user'])
     expect(items[1]).toMatchObject({ kind: 'error', entryId: 'e2', text: '运行失败：请求超时' })
-    // 身份按条目 id：切会话回来时与重读会话的那条对齐，不重复
+    // identity by entry id: never duplicates when the session is reloaded
     expect(identityOf(items[1]!)).toBe('entry:e2')
   })
 
@@ -162,10 +158,10 @@ describe('itemsFromEntries：会话条目 → 段落', () => {
     ])
 
     expect(live.map((i) => i.kind)).toEqual(['user', 'error'])
-    // 展示句用内核给的 text（与落盘那条一字不差），不是原始 message
+    // the display sentence is the kernel's text (same as the persisted entry), not the raw message
     expect(live[1]).toMatchObject({ kind: 'error', entryId: 'e9', text: '运行失败：请求超时' })
 
-    // 同一事件重放一遍不翻倍（中途刷新附着靠这条）
+    // replaying the same event does not double it (a mid-run refresh relies on this)
     expect(
       replay(
         [ev('run_failed', 2, { code: 'llm_error', message: '请求超时', text: '运行失败：请求超时', entry_id: 'e9' })],
@@ -273,7 +269,7 @@ describe('applyEvent：事件 → 段落增量', () => {
     const items = replay([ev('user_message', 1, { entry_id: 'e1', message: { role: 'user', content: '嗨' } })], optimistic)
 
     expect(items).toHaveLength(1)
-    // 读数换成服务端那份：本地时钟只是发送到事件到达之间的临时值
+    // the reading becomes the server's: the local clock only bridges until the event lands
     expect(items[0]).toMatchObject({ kind: 'user', entryId: 'e1', text: '嗨', ts: 1 })
   })
 
@@ -294,13 +290,13 @@ describe('applyEvent：事件 → 段落增量', () => {
     expect(card.runs).toHaveLength(1)
     const [run] = card.runs
     expect(run).toMatchObject({ task: '前端改造', index: 0 })
-    // 子运行的段落列表：思考 → 正文 → 工具（带结果）——与父时间线同一套模型
+    // sub-run items: reasoning → text → tool (with result), same model as the parent timeline
     expect(
       run!.items.map((i) =>
         i.kind === 'tool' ? `${i.name}:${i.result}` : i.kind === 'reasoning' ? `思考:${i.text}` : i.text,
       ),
     ).toEqual(['思考:先看目录', '我看一眼。', 'read_file:export const a = 1'])
-    // 卡片折叠行的子步骤由 runs 派生（卡片 API 不变）
+    // the card's collapsed rows derive from runs (the card API is unchanged)
     expect(subagentSteps(card)).toEqual([
       { task: '前端改造', callId: 'child1', name: 'read_file', args: JSON.stringify({ path: '/w/x.tsx' }), status: 'ok' },
     ])
@@ -311,7 +307,7 @@ describe('applyEvent：事件 → 段落增量', () => {
     const items = replay([
       assistantEvent('e2', '派活。', [{ id: 'call_sub', name: 'subagent', args }], 1),
       ev('tool_call_started', 2, { tool: 'subagent', tool_call_id: 'call_sub', arguments: { tasks: JSON.parse(args).tasks } }),
-      // 父级的收尾先到（子运行全回来了），子运行的最后一截正文还在合帧缓冲里
+      // the parent finishes first (all sub-runs returned); the sub-run's last text is still buffered
       ev('tool_call_finished', 3, { tool: 'subagent', tool_call_id: 'call_sub', status: 'ok', duration_ms: 10 }),
       ev('assistant_delta', 4, { text: '结论：2 行。', subagent: { task: '甲', index: 0 } }),
     ])
@@ -320,9 +316,9 @@ describe('applyEvent：事件 → 段落增量', () => {
     if (card?.kind !== 'tool') throw new Error('期望第二段是 subagent 工具卡')
     expect(card.status).toBe('ok')
     expect(card.runs[0]!.items).toMatchObject([{ kind: 'assistant', text: '结论：2 行。' }])
-    // 批量结束那一刻子运行的流式正文收笔：面板里的游标不再闪
+    // when the batch ends, the sub-run's streaming text closes: the panel cursor stops blinking
     expect(card.runs[0]!.items[0]).toMatchObject({ streaming: false })
-    // 父时间线上不多出这一段
+    // the segment does not appear on the parent timeline
     expect(items.filter((i) => i.kind === 'assistant')).toHaveLength(1)
   })
 
@@ -353,7 +349,7 @@ describe('applyEvent：事件 → 段落增量', () => {
       ev('tool_call_denied', 2, { tool: 'glob', tool_call_id: 'c9', reason: '用户拒绝' }),
     ])
 
-    // 拒绝在界面上并入失败：重读会话时「被拒」只能按结果文案认，两侧口径必须一致。
+    // denial maps to failed: a reload can only read the result text, so both sides must agree
     expect(items[0]).toMatchObject({ kind: 'tool', name: 'glob', status: 'failed' })
   })
 })
@@ -396,7 +392,7 @@ describe('mergeItems：历史与本次运行的归并', () => {
 })
 
 describe('turnGroups：一次回话的分组与折叠判定', () => {
-  /** 段落的可读身份：持久段用 entry_id、工具用 call_id、思考段就写它的种类。 */
+  /** Readable item identity: entry_id for persisted items, callId for tools, kind for reasoning. */
   const ids = (list: TimelineItem[]) =>
     list.map((i) => (i.kind === 'tool' ? i.callId : i.kind === 'reasoning' ? 'reasoning' : i.entryId))
 
@@ -414,7 +410,7 @@ describe('turnGroups：一次回话的分组与折叠判定', () => {
     expect(groups[0]!.items).toHaveLength(4)
     expect(ids(groups[0]!.process)).toEqual(['e2', 'c1'])
     expect(groups[0]!.answer).toMatchObject({ entryId: 'e3', text: '结论是 avid。' })
-    // 收尾本身就是过程之后的那一段：折叠行落在用户段与收尾之间
+    // the closing follows the process: the folded row sits between user item and closing
     expect(groups[1]!.process).toEqual([])
     expect(groups[1]!.answer).toMatchObject({ entryId: 'e5' })
   })

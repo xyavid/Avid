@@ -9,8 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-# JSON Schema type to the Python expectation; bool is an int subclass and is excluded
-# separately, otherwise True would pass as a valid integer.
+# JSON Schema type to the Python expectation; bool is excluded separately since it subclasses int.
 _SCALARS: dict[str, type | tuple[type, ...]] = {
     "string": str,
     "integer": int,
@@ -22,12 +21,7 @@ _SCALARS: dict[str, type | tuple[type, ...]] = {
 
 
 def _type_name(value: Any) -> str:
-    """
-    Formats an argument failure in the one style that marks it as a protocol error.
-
-    Its prefix lets the model separate a wrong argument from a tool fault or a business
-    refusal.
-    """
+    """Names a Python value's JSON Schema type for the argument-error text."""
     if isinstance(value, bool):
         return "boolean"
     if isinstance(value, int):
@@ -46,11 +40,8 @@ def _type_name(value: Any) -> str:
 
 
 def bad_arguments(problem: str) -> str:
-    """
-    Validates one tool call's arguments against the parameters node sent to the model.
-
-    Returns None on success, else text the model can act on instead of an exception.
-    """
+    """Wraps one argument problem in the prefix that marks it as a protocol error, so the model
+    can tell it apart from a tool fault or a business refusal."""
     return f"参数错误：{problem}；请按工具 schema 修正后重试。"
 
 
@@ -112,8 +103,6 @@ def _check(spec: dict[str, Any], value: Any, path: str) -> str | None:
 def validate_arguments(
     parameters: dict[str, Any], arguments: dict[str, Any]
 ) -> str | None:
-    """Validates one tool call's arguments against the parameters node sent to the model.
-
-    Returns None on success, else text the model can act on instead of an exception.
-    """
+    """Validates one tool call's arguments against the parameters node sent to the model,
+    returning None on success or text the model can act on."""
     return _check(parameters, arguments, "")

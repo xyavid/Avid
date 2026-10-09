@@ -21,7 +21,7 @@ describe('Tabs（报告 §7.4：sliding pill 标签页）', () => {
     fireEvent.click(screen.getByRole('tab', { name: '频道' }))
     expect(onChange).toHaveBeenCalledWith('频道')
 
-    // 滑块已渲染并带位移样式（jsdom 无布局，宽度为 0 也应写出 transform）
+    // the pill is rendered with a transform (jsdom has no layout; zero width still writes it)
     const pill = document.querySelector('[data-testid="tabs-pill"]') as HTMLElement
     expect(pill).toBeTruthy()
     expect(pill.style.transform).toContain('translateX')

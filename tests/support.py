@@ -1,7 +1,7 @@
-"""svc / web 测试共用的脚本化模型与等待工具。
+"""Shared scripted model and wait helpers for the svc and web test families.
 
-放在 ``tests/`` 根下的普通模块（pytest 会把测试目录放进 ``sys.path``），这样
-每个测试文件都能 ``from support import ...``，不必各自复制一份 FakeChat。
+A plain module in ``tests/`` (pytest puts the test directory on ``sys.path``) so every test file
+can ``from support import ...``.
 """
 
 from __future__ import annotations
@@ -36,10 +36,8 @@ def make_turn(
     )
 
 
-# 占位参数必须**能过 schema 校验**：参数校验收口到 `execute_one` 之后（见
-# `tools/validate.py`），"{}" 这类占位会在工具执行前就被拒，测试看到的就不是它想验证
-# 的那条路径了。这张表由 `test_tools_contract.py::test_placeholder_args_stay_schema_valid`
-# 钉住与注册表同步。
+# Load-bearing constraint: placeholder args must pass schema validation (validation sits past
+# execute_one, see tools/validate.py), kept in sync with the registry by test_tools_contract.py.
 PLACEHOLDER_ARGS: dict[str, str] = {
     "read_file": '{"path": "a.txt"}',
     "write_file": '{"path": "a.txt", "content": "x"}',
@@ -57,7 +55,7 @@ PLACEHOLDER_ARGS: dict[str, str] = {
 
 
 def tool_call(name: str, arguments: str | None = None, call_id: str = "call_1") -> dict:
-    """构造一次工具调用；不传参数时按工具名取一份 schema 合法的占位参数。"""
+    """Build one tool call; without arguments, use the schema-valid placeholder."""
     if arguments is None:
         arguments = PLACEHOLDER_ARGS.get(name, "{}")
     return {
@@ -68,7 +66,7 @@ def tool_call(name: str, arguments: str | None = None, call_id: str = "call_1") 
 
 
 class ScriptedChat:
-    """按顺序返回预设轮次。多要一轮就报错——测试里那是 bug，不该静默。"""
+    """Return preset turns in order; asking for an extra turn raises (a test bug)."""
 
     def __init__(self, *turns: Turn) -> None:
         self.turns = list(turns)
@@ -83,7 +81,7 @@ class ScriptedChat:
 
 
 class RecordingTools:
-    """最小工具注册表：记录调用，不真的碰磁盘或 shell。"""
+    """Minimal tool registry: records calls, never touches disk or shell."""
 
     def __init__(self, results: dict[str, str] | None = None) -> None:
         self.calls: list[tuple[str, dict]] = []
@@ -109,18 +107,16 @@ def wait_for(predicate: Callable[[], bool], timeout: float = 5.0) -> bool:
     return False
 
 
-#: 运行没走完的状态里，属于**仪器或配置**问题的那几个（不是「模型能力不够」）。
-#: 真模型评测必须把 `llm_error` 也算进这类：否则一次 401 会让 36 次运行全红，
-#: 而测试仍然绿——「全红但绿」比直接失败更危险。
+#: Terminal statuses that mean instrumentation/config trouble, not model capability. Real-model
+#: evals must count `llm_error` here, or one 401 turns every run red while the tests stay green.
 INFRA_STATUSES = ("error", "llm_error")
 
 
 def real_config_or_skip():
-    """真模型评测用的模型配置。
+    """Model config for real-model evals.
 
-    `tests/conftest.py` 的 `model_env` 是 autouse 的，会给**每个**测试种一份
-    `test-key` / `test-model` 的 BYOK 配置。那对 eval 是致命的：运行会全部 401
-    （实测踩到过一次），所以这里显式挡一道——缺配置跳过，拿到夹具的假配置直接失败。
+    conftest's autouse ``model_env`` seeds a fake test-key/test-model config for every test,
+    which would 401 every eval run; a missing config skips, the fixture's fake config fails.
     """
     from avid.providers.byok import resolve_chat
     from avid.providers.config import ConfigError
@@ -138,7 +134,7 @@ def real_config_or_skip():
 
 
 def assert_no_infrastructure_failures(run_set: Any) -> str:
-    """断言没有仪器/配置级失败，返回报表文本供打印。"""
+    """Assert no instrument/config-level failures; returns the report text for printing."""
     summary = run_set.summary()
     broken = [item for item in run_set.results if item.status in INFRA_STATUSES]
     assert not broken, summary + "\n仪器或配置出错：\n" + "\n".join(
@@ -156,15 +152,11 @@ def wait_terminal(record: Any, timeout: float = 5.0) -> bool:
 
 
 def wait_handle_released(services: Any, session_id: str, timeout: float = 5.0) -> None:
-    """等运行线程把会话句柄交还。
+    """Wait for the run thread to release the session handle.
 
-    `record.terminal` 只说明"注册表已定终态"，而句柄是运行线程**紧接着**才交还的：
-    终态事件之后还有 ``finally``（弹注册表、关句柄）。测试要自己 ``repo.open`` 直读
-    文件时必须等这一条，否则会撞上 ``SessionAlreadyOpenError``——服务端读路径不走
-    这条路（``SessionService._session`` 用"活动句柄回退 + 句柄锁"），所以它不受影响。
-
-    这条竞态在阶段 22 之前就存在，只是窗口窄到看不出来；终态路径多了一次会话写入
-    之后稳定复现（HEAD 10/10 通过、改动后约 70% 失败），于是把同步条件补对。
+    ``record.terminal`` only means the registry settled; the handle is released in the
+    ``finally`` right after, so tests that ``repo.open`` the file directly must wait or hit
+    ``SessionAlreadyOpenError`` (the server read path does not: it uses a handle fallback).
     """
     assert wait_for(
         lambda: services.runs.active_run_id(session_id) is None, timeout
@@ -172,7 +164,7 @@ def wait_handle_released(services: Any, session_id: str, timeout: float = 5.0) -
 
 
 def collect(services: Any, run_id: str, after: int = 0, deltas: bool = False) -> list:
-    """把订阅到的帧收完（跳过心跳）。运行结束时生成器会自然结束。"""
+    """Drain subscribed frames (heartbeats skipped); the generator ends when the run does."""
     return [
         event
         for event in services.runs.subscribe(run_id, after=after, deltas=deltas)
@@ -181,10 +173,10 @@ def collect(services: Any, run_id: str, after: int = 0, deltas: bool = False) ->
 
 
 def create_session(client: Any, **fields: Any):
-    """经 HTTP 新建会话——**总是带上工作区**。
+    """Create a session over HTTP, always with a workspace.
 
-    建会话必须显式指定归属，所以测试也要先问服务端"这个进程绑定了哪个工作地点"
-    （`GET /api/workspaces` 的第一项就是它，`is_default=true`），再显式传回去。
+    Sessions must name their ownership, so tests first ask the server which workspace it is
+    bound to (``GET /api/workspaces``, the entry with ``is_default=true``) and pass that back.
     """
     listed = client.get("/api/workspaces").json()["workspaces"]
     assert listed, "服务端必须至少绑定一个工作地点"
@@ -193,7 +185,7 @@ def create_session(client: Any, **fields: Any):
 
 
 def bound_workspace(services: Any) -> str:
-    """进程绑定的工作区 id（测试里的"工作地点"）。"""
+    """The workspace id this process is bound to."""
     return services.workspaces.default.id
 
 
@@ -202,10 +194,9 @@ def new_session(services: Any, name: str | None = None) -> str:
 
 
 def run_loop(messages, *, on_message=None, ask=None, on_event=None, state=None, **spec_kwargs):
-    """旧 ``agent_loop`` 的测试入口：同一 kwarg 面，落到 ``RunSpec.resolve`` + ``Run``。
+    """Test entry point with the old ``agent_loop`` kwargs, backed by ``RunSpec`` + ``Run``.
 
-    loop.py 已删除（阶段 41 统一到 Run）；需要最终文本的用例拿返回值，
-    需要结束原因的用例直接用 ``Run``（返回 ``RunOutcome``）。
+    Returns the final text; callers needing the stop reason use ``Run`` directly (``RunOutcome``).
     """
     from avid.agent.run import Run
     from avid.agent.spec import RunSpec

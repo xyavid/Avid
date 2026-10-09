@@ -81,7 +81,7 @@ def build_request(
         request["max_tokens"] = max_tokens
     if tools:
         request["tools"] = list(tools)
-    # 推理强度：OpenAI 兼容端点的标准字段（不认它的端点会忽略或报参数错，那是端点的选择）
+    # Reasoning effort is the standard field here; endpoints unaware of it ignore or reject it.
     if config.reasoning_effort:
         request["reasoning_effort"] = config.reasoning_effort
     # BYOK passthrough (routing params etc.) merges last: an explicit override is deliberate.

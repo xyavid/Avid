@@ -1,6 +1,6 @@
-"""Tool Broker 与回答者：动作事实的归一化、目标识别、风险分类。
+"""Tool broker and answerer: action normalisation, target detection, risk classification.
 
-裁决本身在 ``test_policy_engine.py``；这里只回答"参数被读成了什么"。
+The verdict itself lives in ``test_policy_engine.py``; this file only covers how arguments are read.
 """
 
 import io
@@ -55,7 +55,7 @@ ALLOWED_COMMANDS = [
 ]
 
 
-# ---------- 第 1 层：硬拒绝（ADMIN 里最硬的一档） ----------
+# ---------- layer 1: hard denial (the strongest ADMIN tier) ----------
 
 
 @pytest.mark.parametrize("command", DENIED_COMMANDS)
@@ -77,11 +77,11 @@ def test_non_dict_arguments_do_not_crash_the_gate():
     assert hard_deny("bash", None) is None
 
 
-# ---------- 风险分类与目标识别 ----------
+# ---------- risk classification and target detection ----------
 
 
 def test_danger_categories_cover_every_pattern():
-    """每一类危险都能被 ``danger_reason`` 认出来（表与代码一一对应）。"""
+    """Every danger category is recognised by ``danger_reason``; table and code stay in step."""
     samples = {
         "提权": "sudo ls",
         "递归或强制删除": "rm -rf build/",
@@ -138,7 +138,7 @@ def test_broker_scans_bash_targets_heuristically(sandbox):
 
 
 def test_broker_marks_write_commands_as_both_operations(sandbox):
-    """bash 分不清读还是写时按两个口径都查——宁可多问一次，也不漏一条写禁令。"""
+    """When bash cannot be told read from write both are checked, so no write ban is missed."""
     action = brokerize("bash", {"command": "echo x > a.txt"}, root=str(sandbox))
     assert action.operations == ("write", "read")
 
@@ -201,7 +201,7 @@ def test_nested_command_is_never_safe_auto(sandbox):
 
 
 
-# ---------- 回答者（轻量化后的默认形态） ----------
+# ---------- answerer ----------
 
 
 def test_ordinary_calls_skip_the_answerer():
@@ -231,12 +231,12 @@ def test_destructive_commands_ask_and_fail_closed_without_a_channel():
 
     assert check_permission("bash", {"command": "rm -rf /"}, ask=ask) is True
     assert asked
-    # 没有询问通道（非交互路径没传 ask）→ 确认不可能发生，直接拒
+    # no ask channel (non-interactive callers pass none): confirmed impossible, so deny
     assert check_permission("bash", {"command": "rm -rf /"}) is False
 
 
 def test_ask_user_needs_two_yes(monkeypatch):
-    """二次确认：第一次 yes 只推进到第二次询问，两次都 yes 才通过。"""
+    """Double confirmation: the first yes only reaches the second prompt; both must be yes."""
     monkeypatch.setattr("sys.stdin", io.StringIO("y\ny\n"))
 
     assert permission.ask_user("bash", {"command": "rm -rf /"}, "删除根目录或家目录") is True
@@ -260,7 +260,7 @@ def test_ask_user_denies_on_eof(monkeypatch):
     assert permission.ask_user("bash", {"command": "rm -rf /"}, "删除根目录或家目录") is False
 
 
-# ---------- auto_approve（--yes） ----------
+# ---------- auto_approve (--yes) ----------
 
 
 def test_auto_approve_answers_everything_ordinary():
@@ -270,7 +270,7 @@ def test_auto_approve_answers_everything_ordinary():
 
 
 def test_auto_approve_answers_the_destructive_question():
-    """``--yes`` 只换回答者：毁灭级的询问被代答「是」，于是它照常执行。"""
+    """``--yes`` swaps the answerer only: the destructive prompt is answered yes, so it runs."""
     assert auto_approve("bash", {"command": "rm -rf /"}) is True
 
 
@@ -279,20 +279,17 @@ def test_auto_approve_never_overrides_credential_refusal():
     assert auto_approve("read_file", {"path": "~/.aws/credentials"}) is False
 
 
-# ---------- 运行级 --yes ----------
+# ---------- run-level --yes ----------
 
 
 def test_permission_holds_no_hidden_run_state():
-    """免审批开关由 RunState 显式传入，模块里不该再留隐式状态。
-
-    ContextVar 版本在子线程里会静默失效；显式传参传不过去会立刻报错。
-    """
+    """The bypass switch comes from RunState explicitly; implicit module state fails in threads."""
     assert not hasattr(permission, "RUN_AUTO_APPROVE")
     assert not hasattr(permission, "bind_auto_approve")
 
 
 def test_concurrent_approval_prompts_are_serialised(monkeypatch):
-    """并行 subagent 会同时来要审批，而终端只有一个——提示不能互相穿插。"""
+    """Parallel subagents ask at once and there is one terminal: prompts must not interleave."""
     events = []
 
     class SlowStdin:
@@ -317,5 +314,5 @@ def test_concurrent_approval_prompts_are_serialised(monkeypatch):
     for thread in threads:
         thread.join()
 
-    # 每个 ask_user 连问两次（二次确认），两个线程的 4 次读入两两不穿插。
+    # each ask_user prompts twice, so the two threads make 4 non-interleaved reads
     assert events == ["start", "end"] * 4

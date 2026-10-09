@@ -1,22 +1,8 @@
-"""BYOK 设置端点：读整份配置、整体保存、两步连通校验、重置回落。
+"""BYOK settings endpoints: read the whole config, save it wholesale, run a two-step connectivity
+check and drop both files on reset.
 
-- GET /api/settings/byok：providers + bindings + 每家的 key_set；密钥明文**只入不出**，
-  任何响应都不回传。这是模型连接的唯一来源——没有配置时运行会报 config_error。
-- PUT /api/settings/byok：整体保存。载荷里的 api_key（只入）剥出写进 secrets.json
-  （按 provider id 存；鉴权隐式：有密钥就按协议标准头发送），validate 不过就不落盘
-  （invalid_request），也不会留下半份密钥。
-- POST /api/settings/byok/test：对载荷里的提供商+模型跑两步探测（真请求：一次
-  max_tokens=1 + 一次工具冒烟）；密钥走载荷，不读也不写密钥文件。
-- DELETE /api/settings/byok：删配置与密钥两份文件（之后运行会报「还没有模型配置」）。
-
-生效路径：`resolve_chat` 每次运行都重读文件，保存后对下一条消息立即生效，无需重启。
-
-会话目录（阶段 56）另有两个端点：
-
-- GET /api/settings/sessions：会话目录的当前值、默认值与生效来源；
-- PUT /api/settings/sessions：改目录（就地建好、写 settings.json、解绑缓存仓库）。
-  只改「新会话写哪」，不搬已有会话——搬数据是 `avid session migrate` 的事。
-  环境变量 AVID_SESSIONS_DIR 在时界面只读（它赢过配置文件）。
+This is the only source of model connections, and the plaintext key is write-only — it never rides
+back in any response and an invalid config never leaves half a key on disk.
 """
 
 from __future__ import annotations
@@ -88,7 +74,7 @@ def _provider_out(provider: ProviderDecl, secrets: dict[str, str]) -> ByokProvid
         headers=dict(provider.headers),
         extra_body=dict(provider.extra_body),
         enabled=provider.enabled,
-        # ModelDecl → ByokModel；逐字段搬，保持「密钥不落配置」的边界。
+        # Field-by-field ModelDecl -> ByokModel mapping keeps the key out of the config.
         models=[
             ByokModel(
                 id=m.id,
@@ -133,8 +119,7 @@ def put_byok_settings(body: ByokSettingsIn) -> ByokSettingsOut:
         providers[item.id] = _to_decl(item)
     config = ByokConfig(providers=providers, bindings={"chat": body.bindings.get("chat")})
 
-    # 先 validate 并落盘配置；成功后才把只入的 api_key 写进密钥文件，
-    # 这样非法配置不会留下半份密钥。
+    # Save the validated config, then the write-only key, so a bad config leaves no partial key.
     try:
         byok.save_byok(config)
     except ConfigError as exc:
@@ -151,7 +136,7 @@ def put_byok_settings(body: ByokSettingsIn) -> ByokSettingsOut:
 
 @router.post("/settings/byok/test", response_model=ByokTestOut)
 def post_byok_test(body: ByokTestIn) -> ByokTestOut:
-    """两步连通校验；针对请求载荷而不是已保存的配置，保存前就能测。"""
+    """Two-step connectivity check against the payload, so it can run before the config is saved."""
     provider = _to_decl(body.provider)
     report = verify_provider(provider, body.model_id, secret=body.provider.api_key)
     return ByokTestOut(
@@ -177,13 +162,13 @@ def _sessions_out() -> SessionsDirOut:
         dir=str(userdirs.sessions_dir().expanduser()),
         default_dir=str(userdirs.default_sessions_dir()),
         source=source,
-        # 环境变量赢过文件：那两栏在界面上就是只读的，改文件也不生效。
+        # The env var beats the file, so the UI shows those fields read-only.
         editable=source != "env",
     )
 
 
 def _prepare_sessions_dir(raw: str) -> Path:
-    """把界面给的路径变成可用的会话目录：要绝对路径，就地建好。"""
+    """Turns a UI-supplied path into a usable session directory: absolute only, created in place."""
     text = raw.strip()
     path = Path(text).expanduser()
     if not path.is_absolute():
@@ -204,13 +189,15 @@ def get_sessions_settings() -> SessionsDirOut:
 
 @router.put("/settings/sessions", response_model=SessionsDirOut)
 def put_sessions_settings(request: Request, body: SessionsDirIn) -> SessionsDirOut:
-    """只改「新会话写哪」：目录就地建好、写进设置文件、解绑缓存仓库；已有会话不动。"""
+    """Changes only where new sessions are written: create the directory, persist it and rebind
+    cached repos, leaving existing sessions untouched.
+    """
     if userdirs.sessions_dir_source() == "env":
         raise InvalidRequest(
             f"环境变量 {userdirs.SESSIONS_DIR_ENV} 已经定了会话目录，写配置也不生效；"
             "先去掉那个环境变量再在这里改。"
         )
-    # None 值 = 删掉这个键（回落默认），所以这里允许 None。
+    # A null value drops the key and falls back to the default, hence the None case below.
     patch: dict[str, str | None]
     if body.dir.strip():
         target = _prepare_sessions_dir(body.dir)
@@ -221,8 +208,8 @@ def put_sessions_settings(request: Request, body: SessionsDirIn) -> SessionsDirO
         userdirs.write_settings(patch)
     except OSError as exc:
         raise InvalidRequest(f"设置写不进 {userdirs.settings_path()}（{exc}）") from exc
-    # 仓库按工作区缓存着：不重新绑定的话，下一条消息还会写进旧目录。
-    # 有活动 run 时这一步会拒绝（409 session_busy）——见 Services.rebind_session_store。
+    # Cached repos would keep writing to the old directory without this rebind.
+    # An active run refuses with 409 session_busy; see Services.rebind_session_store.
     current_services(request).rebind_session_store()
     return _sessions_out()
 

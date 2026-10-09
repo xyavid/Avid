@@ -1,37 +1,9 @@
-"""Context 组装：一张声明表（CONTEXT_MAP）+ 一个装配引擎，决定模型每轮看到什么。
+"""Context assembly: what the model sees each round, from the CONTEXT_MAP declaration table plus the
+engine that renders it.
 
-## 请求的三部分
-
-- **system**：frozen 块首轮拼接后逐字节冻结（结构上保住 provider 前缀缓存），
-  外加 UserPromptSubmit hook 的 injected 文本；
-- **messages**：transcript 历史（可被压缩阶梯改写，见 compaction.py）+ 一条每轮
-  重建的 tail 便签（TAIL_HEADER 头 + per_round 块）；tail 永不写入 transcript；
-- **tools**：本次运行的 schema 数组，每轮不变。
-
-## 块清单（CONTEXT_MAP，声明顺序即渲染顺序）
-
-| kind          | 去哪   | 生命周期 | 上限        | 数据来源 |
-|---------------|--------|----------|-------------|----------|
-| instructions  | system | frozen   | —           | 调用方传入，或 prompt.DEFAULT_INSTRUCTIONS |
-| environment   | system | frozen   | —           | 工作目录 / 运行时 / 日期 / 本次工具名 |
-| bootstrap     | system | frozen   | 16,000 字符 | 工作区 AGENTS.md（缺失即整块缺席） |
-| skill_always  | system | frozen   | 16,000 字符 | always 技能全文（单篇 8k，超限按名字序跳过） |
-| skill_catalog | system | frozen   | —           | 技能目录（name: description 行） |
-| plan          | tail   | per_round| —           | TODO（无计划即整块缺席） |
-| run_state     | tail   | per_round| —           | 轮次 / 工具调用 / 被拒 / 压缩计数 |
-
-扩展点：`register_block`（追加整条声明）或 `register_source`（替换已有 kind 的
-文本源）。压缩阶梯在 compaction.py：compose() 每轮先跑一遍，再装配。
-
-## 缓存纪律（KV-cache 排序，CONTEXT_MAP 的排序依据）
-
-固定的、重复出现的块放前面，易变的放最后——frozen 块拼接出的 system 前缀
-逐字节稳定，是缓存命中的部分。唯一允许的例外是 tail 便签：运行状态这类
-per_round 内容按功能原理必须贴近对话末尾（锚定注意力），它们也确实只出现
-在 messages 的最后一条里。新增块时按同一条纪律选 section/stability：内容
-一次定型选 frozen、每轮变化选 per_round 且要能回答"为什么它必须在末尾"。
-压缩阶梯改写 transcript 中段会击穿该点之后的缓存——那是 compaction.py 的
-频率/幅度权衡（clear_at_least 语义），不是组装层的排序问题。
+Frozen blocks (instructions, environment, workspace AGENTS.md, skills) are joined once and stay
+byte-stable to keep the provider prefix cache; the per-round blocks (plan, run state) join a tail
+note rebuilt every round and never written to the transcript.
 """
 
 from __future__ import annotations
@@ -53,43 +25,39 @@ from .transcript import Transcript, message_chars
 
 logger = logging.getLogger("avid.agent.context")
 
-#: 块的去向：system 进冻结前缀，tail 进每轮重建的便签（位置与生命周期一一对应）。
+#: Block destination: system joins the frozen prefix, tail joins the per-round note.
 SYSTEM = "system"
 TAIL = "tail"
 
-#: 块的生命周期：frozen 首轮定型，per_round 每轮重新收集。
+#: Block lifecycle: frozen is fixed by the first compose, per_round is collected every round.
 FROZEN = "frozen"
 PER_ROUND = "per_round"
 
-#: 内置块 kind；register_block/register_source 可扩展新块，无需改这里。
+#: Built-in block kinds; register_block / register_source extend the table, so this list is closed.
 INSTRUCTIONS = "instructions"
 ENVIRONMENT = "environment"
 BOOTSTRAP = "bootstrap"
 SKILL_ALWAYS = "skill_always"
 SKILL_CATALOG = "skill_catalog"
-INJECTED = "injected"  # 非声明块：UserPromptSubmit 注入的 system 文本
+INJECTED = "injected"  # not a declared block: system text injected by UserPromptSubmit
 PLAN = "plan"
 RUN_STATE = "run_state"
 
-# 固定 tail 头，让模型与日志都能分辨这不是用户输入。
+# Fixed tail header, so model and logs can both tell this is not user input.
 TAIL_HEADER = "[上下文] 以下是本次请求附带的运行时上下文，不是用户输入。"
 
 
 @dataclass(frozen=True)
 class BlockSpec:
-    """一个上下文块的完整声明：去哪、何时定型、上限多少、文本从哪来。
-
-    source 拿到 ContextManager（读 state / instructions / tool_names），返回正文
-    文本；返回 None 表示本块缺席。标题渲染为 `## {title}\\n正文`，title 为 None
-    时不加标题（instructions 用）。
-    """
+    """Full declaration of one context block: section, stability, cap and text source, where None
+    from the source leaves the block out and a None title renders the body without a heading."""
 
     kind: str
     title: str | None
     section: str
     stability: str
-    # None = 不设上限；int = 正文字符数；str = ContextBudget 的字段名（按运行预算解析）。
-    # 上限约束正文，标题不计入。
+    # None = no cap; int = body characters; str = a ContextBudget field name resolved per run.
+    # The cap constrains the body, headings excluded.
     cap: "int | str | None"
     source: Callable[["ContextManager"], str | None]
 
@@ -124,7 +92,7 @@ class ComposedRequest:
 
 
 class ContextManager:
-    """每轮调用的装配引擎：块清单见 CONTEXT_MAP，压缩编排委托 compaction.py。"""
+    """Assembly engine for every round; blocks come from CONTEXT_MAP, compaction is not here."""
 
     def __init__(
         self,
@@ -141,14 +109,15 @@ class ContextManager:
         self.transcript = transcript
         self.state = state
         self.config = config
-        # 调用方的指令覆盖（评测 / 子代理各自携带）；None 回落到默认词表。
+        # Caller-supplied instructions (a subagent or a test arm); None falls back to the default.
         self.instructions = (
             instructions if instructions is not None else prompt.DEFAULT_INSTRUCTIONS
         )
         self.tool_names = list(tool_names)
         self.budget = budget or ContextBudget()
         self.summarize = summarize
-        # ④/⑤ 替换历史后的落盘钩子（summary 消息, keep 条数）；不接则压缩只在内存生效。
+        # Callback after the history is replaced (summary message, kept tail size); without it the
+        # compaction stays in memory only.
         self.on_compaction = on_compaction
         self._specs: dict[str, BlockSpec] = {spec.kind: spec for spec in CONTEXT_MAP}
         self._extra: list[BlockSpec] = []
@@ -156,17 +125,15 @@ class ContextManager:
         self._system: str | None = None
         self._system_parts: dict[str, int] = {}
 
-    # ---- 扩展点 ----
+    # ---- extension points ----
 
     def register_block(self, spec: BlockSpec) -> None:
-        """追加一条自定义块声明。"""
+        """Append a custom block declaration."""
         self._extra.append(spec)
 
     def register_source(self, kind: str, source: Callable[[], str | None]) -> None:
-        """替换已有 kind 的文本源；kind 不在声明表里则追加为 frozen system 块。
-
-        便捷源的签名是零参函数；声明表里的 source 都拿 ContextManager。
-        """
+        """Replace the text source of one kind, or append an unknown kind as a frozen system block;
+        a convenience source takes no arguments, unlike one declared in the table."""
         if kind in self._specs:
             self._specs[kind] = replace(self._specs[kind], source=lambda mgr: source())
             return
@@ -181,7 +148,7 @@ class ContextManager:
             )
         )
 
-    # ---- 各内置块的正文 ----
+    # ---- built-in block bodies ----
 
     def _environment_body(self) -> str:
         # Deferred import: the tools package pulls in agent.skills, so a top-level
@@ -260,7 +227,7 @@ class ContextManager:
             f"压缩 {state.compactions} 次。"
         )
 
-    # ---- 装配 ----
+    # ---- assembly ----
 
     def _ordered_specs(self) -> list[BlockSpec]:
         return [*self._specs.values(), *self._extra]
@@ -269,7 +236,7 @@ class ContextManager:
         body = spec.source(self)
         if body is None or not body.strip():
             return None
-        # 上限约束正文（标题不计入），与旧语义一致：截断发生在内容上，块头保留。
+        # The cap constrains the body, headings excluded: truncation hits content, the header stays.
         cap = getattr(self.budget, spec.cap) if isinstance(spec.cap, str) else spec.cap
         if cap is not None and len(body) > cap:
             body = body[:cap] + prompt.TRUNCATION_NOTE
@@ -346,7 +313,7 @@ class ContextManager:
             reports=reports,
         )
 
-    # ---- 压缩：委托给 compaction.py 的单一通路（阈值触发 / force 兜底） ----
+    # ---- compaction: delegated to the single path in compaction.py ----
 
     def _compact(self) -> list[CompactReport]:
         report = compact.run_compaction(
@@ -360,7 +327,7 @@ class ContextManager:
         return [report] if report is not None else []
 
     def reactive(self) -> CompactReport | None:
-        """溢出兜底：同一条压缩通路，force 跳过阈值与每运行一次的守护。"""
+        """Overflow fallback: the same compaction path with force, skipping both guards."""
         return compact.run_compaction(
             transcript=self.transcript,
             state=self.state,
@@ -372,8 +339,8 @@ class ContextManager:
         )
 
 
-#: 声明顺序即渲染顺序，也是缓存纪律的落点：稳定的在前（instructions 最静态），
-#: 易变的（tail 两块）在 messages 末尾。来源方法长在 ContextManager 上，这里只做声明。
+#: Declaration order is render order and the cache discipline: stable blocks first, the two
+#: per-round blocks last in the messages tail. Sources live on ContextManager; this table declares.
 CONTEXT_MAP: list[BlockSpec] = [
     BlockSpec(
         kind=INSTRUCTIONS,

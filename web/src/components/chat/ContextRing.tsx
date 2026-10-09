@@ -1,17 +1,9 @@
 /**
- * 上下文容量环（阶段 52）：输入区左簇里的一只圆环 + 点开的明细弹层。
- *
- * 为什么是环而不是一行读数：占用率是**运行中每一轮都在变**的数（每轮模型调用都会刷新
- * usage），它值得一个一眼可读的形状——环满到什么程度、变红没有，扫一眼就知道；
- * 精确到小数点的数留给点开的明细。
- *
- * 读数来源：运行中吃 `run_status` / `run_finished` 事件里的 usage 快照（每轮刷新，
- * 所以环是动态的），收尾后与分支落盘的那份对齐（`state/useRunStream.ts`）。
- * 没有读数一律显示「—」，环画成空轨——「未上报」与「确实是 0」不是一回事。
- *
- * 明细的形状对着参考界面：容量标题 + 用的/总量（占用率）+ 容量条 + 分块构成 +
- * 底部的平均缓存命中率。分块只有三类（内核只按 系统提示词 / 系统工具 / 消息 记账，
- * 见 `agent/state.py` 的 `_split_context`），不编没有的维度。
+ * Context-capacity ring in the composer's left cluster, with a click-open breakdown.
+ * Readings come from the `run_status` / `run_finished` usage snapshots (per-round while
+ * running, the persisted one after); a missing reading shows "—" and an empty track — not
+ * reported is not the same as 0 — and the three parts are all the kernel accounts for
+ * (`_split_context` in `agent/state.py`).
  */
 
 import { useState } from 'react'
@@ -19,10 +11,9 @@ import { useState } from 'react'
 import type { UsageReport } from '../../api/types'
 import { cx } from '../../ui/cx'
 
-/** 环画到多满就该警觉：越过这条线换 danger 色（纸本语言里没有第三档黄）。 */
+/** Utilization above which the ring turns danger. */
 const DANGER_AT = 0.85
 
-// 没有胶囊托底，环自己就是控件——比胶囊里的图标大一档才立得住。
 const RING_SIZE = 20
 const RING_STROKE = 3
 
@@ -31,7 +22,6 @@ function ratioOf(usage: UsageReport | null): number | null {
   return ratio === null || ratio === undefined ? null : Math.min(1, Math.max(0, ratio))
 }
 
-/** 环：底轨 + 进度弧。`ratio` 变化时弧长有过渡，所以看着是"长出来的"。 */
 function Ring({ ratio }: { ratio: number | null }) {
   const radius = (RING_SIZE - RING_STROKE) / 2
   const circumference = 2 * Math.PI * radius
@@ -68,7 +58,6 @@ function Ring({ ratio }: { ratio: number | null }) {
   )
 }
 
-/** token 数：够大就按「万」收（整数不带小数点：20万 / 5.6万）；null → 「—」。 */
 function compactTokens(value: number | null | undefined): string {
   if (value === null || value === undefined) return '—'
   if (value >= 10_000) {
@@ -92,14 +81,12 @@ export function ContextRing({ usage }: ContextRingProps) {
   const hot = ratio !== null && ratio >= DANGER_AT
   const context = usage?.context ?? null
   const parts = context?.parts ?? null
-  // 分块是"当前这轮的提示词构成"，所以占比以已用 tokens 为分母，不是窗口。
+  // Parts describe the current prompt, so shares are of used tokens, not the window.
   const share = (value: number): string =>
     context?.tokens ? `${((value / context.tokens) * 100).toFixed(1)}%` : '—'
 
   return (
     <div className="relative">
-      {/* 只有环：不套胶囊框、不带旁边的百分比——数在悬停提示与弹层里，
-          输入区那一行留给"一眼的形状"。 */}
       <button
         type="button"
         aria-label={`上下文容量 ${pct(ratio)}`}
@@ -127,7 +114,6 @@ export function ContextRing({ usage }: ContextRingProps) {
             </span>
           </div>
 
-          {/* 容量条：与环同一个数，这里给"还差多少到顶"的长度感 */}
           <div className="mt-a8 h-[6px] overflow-hidden rounded-full bg-overlay-medium">
             <div
               className={cx(
@@ -154,7 +140,6 @@ export function ContextRing({ usage }: ContextRingProps) {
   )
 }
 
-/** 比例条（参考界面里每行前面的小色点换成一段与占比等长的短线）。 */
 function PartRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center gap-a8">

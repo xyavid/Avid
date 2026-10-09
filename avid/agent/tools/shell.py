@@ -31,8 +31,7 @@ if TYPE_CHECKING:  # annotation only: tools must not depend on runtime at run ti
 DEFAULT_TIMEOUT = 30
 MAX_TIMEOUT = 300
 MAX_OUTPUT_CHARS = 20000
-# Extra characters still read past the cap, which tolerates output that ends soon after and
-# otherwise marks the command as flooding; it bounds memory at 12 x MAX_OUTPUT_CHARS.
+# Extra chars read past the cap, which also bounds memory at 12 x MAX_OUTPUT_CHARS.
 DRAIN_FACTOR = 12
 READ_CHUNK = 8192
 
@@ -41,32 +40,22 @@ class ShellUnavailableError(RuntimeError):
     """No usable shell interpreter on this platform; the tool reports it instead of guessing."""
 
 
-# Windows PowerShell 5.1 emits the system codepage (GBK on zh-CN hosts), which the child
-# pipes cannot decode reliably; forcing UTF-8 makes the output match the decoder below.
+# Windows PowerShell 5.1 emits the system codepage; forcing UTF-8 matches the decoder below.
 _UTF8_PREFIX = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
 
 
 def _encode_ps_command(script: str) -> str:
-    """Base64 of UTF-16LE bytes — the quoting-proof way to hand PowerShell a script.
-
-    ``-Command`` goes through Windows command-line escaping where embedded quotes and
-    trailing backslashes can rewrite semantics; ``-EncodedCommand`` delivers the text
-    verbatim. The downside is an opaque child cmdline in process listings, which the
-    audit log covers by recording the model's command itself.
-    """
+    """Base64 of UTF-16LE bytes — the quoting-proof way to hand PowerShell a script, at the
+    cost of an opaque child cmdline that the audit log compensates for."""
     return base64.b64encode(script.encode("utf-16-le")).decode("ascii")
 
 
 def shell_argv(command: str, *, platform: str | None = None) -> list[str]:
-    """Builds the interpreter argv for one command: ``bash -c`` on POSIX, PowerShell on Windows.
-
-    pwsh (PowerShell 7) is preferred, Windows PowerShell 5.1 is the fallback. The tool keeps
-    the name ``bash`` for contract stability — the platform fact lives in the schema text.
-    """
+    """Builds the interpreter argv for one command — ``bash -c`` on POSIX, PowerShell (pwsh
+    preferred, then 5.1) on Windows — keeping the name ``bash`` for contract stability."""
     system = platform if platform is not None else sys.platform
     if system != "win32":
-        # sh keeps minimal POSIX systems (Alpine) working; a bashism fails at runtime
-        # and the error reaches the model, which is better than refusing to start.
+        # sh keeps minimal POSIX systems (Alpine) working; a bashism failing beats refusing.
         resolved = shutil.which("bash") or shutil.which("sh")
         if resolved is None:
             raise ShellUnavailableError("找不到 bash 或 sh")
@@ -85,12 +74,8 @@ def shell_argv(command: str, *, platform: str | None = None) -> list[str]:
 
 
 def _assess_concurrency(arguments: dict[str, Any], state: Any) -> str:
-    """A provably read-only command may share a segment; anything else is a barrier.
-
-    bash 是这一档的第一个用户：`ls`/`git status`/`rg` 这类命令与别的读并行没有副作用，
-    但**写命令必须独占**（它可能和同批的读抢同一个文件）。判定交给安全层的
-    ``is_read_only``（建立在既有的 shell 解析事实上），拿不准就是独占。
-    """
+    """A command ``security.command_parse.is_read_only`` proves read-only may share a segment;
+    anything else is a barrier."""
     _ = state
     command = arguments.get("command")
     return "safe" if isinstance(command, str) and is_read_only(command) else "exclusive"
@@ -106,10 +91,7 @@ def _timeout(value: Any) -> int:
 
 
 class _Bounded:
-    """A character collector with a cap that keeps the tail and drops the earliest text.
-
-    The newest lines carry the conclusion, so the uninformative opening is what gets dropped.
-    """
+    """A character collector with a cap that keeps the tail, since the newest lines conclude."""
 
     def __init__(self, limit: int) -> None:
         self.limit = limit
@@ -151,10 +133,8 @@ class _Bounded:
 def _read_into(
     stream: IO[str] | None, collector: _Bounded, on_flood: Callable[[], None]
 ) -> None:
-    """Drains one pipe into a collector, stopping the command as soon as it floods.
-
-    Flooding must terminate at once, since the other pipe may have no data to end its read.
-    """
+    """Drains one pipe into a collector, stopping the command on flood since the other pipe
+    may have no data to end its read."""
     if stream is None:  # pragma: no cover - Popen always provides the pipes
         return
     try:
@@ -171,10 +151,7 @@ def _read_into(
 
 
 def kill_tree(process: subprocess.Popen, *, platform: str | None = None) -> None:
-    """Kills the whole process tree: the POSIX process group, or ``taskkill /T`` on Windows.
-
-    taskkill walks the PID tree, which stands in for the process group there.
-    """
+    """Kills the whole process tree: the POSIX process group, or ``taskkill /T`` on Windows."""
     system = platform if platform is not None else sys.platform
     if system == "win32":
         with suppress(OSError, subprocess.SubprocessError):
@@ -228,8 +205,7 @@ def bash(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
     cwd: Path = Path(raw_root) if raw_root else workspace.WORKSPACE_ROOT
     timeout = _timeout(args.get("timeout_seconds"))
 
-    # The sandbox comes precomputed from the permission layer, and no run spec (a direct call
-    # or a unit test) means the caller is the host itself, so nothing is wrapped.
+    # The sandbox is precomputed by the permission layer; no run spec means the host itself.
     security = getattr(state, "security", None)
     spec = getattr(security, "sandbox", None)
     try:
@@ -241,8 +217,7 @@ def bash(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
         grants = state.sandbox_grants() if state is not None else ()
         argv = spec.argv_prefix(argv, grants=grants, root=str(cwd))
         env = spec.child_env()
-    # Decode the child to text: POSIX uses the locale, Windows is pinned to UTF-8 because
-    # the argv prefix above forces PowerShell to emit UTF-8.
+    # POSIX decodes with the locale; Windows is pinned to UTF-8, which the argv prefix forces.
     decode: dict[str, Any] = (
         {"encoding": "utf-8", "errors": "replace"}
         if sys.platform == "win32"
@@ -306,8 +281,7 @@ def bash(args: dict[str, Any], *, state: "RunState | None" = None) -> str:
         body_parts.append("[stderr]\n" + err.text.rstrip("\n"))
     body = "\n".join(body_parts)
 
-    # The exit marker and the truncation notice are the conclusion of the call, so they stay
-    # out of the body truncation; losing the exit code would hide whether the command failed.
+    # The marker and notice stay out of body truncation, or a failure's exit code could vanish.
     dropped = len(body) > MAX_OUTPUT_CHARS - len(marker)
     if flooded:
         notice = f"…（输出过多已终止命令，已收到 {seen} 字符）"

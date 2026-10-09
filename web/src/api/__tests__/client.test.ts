@@ -69,7 +69,7 @@ describe('api/client（网络出口唯一层）', () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(new Response('<html>502</html>', { status: 502 }))
-      .mockResolvedValueOnce(jsonResponse(200, { status: 'ok' })) // health 探测成功
+      .mockResolvedValueOnce(jsonResponse(200, { status: 'ok' })) // health probe succeeds
     vi.stubGlobal('fetch', fetchMock)
 
     const err = await getMeta().catch((e: unknown) => e) as ApiError

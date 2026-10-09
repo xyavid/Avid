@@ -1,13 +1,8 @@
 /**
- * 子智能体面板（阶段 53）：右列里看每个子任务自己干了什么。
- *
- * 两级，与文件面板同构：**列表**（每条子任务一张入口卡：任务名 · N 步 · 运行中）↔
- * **详情**（那一条子运行自己的时间线）。详情直接复用 `components/chat/Timeline`——
- * 子运行的段落与父时间线是同一套模型、同一个渲染器，所以这里没有第二套界面语言。
- *
- * 面板里**不写说明性文字**（用户要求）：界面只摆操作需要的东西，解释进 `title`
- * （悬停才出现）。两件本可以写成长句的事实——子运行明细不落库、单条成败只在内核
- * 汇总的结果里——因此都只留工具提示，不占版面。
+ * Subagent panel: two levels, like the files panel — a list of task cards ↔ the selected run's own
+ * timeline, rendered with the same `components/chat/Timeline` model as the parent conversation.
+ * A sub-run's detail is not persisted (only its task list survives a reload), so the panel shows
+ * no explanatory text and puts such facts in `title` instead.
  */
 
 import { useState } from 'react'
@@ -19,14 +14,14 @@ import { useAutoHideScroll } from '../../ui/useAutoHideScroll'
 import { Timeline } from '../chat/Timeline'
 
 export type SubagentPanelProps = {
-  /** 整条时间线里摊平出来的子运行（顺序即派发顺序）。 */
+  /** Sub-runs flattened from the whole timeline, in dispatch order. */
   runs: SubagentRunView[]
-  /** 这一轮还在跑：给运行中的标记；否则只说「已结束」。 */
+  /** Whether the current turn is still running: drives the running mark. */
   live: boolean
   workspaceRoot: string | null
 }
 
-/** 一条子运行里画出来的步数（工具段）；面板列表只说这个，不评判成败。 */
+/** Tool steps drawn for one sub-run; the list reports only this, never success or failure. */
 function stepCount(run: SubagentRunView): number {
   return run.items.filter((item) => item.kind === 'tool').length
 }
@@ -44,7 +39,7 @@ function StatusMark({ running }: { running: boolean }) {
 
 export function SubagentPanel({ runs, live, workspaceRoot }: SubagentPanelProps) {
   const scrollRef = useAutoHideScroll<HTMLDivElement>()
-  // 选中哪一条是面板内部状态（页面不管）：`null` = 停在列表。
+  // Selection is panel-local state (the page does not care); `null` = showing the list.
   const [selected, setSelected] = useState<number | null>(null)
   const run = selected === null ? null : (runs[selected] ?? null)
 
@@ -116,8 +111,7 @@ export function SubagentPanel({ runs, live, workspaceRoot }: SubagentPanelProps)
             没有可显示的明细
           </p>
         ) : (
-          // 子运行的时间线：与主对话同一个渲染器。它不折（子运行没有"收尾消息"这回事），
-          // 但按轮分组的判定与父级共用一套代码。
+          // Same renderer as the main conversation, minus turn folding (sub-runs never settle).
           <div className="px-a12 py-a12">
             <Timeline testId="timeline-subagent" items={run.items} workspaceRoot={workspaceRoot} liveTail />
           </div>

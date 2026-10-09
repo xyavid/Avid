@@ -1,17 +1,9 @@
 /**
- * 工具调用 → 详情视图（展开工具卡时画什么）。
- *
- * 表格只有**文件类工具**三行，各按它自己的语义给视图：
- *   · `edit_file`  —— 参数里旧文与新文都在 → 差异视图（这是「改了什么」的真正答案）；
- *   · `read_file`  —— 结果是内容本身 → 代码视图（带语言标与行号，行号从 offset 起）；
- *   · `write_file` —— 新建时整篇都是新增（差异视图），覆盖时只画写入的新内容
- *                     （旧内容已经被写掉了，我们拿不到，不假装对比）。
- * 其余工具一律不给详情：命令输出、清单、子任务各有各的样子，回落成原文更诚实。
- *
- * 两条与内核的耦合，都写在明处：
- *   1. 结果状态为 failed 时不给视图——文件没被改动，画出来的差异是假的；
- *   2. `write_file` 的「新建 / 覆盖」认内核结果的措辞（已新建 / 已覆盖）。文案一改
- *      就认不出，那时回落原文（少一个视图），不猜错一个视图。
+ * Tool call → detail view for the expanded card; only the three file tools get one:
+ * `edit_file` → diff (old / new in the args), `read_file` → code (lines from offset),
+ * `write_file` → diff when created, code when overwritten. A failed call gets no view (the
+ * file is unchanged, so a diff would lie), and write_file reads create / overwrite from the
+ * kernel's result wording — a wording change falls back to the raw text, not a wrong view.
  */
 
 import { langOf } from '../../markdown/langOf'
@@ -27,13 +19,13 @@ function text(parsed: Record<string, unknown> | null, key: string): string | nul
   return typeof value === 'string' ? value : null
 }
 
-/** 结果文本只在非空时才作注脚（运行中还没有结果、被折叠的空串都不算）。 */
+/** Result text is a footnote only when non-empty (running or elided-empty does not count). */
 function noteOf(result: string | null): string | null {
   const trimmed = (result ?? '').trim()
   return trimmed === '' ? null : trimmed
 }
 
-/** read_file 的 offset：数字或数字串都认，认不出按 1。 */
+/** read_file offset: numbers and numeric strings; anything else is 1. */
 function startLineOf(parsed: Record<string, unknown> | null): number {
   const raw = parsed?.offset
   const value = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number.parseInt(raw, 10) : 1
@@ -72,7 +64,7 @@ export function toolDetail(
   }
 
   if (name === 'read_file') {
-    // 内容**不 trim**：首尾空行是文件的一部分，行号也要对得上（只要判空才 trim）
+    // Content stays untrimmed: blank edge lines are file content and line numbers must line up.
     if (result === null || result.trim() === '') return null
     return { kind: 'code', lang: langOf(path), text: result, startLine: startLineOf(parsed), note: null }
   }

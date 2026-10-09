@@ -5,8 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MessageActions } from '../MessageActions'
 
 /**
- * 消息动作行：悬停才现形（与列表项那套「隐藏直到需要」同一纪律）。
- * 用户消息没有「分支」——分叉点是模型的回答，不是用户自己的话。
+ * Hover reveals the action row. User messages have no branch: the fork point is the model's
+ * reply, not the user's own words.
  */
 describe('消息动作行', () => {
   afterEach(cleanup)

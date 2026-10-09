@@ -1,10 +1,6 @@
-"""阶段 22：用量台账的派生量与落盘。
-
-三件事各测各的边界：
-
-* ``runtime/state.py``：``usage_report()`` 的统一 schema（占用率、命中率、压缩后读数）。
-* ``session/`` + ``svc/runs.py``：快照真的落到会话值里，读侧拿得到，两个后端一致。
-* HTTP 端到端：跑一次真循环（脚本模型）之后，分支列表与运行视图都带这份快照。
+"""Derived usage ledger: ``usage_report()``'s schema (occupancy, hit ratio, post-compaction
+readings), its persistence as a session value readable on both backends, and the HTTP views
+that expose the snapshot after a real (scripted-model) run.
 """
 
 from __future__ import annotations
@@ -23,7 +19,7 @@ from avid.session import (
     UuidV7Generator,
 )
 
-# ---------------- usage_report：统一 schema ----------------
+# ---------------- usage_report: one schema ----------------
 
 def test_report_is_all_none_before_the_first_model_call():
     report = RunState().usage_report()
@@ -43,7 +39,7 @@ def test_report_shows_occupancy_cache_and_compaction():
         "tokens": 72_000,
         "window": 200_000,
         "utilization": 0.36,
-        "parts": None,  # 没记字符数就不给分块，不猜
+        "parts": None,  # no character counts, so no parts — do not guess
     }
     assert report["cache"]["read_tokens"] == 56_000
     assert report["cache"]["hit_ratio"] == pytest.approx(0.77777, rel=1e-4)
@@ -52,18 +48,18 @@ def test_report_shows_occupancy_cache_and_compaction():
 
 
 def test_report_treats_an_all_zero_usage_as_no_data():
-    """端点不认 `include_usage` 时是"没有读数"，不是"上下文是空的"。"""
+    """An endpoint that ignores ``include_usage`` gives no reading, not an empty context."""
     state = RunState(context_window=200_000)
     state.record_usage(Usage(0, 0, 0))
     report = state.usage_report()
     assert report["context"]["tokens"] is None
     assert report["context"]["utilization"] is None
-    # 累计量照记（那是运行账单，不是占用）。
+    # Cumulative totals still count (that is the run bill, not occupancy).
     assert state.tokens == 0
 
 
 def test_last_compaction_tokens_comes_from_the_next_real_call():
-    """压缩后还剩多少由下一次模型调用回答——不在这里做本地估算。"""
+    """Post-compaction size comes from the next real model call, never a local estimate."""
     state = RunState(context_window=200_000)
     state.record_usage(Usage(150_000, 10, 150_010))
     announce(CompactReport("micro_compact", "落盘 3 条", 400, 200), state)
@@ -71,19 +67,19 @@ def test_last_compaction_tokens_comes_from_the_next_real_call():
     report = state.usage_report()
     assert report["compaction"] == {
         "count": 1,
-        "last_compaction_tokens": None,  # 还没有下一轮，不猜
+        "last_compaction_tokens": None,  # no next round yet — do not guess
         "last_step": "micro_compact",
     }
 
     state.record_usage(Usage(42_000, 10, 42_010))
     report = state.usage_report()
     assert report["compaction"]["last_compaction_tokens"] == 42_000
-    assert report["context"]["tokens"] == 42_000  # 占用也跟着降到压完后的真实值
+    assert report["context"]["tokens"] == 42_000  # occupancy follows the real reading
 
 
 def test_compaction_counter_counts_only_real_reports():
     state = RunState()
-    announce(None, state)  # 没压成 → 不计数
+    announce(None, state)  # nothing compacted -> not counted
     assert state.compactions == 0
     announce(CompactReport("snip_compact", "裁掉中间", 10, 8), state)
     announce(CompactReport("compact_history", "摘要", 9, 3), state)
@@ -92,7 +88,7 @@ def test_compaction_counter_counts_only_real_reports():
 
 
 def test_event_carries_the_snapshot_every_round():
-    """事件是实时通道：每轮 run_status 都带一份快照，字段就是统一 schema。"""
+    """Every ``run_status`` event carries the snapshot under the unified schema."""
     seen: list[dict] = []
     state = RunState(observer=lambda event: seen.append(event), context_window=100_000)
     state.record_usage(Usage(5_000, 5, 5_005, cache_read_tokens=2_500))
@@ -101,7 +97,7 @@ def test_event_carries_the_snapshot_every_round():
     assert seen[-1].data["usage"]["cache"]["hit_ratio"] == 0.5
 
 
-# ---------------- 落盘：进会话值，两个后端都读得到 ----------------
+# ---------------- persistence: a session value readable on both backends ----------------
 
 @pytest.mark.parametrize("backend", ["memory", "jsonl"])
 def test_recorder_persists_usage_per_branch(backend, tmp_path):
@@ -119,7 +115,7 @@ def test_recorder_persists_usage_per_branch(backend, tmp_path):
         side = SessionRecorder(session, "b2")
         payload = {"context": {"tokens": 72_000, "window": 200_000, "utilization": 0.36}}
         main.record_usage(payload)
-        # 覆盖式：同一分支只留最近一次。
+        # Overwrite semantics: a branch keeps only its latest snapshot.
         main.record_usage({**payload, "context": {"tokens": 90_000}})
         side.record_usage(payload)
 
@@ -132,7 +128,7 @@ def test_recorder_persists_usage_per_branch(backend, tmp_path):
 
 
 def test_usage_value_survives_reopen(tmp_path):
-    """退出重进：值与条目共用同一条日志，重开文件后照样读得到。"""
+    """Values share the entry log, so a reopen still reads them back."""
     from avid.session import JsonlSessionRepo
 
     clock = iter(range(1_700_000_000_000, 1_700_000_100_000, 1_000)).__next__
@@ -155,10 +151,10 @@ def test_usage_value_survives_reopen(tmp_path):
         reopened.close()
 
 
-# ---------------- 端到端：一次运行把快照写进会话 ----------------
+# ---------------- end to end: one run persists the snapshot ----------------
 
 def test_run_persists_usage_and_exposes_it_over_http(sandbox):
-    """跑一次真循环（脚本模型），用量应当同时出现在 runs 视图与分支列表里。"""
+    """One real (scripted) run exposes usage in both the runs view and the branch list."""
     from fastapi.testclient import TestClient
     from support import create_session
 
@@ -182,31 +178,27 @@ def test_run_persists_usage_and_exposes_it_over_http(sandbox):
 
         branches = client.get(f"/api/sessions/{session_id}/branches").json()["branches"]
         main = next(item for item in branches if item["name"] == "main")
-        # 脚本模型的 usage 是 prompt=1 / completion=2 / total=3（见 support.make_turn）。
+        # Scripted model usage is prompt=1 / completion=2 / total=3 (see support.make_turn).
         assert main["usage"]["context"]["tokens"] == 1
         assert main["usage"]["cache"]["read_tokens"] is None
-        # 没有 AVID_CONTEXT_WINDOW 且模型名 test-model 不认识 → 没有分母，不猜占用率。
+        # No AVID_CONTEXT_WINDOW and unknown test-model: no denominator, no guessed utilization.
         assert main["usage"]["context"]["window"] is None
         assert main["usage"]["context"]["utilization"] is None
 
-        # 另一个分支没跑过：null 而不是 0。
+        # A branch that never ran is null, not 0.
         assert created["branch"] == "main"
     finally:
         services.close()
 
 
 def services_close_when_done(services, session_id: str) -> bool:
-    """等到该会话没有活动 run（脚本模型很快，但运行在线程里）。"""
+    """Wait until the session has no active run (the run executes on a thread)."""
     from support import wait_for
 
     return wait_for(lambda: services.runs.active_run_id(session_id) is None)
 
 def test_parts_allocate_the_real_total_by_char_share():
-    """分块：按字符占比分配**真实的** prompt_tokens，三块之和恰好等于总数。
-
-    为什么用占比而不是"每 token 多少字符"：后者在中英混排下必然偏；占比只用三块之间的
-    相对量。余数归到对话消息，于是界面上的堆叠条与总数永远对得上。
-    """
+    """Parts split the real prompt_tokens by character share; the three parts sum to the total."""
     state = RunState(context_window=200_000)
     state.record_prompt_parts(system=2_000, tools=6_000, messages=64_000)
     state.record_usage(Usage(72_000, 10, 72_010))
@@ -214,13 +206,13 @@ def test_parts_allocate_the_real_total_by_char_share():
     parts = state.usage_report()["context"]["parts"]
     assert parts is not None
     assert sum(parts.values()) == 72_000
-    assert parts["system"] == 2_000  # 字符占比 2/72 → token 占比同理
+    assert parts["system"] == 2_000  # character share 2/72, so the token share follows
     assert parts["tools"] == 6_000
     assert parts["messages"] == 64_000
 
 
 def test_parts_absorb_the_rounding_remainder_into_messages():
-    """不能整除时余数给对话消息：三块之和必须等于真实总数，不能少几个 token。"""
+    """The rounding remainder goes to messages so the three parts still sum to the total."""
     state = RunState()
     state.record_prompt_parts(system=1, tools=1, messages=1)
     state.record_usage(Usage(10, 0, 10))
@@ -232,7 +224,7 @@ def test_parts_absorb_the_rounding_remainder_into_messages():
 
 
 def test_parts_are_none_without_readings_or_chars():
-    """缺任一前提就不给分块：没读数、没字符数、字符数全零。"""
+    """No parts unless both readings and non-zero character counts exist."""
     assert RunState().usage_report()["context"]["parts"] is None
 
     no_chars = RunState()
@@ -245,10 +237,10 @@ def test_parts_are_none_without_readings_or_chars():
     assert zero_chars.usage_report()["context"]["parts"] is None
 
 
-# ---------------- 窗口探测接进运行路径 ----------------
+# ---------------- window probing inside the run path ----------------
 
 def _window_probe(monkeypatch, *, window=200_000):
-    """把 provider 的 /models 换成 MockTransport，并打开探测（conftest 默认关掉）。"""
+    """Route the provider ``/models`` probe through MockTransport, with probing enabled."""
     import httpx
 
     from avid.providers import client as client_module
@@ -269,11 +261,7 @@ def _window_probe(monkeypatch, *, window=200_000):
 
 
 def test_loop_probes_the_window_and_reports_utilization(monkeypatch):
-    """表里查不到、env 也没配时，循环在发请求前问一次 /models，占用率因此有分母。
-
-    两条路径都要覆盖：CLI（`agent_loop` 自己建 state）与 Web（svc 先建 state 再进循环，
-    探测结果必须回填进那份 state）。
-    """
+    """With no table or env window, the run probes /models once for a utilization denominator."""
     from support import run_loop
 
     http = _window_probe(monkeypatch)
@@ -292,7 +280,7 @@ def test_loop_probes_the_window_and_reports_utilization(monkeypatch):
         assert report["context"]["window"] == 200_000
         assert report["context"]["utilization"] is not None
 
-        # 探测结果是进程内缓存：第二次运行不再打端点。
+        # The probe result is cached per process: the second run makes no request.
         fresh = RunState(observer=lambda event: None)
         run_loop(
             [{"role": "user", "content": "又一轮"}],

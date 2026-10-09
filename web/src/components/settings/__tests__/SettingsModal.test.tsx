@@ -47,7 +47,7 @@ const WIRED: ByokSettings = {
   bindings: { chat: 'deepseek/deepseek-chat' },
 }
 
-/** PUT 载荷 → 回显：key_set 按载荷里是否带 api_key 生成。 */
+/** PUT payload → echo: key_set is derived from whether the payload carried an api_key. */
 function savedState(input: unknown): ByokSettings {
   const providers = (input as { providers: Array<Record<string, unknown>> }).providers
   return {
@@ -86,7 +86,7 @@ describe('SettingsModal（设置界面 · BYOK 模型段）', () => {
 
     await waitFor(() => expect(screen.getByText(/还没有模型配置/)).toBeTruthy())
     expect(screen.getByRole('button', { name: '新增提供商' })).toBeTruthy()
-    // 密钥输入框（若有）必须是 password 且不预填——只入不出
+    // Any key field must be a password one and never prefilled — write-only.
     const passwords = document.querySelectorAll('input[type="password"]')
     passwords.forEach((el) => expect((el as HTMLInputElement).value).toBe(''))
   })
@@ -122,7 +122,7 @@ describe('SettingsModal（设置界面 · BYOK 模型段）', () => {
     fireEvent.click(screen.getByRole('button', { name: '完成' }))
 
     await waitFor(() => expect(screen.getByText('密钥已配置')).toBeTruthy())
-    // 绑定 chat 槽位到刚加的模型，再整体保存
+    // Bind the chat slot to the just-added model, then save the whole payload.
     const binding = screen.getAllByRole('combobox').find(
       (el) => (el as HTMLSelectElement).value === '',
     ) as HTMLSelectElement
@@ -134,7 +134,7 @@ describe('SettingsModal（设置界面 · BYOK 模型段）', () => {
       providers: { id: string; api_key: string | null; models: { id: string }[] }[]
       bindings: { chat: string | null }
     }
-    expect(payload.providers[0]!.api_key).toBe('sk-new') // 只入：随载荷发出
+    expect(payload.providers[0]!.api_key).toBe('sk-new') // write-only: sent with the payload
     expect(payload.providers[0]!.models[0]!.id).toBe('deepseek-chat')
     expect(payload.bindings.chat).toBe('deepseek/deepseek-chat')
     await waitFor(() => expect(screen.getByText(/已保存/)).toBeTruthy())
@@ -157,7 +157,7 @@ describe('SettingsModal（设置界面 · BYOK 模型段）', () => {
     })
     const levels = screen.getByLabelText('模型 reasoner 的推理强度档位') as HTMLInputElement
     fireEvent.change(levels, { target: { value: 'low,' } })
-    // 输入框看的是原文：逗号不能被解析结果吃回去（否则第二档永远打不出来）
+    // The field keeps the raw text: the parse must not eat the trailing comma.
     expect(levels.value).toBe('low,')
     fireEvent.change(levels, { target: { value: 'low, high, max' } })
     fireEvent.change(screen.getByLabelText('模型 reasoner 的图片输入能力'), { target: { value: 'true' } })
@@ -176,7 +176,7 @@ describe('SettingsModal（设置界面 · BYOK 模型段）', () => {
     }
     expect(payload.providers[0]!.models[0]).toMatchObject({
       id: 'reasoner',
-      // 逗号分隔的列表原样拆成数组（顺序保留，空白丢掉）
+      // Comma-separated list splits as-is (order kept, blanks dropped).
       reasoning_efforts: ['low', 'high', 'max'],
       capabilities: { vision: true },
     })
@@ -208,7 +208,7 @@ describe('SettingsModal（设置界面 · BYOK 模型段）', () => {
     await waitFor(() => expect(testByokModel).toHaveBeenCalledOnce())
     const [provider, modelId] = testByokModel.mock.calls[0]! as [Record<string, unknown>, string]
     expect(modelId).toBe('deepseek-chat')
-    // 只入：api_key 为 null（未重填），服务端走已存密钥
+    // Write-only: api_key is null here, so the server uses the stored key.
     expect(provider.api_key).toBeNull()
     await waitFor(() => expect(screen.getByText(/最小对话/)).toBeTruthy())
     expect(screen.getByText(/工具冒烟/)).toBeTruthy()

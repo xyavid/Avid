@@ -1,4 +1,4 @@
-"""压缩预算（ContextBudget）与触发线（reserve 语义）的测试。"""
+"""Compaction budget (ContextBudget) and the trigger line (reserve semantics)."""
 
 from avid.agent.compaction import (
     CONTEXT_CHAR_LIMIT,
@@ -14,7 +14,7 @@ WINDOW = 200_000
 
 
 def state_with_readings():
-    """一份带真实读数的运行状态：窗口 200k，上一轮 100k prompt tokens。"""
+    """A state with real readings: 200k window, last prompt at 100k tokens."""
     state = RunState(context_window=WINDOW)
     state.last_usage = Usage(100_000, 1, 100_001)
     state.prompt_parts = (1000, 500, 50_000)

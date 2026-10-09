@@ -57,7 +57,7 @@ describe('ApprovalBar（审批条，参考报告 hana-rise）', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '允许' }))
     expect(onDecide).not.toHaveBeenCalled()
-    // 原地出第二张「确认执行」卡，第一次的命令仍在眼前
+    // The second "confirm" card appears in place, with the original command still visible.
     expect(screen.getByText('递归删除根目录')).toBeTruthy()
     expect(screen.getByText(/毁灭级命令：确认后立即执行/)).toBeTruthy()
 

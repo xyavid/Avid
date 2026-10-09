@@ -1,16 +1,10 @@
 /**
- * 输入区（参考图主界面）：16px 圆角抬升面壳（--radius-chat-surface）+
- * 裸 textarea（自动增高，封顶约 8 行后内滚）+ 左侧权限/模型 + 右侧发送/停止钮。
- * Enter 发送，Shift+Enter 换行；**IME 合成中的 Enter 不发送**（中文输入法
- * 选词回车是组词，不是提交——纸本中文界面的硬约束）。
- * While busy the input stays editable: Enter = queue for the next turn, "insert" targets the
- * current run's next step; stop is cooperative, the terminal state comes from events.
- * 权限胶囊反映这次运行是否完全访问（默认 / 完全访问两态），发送时随
- * StartRunInput 提交（full 由 hook 附 full_access_ack）。
- *
- * Images: paste / drop / paperclip funnel into `addFiles`; chips are the draft and go out with
- * the text (images alone count). Over-limit images are downscaled by `prepareImage`; the server
- * only validates.
+ * Input area: auto-growing textarea with permission / model on the left and send / stop on
+ * the right; Enter sends, Shift+Enter breaks, and an IME-composing Enter never sends.
+ * While busy the text stays editable (Enter queues, insert targets the running step) and stop
+ * stays cooperative — the terminal state comes from events; images from paste / drop / picker
+ * are downscaled by `prepareImage`, and `full` goes out with StartRunInput so the hook can
+ * attach `full_access_ack`.
  */
 
 import { useRef, useState } from 'react'
@@ -26,19 +20,18 @@ import { ModelButton } from './ModelButton'
 const BARE_AREA =
   'max-h-[216px] w-full resize-none overflow-y-auto bg-transparent font-ui text-ui leading-[24px] text-ink placeholder:text-ink-muted focus:outline-none disabled:opacity-40'
 
-/** 自动增高：先缩回 auto 量出 scrollHeight，再夹到 8 行封顶。 */
 function autogrow(el: HTMLTextAreaElement) {
   el.style.height = 'auto'
   el.style.height = `${Math.min(el.scrollHeight, 216)}px`
 }
 
 export type ComposerProps = {
-  /** 这次运行是否完全访问（默认 false = normal）。 */
+  /** Whether this run has full access (default false = normal). */
   full: boolean
   onToggleFull: (full: boolean) => void
-  /** 无选中会话等：整条输入路径不可用。 */
+  /** No session selected etc.: the whole input path is unavailable. */
   disabled?: boolean
-  /** 运行中：发送禁用（钮变停止），输入仍可编辑。 */
+  /** Run in flight: send turns into stop, the input stays editable. */
   busy?: boolean
   onSend: (text: string, images: DraftImage[]) => void
   /** Queue for the next turn while busy; omit to hide the button. */
@@ -46,15 +39,16 @@ export type ComposerProps = {
   /** Insert into the current run's next step while busy; omit to hide the button. */
   onInsert?: (text: string, images: DraftImage[]) => void
   onStop: () => void
-  /** 本次运行的模型（providerId/modelId）；null = 还没选——那时发不出去，也不替用户猜。 */
+  /** Model for this run (providerId/modelId); null = not chosen, so nothing is sent. */
   model?: string | null
   onChangeModel?: (model: string) => void
-  /** 本次运行的推理强度（该模型声明的档位之一）；null = 不设 → 请求里不带这个参数。 */
+  /** Reasoning effort for this run (one of the model's declared levels); null = unset, so the
+   *  request carries no such parameter. */
   effort?: string | null
   onChangeEffort?: (effort: string | null) => void
-  /** BYOK 候选（providerId/modelId ref）：模型胶囊的全部选项来自这里。 */
+  /** BYOK candidates (providerId/modelId refs): the only options the model chip offers. */
   byokModels?: ModelCandidate[]
-  /** 上下文用量快照（运行中吃事件里的每轮读数，收尾后是落盘那份）。 */
+  /** Context usage snapshot: per-round event readings while running, the persisted one after. */
   usage?: UsageReport | null
 }
 
@@ -81,7 +75,7 @@ export function Composer({
   const composingRef = useRef(false)
   const areaRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
-  // 没选模型就不发车：显式带上模型，不由服务端的 chat 绑定替用户决定。
+  // No model, no send: the run start carries the model explicitly, not a server-side default.
   // Images alone count; busy is not a block — queue/insert go through a separate path.
   const canSend =
     !disabled && (text.trim().length > 0 || images.length > 0) && model !== null
@@ -308,7 +302,7 @@ function AttachButton({ disabled, onClick }: { disabled: boolean; onClick: () =>
   )
 }
 
-/** 主行动按钮：accent 实底 + 图标 + 文字（发送 / 停止 两个动作用它）。 */
+/** Primary action button (send / stop): accent fill, icon, label. */
 function ActionButton({
   icon,
   label,

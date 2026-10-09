@@ -1,6 +1,6 @@
-"""索引层的形状：状态取值、扫描记录、查询结果。
+"""Shapes of the index layer: status values, scan records and query results.
 
-这里只有数据，没有 sqlite、没有文件 IO —— 抽查索引对不对时，这些类型就是判据的载体。
+Data only, with no SQLite and no file IO, so an audit of the index can be expressed in these types.
 """
 
 from __future__ import annotations
@@ -8,14 +8,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-# sessions.index_status 的取值（落库字符串，改名等于一次数据迁移）。
+# Values of sessions.index_status (stored strings: renaming one is a data migration).
 INDEX_STATUSES: tuple[str, ...] = (
-    "ok",  # 游标追平文件
-    "pending",  # 还没跑过
-    "stale",  # 文件变了（变短/换 inode/条数不符）→ 需要重建
-    "error",  # 上一次失败，last_error 里有原因
-    "missing",  # 记录里的文件已经不在了
-    "unsupported",  # storageVersion 不认识（不猜，也不崩）
+    "ok",  # cursor caught up with the file
+    "pending",  # never indexed
+    "stale",  # file changed (shorter / new inode / row count mismatch), needs a rebuild
+    "error",  # last pass failed, reason in last_error
+    "missing",  # the recorded file is gone
+    "unsupported",  # unknown storageVersion (do not guess, do not crash)
 )
 INDEX_STATUS_OK, INDEX_STATUS_PENDING, INDEX_STATUS_STALE = "ok", "pending", "stale"
 INDEX_STATUS_ERROR, INDEX_STATUS_MISSING, INDEX_STATUS_UNSUPPORTED = "error", "missing", "unsupported"

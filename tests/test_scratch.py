@@ -1,9 +1,5 @@
-"""阶段 54 · 临时对话：拷上下文、只读三道、关闭即销毁。
-
-三条约束各测各的那一道（互不替代）：
-  1. 工具表——会写文件的工具不进表（内置表、注入表、MCP 表、子运行的表，都过同一道）；
-  2. 沙箱——工作区挂只读，bash 里写不动；
-  3. 标记——落在**会话**上，所以谁发起这个会话的运行都吃同一套约束。
+"""Scratch sessions: the context is copied, and read-only holds through three independent guards —
+the tool table, the read-only workspace mount, and the session marker every run of it reads.
 """
 
 from __future__ import annotations
@@ -26,7 +22,7 @@ def names(schemas: list[dict]) -> set[str]:
 
 @pytest.fixture
 def rig(sandbox):
-    """一套真服务 + 脚本模型：运行走的是生产装配（没有注入工具表，所以工具表就是内置那份）。"""
+    """A real service with a scripted model; runs use the production wiring and built-in table."""
     chat = ScriptedChat(make_turn("回答"), make_turn("回答"), make_turn("回答"))
     services = Services(root=sandbox / ".avid" / "sessions", chat=chat, workspace_root=None)
     client = TestClient(
@@ -48,13 +44,13 @@ def make_session(client: TestClient, *, workspace=None, seed: list[dict] | None 
     return created["id"]
 
 
-# ---------------- 上下文：拷一份投影快照 ----------------
+# ---------------- context: a projected snapshot is copied ----------------
 
 
 def test_scratch_copies_the_source_context_and_marks_the_session(rig):
     client, _, services = rig
     source = make_session(client)
-    # 源会话里放一段真历史（用户 + 助手），临时会话要把它带走
+    # Seed the source with real history (user + assistant); the scratch copy must carry it over
     with services.sessions._session(source) as session:
         branch = session.branch(DEFAULT_BRANCH) or session.create_branch(DEFAULT_BRANCH, None)
         branch.append_message({"role": "user", "content": "主线的问题"})
@@ -73,12 +69,12 @@ def test_scratch_copies_the_source_context_and_marks_the_session(rig):
     contents = [entry["message"]["content"] for entry in page["entries"]]
     assert contents == ["主线的问题", "主线的回答"]
 
-    # 标记落在会话上：值里带着来源，之后判只读就认它
+    # The marker lives on the session: its value carries the source used to decide read-only
     with services.sessions._session(scratch["id"]) as opened:
         stored = opened.get_value(session_scratch())
     assert stored is not None and stored.value == {"source": source}
 
-    # 快照语义：源会话继续长，临时会话不动
+    # Snapshot semantics: the source keeps growing, the scratch copy does not
     with services.sessions._session(source) as session:
         session.branch(DEFAULT_BRANCH).append_message({"role": "user", "content": "之后又问了"})
     after = client.get(f"/api/sessions/{scratch['id']}/entries").json()
@@ -98,7 +94,7 @@ def test_scratch_session_can_be_deleted(client):
     assert scratch["id"] not in ids and source in ids
 
 
-# ---------------- 只读第一道：工具表 ----------------
+# ---------------- read-only guard 1: the tool table ----------------
 
 
 def test_readonly_names_exclude_the_writing_tools():
@@ -131,13 +127,13 @@ def test_build_toolset_drops_writers_and_mcp_for_a_scratch_run():
     scratch = RunState(scratch=True)
     scratch.mcp = FakeMcp()
     schemas, impls = build_toolset(scratch)
-    # 写入工具摘表；MCP 也不放开（外部工具的能力我们不知道，说不清是否只读的不进表）
+    # Writers dropped, MCP too: unknown external tools are not assumed read-only
     assert "write_file" not in names(schemas) and "edit_file" not in names(schemas)
     assert "mcp__fs__write" not in names(schemas) and "mcp__fs__write" not in impls
 
 
 def test_a_scratch_run_hands_the_reduced_table_to_the_model(rig):
-    """装配层实测：临时会话里的运行发出去的 tool schema 里没有写入工具（主线里照旧有）。"""
+    """Wiring-level: a scratch run sends no writing tools; a mainline run of it still does."""
     client, chat, _ = rig
     source = make_session(client)
     scratch = client.post(f"/api/sessions/{source}/scratch", json={}).json()
@@ -150,7 +146,7 @@ def test_a_scratch_run_hands_the_reduced_table_to_the_model(rig):
     assert "write_file" not in scratch_sent and "edit_file" not in scratch_sent
     assert "read_file" in scratch_sent
 
-    # 同一条路径主线跑一次：写入工具在表里（只读是临时会话的性质，不是全局的）
+    # Same path on a mainline session: writers are back, read-only is per scratch session
     run = client.post(f"/api/sessions/{source}/runs", json={"prompt": "问一句", "auto_approve": True})
     assert run.status_code == 201, run.text
     assert wait_for(lambda: client.get(f"/api/runs/{run.json()['run_id']}").json()["status"] == "finished")
@@ -158,7 +154,7 @@ def test_a_scratch_run_hands_the_reduced_table_to_the_model(rig):
     assert {"write_file", "edit_file"} <= normal_sent
 
 
-# ---------------- 只读第二道：沙箱 ----------------
+# ---------------- read-only guard 2: the sandbox ----------------
 
 
 def test_readonly_sandbox_mounts_the_workspace_read_only():
@@ -191,7 +187,7 @@ def test_build_spec_carries_the_readonly_flag_and_says_so():
     assert "工作区挂只读（临时对话）" in spec.notes
 
 
-# ---------------- 只读第三道：子运行继承 ----------------
+# ---------------- read-only guard 3: child runs inherit it ----------------
 
 
 def test_child_runs_of_a_scratch_parent_get_the_reduced_table(monkeypatch):

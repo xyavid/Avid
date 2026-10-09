@@ -1,9 +1,7 @@
 /**
- * 审批条：内核挂起等待人类裁决时，从输入区上方升起（hana-rise，clip-path 裁剪
- * 入场）。只有**毁灭级命令**会走到这里；引擎一次 approval，「二次确认」是前端
- * 纪律——第一次「允许」原地展开第二张「确认执行」卡，再点一次才 POST allow；
- * 拒绝直接 POST deny；第二张卡有「取消」回到第一步。允许 = accent 实底，
- * 拒绝 = 发丝线描边；busy 时禁用（等待后端幂等确认）。多条待决纵向堆叠。
+ * Pending decisions above the composer: destructive-command approvals and model questions.
+ * The double confirmation for approvals (first "allow" expands a confirm card, the second
+ * click sends `allow`; `deny` goes straight out) is a frontend discipline.
  */
 
 import { useState } from 'react'
@@ -15,14 +13,14 @@ export type ApprovalBarProps = {
   approvals: LiveApproval[]
   busy: boolean
   onDecide: (approvalId: string, decision: 'allow' | 'deny') => void
-  /** 回答一次提问（选择题点按钮与自由输入都走这里）。 */
+  /** Answer one question (option buttons and free text both land here). */
   onAnswer: (approvalId: string, text: string) => void
 }
 
 export function ApprovalBar({ approvals, busy, onDecide, onAnswer }: ApprovalBarProps) {
-  // 已点过「允许」、等第二次确认的审批 id；审批出列后自动失效，不留悬挂状态。
+  // Approval id that passed the first "allow"; a queued approval clears it, so nothing dangles.
   const [confirming, setConfirming] = useState<string | null>(null)
-  // 自由回答的草稿，按待决 id 存：多个问题同时挂着时互不串台。
+  // Free-text drafts keyed by approval id, so concurrent questions do not share state.
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   if (approvals.length === 0) return null
   const confirmingId =

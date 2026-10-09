@@ -1,12 +1,10 @@
 /**
- * 文件名 → 语言标（阶段 52 追加：从右列文件面板搬来，工具卡详情也要它）。
- *
- * 「语言标」同时也是 `highlight.ts` 认的别名，但两者口径**故意不同**：这里认的
- * 扩展名比高亮器多（markdown / toml / rust…），认不出的按扩展名原样标，不猜 ——
- * 语言标是给人看的坐标，高亮器认不出就整段 plain，各自的表各自维护。
+ * Filename → language label. The label is also an alias `highlight.ts` accepts, but the two
+ * sets differ on purpose: this table knows more extensions, unknown ones are labeled by their
+ * extension, and the highlighter falls back to plain when it does not recognize a label.
  */
 
-/** 扩展名 → 语言标；没见过的按扩展名原样标。 */
+/** Extension → label; an unseen extension is labeled as-is. */
 const LANGS: Record<string, string> = {
   py: 'python',
   ts: 'typescript',
@@ -43,7 +41,7 @@ const LANGS: Record<string, string> = {
   txt: '文本',
 }
 
-/** 从文件名取语言标；没有扩展名给 null（CodeBlock 于是显示「文本」）。 */
+/** Label for a path; null without an extension (CodeBlock then shows its text label). */
 export function langOf(path: string): string | null {
   const name = path.split('/').pop() ?? path
   const dot = name.lastIndexOf('.')

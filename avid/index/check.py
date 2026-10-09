@@ -1,24 +1,7 @@
-"""校验与重建：把「索引可能怎么坏」列成可执行清单，每条给出建议动作。
+"""Index check and repair: report what contradicts the files, then apply the recommended fixes.
 
-check 只读（stat + 库内自洽），所以能随时跑；修不修由调用方决定——
-CLI 的 `avid index check --fix` 与测试走同一个 `apply_fixes`。
-
-判据表（每条都对应一个失败场景，见 tests/test_index_check.py）：
-
-| 症状 | 判据 | 建议动作 |
-|---|---|---|
-| 文件没了 | 行在、路径不在 | forget（清行） |
-| 被截断/换掉 | indexed_bytes > 文件长度 | rebuild |
-| 落后 | indexed_bytes < 文件长度 | reindex（增量） |
-| 被改写但长度没变 | mtime > 索引时记的 updated_at 且长度相等 | rebuild |
-| 库里行数与文件不符 | COUNT(entries) != entry_count | rebuild |
-| 认不出的版本 | status = unsupported | 无（不猜） |
-| 上次出错 | status = error | reindex |
-| 没索引过的新文件 | 发现到文件、库里没有行 | reindex |
-| 库描述的是别的会话目录 | meta.store_root 与当前不符 | 全量 rebuild |
-
-长度没变的改写只能靠 mtime 发现——文件系统给不出更强的信号；真要做到无遗漏得每次
-重读全文，那就不叫校验了。「至少能被发现」是这条判据的边界。
+The sweep is read-only (stat plus in-database consistency), so it is always safe to run; a rewrite
+that keeps the file length is only detectable through mtime, which makes it the weakest signal.
 """
 
 from __future__ import annotations
@@ -34,10 +17,10 @@ from . import queries
 from .types import INDEX_STATUS_OK, IndexReport
 from .writer import forget_session, indexed_store_root
 
-if TYPE_CHECKING:  # pragma: no cover - 只为类型检查，避免运行期循环 import
+if TYPE_CHECKING:  # pragma: no cover - type checking only, avoids a runtime import cycle
     from .indexer import SessionIndexer
 
-# 建议动作：这三条是修法，None 表示人得先看一眼（比如不认识的版本）。
+# The three fix actions; None means a human must look first (for example an unknown version).
 FIX_FORGET = "forget"
 FIX_REBUILD = "rebuild"
 FIX_REINDEX = "reindex"
@@ -45,7 +28,7 @@ FIX_REINDEX = "reindex"
 
 @dataclass(frozen=True)
 class Finding:
-    """一条发现：症状 + 说明 + 建议动作（None = 没有自动修法）。"""
+    """One finding: symptom, detail and the recommended fix (None when no automatic fix exists)."""
 
     kind: str
     session_id: str
@@ -109,7 +92,7 @@ def check_index(indexer: "SessionIndexer", *, roots: Sequence[Path] | None = Non
             continue
         try:
             stat = path.stat()
-        except OSError as exc:  # pragma: no cover - 权限/竞态：如实报，不猜
+        except OSError as exc:  # pragma: no cover - permissions/race: report it, do not guess
             findings.append(Finding("missing_file", row.session_id, f"{path}（{exc}）", FIX_FORGET))
             continue
 
@@ -180,10 +163,8 @@ def check_index(indexer: "SessionIndexer", *, roots: Sequence[Path] | None = Non
 
 
 def apply_fixes(indexer: "SessionIndexer", report: CheckReport) -> FixTally:
-    """Follow the recommendations; each one is idempotent and safe to re-run.
-
-    单条修不动（约束错误、库只读）只记跳过，不让整条命令崩——check 的契约是「说清楚」，
-    不是「保证修好」。
+    """Follow the recommendations; each fix is idempotent, and a fix that cannot be applied counts
+    as skipped instead of failing the whole command.
     """
     tally = FixTally()
     for finding in report.findings:
@@ -198,7 +179,7 @@ def apply_fixes(indexer: "SessionIndexer", report: CheckReport) -> FixTally:
             if finding.kind == "other_store":
                 report_all = indexer.rebuild()
                 tally = tally.merged(FixTally(rebuilt=report_all.indexed))
-                break  # 全量重建之后按第一次的清单继续修就没意义了
+                break  # After a full rebuild the original findings no longer apply.
             try:
                 result: IndexReport = indexer.rebuild(finding.session_id)
             except sqlite3.Error:

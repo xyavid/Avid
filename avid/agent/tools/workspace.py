@@ -15,8 +15,7 @@ from pathlib import Path
 # Fixed at import time; tests replace it with a temporary directory.
 WORKSPACE_ROOT = Path.cwd()
 
-# Tokens that may carry a path in a shell command, split on blanks and shell metacharacters;
-# paths containing spaces survive only inside quotes, see `_iter_marks` and `_mark_paths`.
+# Command tokens that may carry a path, split on blanks and shell metacharacters.
 _TOKEN_SPLIT = re.compile(r"[\s;|&()<>'\"]+")
 #: Shell quote characters and metacharacters that end a token.
 _QUOTE_CHARS = "'\""
@@ -24,7 +23,7 @@ _META_CHARS = ";|&()<>"
 #: Prefixes that let a quoted span pass as one absolute path (`~/` equals `$HOME/`).
 _QUOTED_WHOLE_PREFIXES = ("/", "~", "$HOME")
 _PATHLIKE = re.compile(r"(?:^|/)(?:\.\.?)(?:/|$)")
-#: Windows 绝对/UNC 形态：盘符（C:\ 或 C:/）与 \\server\share。
+#: Windows absolute/UNC shapes: a drive letter (C:\ or C:/) and \\server\share.
 _WINDOWS_ABSOLUTE = re.compile(r"^[A-Za-z]:[\\/]|^\\\\")
 
 
@@ -94,10 +93,8 @@ def outside_target(raw: str, *, root: Path | None = None) -> str | None:
 
 
 def _candidate(token: str, base: Path) -> Path | None:
-    """Reads one command token as a path, returning None when it does not look like one.
-
-    Relative paths count too, or a rule for `.git/hooks/pre-commit` would never match.
-    """
+    """Reads one command token as a path, or None when it does not look like one; relative
+    paths count too, since a rule may target them."""
     token = token.strip().rstrip(",;)")
     if not token:
         return None
@@ -111,8 +108,7 @@ def _candidate(token: str, base: Path) -> Path | None:
     if "://" in token:
         return None
     if _WINDOWS_ABSOLUTE.search(token):
-        # Windows 绝对/UNC 路径：在 Windows 宿主上由 ntpath 解析，is_within 因此
-        # 正确判区外；POSIX 上它只能是字面文件名，认进来只多不少（保守方向）。
+        # Absolute/UNC paths: ntpath on Windows; on POSIX a literal name (conservative).
         return Path(token)
     if token.startswith("~"):
         return Path.home() / token[2:] if token.startswith("~/") else Path.home()
@@ -136,10 +132,8 @@ def _candidate(token: str, base: Path) -> Path | None:
 
 
 def _iter_marks(command: str) -> Iterator[tuple[str, bool]]:
-    """Splits a command into tokens and records whether each token held a quotation.
-
-    Blanks inside quotes do not separate, so `cd "/a b c"` stays one token.
-    """
+    """Splits a command into tokens, recording whether each held a quotation, so blanks inside
+    quotes do not separate."""
     buffer: list[str] = []
     quoted = False
     index = 0
@@ -169,10 +163,8 @@ def _iter_marks(command: str) -> Iterator[tuple[str, bool]]:
 
 
 def _mark_paths(mark: str, quoted: bool, base: Path) -> list[Path]:
-    """Returns the paths one token may denote, trying the whole token before splitting it.
-
-    A quoted token survives whole only when it is an absolute path, keeping spaces intact.
-    """
+    """Returns the paths one token may denote, trying the whole token first, since a quoted
+    absolute path keeps its spaces."""
     if quoted and mark.startswith(_QUOTED_WHOLE_PREFIXES):
         whole = _candidate(mark, base)
         if whole is not None:
@@ -188,10 +180,8 @@ def _mark_paths(mark: str, quoted: bool, base: Path) -> list[Path]:
 
 
 def outside_command_target(command: str, *, root: Path | None = None) -> str | None:
-    """Returns the first path in a command that lies outside the workspace.
-
-    The scan is a heuristic over literal tokens, so it is a guard rail rather than a barrier.
-    """
+    """Returns the first path in a command that lies outside the workspace — a heuristic over
+    literal tokens, so a guard rail rather than a barrier."""
     if not isinstance(command, str) or not command.strip():
         return None
     base = _base(root)
@@ -202,10 +192,8 @@ def outside_command_target(command: str, *, root: Path | None = None) -> str | N
 
 
 def command_targets(command: str, *, root: Path | None = None) -> tuple[Path, ...]:
-    """Scans every path-like token of a command, resolved, ordered and de-duplicated.
-
-    The outside check and target identification share it, because two would drift.
-    """
+    """Scans every path-like token of a command, resolved, ordered and de-duplicated; the
+    outside check and target identification share it so they cannot drift."""
     if not isinstance(command, str) or not command.strip():
         return ()
     base = _base(root)

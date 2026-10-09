@@ -1,8 +1,9 @@
-"""循环 × 会话：``on_message`` 观察点把每条结算消息落成条目。
+"""Loop x session: the ``on_message`` observation point turns every settled message into an
+entry.
 
-这是"会话真的接在运行时上"的端到端证据：一条消息一次提交，续接时读回来，
-触发消息按**用户写的那句话**落库（注入的上下文进系统提示词，不写进用户消息），
-写入失败则整轮中止。
+One message is one commit, a second run reads it back, the trigger message persists verbatim
+as the user wrote it (injected context goes into the system prompt, never into the user
+message), and a write failure aborts the whole turn.
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ CONFIG = Config(api_key="k", base_url="http://localhost", model="m")
 
 
 class FakeChat:
-    """按顺序返回预设轮次，并记录每轮收到的参数（与 test_agent.py 同形）。"""
+    """Return preset turns in order and record the arguments each one received."""
 
     def __init__(self, *turns):
         self.turns = list(turns)
@@ -119,7 +120,7 @@ def test_second_run_continues_from_the_session(hook_registry, session):
     run_loop(second, config=CONFIG, chat=chat, on_message=recorder.on_message)
 
     def visible(request):
-        """发给模型的历史（tail 块每轮重渲染且不落库，不参与这条断言）。"""
+        """History sent to the model; the tail block is re-rendered per round, never persisted."""
         return [
             message["content"]
             for message in request["messages"]
@@ -140,11 +141,8 @@ def test_second_run_continues_from_the_session(hook_registry, session):
 
 
 def test_trigger_message_is_recorded_verbatim(hook_registry, session):
-    """落库的是**用户写的那句话**：注入的上下文进系统提示词，不改写用户消息。
-
-    以前注入被拼在 user content 前面，于是界面把内核写的环境信息当成用户输入显示，
-    每次运行的临时环境信息还会在历史里越积越多。
-    """
+    """What persists is exactly what the user typed: injected context goes into the system
+    prompt and never rewrites the user message."""
 
     def inject(context):
         context.setdefault("injected", []).append("[环境] 测试注入")
@@ -159,7 +157,7 @@ def test_trigger_message_is_recorded_verbatim(hook_registry, session):
     stored = messages_for_branch(session)
     assert [message["content"] for message in stored] == ["原始问题", "答"]
     assert stored == messages
-    # 注入没有丢：它在这次运行的系统提示词里（每轮重建，因此不落库）
+    # Not lost: the injection rides this run's system prompt, rebuilt per round (never persisted).
     assert "[环境] 测试注入" in chat.requests[0]["system"]
 
 
@@ -221,11 +219,7 @@ def test_history_is_not_re_recorded(hook_registry, session):
 
 
 def test_a_summarized_history_is_not_summarized_again_next_run(hook_registry, session, tmp_path):
-    """诊断 C2 端到端：④ 的摘要经投影成为下次运行的历史——摘要调用只花一次。
-
-    修复前：splice 只改内存，第二个运行从全量历史重新投影，字符再度超限，
-    ④ 再花一次摘要调用（每次运行一遍）。
-    """
+    """End to end: a summary projects into the next run's history, so it is paid for once."""
 
     from avid.agent.context import ContextBudget
     from avid.agent.run import Run
@@ -240,8 +234,8 @@ def test_a_summarized_history_is_not_summarized_again_next_run(hook_registry, se
 
     summarizer = Summarizer()
     recorder = SessionRecorder(session)
-    # 摘要消息自带 ~160 字符样板（完整记录路径），预算须与触发消息量级分开
-    # keep_recent_turns=1：第二个 assistant 轮一到，第一轮就落入「更早历史」
+    # Summary messages carry ~160 chars of boilerplate, so the budget differs from the trigger size.
+    # keep_recent_turns=1: the second assistant round pushes the first into "earlier history".
     budget = ContextBudget(context_chars=3000, keep_recent_turns=1, from_window=False)
 
     def spec_for(chat):
@@ -253,8 +247,7 @@ def test_a_summarized_history_is_not_summarized_again_next_run(hook_registry, se
             registry={"read_file": lambda arguments: "内容"},
         )
 
-    # 运行一：一轮读文件（assistant 轮 1）后再答（轮 2）——第 2 轮的 compose
-    # 时第 1 轮已落入「更早历史」（keep_recent_turns=1），摘要替换并落游标。
+    # Run one: tool round then answer; round 2's compose summarizes round 1 and lands the cursor.
     run1 = Run(
         [{"role": "user", "content": "x" * 5000}],
         spec_for(FakeChat(make_turn("", [tool_call("read_file")]), make_turn("干完了一"))),
@@ -265,11 +258,11 @@ def test_a_summarized_history_is_not_summarized_again_next_run(hook_registry, se
     assert run1.run().text == "干完了一"
     assert len(summarize_sizes) == 1
 
-    # 投影即摘要形态
+    # The projection is in summary shape
     projected = messages_for_branch(session, recorder.branch)
     assert projected[0]["content"].startswith("[历史摘要]")
 
-    # 运行二：从摘要形态续接，字符不再超预算 → 摘要调用不重复
+    # Run two continues from the summary shape: back under budget, so no second summarize call
     history = messages_for_branch(session, recorder.branch)
     run2 = Run(
         [*history, {"role": "user", "content": "继续"}],
@@ -279,5 +272,5 @@ def test_a_summarized_history_is_not_summarized_again_next_run(hook_registry, se
         on_compaction=recorder.record_compaction,
     )
     assert run2.run().text == "接着干完二"
-    assert len(summarize_sizes) == 1  # 修复前这里会变成 2
+    assert len(summarize_sizes) == 1
 

@@ -178,11 +178,8 @@ def _call_name(call: dict[str, Any]) -> str:
 
 
 def _call_arguments(call: dict[str, Any]) -> dict[str, Any]:
-    """Parsed arguments for the concurrency judgement; an unparseable blob reads as empty.
-
-    A malformed blob cannot be judged, and "cannot be judged" means exclusive — so an empty dict
-    is the right stand-in (an assessor sees no command and refuses).
-    """
+    """Parsed arguments for the concurrency judgement, where an unparseable blob reads as empty and
+    therefore exclusive, since a malformed blob cannot be judged."""
     raw = (call.get("function") or {}).get("arguments")
     if isinstance(raw, dict):
         return raw
@@ -201,11 +198,8 @@ def plan_segments(
     *,
     state: "RunState | None" = None,
 ) -> list[list[int]]:
-    """Split a batch into ordered segments: safe calls share one, exclusive calls stand alone.
-
-    分类是**按调用**问的（`is_concurrency_safe(name, arguments, state)`）：工具可以声明
-    conditional，由自己的 assess 看参数决定这一次能不能并行。
-    """
+    """Split a batch into ordered segments, safe calls sharing one and exclusive calls standing
+    alone; the classification is asked per call, so a conditional tool's own assess decides."""
     segments: list[list[int]] = []
     current: list[int] = []
     for index, call in enumerate(tool_calls):

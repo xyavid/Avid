@@ -1,17 +1,19 @@
-"""批内并行：分段、真重叠、源顺序、屏障、失败隔离、取消、与串行等价（阶段 25）。
+"""In-batch parallelism: segmentation, real overlap, source order, barriers, failure
+isolation, cancellation, and serial equivalence.
 
-规则（已确认）：
+Ways the batch scheduler can break, one case each:
 
-* 默认并发（上限 10，`AVID_MAX_PARALLEL_TOOL_CALLS` 可配）；`max_parallel=1` = 旧串行。
-* 按工具分类：**并发安全**的调用聚成一段一起跑；**独占**调用单独跑并充当屏障。
-* 结果永远按 assistant 源顺序返回，与完成顺序无关。
-* 单个调用失败/被拒不影响同批其余（沿用"工具失败回文本、不中断循环"）。
-* 取消后不再派发尚未开始的调用；未执行的调用回一条**真实**的"未执行"文本
-  （不回它会让 assistant 消息里留下没有回应的 tool_calls，transcript 结构不合法）。
-* 同批内完全相同的调用**不去重**（各自执行、各自结果）。
+* Default concurrency is capped at 10 (`AVID_MAX_PARALLEL_TOOL_CALLS` overrides it);
+  `max_parallel=1` is the serial path.
+* Concurrent-safe calls form one segment; an exclusive call runs alone and acts as a barrier.
+* Results come back in assistant source order, never in completion order.
+* One failing or refused call leaves the rest of the batch alone.
+* After a cancel, undispatched calls are not started and get a real "not executed" text
+  (an unanswered tool_call would make the transcript structurally invalid).
+* Identical calls in one batch are not deduplicated.
 
-"真重叠"的判定用 `threading.Barrier(2)`：两个 handler 不并发就会等超时，
-测试据此把"看起来并行"与"真的并行"区分开。
+Real overlap is judged with `threading.Barrier(2)`: handlers that do not run concurrently
+time out and the test goes red.
 """
 
 from __future__ import annotations
@@ -40,18 +42,15 @@ def call(name: str, arguments: str = "{}", call_id: str = "c1") -> dict:
 
 
 def make_state() -> RunState:
-    """本文件只测调度：挂一份空 hook 注册表。
-
-    默认注册表里有权限 hook（`write_file`/`bash` 会发起审批并读 stdin）与截断 hook，
-    那是别的用例的题目；这里要观察的是"谁和谁同时在跑"，不该被审批阻塞。
-    """
+    """An empty hook registry for scheduling-only tests: the default permission hook would read
+    stdin and block the batch."""
     from avid.agent.hooks import HookRegistry
 
     return RunState(hooks=HookRegistry())
 
 
 class Recorder:
-    """记录每次 handler 的进入/退出时刻，用来判定两次调用是否真的重叠。"""
+    """Records each handler's enter/exit times to tell real overlap from apparent overlap."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -72,7 +71,7 @@ class Recorder:
                 on_call()
             try:
                 if barrier is not None:
-                    barrier.wait(timeout=3)  # 串行执行时这里会超时 → 测试红
+                    barrier.wait(timeout=3)  # serial execution times out here and fails
                 if delay:
                     time.sleep(delay)
                 if boom is not None:
@@ -100,7 +99,7 @@ class Recorder:
         return a_start < b_end and b_start < a_end
 
 
-# ---------------- 分段（纯函数） ----------------
+# ---- segmentation (pure) ----
 
 
 @pytest.mark.parametrize(
@@ -112,7 +111,8 @@ class Recorder:
     ],
 )
 def test_plan_segments_isolates_exclusive_calls(limit, expected):
-    """独占调用必须**单独成段**：它是屏障，不能被塞进并发段里。"""
+    """An exclusive call must form its own segment: it is a barrier and must never be packed
+    into a concurrent one."""
     calls = [
         call("read_file", call_id="c1"),
         call("write_file", call_id="c2"),
@@ -137,13 +137,13 @@ def test_plan_segments_keeps_every_call_exactly_once():
 
 
 def test_plan_segments_unknown_tool_is_exclusive():
-    """没表态的工具按最保守处理：独占。"""
+    """A tool with no concurrency declaration is treated as exclusive."""
     calls = [call("read_file", call_id="c1"), call("brand_new", call_id="c2")]
 
     assert plan_segments(calls, 10) == [[0], [1]]
 
 
-# ---------------- 真重叠 ----------------
+# ---- real overlap ----
 
 
 def test_safe_calls_in_one_batch_actually_overlap():
@@ -182,7 +182,7 @@ def test_results_keep_source_order_when_completion_is_reversed():
     assert rec.finish_order() == ["fast", "slow"], "第二条应当先完成（否则没测到乱序）"
 
 
-# ---------------- 屏障 ----------------
+# ---- barriers ----
 
 
 def test_exclusive_call_forms_a_barrier():
@@ -202,10 +202,10 @@ def test_exclusive_call_forms_a_barrier():
     )
 
     assert [item.tool_call_id for item in outcomes] == ["c1", "c2", "c3", "c4", "c5"]
-    # 屏障本身不与任何调用重叠
+    # The barrier itself overlaps nothing
     for other in ("read_file", "glob", "load_skill", "get_task"):
         assert not rec.overlaps("write_file", other), f"write_file 与 {other} 重叠了"
-    # 屏障两侧的两个并发段也不互相重叠
+    # The two concurrent segments on either side do not overlap each other
     for before in ("read_file", "glob"):
         for after in ("load_skill", "get_task"):
             assert not rec.overlaps(before, after), f"{before} 与 {after} 跨屏障重叠了"
@@ -227,7 +227,7 @@ def test_consecutive_exclusive_calls_stay_serial():
     assert not rec.overlaps("w1", "w2")
 
 
-# ---------------- 失败隔离 ----------------
+# ---- failure isolation ----
 
 
 def test_one_failure_does_not_stop_the_others():
@@ -251,7 +251,7 @@ def test_one_failure_does_not_stop_the_others():
 
 
 def test_identical_calls_in_one_batch_are_not_deduplicated():
-    """同一段里两个一模一样的调用各自执行（去重会悄悄吞掉第二次的真实结果）。"""
+    """Two identical calls in one segment both run; deduplication would swallow the second."""
     calls: list[dict] = []
 
     def handler(arguments, **kwargs):
@@ -271,7 +271,7 @@ def test_identical_calls_in_one_batch_are_not_deduplicated():
     assert [item.tool_call_id for item in outcomes] == ["c1", "c2"]
 
 
-# ---------------- 取消 ----------------
+# ---- cancellation ----
 
 
 def test_cancelled_batch_skips_calls_not_yet_dispatched():
@@ -306,7 +306,7 @@ def test_cancelled_batch_skips_calls_not_yet_dispatched():
 
 
 def test_cancelled_before_dispatch_produces_only_placeholders():
-    """进批之前就已经取消了：一个都不跑，全部回"未执行"。"""
+    """Cancelled before the batch starts: nothing runs, every call gets the placeholder."""
     state = make_state()
     started: list[str] = []
 
@@ -333,10 +333,8 @@ def test_cancelled_before_dispatch_produces_only_placeholders():
 
 
 def test_cancelled_mid_segment_does_not_abandon_the_calls_in_flight():
-    """一段之内取消：同段已在跑的调用照常收尾，**之后的段不再派发**。
-
-    这是"停止派发新调用、不打断在飞的"那条规则的边界：线程杀不掉，假装打断只会让
-    结果与事实不符；而没派发的调用必须回一条真实的"未执行"（条数要与 tool_calls 对齐）。
+    """Cancel inside a segment: in-flight siblings finish, later segments do not dispatch, and
+    undispatched calls still get a real placeholder (count must match tool_calls).
     """
     state = make_state()
     finished: list[str] = []
@@ -344,7 +342,7 @@ def test_cancelled_mid_segment_does_not_abandon_the_calls_in_flight():
     def cancelling(arguments, **kwargs):
         time.sleep(0.01)
         finished.append("cancelling")
-        state.cancel("user")  # 同段的兄弟还在跑
+        state.cancel("user")  # a sibling in the same segment is still running
         return "c1 完成"
 
     def slow(arguments, **kwargs):
@@ -371,11 +369,11 @@ def test_cancelled_mid_segment_does_not_abandon_the_calls_in_flight():
     assert outcomes[2].content == CANCELLED_CONTENT, "之后的段不再派发"
 
 
-# ---------------- 与串行等价 ----------------
+# ---- serial equivalence ----
 
 
 def test_max_parallel_one_matches_the_serial_reference_byte_for_byte():
-    """max_parallel=1 必须与旧的"逐个 execute_one"完全同结果，且不重叠。"""
+    """max_parallel=1 must match per-call execute_one byte for byte and never overlap."""
     rec = Recorder()
     registry = {
         "read_file": rec.handler("r1"),
@@ -396,7 +394,7 @@ def test_max_parallel_one_matches_the_serial_reference_byte_for_byte():
 
     assert rec.finish_order() == ["r1", "r2", "w", "r3"], "串行档里不该出现任何乱序"
 
-    # 参考实现：改动前的写法——逐个调 execute_one（另用一份记录器，别混进上一跑的时间线）。
+    # Reference: call execute_one per item (separate recorder, not mixed into the spans)
     reference_rec = Recorder()
     reference_registry = {
         "read_file": reference_rec.handler("r1"),
@@ -427,7 +425,7 @@ def test_max_parallel_one_matches_the_serial_reference_byte_for_byte():
 
 
 def test_default_is_serial_so_callers_opt_in():
-    """不传 max_parallel 时保持旧行为（直调 / bare 路径因此不受影响）。"""
+    """Omitting max_parallel keeps the serial path, so direct callers are unaffected."""
     rec = Recorder()
     registry = {"read_file": rec.handler("only")}
 
@@ -436,7 +434,7 @@ def test_default_is_serial_so_callers_opt_in():
     assert rec.finish_order() == ["only"]
 
 
-# ---------------- 共享状态 ----------------
+# ---- shared state ----
 
 
 def test_state_counters_survive_concurrent_updates():
@@ -455,7 +453,8 @@ def test_state_counters_survive_concurrent_updates():
 
 
 def test_repeat_counter_hands_out_every_number_exactly_once():
-    """重复提醒的计数必须原子自增：并发下丢号会让提醒永远到不了阈值。"""
+    """The repeat counter must increment atomically: a lost number keeps a reminder below
+    its threshold forever."""
     state = make_state()
     seen: list[int] = []
     lock = threading.Lock()

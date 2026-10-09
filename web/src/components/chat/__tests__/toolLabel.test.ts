@@ -1,8 +1,6 @@
 /**
- * 工具标签派生用例：每个内置工具一行「动作 + 目标」。
- *
- * 路径相对化只在「在工作区根以内」时发生——把工作区外的绝对路径显示成相对路径
- * 会骗人（那文件根本不在这个工作区里）。
+ * toolLabel cases: one "verb + target" line per built-in tool. Relativization only happens
+ * inside the workspace root — showing an outside absolute path as relative would lie.
  */
 
 import { describe, expect, it } from 'vitest'

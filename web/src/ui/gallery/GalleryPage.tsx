@@ -1,8 +1,7 @@
 /**
- * 组件墙（阶段 2 的验收对照物，常驻风格速查板）：`?gallery=1` 打开，
- * `&only=button` 只渲染一节——供逐组件截图。分组与文案对照 Hana 组件墙参考；
- * 本页随产物分发但没有任何界面入口指向它。
- * 纪律与本站一致：一切颜色/尺寸引用 token；组件内边距等离网值在组件文件里注明墙出处。
+ * Component gallery for per-component screenshots: `?gallery=1` opens it, `&only=<id>` renders a
+ * single section. It ships with the build but no interface links to it; all colors and sizes come
+ * from tokens.css.
  */
 
 import type { ReactNode } from 'react'
@@ -34,7 +33,7 @@ export function GalleryPage() {
   const only = new URLSearchParams(window.location.search).get('only')
   const show = (id: string) => only === null || only === id
 
-  /* 演示数据：组合组件节的展示样本（不是真连接）——真实数据看主页。 */
+  /* Demo data for the composite sections; nothing here is wired up. */
   const demoSessions: SessionSummary[] = [
     { id: 'd1', name: '整理会议纪要', created_at: Date.now() - 2 * 60_000, storage_version: 1, parent_session_id: null, workspace: null, message_count: 4, active_run_id: 'r1', truncated_tail: false },
     { id: 'd2', name: '重构 archive 模块', created_at: Date.now() - 3_600_000, storage_version: 1, parent_session_id: null, workspace: null, message_count: 12, active_run_id: null, truncated_tail: false },
@@ -67,7 +66,7 @@ export function GalleryPage() {
         <Section id="button" title="按钮">
           <div className="flex flex-wrap items-center gap-a12">
             <Button>描边按钮</Button>
-            {/* hover 态摆拍：直接给 hover 的落点类，等价于 :hover 的稳定呈现 */}
+            {/* hover state posed by applying the hover classes directly */}
             <Button className="bg-accent-light">hover 态</Button>
             <Button variant="primary">主行动（每屏 ≤1）</Button>
             <Button disabled>禁用</Button>
@@ -81,9 +80,7 @@ export function GalleryPage() {
             <div className="mb-a8">
               <Input placeholder="常态 · 高度 34px" />
             </div>
-            {/* focus 态摆拍用 autoFocus 走真实 :focus 路径：类名覆盖会被 tailwind
-                的字母序输出静默吞掉（.border-accent 排在 .border-hair 之前），
-                而 :focus 伪类带特异性加成，永远赢。 */}
+            {/* focus is posed via autoFocus because a class override loses to Tailwind's order */}
             <Input autoFocus placeholder="focus · 边框转 accent + 2px 光晕" />
           </div>
         </Section>
@@ -126,9 +123,7 @@ export function GalleryPage() {
 
       {show('mark') && (
         <Section id="mark" title="标识 · 荷花（自带配色的插画，与线性图标集是两类）">
-          {/* 标识不做圆托、不垫色板：直接贴在页面上、背景透明（使用者的要求）。
-              两套主题并排——给子树挂 data-theme 即可换掉里面所有 token，
-              标识自己不变色（它有自己的配色），只是周边底色跟着主题走。 */}
+          {/* transparent background, no disc or plate; data-theme swaps tokens, the mark keeps its colors */}
           <div className="flex flex-wrap gap-a24">
             <div className="rounded-md border-hairline border-hair bg-paper px-a16 py-a12">
               <p className="mb-a8 font-ui text-hint text-ink-muted">暖纸 · 纸面直放</p>
@@ -180,8 +175,7 @@ export function GalleryPage() {
       {show('markdown') && (
         <Section id="markdown" title="markdown 渲染（助手正文：模型输出直接进 DOM，全程不注入 HTML）">
           <div className="max-w-chat rounded-md border-hairline border-hair bg-card px-a16 py-a12">
-            {/* 样本覆盖：标题 / 段落（含行内码·粗体·链接）/ 有序与无序列表（含嵌套）/
-                引用 / 表格 / 围栏代码 / 分隔线 / svg 围栏（渲染成图，不内联） */}
+            {/* sample set: headings, inline formatting, nested lists, quotes, tables, code, rules, svg */}
             <AssistantMessage>{`## 结论
 
 读完了 \`pyproject.toml\`，项目名是 **avid**，要求 Python >= 3.12。参考 [标识一节](#markdown)。
@@ -241,8 +235,7 @@ print("hi")
         <Section id="session" title="会话列表项（行内动作：重命名 / 删除）">
           <div className="w-sidebar">
             <SessionItem title="常态会话标题" meta="09:44 · 昨天" />
-            {/* hover 摆拍：用任意变体选择器把「隐藏直到需要」的按钮直接点亮；
-                给了回调才有按钮——只读形态（上面的常态行）一个都不渲染 */}
+            {/* hover posed via an arbitrary variant; action buttons render only with callbacks */}
             <SessionItem
               title="hover 态 · 操作按钮淡入"
               meta="11:20"
@@ -303,7 +296,7 @@ print("hi")
         <Section id="nav" title="会话列表（侧栏 240px 实宽）+ 侧栏底栏">
           <div className="flex h-[420px] w-sidebar flex-col rounded-md border-hairline border-hair bg-sidebar p-a12">
             <SessionNav sessions={demoSessions} selectedId="d1" onSelect={() => {}} />
-            {/* 底栏单开一栏：顶发丝线 + mt-auto 贴住栏底，设置入口在会话列表之后 */}
+            {/* footer as its own column: top hairline + mt-auto pins it to the bottom */}
             <SidebarFooter onOpenSettings={() => {}} />
           </div>
         </Section>
@@ -311,7 +304,7 @@ print("hi")
 
       {show('projects') && (
         <Section id="projects" title="项目卡（侧栏 · 可收回；行尾「更多」悬停现形，按下出删除）">
-          {/* 摆拍：项目行的「更多」平时是 opacity-0，这里把它强制点亮，速查板上才看得见 */}
+          {/* posed: the project row's "more" is opacity-0 by default, forced visible here */}
           <div className="w-sidebar rounded-md border-hairline border-hair bg-sidebar p-a12 [&_[data-testid=project-more]]:opacity-100">
             <ProjectCard
               workspaces={demoSessions

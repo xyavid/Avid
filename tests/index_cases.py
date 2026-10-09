@@ -1,7 +1,7 @@
-"""索引用例共用的帮手：造真会话、读回字节区间。
+"""Shared helpers for index cases: build real sessions and read back byte ranges.
 
-夹具（store / indexer）在 conftest.py 里——pytest 的夹具按名字找，import 进来会被
-ruff 当成未使用（F401）与重定义（F811）两边告状。这里只放能正常 import 的函数。
+Fixtures (store / indexer) live in conftest.py, since importing them would trip ruff's
+F401/F811; only functions that import cleanly belong here.
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ def append_message(path: Path, message: dict, *, workspace: str | None = ALPHA) 
 
 
 def read_byte_range(path: Path, offset: int, length: int) -> dict:
-    """The jump the index promises: byte range → the original record, parsed by the store's own codec."""
+    """The jump the index promises: byte range → the original record, parsed by the store codec."""
     with path.open("rb") as handle:
         handle.seek(offset)
         raw = handle.read(length).decode("utf-8")

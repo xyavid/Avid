@@ -1,14 +1,7 @@
-"""providers/ 三协议与传输层重试的单元测试。
+"""Cover the three provider protocols and transport retries: request shape, response parsing into
+a same-shaped Turn, and the retry matrix (``AVID_PROVIDER`` overrides provider detection).
 
-先于实现编写（§6 约定）。覆盖：
-
-* ``transport``：429/5xx/网络错误的重试矩阵（Retry-After、退避序列、耗尽后收敛）；
-  流式只在首字节前可重试。
-* ``anthropic`` / ``responses``：请求构造（system 落位、tool_calls↔原生 item、tool 结果
-  映射）与响应解析（非流式 JSON 与流式 SSE 产出**同形** Turn，B9）。
-* ``config``：provider 探测与 AVID_PROVIDER 覆盖。
-
-所有 HTTP 都走 ``httpx.MockTransport``；sleeper 注入为记录函数，测试不真睡。
+All HTTP goes through ``httpx.MockTransport`` with an injected sleeper, so no test sleeps.
 """
 
 from __future__ import annotations
@@ -55,7 +48,7 @@ def _mock(handler) -> httpx.Client:
     return httpx.Client(transport=httpx.MockTransport(handler))
 
 
-# ---------------- transport：重试矩阵 ----------------
+# ---------------- transport: retry matrix ----------------
 
 
 class TestRetry:
@@ -118,7 +111,7 @@ class TestRetry:
                 policy=RetryPolicy(attempts=3, jitter=0.0, sleeper=sleeper),
             )
         assert response.status_code == 503
-        assert record == [0.5, 1.0]  # 3 次尝试之间只有 2 段等待
+        assert record == [0.5, 1.0]  # 3 attempts leave only 2 waits
 
     def test_network_error_retries_then_raises_llm_error(self):
         calls = {"n": 0}
@@ -152,7 +145,7 @@ class TestRetry:
         assert record == [0.5]
 
     def test_stream_retry_only_before_first_byte(self):
-        """状态在响应头阶段就可判定：503 后重试成功。"""
+        """Status is decided at header time, so a 503 is retried before any body is read."""
         calls = {"n": 0}
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -174,12 +167,13 @@ class TestRetry:
         assert body == ['data: {"ok": true}', ""]
 
 
-# ---------------- config：协议族与窗口表 ----------------
+# ---------------- config: protocol family and window table ----------------
 
 
 class TestProviderDetection:
     def test_resolved_provider_validates_the_family(self):
-        """协议族来自 BYOK 的显式声明；非法值报错而不是猜。"""
+        """The protocol family comes from BYOK's explicit declaration; an invalid value errors
+        instead of being guessed."""
         assert Config(api_key="k", base_url="https://x/v1", model="m", provider="anthropic").resolved_provider == "anthropic"
         with pytest.raises(ConfigError, match="provider"):
             _ = Config(api_key="k", base_url="https://x/v1", model="m", provider="palm").resolved_provider
@@ -246,8 +240,8 @@ class TestAnthropic:
         body = json.loads(request.content)
         assert body["model"] == "claude-test"
         assert body["system"] == "sys"
-        assert body["max_tokens"] == anthropic.DEFAULT_MAX_TOKENS  # Anthropic 必填
-        # tool 消息合并进一条 user 消息的 tool_result 块
+        assert body["max_tokens"] == anthropic.DEFAULT_MAX_TOKENS  # required by Anthropic
+        # tool messages merge into one user message's tool_result blocks
         assert body["messages"] == [
             {"role": "user", "content": "hi"},
             {
@@ -303,7 +297,7 @@ class TestAnthropic:
         assert turn.reasoning == "let me look"
         assert turn.finish_reason == "tool_calls"
         assert turn.model == "claude-test"
-        # Anthropic 的 input_tokens 不含缓存部分：prompt 是三段之和（口径见 ai/usage.py）。
+        # Anthropic's input_tokens excludes cache: prompt sums three counters (ai/usage.py).
         assert turn.usage.prompt_tokens == 15
         assert turn.usage.cache_read_tokens == 3
         assert turn.usage.cache_write_tokens == 2
@@ -402,25 +396,27 @@ def _responses_message(text="hi", tool_calls=()):
 
 
 def test_http_error_offers_a_hint_when_reasoning_effort_may_be_the_culprit():
-    """400/422 且这次真带了推理强度：消息里附一条能照做的提示（措辞是"这条像是"，不硬断言）。"""
+    """A 400/422 on a request that did carry reasoning effort gets an actionable hint, phrased
+    as a guess rather than a verdict."""
     from avid.providers.protocol import http_error
 
     hinted = http_error(400, '{"error":"unknown parameter: reasoning_effort"}', sent_reasoning_effort=True)
     assert "HTTP 400" in str(hinted)
-    # 提示要指到能改的地方：输入区那一档（以及设置里那份档位列表）
+    # The hint must point at where it can be changed: the input-area picker and the settings list.
     assert "不设" in str(hinted) and "设置 → 模型" in str(hinted)
 
-    # 没带这个参数就别乱指（同样的 400 只是原始消息）
+    # Without that parameter there is no hint: the same 400 stays a plain message.
     plain = http_error(400, "bad request", sent_reasoning_effort=False)
     assert "不设" not in str(plain)
 
-    # 401/500 这类不是参数问题的，也不附提示
+    # 401/500 are not parameter problems and get no hint either.
     assert "不设" not in str(http_error(401, "unauthorized", sent_reasoning_effort=True))
 
 
 def test_reasoning_effort_rides_each_protocol_in_its_own_shape():
-    """推理强度（阶段 55）：OpenAI 兼容是顶层字段，Responses 收在 reasoning 对象里；
-    Anthropic 不映射（它的对应物是 thinking 预算，要开就在 extra_body 里写）。"""
+    """Reasoning effort rides each protocol in its own shape: a top-level field for
+    openai-compatible, inside the reasoning object for Responses, and no mapping at all for
+    Anthropic (its equivalent is the thinking budget, set via extra_body)."""
     from avid.providers import openai_compat
 
     config = Config(
@@ -446,7 +442,7 @@ def test_reasoning_effort_rides_each_protocol_in_its_own_shape():
     )
     assert responses_body["reasoning"] == {"effort": "low"}
 
-    # 不带时字段不出现（None = 由提供方自己决定，不是"发个空值"）
+    # Absent when unset: None means the provider decides, not "send an empty value".
     plain = openai_compat.build_request(
         Config(api_key="k", base_url="https://api.test/v1", model="m"),
         [{"role": "user", "content": "嗨"}],
@@ -487,7 +483,7 @@ def test_responses_request_translates_messages_and_tools():
     assert items[0] == {"role": "user", "content": "读 a.txt"}
     assert items[1]["type"] == "function_call" and items[1]["call_id"] == "fc_1"
     assert items[2] == {"type": "function_call_output", "call_id": "fc_1", "output": "内容"}
-    # 工具定义扁平化：name/parameters 顶层，不再嵌在 function 里
+    # Tool definitions flatten: name/parameters at the top level, not nested under function.
     assert request["tools"][0]["name"] == "read_file"
     assert "function" not in request["tools"][0]
 
@@ -571,7 +567,7 @@ def test_responses_prompt_too_long_is_classified():
             responses.chat(RESPONSES_CONFIG, [{"role": "user", "content": "hi"}], client=http)
 
 
-# ---------------- 门面分发 ----------------
+# ---------------- facade dispatch ----------------
 
 
 class TestDispatch:
@@ -627,7 +623,8 @@ class TestDispatch:
         assert turn.text == "hi"
 
     def test_openai_path_unchanged_through_dispatcher(self):
-        """provider 缺省 = openai 兼容：老路径（含 stream_options）逐字保留。"""
+        """A missing provider means openai-compatible: the legacy path, stream_options
+        included, is kept verbatim."""
         captured: dict[str, httpx.Request] = {}
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -671,9 +668,7 @@ class TestDispatch:
 
 
 # ---- image input: parts to each provider's wire shape ----
-#
-# The stored part is provider-neutral (avid/attachments.py); wire shapes exist only in these three modules.
-# Pins that each provider translates the shape correctly and that none of them silently drops the image.
+# Parts are provider-neutral (avid/attachments.py); wire shapes live here, no image may be dropped.
 
 _IMG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 24
 _IMG_B64 = base64.b64encode(_IMG_BYTES).decode("ascii")

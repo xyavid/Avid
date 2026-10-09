@@ -1,4 +1,7 @@
-"""工作区注册表：id 派生、幂等登记、损坏容错、以及"注册表只是索引"这条性质。"""
+"""Workspace registry: id derivation, idempotent registration, corruption tolerance.
+
+The registry file is an index, never the authority.
+"""
 
 from __future__ import annotations
 
@@ -58,7 +61,7 @@ def test_add_is_idempotent(registry, workspace_dir):
 
 
 def test_add_updates_the_name(registry, workspace_dir):
-    """登记只带名字：阶段 51 起工作区没有默认权限这种字段。"""
+    """Registration carries only a name; this version has no default-permission field."""
     registry.add(workspace_dir)
     renamed = registry.add(workspace_dir, name="重构")
 
@@ -95,11 +98,7 @@ def test_list_is_newest_used_first(registry, tmp_path):
 
 
 def test_registry_only_changes_on_explicit_writes(registry, workspace_dir):
-    """读路径不写盘：列一次、找一个、打开都别生成或改动文件。
-
-    启动与日常使用都不写盘是阶段 18 的收尾裁决——"看一眼注册表"与"起过服务"
-    必须可区分。写入口只有 add / remove。
-    """
+    """Read paths never write the file; only add and remove do."""
     registry.add(workspace_dir)
     before = registry.path.read_text(encoding="utf-8")
 
@@ -111,7 +110,7 @@ def test_registry_only_changes_on_explicit_writes(registry, workspace_dir):
 
 
 def test_a_legacy_default_permission_field_is_ignored(registry, workspace_dir):
-    """旧注册表里的 default_permission 读时忽略、下次写入自然消失（阶段 51 没有默认权限）。"""
+    """A legacy default_permission field is ignored on read and disappears on the next write."""
     registry.path.parent.mkdir(parents=True, exist_ok=True)
     registry.path.write_text(
         json.dumps(
@@ -152,12 +151,7 @@ def test_get_unknown_raises_with_a_usable_hint(registry):
 
 
 def test_remove_only_hides_the_index(registry, workspace_dir):
-    """删除是**墓碑**：不在候选里了，路径与数据都还在。
-
-    为什么不是把条目从文件里删掉：会话库在 ``<root>/.avid/sessions``，而工作区 id 是
-    路径的派生值——条目一旦没了，"这个 id 对应哪个目录"就再没有记录，界面删掉工作区后
-    它下面的会话连列举与打开都做不到。用户要的是"归到未归属的会话"，不是消失。
-    """
+    """Removal is a tombstone: the entry leaves the candidate list, path and data stay."""
     marker = workspace_dir / "keep.txt"
     marker.write_text("会话数据", encoding="utf-8")
     registry.add(workspace_dir)
@@ -166,15 +160,16 @@ def test_remove_only_hides_the_index(registry, workspace_dir):
 
     assert removed.id == derive_id(workspace_dir)
     assert removed.hidden is True
-    assert registry.list() == []  # 候选里没有了
+    assert registry.list() == []  # gone from the candidate list
     assert [ws.id for ws in registry.list(include_hidden=True)] == [removed.id]
-    assert registry.find(str(workspace_dir)) is None  # 默认查不到（不会被当成"已登记"）
+    assert registry.find(str(workspace_dir)) is None  # find() misses it by default
+    # the id is path-derived, so the entry must stay resolvable
     assert registry.get(derive_id(workspace_dir)).root == str(workspace_dir.resolve())
     assert marker.read_text(encoding="utf-8") == "会话数据"
 
 
 def test_adding_a_hidden_workspace_again_brings_it_back(registry, workspace_dir):
-    """重新登记同一个目录 = 撤销删除（同一个 id、同一个条目，不是第二份真相）。"""
+    """Re-adding the same directory undoes the removal: same id, one entry, no second truth."""
     registry.add(workspace_dir, name="项目")
     registry.remove(derive_id(workspace_dir))
 
@@ -203,17 +198,17 @@ def test_registry_file_shape(registry, workspace_dir):
 
     assert payload["version"] == 1
     assert payload["workspaces"][0]["name"] == "项目"
-    # 权限不再随工作区落盘：运行级 permission 只由每次运行的显式参数决定。
+    # permission is not persisted per workspace: each run passes it explicitly
     assert "default_permission" not in payload["workspaces"][0]
     assert payload["workspaces"][0]["root"] == str(workspace_dir.resolve())
 
 
 def test_sessions_root_is_the_shared_store_keyed_by_workspace_id(registry, workspace_dir):
-    """阶段 56：会话集中在一个专用目录下，按工作区 id 分子目录——不再是工作区里的 .avid/sessions。"""
+    """Sessions live in one dedicated store keyed by workspace id, not under ``<root>/.avid``."""
     workspace = registry.add(workspace_dir)
 
     assert sessions_root(workspace) == userdirs.sessions_dir() / workspace.id
-    # 未登记的目录按路径摘要拿到同一个 id，因此落点一致。
+    # an unregistered directory derives the same id from its path, so the landing spot matches
     assert sessions_root(str(workspace_dir)) == userdirs.sessions_dir() / workspace.id
     assert not Path(workspace.root, ".avid", "sessions").exists()
 

@@ -21,7 +21,7 @@ function report(overrides: Partial<UsageReport> = {}): UsageReport {
   }
 }
 
-/** 进度弧的 dasharray 第一段 = 弧长；用它断言"环画到多满"。 */
+/** First dasharray segment = arc length, used to assert how full the ring is. */
 function arc(container: HTMLElement): number {
   const circles = container.querySelectorAll('circle')
   const dash = circles[1]?.getAttribute('stroke-dasharray') ?? '0 0'

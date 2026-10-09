@@ -1,19 +1,11 @@
-"""WebSocket 终端桥：一条连接一个 PTY 交互 shell，POSIX only。
+"""WebSocket terminal bridge at ``/api/ws/terminal?root=<workspace root>&cols=&rows=``: one PTY
+shell per connection, POSIX only, the connection owning the shell's whole lifecycle (disconnect
+kills the process group, so no orphan shell survives).
 
-- ``/api/ws/terminal?root=<工作区根>&cols=&rows=``
-- root 必须是已登记工作区的根目录（防任意 cwd）；Origin 校验自己做——
-  TrustBoundaryMiddleware 是 BaseHTTPMiddleware，不覆盖 WebSocket。
-- 帧协议：上行 ``{"type":"in","data"}`` / ``{"type":"resize","cols","rows"}``；
-  下行 ``{"type":"out","data"}`` / ``{"type":"exit","code"}`` / ``{"type":"error","message"}``。
-- 断开杀整个进程组：终端是人的工具，不走权限引擎（打字的是人），
-  但生命周期必须跟着连接走，不允许留下孤儿 shell。
-- Windows 标准库没有 PTY（ConPTY 需要 ctypes 封装）：明确回 error frame，
-  不做半吊子的管道伪装（记录缺口，另立阶段）。fcntl/pty/termios 因此
-  只能在运行时导入——顶层导入会让 Windows 起不来整个 web 服务。
-- 信任边界（M4 决策记录）：Origin 的 **hostname** 必须在白名单内（挡跨站与
-  DNS rebinding），且 Origin 的 host:port 必须与请求 Host 头一致（挡本机
-  其它端口的页面驱动 shell，即 CSWSH）。hostname 白名单不比端口，与 HTTP
-  中间件同一姿态；本地其它端口的页面被端口比对挡住。
+``root`` must be a registered workspace root; the Origin hostname must be allowlisted and its
+host:port must equal the Host header, because TrustBoundaryMiddleware never sees WebSocket
+handshakes; frames are up ``{"type":"in","data"}`` / ``{"type":"resize","cols","rows"}``, down
+``{"type":"out","data"}`` / ``{"type":"exit","code"}`` / ``{"type":"error","message"}``.
 """
 
 from __future__ import annotations
@@ -53,8 +45,7 @@ def _clamp(value: object, default: int) -> int:
 @router.websocket("/ws/terminal")
 async def terminal_socket(websocket: WebSocket, root: str = "", cols: int = 80, rows: int = 24) -> None:
     """One PTY per connection; the socket is the shell's whole lifecycle."""
-    # Origin 校验自己做：BaseHTTPMiddleware 只拦 HTTP，不拦 WebSocket 握手。
-    # 白名单取 app 级的同一份（含 CLI 的 LAN extra），端口还要与 Host 一致。
+    # BaseHTTPMiddleware never sees the WS handshake, so Origin is checked here on the allowlist.
     allowed_hosts = websocket.app.state.allowed_hosts
     origin = websocket.headers.get("origin")
     if origin:
@@ -82,7 +73,7 @@ async def terminal_socket(websocket: WebSocket, root: str = "", cols: int = 80, 
         await websocket.close()
         return
 
-    # POSIX 专属模块在这里才导入：顶层导入会让 Windows 起不来整个 web 服务。
+    # Runtime imports: top-level fcntl/pty would break the whole web service on Windows.
     import fcntl
     import pty
     import termios
@@ -109,7 +100,7 @@ async def terminal_socket(websocket: WebSocket, root: str = "", cols: int = 80, 
         await websocket.send_json({"type": "error", "message": f"终端启动失败：{exc}"})
         await websocket.close()
         return
-    os.close(slave_fd)  # 子进程已持有副本，父进程留着自己的会挡住 EOF 语义
+    os.close(slave_fd)  # The child holds a copy; the parent's own copy would break EOF semantics.
     logger.info("终端已连接：pid=%s cwd=%s (%sx%s)", proc.pid, root_path, cols_n, rows_n)
 
     loop = asyncio.get_running_loop()
@@ -117,7 +108,7 @@ async def terminal_socket(websocket: WebSocket, root: str = "", cols: int = 80, 
     outgoing: asyncio.Queue[str | None] = asyncio.Queue()
 
     def pump() -> None:
-        """把 PTY 输出泵进队列（阻塞读放线程，异步侧只消费）。"""
+        """Pumps PTY output into the queue; the blocking read runs on a thread."""
         while True:
             try:
                 data = os.read(master_fd, 4096)
@@ -137,7 +128,7 @@ async def terminal_socket(websocket: WebSocket, root: str = "", cols: int = 80, 
             if text is None:
                 break
             await websocket.send_json({"type": "out", "data": text})
-        # PTY 读到 EOF：shell 已退出。此刻它刚死，poll 通常已能拿到码。
+        # EOF from the PTY means the shell exited; poll() can normally read the code right away.
         with contextlib.suppress(Exception):
             code = proc.poll()
             await websocket.send_json({"type": "exit", "code": code if code is not None else 0})
@@ -153,10 +144,9 @@ async def terminal_socket(websocket: WebSocket, root: str = "", cols: int = 80, 
             except ValueError:
                 continue
             if not isinstance(frame, dict):
-                continue  # 非对象帧（数字/字符串/数组）是坏帧，跳过不杀连接
+                continue  # A non-object frame (number/string/array) is malformed; skip, don't drop.
             kind = frame.get("type")
-            # 对已死 PTY 的写与 resize 会 OSError——shell 自己退了（exit），按正常
-            # 断开收尾；不让它从协程逃逸成 ASGI 未处理异常。
+            # A dead PTY raises OSError; that is a normal shell exit, not a coroutine escape.
             with contextlib.suppress(OSError):
                 if kind == "in" and isinstance(frame.get("data"), str):
                     os.write(master_fd, frame["data"].encode("utf-8"))
@@ -169,7 +159,7 @@ async def terminal_socket(websocket: WebSocket, root: str = "", cols: int = 80, 
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
         proc.wait()
         send_task.cancel()
-        # sender 可能已因对端断开死在 send_json 上：兜住一切，保证 fd 收尾必达。
+        # sender may already have died on send_json after a disconnect; still finish fd cleanup.
         with contextlib.suppress(BaseException):
             await send_task
         with contextlib.suppress(OSError):

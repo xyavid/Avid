@@ -1,23 +1,8 @@
-"""压缩子系统：一条 Pi 式压缩通路，阈值或手动触发。
+"""Compaction subsystem: one path that keeps the recent turns and folds everything earlier into a
+single checkpoint message, triggered by the token budget or forced.
 
-Context 输入 = system prompt + 对话历史 + 用户输入。触发后：保留最近
-``keep_recent_turns``（默认 10，约 5–20 之间可配）轮的完整历史，更早的
-历史先整段落盘（可回查）再经一次 summarize 压成一条检查点消息。压缩后
-context = system prompt + 检查点 + 最近轮历史。
-
-检查点走两份 prompt（``CREATE_TASK`` 新建 / ``UPDATE_TASK`` 更新，共用
-``COMPACTION_SYSTEM`` 与 ``CHECKPOINT_STRUCTURE``）。分界是 transcript 头部：
-还是普通消息就是首次压缩，带上最初请求与被压缩的历史；已经是检查点就走更新路径——
-上一份检查点 + 新素材 + 仓库现状（``repo_state`` 探针），按现状改而不是从头摘要一遍。
-两份都要求把事实与假设分开（``### Verified`` / ``### Hypotheses``）：假设被推翻也不删，
-标 ``[rejected]`` 留痕，否则下一轮会有人把假设当事实用。
-
-- 切点只在安全边界：assistant 轮与其工具结果同生共死，绝不从批中间切。
-- 溢出兜底（PromptTooLong）与主动请求走同一条路径，只是 force=True。
-- 游标经 on_compaction 落会话值（诊断 C2）：下一个运行的投影直接从
-  摘要形态开始，摘要调用不重花。
-- 触发线 = 窗口折算字符 − reserve（给输出留的余量，Pi 同值 16384
-  tokens）；无窗口/读数时回落 CONTEXT_CHAR_LIMIT。
+The cut point never lands inside a tool batch, and the trigger line is derived from the model
+window minus the output reserve, falling back to CONTEXT_CHAR_LIMIT when no window reading exists.
 """
 
 from __future__ import annotations
@@ -39,7 +24,7 @@ from .transcript import Transcript, text_of
 
 logger = logging.getLogger("avid.agent.compaction")
 
-# 无窗口/读数时的回落触发线；阈值常量集中在这里，调参只动这些数字。
+# Fallback trigger line when no window reading exists; the tunable thresholds all live here.
 CONTEXT_CHAR_LIMIT = 400_000
 RESERVE_TOKENS = 16_384
 KEEP_RECENT_TURNS = 10
@@ -49,8 +34,8 @@ SPILL_DIR = ".avid/context"
 # Marker for content that has already been spilled, so it is never treated as raw output again.
 SPILL_PREFIX = "[已落盘]"
 
-# 检查点引擎的系统提示：创建与更新共用（身份、禁止事项、语言）。摘要是模型写的，但它是
-# 原件——不许解题、不许接着聊、不许调工具，只出一份下一个 agent 能直接续上的检查点。
+# System prompt of the checkpoint engine, shared by create and update: the summary is model-written
+# but is the original text, so the engine must not solve the task, chat on or call tools.
 COMPACTION_SYSTEM = (
     "You are a context-compaction engine for a coding agent.\n"
     "Your task is to transform the provided conversation state into a compact, faithful "
@@ -65,8 +50,7 @@ COMPACTION_SYSTEM = (
     "headings exactly as given. Never invent missing facts."
 )
 
-#: 检查点结构：两份 prompt 共用一份骨架——结构漂了，下一个 agent 就找不着东西，
-#: 而它只拿到这一份文本。
+#: Shared checkpoint skeleton; it is all the next agent receives, so both prompts keep it identical.
 CHECKPOINT_STRUCTURE = (
     "## Goal\n"
     "## Constraints & Preferences\n"
@@ -82,7 +66,7 @@ CHECKPOINT_STRUCTURE = (
     "## Critical Context"
 )
 
-#: 两份任务块共用的分段说明：光给段名不够，填法也要一致，否则创建与更新的产物没法比。
+#: Shared section guide: how each section is filled must match, or create and update cannot compare.
 STRUCTURE_GUIDE = (
     "Section notes:\n"
     "- Progress items carry - [x] when done and - [ ] when not; ### Blocked holds what is "
@@ -92,7 +76,7 @@ STRUCTURE_GUIDE = (
     "- Keep exact file paths, function names, commands and identifiers everywhere."
 )
 
-#: 首次压缩的任务块：保留/删去清单 + 事实与假设的分层 + 输出结构。
+#: First compaction task block: keep/drop lists, the verified-vs-hypothesis split, the structure.
 CREATE_TASK = (
     "Create a continuation checkpoint.\n"
     "\n"
@@ -128,7 +112,7 @@ CREATE_TASK = (
     f"{CHECKPOINT_STRUCTURE}"
 )
 
-#: 更新路径的任务块：以旧检查点为底座，用新素材改它，而不是重新摘要一遍。
+#: Update task block: revise the old checkpoint with new material instead of re-summarizing.
 UPDATE_TASK = (
     "Update the existing structured summary with new information.\n"
     "\n"
@@ -154,11 +138,12 @@ UPDATE_TASK = (
     f"{CHECKPOINT_STRUCTURE}"
 )
 
-#: 摘要消息的头与脚注标记：``checkpoint_of`` 靠它把检查点正文取回来（更新路径的输入）。
+#: Head and footer marks of a summary message; checkpoint_of reads the checkpoint body back out.
 SUMMARY_MESSAGE_HEADER = "[历史摘要] 之前的对话已被压缩，以下是摘要。"
 _SUMMARY_FOOTER_MARK = "（完整记录："
 
-# 仓库现状探针：更新路径的输入之一。只做锦上添花——超时、报错、不是仓库都当作没有。
+# Repo-state probe, one input of the update path; best effort only, so a timeout, error or non-repo
+# result reads as absent and never fails the compaction.
 REPO_STATE_TIMEOUT_SECONDS = 2.0
 REPO_STATE_MAX_CHARS = 2_000
 REPO_STATE_COMMANDS: tuple[tuple[str, ...], ...] = (
@@ -168,8 +153,8 @@ REPO_STATE_COMMANDS: tuple[tuple[str, ...], ...] = (
     ("diff", "--stat"),
 )
 
-# A per-process tag keeps spill filenames unique across restarts, so a summary's read-back path stays
-# valid instead of being silently overwritten by the next run.
+# A per-process tag keeps spill filenames unique across restarts, so a summary's read-back path
+# stays valid instead of being silently overwritten by the next run.
 _PROCESS_TAG = f"{os.getpid():x}{int(time.time() * 1000) & 0xFFFFF:05x}"
 # In-process spill counter; it resets on restart, which is exactly why the tag above exists.
 _spill_seq = 0
@@ -191,11 +176,8 @@ class CompactReport:
 
 @dataclass(frozen=True)
 class ContextBudget:
-    """压缩预算与组装上限；默认值引用常量，按运行可注入覆盖（单变量对照用）。
-
-    组装上限（bootstrap_chars / skill_always_chars）由 CONTEXT_MAP 的 cap 字段
-    以字段名引用，渲染时从这份预算取值——上限可调但不散落。
-    """
+    """Compaction budget and assembly caps; a run may inject overrides, and CONTEXT_MAP references
+    the assembly caps by field name so the limits stay adjustable in one place."""
 
     bootstrap_chars: int = prompt.AGENTS_MD_MAX_CHARS
     skill_always_chars: int = prompt.SKILL_ALWAYS_TOTAL_MAX_CHARS
@@ -210,7 +192,7 @@ class ContextBudget:
 def _next_spill_path(root: Path, kind: str, suffix: str, tag: str = "") -> Path:
     """Return the next spill path, tagged per run when the caller supplies one."""
     global _spill_seq
-    with _SPILL_LOCK:  # parallel subagents compact at once, so the sequence must be taken atomically
+    with _SPILL_LOCK:  # parallel subagents compact at once, so the counter is taken atomically
         _spill_seq += 1
         seq = _spill_seq
     return root / f"{kind}-{tag or _PROCESS_TAG}-{seq:04d}{suffix}"
@@ -226,11 +208,8 @@ def _spill_root(root: Path | None = None) -> Path:
 
 
 def spill(text: str, kind: str, root: Path | None = None, tag: str = "") -> str | None:
-    """Write text under the spill directory and return its workspace-relative path, or None on failure.
-
-    供 large_output_hook 使用：工具结果超长时截断并把全文放到这里，模型用
-    read_file 读回。
-    """
+    """Write text under the spill directory and return its workspace-relative path, or None; the
+    large-output hook spills oversized tool output here, read back with read_file."""
     root = _spill_root(root)
     path = _next_spill_path(root, kind, ".txt", tag)
     try:
@@ -250,7 +229,7 @@ def spill_notice(path: str, size: int, kind: str) -> str:
 def _save_transcript(
     messages: list[dict[str, Any]], workdir: Path | None = None, tag: str = ""
 ) -> str:
-    """Write the full transcript as JSON and return its path, or a placeholder when saving failed."""
+    """Write the full transcript as JSON and return its path, or a placeholder on failure."""
     root = _spill_root(workdir)
     path = _next_spill_path(root, "transcript", ".json", tag)
     try:
@@ -270,17 +249,13 @@ def _tag(name: str, body: str) -> str:
     return f"<{name}>\n{body}\n</{name}>"
 
 
-#: 更新路径遇到空素材时写进 <conversation> 的替代文本。
+#: Substitute text written into <conversation> when the update path has no new material.
 _NO_NEW_MATERIAL = "(no new conversation since the checkpoint)"
 
 
 def render_conversation(messages: list[dict[str, Any]]) -> str:
-    """Renders a slice of history as role-labelled text.
-
-    The request carries one user message (see COMPACTION_SYSTEM), so this is the single place
-    where message shapes are flattened. Tool calls keep their raw arguments on purpose: an
-    exact command or path is what the next agent needs, and it cannot re-derive it.
-    """
+    """Render a slice of history as role-labelled text, the single place message shapes flatten;
+    tool arguments stay raw because the next agent needs the exact command or path."""
     names = {
         str(call.get("id")): str((call.get("function") or {}).get("name", "?"))
         for message in messages
@@ -291,7 +266,7 @@ def render_conversation(messages: list[dict[str, Any]]) -> str:
         role = str(message.get("role", "?"))
         text = text_of(message.get("content")).strip()
         if role == "tool":
-            # 光有 call_id 读不出这是谁的结果，标上工具名
+            # A bare call_id does not say whose result this is, so tag the tool name.
             name = names.get(str(message.get("tool_call_id")), "unknown")
             head = f"[tool result: {name}]"
         else:
@@ -328,7 +303,8 @@ def _create_message(original_request: str, conversation: str) -> str:
 def _update_message(checkpoint: str, conversation: str, repo: str | None) -> str:
     blocks = [
         _tag("previous-checkpoint", checkpoint),
-        # 连着压两次（或刚压完就溢出兜底）时新素材是空的：明说，别给一个空块让模型自己猜。
+        # Two compactions in a row (or a compaction right before an overflow) leave no new material:
+        # say so, rather than handing the model an empty block to guess about.
         _tag("conversation", conversation or _NO_NEW_MATERIAL),
     ]
     if repo:
@@ -349,11 +325,8 @@ def checkpoint_of(content: str) -> str | None:
 
 
 def previous_checkpoint(messages: list[dict[str, Any]]) -> str | None:
-    """The checkpoint the transcript opens with, if any.
-
-    摘要消息在不在头部，就是「首次压缩」与「更新压缩」的分界——它也正好是「上一份检查点」
-    的存放处，所以不需要另存一份游标。
-    """
+    """The checkpoint the transcript opens with, if any, which is also the first-vs-update boundary
+    and therefore needs no separate cursor."""
     if not messages or messages[0].get("role") != "user":
         return None
     return checkpoint_of(text_of(messages[0].get("content")))
@@ -377,12 +350,8 @@ def _git(root: Path, *args: str) -> str | None:
 
 
 def repo_state(root: str | None) -> str | None:
-    """Summarizes the working tree for the update prompt: branch, HEAD, tracked changes, diff size.
-
-    只做锦上添花：不是 git 仓库、没装 git、超时或命令失败，一律当作没有这段——压缩不能
-    因为探针失败而失败。代价是更新时多几条只读 git 进程；首次压缩不探（那时候没有可更新
-    的检查点，探了也没人用）。
-    """
+    """Summarize the working tree for the update prompt, best effort only: a missing git, a timeout
+    or a failed command reads as no block, since compaction must never fail with the probe."""
     if not root:
         return None
     path = Path(root)
@@ -421,18 +390,18 @@ def _summary_message(summary: str, transcript: str) -> str:
     )
 
 
-# ---------- 触发预算 ----------
+# ---------- trigger budget ----------
 
 
 def _chars_per_token(prompt_tokens: int | None, chars: tuple[int, int, int] | None) -> float:
-    """实测本会话的字符/token 比；缺失或离谱时回落 2.0（多数中英混合的量级）。"""
+    """Measured chars/token for this session; missing or implausible readings fall back to 2.0."""
     if prompt_tokens is None or prompt_tokens <= 0 or chars is None:
         return 2.0
     total = sum(chars)
     if total <= 0:
         return 2.0
     measured = total / prompt_tokens
-    # 离谱的读数不采纳：0.5（token 比字符还多）到 6.0（全 ASCII）之外视为噪声。
+    # Implausible readings are noise: anything outside 0.5..6.0 is rejected.
     return min(max(measured, 0.5), 6.0)
 
 
@@ -444,10 +413,8 @@ def trigger_chars(
     reserve_tokens: int,
     fallback: int = CONTEXT_CHAR_LIMIT,
 ) -> int:
-    """触发线 = (窗口 − reserve) × 实测字符/token − system 与工具字符。
-
-    reserve 给输出留余量（推理模型输出很长）。窗口或读数缺失时回落 fallback。
-    """
+    """Trigger line = (window − reserve) × measured chars/token − system and tools characters, where
+    the reserve leaves room for output (reasoning models answer at length)."""
     if window is None or window <= 0:
         return fallback
     per_token = _chars_per_token(prompt_tokens, chars)
@@ -458,10 +425,8 @@ def trigger_chars(
 
 
 def effective_trigger(limits: ContextBudget, state: Any) -> tuple[ContextBudget, int]:
-    """Return the trigger line this run uses (window-derived when a reading exists).
-
-    from_window=False 时注入的 context_chars 原样生效——单变量对照的注入不能被派生盖掉。
-    """
+    """Return the trigger line this run uses, derived from the window when a reading exists, unless
+    from_window=False keeps the injected context_chars exactly for a controlled arm."""
     if not limits.from_window:
         return limits, limits.context_chars
     trigger = trigger_chars(
@@ -490,16 +455,12 @@ def announce(report: "CompactReport | None", state: Any) -> None:
     )
 
 
-# ---------- 压缩通路 ----------
+# ---------- compaction path ----------
 
 
 def cut_point(transcript: Transcript, keep_recent_turns: int) -> int:
-    """Return the index where the kept window starts: the oldest of the recent turns.
-
-    一轮 = 一条 assistant 消息连同它的全部工具结果；从尾部往前数
-    ``keep_recent_turns`` 条 assistant 消息，切点再向安全边界外侧行走——
-    绝不从工具批中间切。
-    """
+    """Return the index where the kept window starts, the oldest of the recent turns; a round is one
+    assistant message with all its tool results, so the cut never splits a tool batch."""
     messages = transcript.as_messages()
     rounds = 0
     cut = 0
@@ -510,7 +471,7 @@ def cut_point(transcript: Transcript, keep_recent_turns: int) -> int:
                 cut = index
                 break
     if cut == 0:
-        return 0  # 轮数不足一个保留窗口：没有「更早历史」可摘要
+        return 0  # fewer rounds than the keep window: no earlier history exists to summarize
     while cut < len(messages) and not transcript.is_safe_boundary(cut):
         cut += 1
     return cut
@@ -526,16 +487,15 @@ def run_compaction(
     force: bool = False,
     on_compaction: Any = None,
 ) -> CompactReport | None:
-    """把保留窗口之外的历史压成一条摘要；返回报告，未触发或失败返回 None。
-
-    force=True（溢出兜底或主动请求）跳过触发线与每运行一次的守护。
-    """
+    """Fold everything outside the keep window into one summary message, force=True skipping the
+    trigger line and the once-per-run guard; None means nothing ran, keeping the old history."""
     _limits, trigger = effective_trigger(limits, state)
     before = transcript.estimate_chars()
     if not force and before <= trigger:
         return None
     if state.compacted and not force:
-        # 自动路径每运行只尝试一次：摘要失败时保留原历史，防逐轮重试风暴。
+        # The automatic path tries once per run: a failed summary keeps the old history, so a
+        # per-round retry storm cannot start.
         logger.info("compact: 本运行已压缩过，跳过")
         return None
 
@@ -553,15 +513,16 @@ def run_compaction(
         body = _create_message(_original_request(earlier), render_conversation(earlier))
         mode = "新建检查点"
     else:
-        # 上一份检查点就是这段历史的第一条消息：它已经吃掉了那部分内容，新素材从它之后算起，
-        # 同一段内容不喂两遍。repo_state 只在这条路径上探——首次压缩没有可更新的东西。
+        # The previous checkpoint is the first message of this history, so the new material starts
+        # after it and nothing is fed twice; repo_state is probed only here, never on a first pass.
         body = _update_message(
             checkpoint,
             render_conversation(earlier[1:]),
             repo_state(state.workspace_root),
         )
         mode = "更新检查点"
-    # 引擎提示只有一份：是新建还是更新由任务块说，系统提示不跟着模式漂。
+    # One engine prompt only: the task block says create or update, so the system prompt never
+    # follows the mode.
     summary = _summarize(body, config=config, chat=chat, system=COMPACTION_SYSTEM)
     if summary is None:
         logger.warning("compact: 检查点生成失败，保留原历史")

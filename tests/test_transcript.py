@@ -1,4 +1,4 @@
-"""Transcript 的测试：它是 messages 的唯一所有者，也是结构不变量的守护者。"""
+"""Transcript: the sole owner of messages and the guardian of its structural invariants."""
 
 import pytest
 
@@ -28,7 +28,7 @@ def tool(call_id="c1", content="结果"):
     return {"role": "tool", "tool_call_id": call_id, "content": content}
 
 
-# ---------- 结构校验 ----------
+# ---- structural validation ----
 
 
 def test_valid_structure_passes():
@@ -49,7 +49,7 @@ def test_partially_answered_tool_calls_are_a_violation():
     assert validate(messages) != []
 
 
-# ---------- 所有者语义 ----------
+# ---- ownership semantics ----
 
 
 def test_wraps_the_given_list_in_place():
@@ -89,7 +89,7 @@ def test_set_content_rejects_out_of_range():
         Transcript([user()]).set_content(5, "x")
 
 
-# ---------- 结构改动：先校验后落地 ----------
+# ---- structural edits: validate before landing ----
 
 
 def test_replace_all_accepts_a_valid_candidate():
@@ -116,7 +116,7 @@ def test_splice_rejects_a_cut_that_orphans_a_result():
     before = transcript.as_messages()
 
     with pytest.raises(TranscriptError):
-        transcript.splice(2, 3)  # 切掉 tool 结果，assistant 的 tool_calls 就悬空了
+        transcript.splice(2, 3)  # dropping the tool result orphans the assistant's tool_calls
 
     assert transcript.as_messages() == before
 
@@ -144,27 +144,24 @@ def test_splice_can_insert_a_marker():
     assert transcript.validate() == []
 
 
-# ---------- 边界与统计 ----------
+# ---- boundaries and accounting ----
 
 
 def test_is_safe_boundary():
     transcript = Transcript([user(), assistant("", [call()]), tool(), user("after")])
 
-    assert transcript.is_safe_boundary(0)  # 开头
-    assert transcript.is_safe_boundary(1)  # assistant 之前
-    assert not transcript.is_safe_boundary(2)  # 切口处是 tool 结果
-    assert transcript.is_safe_boundary(3)  # tool 结果之后
-    assert transcript.is_safe_boundary(4)  # 结尾
+    assert transcript.is_safe_boundary(0)  # start
+    assert transcript.is_safe_boundary(1)  # before the assistant
+    assert not transcript.is_safe_boundary(2)  # a tool result sits at the cut
+    assert transcript.is_safe_boundary(3)  # after the tool result
+    assert transcript.is_safe_boundary(4)  # end
 
 
 def test_boundary_rejects_a_pending_tool_call_left_behind():
-    """防御分支：切口前一条还挂着没结果的 tool_calls。
-
-    合法的 transcript 里这个位置不可能出现（assistant 带 tool_calls 后必然紧跟
-    结果），所以这里直接构造候选序列来验证判定函数本身。
-    """
+    """The boundary sits after an assistant with pending tool_calls — unreachable in a valid
+    transcript, so the candidate sequence is built directly."""
     transcript = Transcript([assistant("", [call()]), tool()])
-    # index 1 是 tool，按"切口处不能是 tool"就已经不安全了
+    # index 1 is a tool: already unsafe by the "no tool at the cut" rule
     assert not transcript.is_safe_boundary(1)
 
 
@@ -198,7 +195,8 @@ def test_estimate_counts_content_and_tool_calls():
 
 
 def test_an_image_message_costs_a_fixed_estimate_not_its_base64():
-    """Image cost is a fixed estimate: base64 length is not a token count and would blow past the compaction threshold."""
+    """Image cost is a fixed estimate: base64 length is not a token count and would blow past
+    the compaction threshold."""
     from avid.attachments import IMAGE_CHAR_COST, image_part
 
     part = image_part(b"\x89PNG\r\n\x1a\n" + b"\x00" * 200_000, name="big.png")
@@ -210,7 +208,7 @@ def test_an_image_message_costs_a_fixed_estimate_not_its_base64():
     assert transcript.estimate_chars() >= IMAGE_CHAR_COST
 
 
-# ---------------- 成本量是增量维护的（P2-4） ----------------
+# ---- cost counters are incremental ----
 
 TOOL = {"role": "tool", "tool_call_id": "c1", "content": "z" * 300}
 CALL = {
@@ -221,7 +219,8 @@ CALL = {
 
 
 def test_incremental_costs_match_a_full_recompute_after_every_mutation():
-    """缓存值必须与全量算法逐次相等——记账写错就会让压缩阈值判断失真。"""
+    """Cached values must equal a full recompute after every mutation, or the compaction
+    threshold drifts."""
     transcript = Transcript([{"role": "user", "content": "初始"}])
     cases = [
         ("append assistant", lambda t: t.append(CALL)),
@@ -240,7 +239,8 @@ def test_incremental_costs_match_a_full_recompute_after_every_mutation():
 
 
 def test_reads_do_not_recompute(monkeypatch):
-    """读取必须走缓存：每轮 `context.prepare` 至少算三次，全量扫是 O(消息数 × 轮数)。"""
+    """Reads must hit the cache: each `context.prepare` reads at least three times, and a
+    full scan is O(messages x rounds)."""
     transcript = Transcript([{"role": "user", "content": "一"}])
     recomputes: list[int] = []
     monkeypatch.setattr(transcript, "_recompute_costs", lambda: recomputes.append(1))

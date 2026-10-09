@@ -1,13 +1,9 @@
-"""BYOK 设置端点（GET/PUT/DELETE+POST /api/settings/byok）与三层配置的线格式。
+"""Line format and contracts of the BYOK settings endpoints (GET/PUT/DELETE/POST
+/api/settings/byok): keys are write-only, so no response echoes api_key and GET reports a
+per-provider key_set bool.
 
-契约要点：
-- 密钥只入不出：任何响应都不返回 api_key 明文，GET 只给每家的 key_set 布尔；
-- PUT 是整体保存：providers 全量 + chat 绑定；载荷里的 api_key 剥出落
-  `~/.avid/secrets.json`（0600，按 provider id 索引），配置文件里不存明文；
-- 鉴权隐式：有密钥就按协议标准头发送，没存就不带——没有 auth_type 可选；
-- validate 不过就不落盘（invalid_request 信封），也不会留下半份密钥；
-- 测试端点针对**载荷**而不是已保存配置：保存前就能测，且不产生写密钥文件的副作用；
-- 生效路径：resolve_chat 每次运行都重读文件，保存后对新消息立即生效，无需重启。
+PUT saves providers plus chat bindings as a whole, stripping the payload's api_key into the
+0600 ``~/.avid/secrets.json``; an invalid payload returns invalid_request and writes nothing.
 """
 
 from __future__ import annotations
@@ -17,7 +13,7 @@ import stat
 
 import pytest
 from fastapi.testclient import TestClient
-from support import collect  # noqa: F401  (统一收集器，保持与其它 web 用例同构)
+from support import collect  # noqa: F401  (shared collector for all web tests)
 
 from avid.providers.byok import config_path, load_byok, read_secrets, resolve_chat, secrets_path
 from avid.providers.config import ConfigError
@@ -27,7 +23,7 @@ from avid.web import create_app
 
 @pytest.fixture(autouse=True)
 def byok_paths(tmp_path, monkeypatch):
-    """指向本文件专用的空目录（盖掉 conftest 的种子配置，从空状态测起）。"""
+    """Point at a per-file empty directory, overriding conftest's seeded config."""
     monkeypatch.setenv("AVID_BYOK_CONFIG", str(tmp_path / "settings-byok" / "models.json"))
     monkeypatch.setenv("AVID_BYOK_SECRETS", str(tmp_path / "settings-byok" / "secrets.json"))
 
@@ -55,7 +51,7 @@ def client(tmp_path) -> TestClient:
     return TestClient(create_app(services=services), base_url="http://127.0.0.1:8765")
 
 
-# ---------------- GET：读与密钥边界 ----------------
+# ---------------- GET: reading and the key boundary ----------------
 
 
 def test_get_empty_state_has_no_legacy_block(tmp_path):
@@ -65,7 +61,7 @@ def test_get_empty_state_has_no_legacy_block(tmp_path):
 
     assert body["providers"] == []
     assert body["bindings"] == {"chat": None}
-    # BYOK 是唯一来源：没有 legacy 块，空态由界面自己引导
+    # BYOK is the only source: no legacy block, the UI owns the empty state.
     assert "legacy" not in body
 
 
@@ -76,10 +72,10 @@ def test_get_hides_key_but_shows_key_set(tmp_path):
     body = http.get("/api/settings/byok").json()
 
     assert "api_key" not in json.dumps(body)
-    assert body["providers"][0]["key_set"] is False  # 还没填过密钥
+    assert body["providers"][0]["key_set"] is False  # no key submitted yet
 
 
-# ---------------- PUT：保存、密钥落盘、立即生效 ----------------
+# ---------------- PUT: save, secret on disk, immediate effect ----------------
 
 
 def test_put_writes_config_and_secret_and_takes_effect(tmp_path):
@@ -96,23 +92,23 @@ def test_put_writes_config_and_secret_and_takes_effect(tmp_path):
     assert res.status_code == 200
     body = res.json()
     assert body["providers"][0]["key_set"] is True
-    assert "sk-ui" not in json.dumps(body)  # 只入不出
+    assert "sk-ui" not in json.dumps(body)  # write-only
 
-    # 配置文件不存明文、也不再有 auth 块；明文在 0600 的密钥文件里，按 provider id 索引
+    # No plaintext or auth block in the config file; the 0600 secrets file holds it by provider id.
     raw = json.loads(config_path().read_text(encoding="utf-8"))
     assert "sk-ui" not in json.dumps(raw)
     assert "auth" not in json.dumps(raw)
     assert read_secrets() == {"deepseek": "sk-ui"}
     assert stat.S_IMODE(secrets_path().stat().st_mode) == 0o600
 
-    # 立即生效：下一次 resolve_chat 就是界面保存的这份
+    # Effective immediately: the next resolve_chat returns what the UI just saved.
     config = resolve_chat()
     assert (config.model, config.base_url, config.api_key) == (
         "deepseek-chat",
         "https://api.deepseek.example/v1",
         "sk-ui",
     )
-    # meta 的 model 与 BYOK 候选同步变化
+    # meta's model and BYOK candidates change together.
     meta = http.get("/api/meta").json()["capabilities"]
     assert meta["model"] == "deepseek-chat"
     assert meta["models"] == [
@@ -127,7 +123,7 @@ def test_put_without_key_keeps_existing_secret(tmp_path):
         json={"providers": [provider_payload(api_key="sk-keep")], "bindings": {}},
     )
 
-    # 第二次保存不带 api_key 字段（界面没动密钥输入框）
+    # The second save omits api_key because the UI never touched the key input
     http.put("/api/settings/byok", json={"providers": [provider_payload()], "bindings": {}})
 
     assert read_secrets() == {"deepseek": "sk-keep"}
@@ -169,7 +165,7 @@ def test_put_rejects_invalid_config_without_writing(tmp_path):
     assert res.status_code == 400
     assert res.json()["error"]["code"] == "invalid_request"
     assert not config_path().exists()
-    assert read_secrets() == {}  # 没有留下半份密钥
+    assert read_secrets() == {}  # no half-written secret
 
 
 def test_put_rejects_unknown_binding_slot(tmp_path):
@@ -184,7 +180,7 @@ def test_put_rejects_unknown_binding_slot(tmp_path):
     assert res.json()["error"]["code"] == "invalid_request"
 
 
-# ---------------- 测试端点：保存前就能测 ----------------
+# ---------------- test endpoint: testable before saving ----------------
 
 
 def test_test_endpoint_reports_both_steps(tmp_path, monkeypatch):
@@ -242,7 +238,7 @@ def test_test_endpoint_reports_smoke_failure(tmp_path, monkeypatch):
     assert "工具" in body["steps"][1]["detail"]
 
 
-# ---------------- DELETE：重置回落 ----------------
+# ---------------- DELETE: reset and fall back ----------------
 
 
 def test_delete_drops_both_files_and_falls_back(tmp_path):
@@ -266,7 +262,7 @@ def test_delete_drops_both_files_and_falls_back(tmp_path):
     assert load_byok() is None
 
 
-# ---------------- 解析优先级（BYOK 胜过 legacy） ----------------
+# ---------------- resolution priority (BYOK beats legacy) ----------------
 
 
 def test_byok_binding_beats_legacy_env(tmp_path):
@@ -281,8 +277,8 @@ def test_byok_binding_beats_legacy_env(tmp_path):
 
     config = resolve_chat()
 
-    assert config.api_key == "sk-live"  # 不是 conftest 基线的 test-key
-    assert config.provider == "openai"  # openai-compatible → openai 协议族
+    assert config.api_key == "sk-live"  # not conftest's baseline test-key
+    assert config.provider == "openai"  # openai-compatible maps to the openai protocol family
 
 
 def test_unbound_config_cannot_resolve(tmp_path):

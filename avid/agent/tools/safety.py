@@ -1,11 +1,8 @@
 """Answers which tool calls in one batch run concurrently.
 
-三条规则，按顺序：
-
-1. 声明为 ``safe`` 的重叠执行，``exclusive`` 是屏障；未知工具名按独占（默认拒绝）；
-2. ``conditional`` 的问 ``assess(arguments, state)``——**只有答 "safe" 才算并行**，
-   抛异常、返回别的值、没有 assessor 都是独占；
-3. 声明 ``writes=True`` 的工具永远不并行（声明期已拦下 conditional，这里是第二道）。
+Declared ``safe`` calls overlap and ``exclusive`` calls are barriers; ``conditional`` is
+assessed per call and can only be downgraded to safe, so raises, missing assessors and every
+writer fall to exclusive.
 """
 
 
@@ -52,7 +49,7 @@ def is_concurrency_safe(
         return False
     try:
         return spec.assess(dict(arguments or {}), state) == "safe"
-    except Exception:  # 误判面收敛：判定本身出错就当独占
+    except Exception:  # a raising assessor is exclusive (the conservative side)
         logger.warning("工具 %s 的并发判定抛错，按独占处理", name, exc_info=True)
         return False
 

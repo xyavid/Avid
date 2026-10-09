@@ -1,4 +1,5 @@
-"""Command line entry point: one question, the agent loop, session resume, workspace admin and web."""
+"""Command line entry point: one question, the agent loop, session resume, workspace admin
+and web."""
 
 from __future__ import annotations
 
@@ -66,10 +67,8 @@ def _local_time(timestamp_ms: int) -> str:
 
 
 def _terminal_question() -> Callable[[str, tuple[str, ...]], str | None]:
-    """终端问答通道：交互时把问题打到 stderr 并读一行；非交互（没有 TTY）返回 None。
-
-    「没答」是一个明确的结果（工具会据此让模型降级），不是错误——所以这里不打日志、
-    不抛异常，只是安静地交不出答案。
+    """Terminal ask channel: one stderr prompt plus a read line when interactive, else None — no
+    answer being a legitimate outcome the tool degrades on, so it stays quiet: no log, no raise.
     """
 
     def ask(question: str, options: tuple[str, ...] = ()) -> str | None:
@@ -92,10 +91,9 @@ def _terminal_question() -> Callable[[str, tuple[str, ...]], str | None]:
 
 
 def _session_indexer() -> SessionIndexer | None:
-    """会话运行的索引器：只索引本进程写的会话（全库补齐留给 `avid web` 与 `avid index check`）。
-
-    建不起来（索引目录写不了、盘满）就返回 None：索引是可丢的派生层，终端里跑一轮会话
-    不该因为一个可选的加速层起不来而失败。调用方见 None 就跳过通知与检索。
+    """Indexer for sessions this process writes (full backfill belongs to ``avid web`` and
+    ``avid index check``); None when it cannot start, since a droppable derived layer must not
+    fail a session.
     """
     registry = WorkspaceRegistry()
     try:
@@ -111,7 +109,7 @@ def _session_indexer() -> SessionIndexer | None:
 
 
 def _resolve_workspace(selection: str | None) -> Workspace:
-    """Picks this command's workspace by id, path or the current directory, never writing the registry."""
+    """Picks this command's workspace by id, path or the cwd, never writing the registry."""
     registry = WorkspaceRegistry()
     if selection:
         found = registry.find(selection)
@@ -242,7 +240,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if not args.prompt:
-        # 无问题 = 交互会话：--session/--new-session/--workspace 继续生效。
+        # No prompt means the interactive session, where --session/--new-session/--workspace apply.
         return _interactive(args, config)
 
     if args.session or args.new_session:
@@ -321,7 +319,8 @@ def usage_suffix(usage: Usage, config: Config) -> str:
 
 
 def _run_session(args: argparse.Namespace, config, state: RunState | None = None) -> int:
-    """Resumes or creates a session and runs one loop, reading history and writing this round back."""
+    """Resumes or creates a session and runs one loop, reading history and writing this round
+    back."""
     try:
         target = _resolve_workspace(args.workspace)
     except WorkspaceNotFound as exc:
@@ -375,7 +374,7 @@ def _run_session(args: argparse.Namespace, config, state: RunState | None = None
         print(f"会话错误：{exc}", file=sys.stderr)
         return 1
     finally:
-        # 索引队列排空再走：终端这一轮的消息不该等到下次才被搜到（索引不可用时 indexer 为 None）。
+        # Drain the index queue so this round is searchable now (indexer is None if unavailable).
         if indexer is not None:
             indexer.stop()
         if session is not None and not session.closed:
@@ -396,7 +395,8 @@ def _run_session(args: argparse.Namespace, config, state: RunState | None = None
 
 
 def _interactive(args: argparse.Namespace, config) -> int:
-    """交互会话：默认续接最近会话；/compact 压缩、/rewind 回滚上一轮、/<技能名> 载入技能、其余发给模型。"""
+    """Interactive session: resumes the latest session by default; commands, skills and plain
+    prompts are dispatched here."""
     logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
     try:
@@ -420,7 +420,7 @@ def _interactive(args: argparse.Namespace, config) -> int:
             else:
                 session = repo.open(existing)
         else:
-            # 默认续接最近会话（repo.list() 按创建时间倒序）。
+            # Default resume is the most recent session, since repo.list() is newest-first.
             items = repo.list()
             if items:
                 session = repo.open(items[0])
@@ -432,8 +432,8 @@ def _interactive(args: argparse.Namespace, config) -> int:
         recorder = SessionRecorder(session)
         indexer = _session_indexer()
         recorder.ensure_branch()
-        # 写前快照随会话接线：files 工具覆盖前把原内容落进本会话的检查点目录，
-        # 落点跟随分支 tip 条目。sink 全程复用（seq 单调递增，目录不冲突）。
+        # Checkpoints belong to the session: files snapshots old content under the branch tip.
+        # One sink serves the whole loop, since seq is monotonic and directory names cannot clash.
         checkpoint = DirCheckpointSink(
             root=Path(target.root), session_id=session.metadata.id, tip_seq=recorder.tip_seq
         )
@@ -481,7 +481,7 @@ def _interactive(args: argparse.Namespace, config) -> int:
                         file=sys.stderr,
                     )
                     continue
-                # 技能全文作为一条 user 消息写入会话：落库、可续接，下一轮模型即见。
+                # The whole skill body becomes a user message, persisted and visible next turn.
                 recorder.on_message({"role": "user", "content": body})
                 print(f"已载入技能 {match.name}（{len(body)} 字符），已写入会话", file=sys.stderr)
                 continue
@@ -489,7 +489,7 @@ def _interactive(args: argparse.Namespace, config) -> int:
                 print(commands_module.help_text(workspace_root=target.root), file=sys.stderr)
                 continue
 
-            # 普通输入：每轮一份新的 RunState（安全默认沿用旗标与工作区），MCP 随运行起停。
+            # Plain input: a fresh RunState per turn keeps the flags and workspace; MCP follows it.
             state = RunState.for_run(
                 auto_approve=args.yes,
                 full=args.allow_full_access,
@@ -528,7 +528,7 @@ def _interactive(args: argparse.Namespace, config) -> int:
 
 
 def _compact_now(session, recorder: SessionRecorder, config, target) -> None:
-    """/compact 的执行体：强制压缩当前会话历史并落游标（摘要调用走非流式 chat）。"""
+    """/compact body: forces compaction of the current history and writes the cursor."""
     report = commands_module.compact_session(
         history=messages_for_branch(session, recorder.branch),
         config=config,
@@ -543,10 +543,9 @@ def _compact_now(session, recorder: SessionRecorder, config, target) -> None:
 
 
 def _rewind_now(session, recorder: SessionRecorder, root: Path) -> None:
-    """/rewind 的执行体：对话指针回移到最近一次用户输入之前，文件恢复到该点。
-
-    条目只追加：被移出的对话留在盘上；压缩游标覆盖的前缀属于旧链，必须一并清掉，
-    否则投影把摘要接在被回滚的链上。
+    """/rewind body: moves the branch tip back before the latest user input and restores files,
+    dropping the compaction cursor too — entries are append-only, so the removed dialogue stays
+    on disk, but the old summary would otherwise re-attach to the rolled-back chain.
     """
     branch = session.branch(recorder.branch)
     chain = (
@@ -639,7 +638,7 @@ def build_workspace_parser() -> argparse.ArgumentParser:
 
 
 def _run_workspace(argv: list[str]) -> int:
-    """Implements ``avid workspace``, the only writer of the registry; session data stays untouched."""
+    """Implements ``avid workspace``, the only registry writer; session data stays untouched."""
     args = build_workspace_parser().parse_args(argv)
     registry = WorkspaceRegistry()
     try:
@@ -708,7 +707,7 @@ def build_session_parser() -> argparse.ArgumentParser:
 
 
 def _run_session_command(argv: list[str]) -> int:
-    """Implements ``avid session``: 会话目录的只读查询与一次性搬迁，都不唤起模型。"""
+    """Implements ``avid session``: read-only directory queries and the one-off migration."""
     args = build_session_parser().parse_args(argv)
     if args.action == "dir":
         return _session_dir_report()
@@ -718,7 +717,7 @@ def _run_session_command(argv: list[str]) -> int:
 
 
 def _known_roots() -> list[str]:
-    """会去扫旧会话目录的工作区根：注册表里的（含墓碑）+ 当前目录。"""
+    """Workspace roots to scan for old session directories: registry entries plus the cwd."""
     roots = [ws.root for ws in WorkspaceRegistry().list(include_hidden=True)]
     current = str(Path(workspace.WORKSPACE_ROOT).resolve())
     if current not in roots:
@@ -737,7 +736,7 @@ def _session_dir_report() -> int:
     print(f"{store}\t来源：{decided}")
     if source != "default":
         print(f"默认位置：{userdirs.default_sessions_dir()}", file=sys.stderr)
-    # 旧位置还有会话时提一句：否则用户会以为会话丢了。
+    # Mention sessions left in the old location, or they look lost.
     plan = plan_migration(roots=_known_roots(), store=store)
     if plan.moves:
         print(
@@ -749,10 +748,8 @@ def _session_dir_report() -> int:
 
 
 def _recorded_store_root() -> str | None:
-    """索引里记着「上一份会话目录」（改位置时留下的线索）——迁移的第四种来源。
-
-    读不到（没有库、库坏了、目录不可用）就返回 None：索引是可丢的派生层，
-    它读不出来不该拦住迁移。库不存在时不去创建它（只读的提示不该有副作用）。
+    """The store root the index recorded, one more migration source; None when it cannot be read,
+    since a droppable derived layer must not block migration and is never created here.
     """
     if not userdirs.index_path().exists():
         return None
@@ -772,8 +769,8 @@ def _session_migrate(args: argparse.Namespace) -> int:
         recorded = _recorded_store_root()
         current = str(userdirs.sessions_dir())
         if recorded is not None and recorded != current:
-            # 改过会话目录之后，README 指的「用 avid session migrate 搬」才走得通：
-            # 旧目录既不在注册表里也不在 cwd，只有索引记得它。
+            # After a store move the old directory is in neither the registry nor the cwd,
+            # so only the index remembers it.
             print(f"（另外去索引记着的旧会话目录找一遍：{recorded}）", file=sys.stderr)
             from_dir = recorded
     plan = plan_migration(roots=_known_roots(), from_dir=from_dir)
@@ -801,7 +798,7 @@ def _session_migrate(args: argparse.Namespace) -> int:
 
 
 def _workspace_id_of(selection: str | None) -> str | None:
-    """--workspace 收 id 或路径（库里存的是 id）：与其他子命令的「PATH|ID」口径一致。"""
+    """Accepts a PATH|ID for --workspace and normalizes to the id the index stores."""
     if not selection:
         return None
     found = WorkspaceRegistry().find(selection)
@@ -809,7 +806,7 @@ def _workspace_id_of(selection: str | None) -> str | None:
 
 
 def _session_search(args: argparse.Namespace) -> int:
-    """按内容检索：先把索引补到最新（一遍 reconcile），再查，再按命中给人话。"""
+    """Content search: reconcile the index, query it, then render the hits."""
     indexer = _session_indexer()
     if indexer is None:
         print("索引不可用（原因见上面的警告）；会话本身不受影响。", file=sys.stderr)
@@ -855,7 +852,7 @@ def _session_search(args: argparse.Namespace) -> int:
         except ConfigError as exc:
             print(f"配置错误：{exc}", file=sys.stderr)
             return 2
-        # 用根路径而不是 id：注册表里被摘掉的（墓碑）会话照样打得开（`find` 默认看不见墓碑）。
+        # Pass the root, not the id: tombstones must still open, and find() hides them by default.
         found = WorkspaceRegistry().find(hits[0].workspace_id or "", include_hidden=True)
         return _interactive(
             argparse.Namespace(
@@ -872,7 +869,7 @@ def _session_search(args: argparse.Namespace) -> int:
 
 
 def _confirm(prompt: str) -> bool:
-    """Terminal yes/no; a closed stdin answers no, so a pipe can never approve a destructive step."""
+    """Terminal yes/no; closed stdin answers no, so a pipe can never approve a destructive step."""
     try:
         return input(prompt).strip().lower() in {"y", "yes"}
     except EOFError:
@@ -924,8 +921,7 @@ def _run_index(argv: list[str]) -> int:
         if report.healthy:
             print("没有问题。")
             return 0
-        # 按症状分组打印：一次几百个「还没进过索引」逐条列会把终端刷满，但每类给几条样例
-        # 才能让人认出到底是哪一批坏了。
+        # Grouped by kind: per-line output would flood, one sample per kind still names the batch.
         grouped: dict[str, list[index_check.Finding]] = {}
         for finding in report.findings:
             grouped.setdefault(finding.kind, []).append(finding)
@@ -1012,7 +1008,7 @@ def _run_web(argv: list[str]) -> int:
 
 
 def _allowed_hosts(host: str) -> frozenset[str]:
-    """Builds the Host and Origin allow-list for this bind address, warning when it is not loopback."""
+    """Builds the Host and Origin allow-list for this bind address, warning when not loopback."""
     if host in LOOPBACK_HOSTS:
         return trusted_hosts()
     print(
@@ -1037,7 +1033,7 @@ def _host_of(value: str) -> str:
 
 
 def _peek(repo: JsonlSessionRepo, meta: JsonlSessionMetadata) -> tuple[str | None, int]:
-    """Reads a session's name and count through the non-replaying summary path, degrading quietly."""
+    """Reads a session's name and count through the non-replaying path, degrading quietly."""
     try:
         summary = repo.summarize(meta)
     except SessionError:
