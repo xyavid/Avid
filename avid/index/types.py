@@ -47,7 +47,6 @@ class ScanResult:
     entry_count: int
     next_offset: int
     truncated_tail: bool
-    found_entries: int
     unsupported: str | None = None
 
 

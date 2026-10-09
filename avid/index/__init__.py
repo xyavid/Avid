@@ -15,6 +15,18 @@ from .db import (
     schema_version,
     transaction,
 )
+from .indexer import SessionIndexer, workspace_id_from_path
+from .queries import (
+    count_sessions,
+    entries_of,
+    entry_location,
+    get_session,
+    index_stats,
+    list_sessions,
+    search_entries,
+    sessions_by_workspace,
+    tokens,
+)
 from .types import (
     INDEX_STATUS_ERROR,
     INDEX_STATUS_MISSING,
@@ -32,6 +44,7 @@ from .types import (
 
 __all__ = [
     "BUSY_TIMEOUT_MS",
+    "SessionIndexer",
     "INDEX_STATUSES",
     "INDEX_STATUS_ERROR",
     "INDEX_STATUS_MISSING",
@@ -46,8 +59,18 @@ __all__ = [
     "ScanResult",
     "ScannedEntry",
     "SearchHit",
+    "count_sessions",
+    "entries_of",
+    "entry_location",
+    "get_session",
+    "index_stats",
+    "list_sessions",
     "migrate",
     "open_db",
     "schema_version",
+    "search_entries",
+    "sessions_by_workspace",
+    "tokens",
     "transaction",
+    "workspace_id_from_path",
 ]
