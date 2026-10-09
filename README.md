@@ -25,6 +25,9 @@ English · [中文](README.zh-CN.md)
 - **Session persistence** — conversations and state live on disk, with branches and a change line;
   `/rewind` rolls back the conversation pointer and the files together. Every workspace's sessions
   share one directory (`~/.avid/sessions` by default, movable to another disk).
+- **Content search** — a local SQLite index (FTS5, trigram) over every session's text: find the
+  conversation where you said something, jump to the exact entry. The index is derived data —
+  delete it and it rebuilds from the JSONL files.
 - **Model/provider abstraction** — BYOK across four protocols (OpenAI-compatible / Responses /
   Anthropic / Ollama); swapping a model never touches the core.
 - **Permissions** — everything runs by default; destructive commands ask first, host credentials are
@@ -41,6 +44,8 @@ uv run avid --agent "Read pyproject.toml and tell me the project name."
 ```bash
 uv run avid                    # interactive session: /compact, /rewind, /<skill-name>
 uv run avid web --port 8765    # web UI → http://127.0.0.1:8765
+uv run avid session search "something you discussed"   # content search over past sessions
+uv run avid index check --fix  # verify the search index; repair or rebuild it
 ```
 
 Build the frontend once before `avid web`:
@@ -76,12 +81,18 @@ All flags: `avid --help`, `avid web --help`, `avid workspace --help`, `avid sess
   `~/.avid/sessions`; change it in Settings → Session storage or with `AVID_SESSIONS_DIR`.
   Changing it does not move existing sessions — `avid session migrate` prints what it would move
   and then does it (`avid session dir` shows where they live now).
+- **Search index**: `~/.avid/index/sessions.sqlite`, built from the session files and rebuilt
+  automatically as they grow (a run's messages are indexed right after they are written).
+  It is disposable: `avid index check` says what is stale or broken, `avid index rebuild`
+  rebuilds it, and deleting the file costs nothing but the next build. Nothing in it is
+  required to read your sessions.
 - **Environment variables**: all optional, not needed for day-to-day use.
 
 | Variable | Meaning |
 |---|---|
 | `AVID_HOME` | move the user-level directory (settings, registry, sessions, audit), default `~/.avid` |
 | `AVID_SESSIONS_DIR` | put the session directory somewhere else (wins over the settings file) |
+| `AVID_INDEX_DIR` | put the derived search index somewhere else |
 | `AVID_AUDIT_DIR` | put the audit JSONL in its own directory |
 | `AVID_MAX_PARALLEL_TOOL_CALLS` | parallel tool calls per step, default 10 |
 | `AVID_MODEL_INFO` | `off` disables probing the provider for the model window |

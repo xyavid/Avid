@@ -22,6 +22,8 @@ uv sync && uv sync --extra web   # 内核依赖 / 追加 Web 依赖（fastapi·u
 uv tool install --editable ".[web]"   # 装成命令：任何目录直接敲 `avid`（改代码立即生效）
 avid --agent "读 pyproject.toml，告诉我项目名"
 avid web --port 8765
+avid session search "词"          # 按内容检索历史会话（本地索引，不调模型）
+avid index check --fix          # 校验会话索引，需要时补/修（删掉 ~/.avid/index 也不伤会话）
 
 uv run pytest                    # stress 门禁默认不跑（见 pyproject 的 addopts）
 uv run pytest -m stress          # 复杂度与长会话门禁
@@ -56,10 +58,16 @@ Web  POST /api/sessions/{id}/runs ─┴─► svc/runs.RunRegistry（线程 + �
                                 └ 工具 handler（agent/tools/*，含 MCP 包装）
        on_message ─► SessionRecorder ─► <会话目录>/<工作区 id>/*.jsonl（durable 真相；默认 ~/.avid/sessions）
        on_event   ─► RunRegistry 缓冲 ─► SSE ─► 浏览器消费方（React 前端 web/）
+       ── 旁路（可丢的派生层，阶段 57）：装配层在提交成功后 notify(session_id)
+          ─► avid/index 的队列（同会话合并） ─► 增量扫描 JSONL ─► ~/.avid/index/sessions.sqlite
+          ─► GET /api/search 与 `avid session search` 读它；列表仍以 JSONL 为准
 ```
 
 - **`on_message` 是消息的唯一出口**：循环不 import 会话层，落库与否由回调决定。
 - **`on_event` 是步骤级事实的通道**，不是第二个消息通道；事件不写进会话 JSONL。
+- **索引是可丢的派生层**（阶段 57）：JSONL 是唯一权威，库里的每一列都能从 JSONL + 注册表
+  重算；写失败只落后（`last_error`），`avid index check|rebuild` 是恢复路径。通知只从装配层发，
+  `session/` 不知道索引存在（`tests/test_web_boundaries.py` 的 A14 钉住这条边）。
 - **会话存储**集中在一个专用目录（阶段 56）：解析单点是 `security/userdirs.sessions_dir()`
   （`AVID_SESSIONS_DIR` → `~/.avid/settings.json` 的 `sessions_dir` → `~/.avid/sessions`），
   目录内按工作区 id 分子目录；归属只认 header 的 `workspaceId`。旧位置用
@@ -75,6 +83,7 @@ Web  POST /api/sessions/{id}/runs ─┴─► svc/runs.RunRegistry（线程 + �
 | 模型适配 | `providers/`：`{openai_compat,anthropic,responses}` 实现 + `__init__` 注册表、`transport` 退避重试、`protocol` 共享词表、`client`、`usage` 四家 usage 归一、`byok` 模型配置、`verify` 连通校验 | 换模型只动这一层 |
 | 安全 | `security/`：`action` 归一化与风险分类、`engine`（默认直接跑；毁灭级问一次；凭据硬拒；full 跳过询问）、`sandbox` bwrap（会话目录进掩蔽名单）、`audit`、`permission` 唯一装配点、`userdirs`（用户级目录 + 设置文件 + 会话目录解析） | 毁灭级名单、阈值与文案的高频变化集中地 |
 | 会话 | `session/`：条目树 + 值 + 分支 + 变更线，`memory` 与 `jsonl` 两后端共用一套一致性用例，`recorder` 是唯一写入者 | 磁盘上的会话真相 |
+| 会话索引 | `avid/index/`：`db`（SQLite 连接 + user_version 迁移）、`scanner`（字节→行→记录，带行偏移）、`extract`（哪段文本进 search_text）、`writer`（条目与游标同事务）、`indexer`（发现/增量/补齐/重建 + 通知队列）、`queries`（读侧与 FTS 检索）、`check`（校验与修） | JSONL 之上的派生查询层，可删可重建 |
 | 应用服务 | `services/`：`runs` 运行注册表与重放缓冲、`approvals` 待决表、`sessions` 读视图、`workspaces`、`workspace_registry`（含会话目录的 `sessions_root`）、`session_migration`（旧布局一次性搬迁）、`picker` | 内核的第二个调用方 |
 | 传输适配 | `web/`：FastAPI 路由 + pydantic DTO + SSE 编帧 + 静态资源 | 线格式的唯一所有者 |
 | 工具 | `agent/tools/`：`registry` 单点声明、`files`/`shell`/`subagent`/`skill`/`mcp`、`validate` 参数校验 | 8 个内置工具 + 该工作区声明的 MCP 工具 |
@@ -85,8 +94,8 @@ Web  POST /api/sessions/{id}/runs ─┴─► svc/runs.RunRegistry（线程 + �
 
 | 入口 | 位置 |
 |---|---|
-| CLI | `avid/cli.py`：无参数进交互会话（`/compact`、`/rewind` 与 `/<技能名>`，解析单点在 `agent/commands.py`）；带问题为单轮 / `--agent` / `--session` / `avid workspace` / `avid session dir|migrate` / `avid web` |
-| Web 服务 | `avid/web/app.py`（FastAPI）；接口面看 `avid/web/routes/` 与 `schemas.py` |
+| CLI | `avid/cli.py`：无参数进交互会话（`/compact`、`/rewind` 与 `/<技能名>`，解析单点在 `agent/commands.py`）；带问题为单轮 / `--agent` / `--session` / `avid workspace` / `avid session dir|migrate|search` / `avid index check|rebuild` / `avid web` |
+| Web 服务 | `avid/web/app.py`（FastAPI）；接口面看 `avid/web/routes/` 与 `schemas.py`；`GET /api/search` 是唯一读索引的端点 |
 | 测试 | `tests/`，镜像 `avid/` 结构；`tests/test_web_boundaries.py` 是分层门禁 |
 | 模块入口 | `avid/__main__.py`（`python -m avid`） |
 
@@ -98,6 +107,7 @@ Web  POST /api/sessions/{id}/runs ─┴─► svc/runs.RunRegistry（线程 + �
 | 新增会话内命令 | `agent/commands.py` 的 COMMANDS 加名字 + 执行分支（CLI 与 Web 自动继承解析）|
 | 新增模型协议 | `providers/` 加一个实现模块 + `__init__.py` 的 PROVIDERS 一条表项，对循环返回**同形** `Turn` |
 | 新增一类上下文 | `ContextManager.register_source(kind, fn)` 一行（`agent/context.py`） |
+| 改索引哪些文本 / 怎么检索 | `avid/index/extract.py` 是「哪段文本进 search_text」的唯一规则处；查询语法与作用域在 `avid/index/queries.py`（用户输入当字面量，&lt;3 字回落 LIKE）；schema 变更走 `avid/index/db.py` 的 MIGRATIONS 追加一条 |
 | 改会话存哪 / 会话目录布局 | 解析单点在 `security/userdirs.sessions_dir()`（环境变量 → 设置文件 → 默认）；布局在 `services/workspace_registry.sessions_root()`（`<会话目录>/<工作区 id>`）；界面在设置页「会话存储」段（`web/src/components/settings/SessionsSection.tsx`） |
 | 调毁灭级名单 / 权限阈值 / 文案 | `security/`（名单在 `action.DENY_PATTERNS`，决策在 `engine.py`）；压缩阈值在 `agent/compaction.py` |
 | 加一个事件 | `agent/events.py`（唯一单点）；同时在 `web/src/events/types.ts` 的 EVENTS 块里加同名成员——`tests/test_event_contract.py` 拦住两侧漂移 |

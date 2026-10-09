@@ -329,3 +329,26 @@ def test_web_imports_name_submodules_not_the_package():
                         f"from {'.' * node.level} import {alias.name}"
                     )
     assert offenders == [], f"web 内部按子模块名 import：{offenders}"
+
+
+# ---------------- A14：会话索引的方向（判据：派生层不得反向污染真相层） ----------------
+
+
+def test_a14_the_session_package_does_not_know_about_the_index():
+    """索引可以依赖会话（只读它的磁盘格式），会话包不得依赖索引。
+
+    JSONL 是唯一权威、索引可以整个删掉重建——这条性质靠「真相层不知道索引存在」保住。
+    有人顺手在 recorder 或 jsonl 里 import 一下索引，第一个破坏的就是它。
+    """
+    found = hits(files_under("session"), r"^\s*from\s+\.+.*\bindex\b|^\s*import\s+\S*\bindex\b")
+    assert found == [], found
+
+
+def test_a14_the_index_only_depends_on_the_layers_under_it():
+    """index/ 只依赖 session/ 与 security/：不得反过来依赖 services / web / agent / providers。
+
+    通知由装配层发（services/runs.py、cli.py），所以索引包不需要认识它们——
+    真需要「谁在写会话」这个知识时，说明边界画反了。
+    """
+    found = hits(files_under("index"), r"^\s*from\s+\.\.(agent|services|providers|web)\b")
+    assert found == [], found
