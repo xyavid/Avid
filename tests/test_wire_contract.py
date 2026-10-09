@@ -56,6 +56,8 @@ from avid.web.schemas import (
     PickFolderOut,
     RunCreatedOut,
     RunOut,
+    SearchHitOut,
+    SearchResultOut,
     SessionDetail,
     SessionsDirIn,
     SessionsDirOut,
@@ -112,6 +114,9 @@ PAIRS: list[tuple[type, str]] = [
     # 会话目录（阶段 56）：来源可能是环境变量，那时 editable 为 false
     (SessionsDirOut, "SessionsDir"),
     (SessionsDirIn, "SessionsDirInput"),
+    # 内容检索（阶段 57）：命中带条目定位，behind 说索引落后多少
+    (SearchResultOut, "SearchResult"),
+    (SearchHitOut, "SearchHit"),
     (StreamInfo, "StreamInfo"),
     (HealthOut, "Health"),
     (SkillOut, "Skill"),

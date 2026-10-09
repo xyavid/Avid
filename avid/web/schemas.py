@@ -267,6 +267,30 @@ class SessionsDirIn(BaseModel):
     dir: str = Field(max_length=MAX_PATH_CHARS)
 
 
+class SearchHitOut(BaseModel):
+    """一条内容命中：够显示片段，也够跳回原文（会话 + 条目 + 行偏移）。"""
+
+    session_id: str
+    entry_id: str
+    seq: int
+    entry_type: str
+    role: str | None = None
+    timestamp: int | None = None
+    snippet: str
+    title: str | None = None
+    workspace_id: str | None = None
+    workspace_name: str | None = None
+    byte_offset: int
+    byte_length: int
+
+
+class SearchResultOut(BaseModel):
+    """检索结果；behind 是「索引还落后多少个会话」——如实说，别让人以为搜全了。"""
+
+    hits: list[SearchHitOut] = Field(default_factory=list)
+    behind: int = 0
+
+
 class SessionSummary(BaseModel):
     id: str
     name: str | None = None

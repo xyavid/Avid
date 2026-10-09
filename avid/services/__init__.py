@@ -60,6 +60,8 @@ FEATURES: dict[str, int] = {
     "workspace_delete": 1,
     # Branches carry a usage snapshot reported in one shared schema.
     "usage": 1,
+    # 内容检索（阶段 57）：本地索引 + FTS5，端点 GET /api/search。
+    "search": 1,
 }
 
 # Ceiling on concurrently open event streams; subscribers beyond it are rejected, not queued.

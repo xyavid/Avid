@@ -20,6 +20,7 @@ import { useState } from 'react'
 import type { ReactNode } from 'react'
 
 import type { TimelineItem } from '../../state/timeline'
+import { cx } from '../../ui/cx'
 import { itemKey, subagentSteps, turnGroups } from '../../state/timeline'
 import { AssistantMessage } from './AssistantMessage'
 import { MessageActions } from './MessageActions'
@@ -42,6 +43,11 @@ export type TimelineProps = {
   liveTail?: boolean
   /** 点子智能体卡时通知调用方（打开右列的「子智能体」面板）。 */
   onOpenSubagents?: () => void
+  /**
+   * 从检索命中跳过来的那条条目（阶段 57）：高亮它并滚进视野一次。
+   * 它可能不在当前这一页里——那种情况下由装配层改成从那条开始取页，所以这里只管画。
+   */
+  focusEntry?: string | null
 }
 
 /**
@@ -83,10 +89,17 @@ function turnActions(items: TimelineItem[]): Map<number, { text: string; branchA
 
 type TurnAction = { text: string; branchAt: string | null }
 
+/** 被检索点到的那一条：一圈浅底标出来（只加底色，不动字号与位置）。 */
+function isFocused(entryId: string | null | undefined, focus: string | null): string {
+  return entryId && focus && entryId === focus ? 'rounded-sm bg-accent-light/60 p-a4' : ''
+}
+
 type Ctx = {
   workspaceRoot: string | null
   onBranch?: (entryId: string) => void
   onOpenSubagents?: () => void
+  /** 从检索跳过来的那条（阶段 57）；null = 没有焦点。 */
+  focusEntry: string | null
   /** 本轮第一段正文吃标识行；由调用方按"这一轮画过正文没有"消费。 */
   head: { pending: boolean }
   /** 整轮的动作面（复制 / 分支），按段落在组内的下标索引进来的。 */
@@ -105,7 +118,13 @@ function itemNodes(list: TimelineItem[], offset: number, ctx: Ctx): ReactNode[] 
     if (item.kind === 'user') {
       ctx.head.pending = true
       return (
-        <div key={key} className="group" data-item="user" data-entry={item.entryId ?? undefined}>
+        <div
+          key={key}
+          className={cx('group', isFocused(item.entryId, ctx.focusEntry))}
+          data-item="user"
+          data-entry={item.entryId ?? undefined}
+          data-focus={item.entryId === ctx.focusEntry ? 'true' : undefined}
+        >
           <UserBubble>{item.text}</UserBubble>
           <MessageActions text={item.text} className="justify-end" />
         </div>
@@ -117,7 +136,13 @@ function itemNodes(list: TimelineItem[], offset: number, ctx: Ctx): ReactNode[] 
       ctx.head.pending = false
       const turn = ctx.actions.get(at)
       return (
-        <div key={key} className="group" data-item="assistant" data-entry={item.entryId ?? undefined}>
+        <div
+          key={key}
+          className={cx('group', isFocused(item.entryId, ctx.focusEntry))}
+          data-item="assistant"
+          data-entry={item.entryId ?? undefined}
+          data-focus={item.entryId === ctx.focusEntry ? 'true' : undefined}
+        >
           <AssistantMessage streaming={item.streaming} showHead={showHead}>
             {item.text}
           </AssistantMessage>
@@ -133,7 +158,11 @@ function itemNodes(list: TimelineItem[], offset: number, ctx: Ctx): ReactNode[] 
           key={key}
           data-item="error"
           data-entry={item.entryId ?? undefined}
-          className="rounded-sm border-hairline border-hair bg-danger/5 px-a8 py-a4 font-ui text-hint leading-[1.7] text-danger"
+          data-focus={item.entryId === ctx.focusEntry ? 'true' : undefined}
+          className={cx(
+            'rounded-sm border-hairline border-hair bg-danger/5 px-a8 py-a4 font-ui text-hint leading-[1.7] text-danger',
+            isFocused(item.entryId, ctx.focusEntry),
+          )}
         >
           {item.text}
         </div>
@@ -185,6 +214,7 @@ export function Timeline({
   onBranch,
   liveTail = false,
   onOpenSubagents,
+  focusEntry = null,
 }: TimelineProps) {
   // 手动展开的轮：折叠是默认，点开的那几轮记在这儿（切换会话/刷新即回到默认）。
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set())
@@ -207,6 +237,7 @@ export function Timeline({
     const foldable = group.answer !== null && group.process.length > 0 && !running
     const open = foldable && opened.has(group.key)
     const ctx: Ctx = {
+      focusEntry,
       workspaceRoot,
       onBranch,
       onOpenSubagents,

@@ -22,6 +22,7 @@ import type {
   Run,
   RunCreated,
   ScratchSession,
+  SearchResult,
   SessionDetail,
   SessionSummary,
   SessionsDir,
@@ -296,4 +297,19 @@ export function setSessionsDir(dir: string): Promise<SessionsDir> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ dir }),
   })
+}
+
+/**
+ * 内容检索（阶段 57）：走本地索引（SQLite + FTS5），不调模型。
+ * 索引只服务检索——列表仍以 JSONL 为准，所以这个接口可能落后（响应里的 behind）。
+ */
+export function searchEntries(
+  query: string,
+  opts: { workspace?: string | null; session?: string | null; limit?: number } = {},
+): Promise<SearchResult> {
+  const params = new URLSearchParams({ q: query })
+  if (opts.workspace) params.set('workspace', opts.workspace)
+  if (opts.session) params.set('session', opts.session)
+  if (opts.limit !== undefined) params.set('limit', String(opts.limit))
+  return request(`/api/search?${params.toString()}`)
 }

@@ -31,9 +31,6 @@ DEFAULT_SEARCH_LIMIT = 50
 SNIPPET_PAD = 60
 # 什么算一个词元：CJK、字母数字与下划线连续段。
 _TOKEN = re.compile(r"[\w\u4e00-\u9fff]+", re.UNICODE)
-# LIKE 扫描的上限：短词查询最多扫这些行，扫不完就如实说结果可能不全。
-LIKE_SCAN_LIMIT = 20000
-
 _SESSION_FIELDS = (
     "session_id",
     "file_path",
@@ -255,29 +252,22 @@ def search_entries(
         )
 
     if short_words:
-        # 短词（中文两字词最常见）FTS 看不见：直接扫 search_text，代价是有上限的。
+        # 短词（中文两字词最常见）FTS 看不见：直接扫 search_text。几千行的量级是毫秒级，
+        # 所以不设扫描上限，也不假装结果不全——真慢了是加索引的信号，不是这里加闸门。
         clauses = [" AND ".join("e.search_text LIKE ? ESCAPE '\\'" for _ in short_words)]
         params = [_like_pattern(word) for word in short_words]
         clauses.extend(scope)
-        scanned = conn.execute(
-            f"SELECT COUNT(*) FROM entries e JOIN sessions s ON s.session_id = e.session_id "
-            f"WHERE {' AND '.join(clauses)}",
-            params,
-        ).fetchone()[0]
-        extra = _fetch_hits(
+        seen = {(hit.session_id, hit.entry_id) for hit in hits}
+        for hit in _fetch_hits(
             conn,
             where=" AND ".join(clauses),
             params=params,
-            needles=short_words,
+            needles=words,
             limit=limit,
-        )
-        seen = {(hit.session_id, hit.entry_id) for hit in hits}
-        hits.extend(hit for hit in extra if (hit.session_id, hit.entry_id) not in seen)
-        if scanned > LIKE_SCAN_LIMIT:
-            # 如实报告不完整，而不是给出一个看起来完整的结果集。
-            hits = hits[:limit]
+        ):
+            if (hit.session_id, hit.entry_id) not in seen:
+                hits.append(hit)
 
-    hits.sort(key=lambda hit: (hit.seq), reverse=True)
     return hits[:limit]
 
 
@@ -307,7 +297,6 @@ def index_stats(conn: sqlite3.Connection) -> dict[str, object]:
 
 __all__ = [
     "DEFAULT_SEARCH_LIMIT",
-    "LIKE_SCAN_LIMIT",
     "MIN_FTS_TOKEN",
     "count_sessions",
     "entries_of",

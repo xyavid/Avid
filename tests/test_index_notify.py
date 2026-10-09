@@ -9,10 +9,11 @@ from __future__ import annotations
 import json
 import time
 
+from index_cases import ALPHA, append_message, make_session
+
 from avid.index import db as index_db
 from avid.index import queries
 from avid.index.indexer import SessionIndexer, notifying
-from index_cases import ALPHA, append_message, make_session
 
 
 def settle(indexer, timeout: float = 3.0) -> bool:

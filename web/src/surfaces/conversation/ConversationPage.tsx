@@ -15,6 +15,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 
 import {
+  searchEntries,
   ApiError,
   createBranch,
   createSession,
@@ -46,6 +47,7 @@ import { Icon } from '../../ui/Icon'
 import { useConversationScroll } from '../../ui/useConversationScroll'
 import { SettingsModal } from '../../components/settings/SettingsModal'
 import { ProjectCard } from '../../components/session/ProjectCard'
+import type { SearchHit } from '../../api/types'
 import { SessionNav } from '../../components/session/SessionNav'
 import { SidebarFooter } from '../../components/session/SidebarFooter'
 import { AppShell } from '../../app/AppShell'
@@ -110,6 +112,18 @@ export function ConversationPage() {
   // 会话动作（新建 / 重命名 / 删除）：在飞时禁用新建，结果或失败都落一行提示。
   const [sessionsBusy, setSessionsBusy] = useState(false)
   const [sessionsHint, setSessionsHint] = useState<string | null>(null)
+  // 内容检索（阶段 57）：搜索框里的词交给索引查一遍（防抖），命中点开则切会话并跳到那条。
+  // 索引落后是允许的——所以这里只展示「搜到什么」，不假装搜全了。
+  const [navQuery, setNavQuery] = useState('')
+  const [contentHits, setContentHits] = useState<SearchHit[]>([])
+  const [searchingContent, setSearchingContent] = useState(false)
+  // 跳到哪条：会话 id 决定「要不要换页」，条目 id 决定「高亮谁」。
+  const [focusEntry, setFocusEntry] = useState<{
+    sessionId: string
+    entryId: string
+    seq: number
+  } | null>(null)
+  const focusEntryId = focusEntry?.entryId ?? null
   // 活运行：一次运行的发送/订阅/终态回拉。它自己的段落属于哪个会话由 hook 记着
   // （live.attachedSession）——切走会话时那些段落不跟过去；attachedRunRef 防重复附着。
   // `?settings=1` 是开发期钉子（截图/联调直达设置界面），与 ?gallery=1 同性质
@@ -186,15 +200,47 @@ export function ConversationPage() {
   }, [])
 
   useEffect(() => {
+    const needle = navQuery.trim()
+    if (needle.length < 2) {
+      setContentHits([])
+      setSearchingContent(false)
+      return
+    }
+    let alive = true
+    setSearchingContent(true)
+    const timer = window.setTimeout(() => {
+      searchEntries(needle, { workspace: activeWorkspaceId, limit: 8 })
+        .then((result) => {
+          if (!alive) return
+          setContentHits(result.hits)
+        })
+        .catch(() => {
+          if (alive) setContentHits([])
+        })
+        .finally(() => {
+          if (alive) setSearchingContent(false)
+        })
+    }, 250)
+    return () => {
+      alive = false
+      window.clearTimeout(timer)
+    }
+  }, [navQuery, activeWorkspaceId])
+
+  useEffect(() => {
     if (!selectedId) return
     let alive = true
     setHistory(null)
     // 用量快照与条目分属两个端点；快照失败不该连累对话流，静默回退到「—」。
-    listEntries(selectedId, { branch, limit: 50 })
+    // 从检索跳过来时（focus 指向这条会话）改成从那条开始取页：cursor 是排他的，
+    // seq + 1 正好把命中那条放在这一页的新端，「加载更早」照旧往回接。
+    const anchor = focusEntry?.sessionId === selectedId ? focusEntry.seq + 1 : undefined
+    listEntries(selectedId, { branch, limit: 50, cursorSeq: anchor })
       .then((page) => {
         if (!alive) return
         setHistory(itemsFromEntries([...page.entries].reverse()))
         setEarlier({ hasMore: page.has_more, cursor: page.next_cursor })
+        setFocusEntry(null)  // 跳一次就够，之后的重渲染不该再换页
       })
       .catch((e: unknown) => {
         if (alive) {
@@ -264,6 +310,13 @@ export function ConversationPage() {
       setLoadingEarlier(false)
     }
   }
+
+  // 从检索跳过来的那条：画出来之后滚进视野一次（用 layout 效果，别让用户自己找）。
+  useLayoutEffect(() => {
+    if (!focusEntryId) return
+    const el = document.querySelector(`[data-entry="${focusEntryId}"]`)
+    el?.scrollIntoView({ block: 'center' })
+  }, [focusEntryId, history])
 
   // prepend 落地后按锚点差值回滚视口（layout：在浏览器绘制前完成，不闪）。
   useLayoutEffect(() => {
@@ -474,6 +527,7 @@ export function ConversationPage() {
             liveTail={liveHere}
             onBranch={(id) => void branchFrom(id)}
             onOpenSubagents={() => dock.select('subagents')}
+            focusEntry={focusEntryId}
           />
         )}
         {!hasItems && !liveHere && <Welcome detail="这个会话还没有对话内容" />}
@@ -533,6 +587,13 @@ export function ConversationPage() {
             onCreateSession={() => void createSessionInProject()}
             onRenameSession={(id, name) => void renameSessionById(id, name)}
             onDeleteSession={(id) => void deleteSessionById(id)}
+            contentHits={contentHits}
+            contentSearching={searchingContent}
+            onSearchQuery={setNavQuery}
+            onSelectHit={(hit) => {
+              setSelectedId(hit.session_id)
+              setFocusEntry({ sessionId: hit.session_id, entryId: hit.entry_id, seq: hit.seq })
+            }}
             creating={sessionsBusy}
             notice={sessionsHint}
           />

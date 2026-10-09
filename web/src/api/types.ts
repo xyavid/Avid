@@ -382,3 +382,28 @@ export interface SessionsDir {
 export interface SessionsDirInput {
   dir: string
 }
+
+/**
+ * 一条内容命中（阶段 57）：够显示片段，也够跳回原文——会话 + 条目 + 行偏移。
+ * type 是条目类型（message / notice / error），role 是消息角色（user / assistant / tool）。
+ */
+export interface SearchHit {
+  session_id: string
+  entry_id: string
+  seq: number
+  entry_type: string
+  role: string | null
+  timestamp: number | null
+  snippet: string
+  title: string | null
+  workspace_id: string | null
+  workspace_name: string | null
+  byte_offset: number
+  byte_length: number
+}
+
+/** GET /api/search 的响应；behind = 索引还落后多少个会话（0 表示搜的是全部）。 */
+export interface SearchResult {
+  hits: SearchHit[]
+  behind: number
+}

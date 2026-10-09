@@ -16,7 +16,7 @@ from .agent.spec import RunSpec
 from .agent.state import RunState
 from .agent.tools import TOOLS, build_toolset, workspace
 from .agent.tools.mcp import McpManager
-from .index import SessionIndexer
+from .index import SessionIndexer, queries
 from .index.indexer import notifying, workspace_lookup
 from .providers.byok import resolve_chat
 from .providers.client import LLMError, ask, chat_completion
@@ -651,6 +651,13 @@ def build_session_parser() -> argparse.ArgumentParser:
     )
     migrate.add_argument("--yes", action="store_true", help="不再问一次，直接搬")
 
+    search = actions.add_parser("search", help="按内容检索会话（本地索引，不调模型）")
+    search.add_argument("query", help="要搜的词；多个词按 AND，两字中文词走扫描")
+    search.add_argument("--workspace", metavar="PATH|ID", help="只搜这个工作区")
+    search.add_argument("--session", metavar="ID", help="只搜这个会话")
+    search.add_argument("--limit", type=int, default=20, help="最多给几条（默认 20）")
+    search.add_argument("--open", action="store_true", help="直接续接第一条命中的会话")
+
     return parser
 
 
@@ -659,6 +666,8 @@ def _run_session_command(argv: list[str]) -> int:
     args = build_session_parser().parse_args(argv)
     if args.action == "dir":
         return _session_dir_report()
+    if args.action == "search":
+        return _session_search(args)
     return _session_migrate(args)
 
 
@@ -715,6 +724,60 @@ def _session_migrate(args: argparse.Namespace) -> int:
         return 0
     for skip in plan.skips:
         print(f"  跳过 {skip.source}：{skip.reason}", file=sys.stderr)
+    return 0
+
+
+def _session_search(args: argparse.Namespace) -> int:
+    """按内容检索：先把索引补到最新（一遍 reconcile），再查，再按命中给人话。"""
+    indexer = _session_indexer()
+    try:
+        indexer.reconcile()
+        hits = queries.search_entries(
+            indexer.conn,
+            args.query,
+            session_id=args.session,
+            workspace_id=args.workspace,
+            limit=max(1, args.limit),
+        )
+        behind = queries.index_stats(indexer.conn)["behind"]
+    finally:
+        indexer.close()
+
+    if not hits:
+        print("没有命中。")
+        if behind:
+            print(f"（索引还落后 {behind} 个会话，稍后再跑一次可能就有了）", file=sys.stderr)
+        return 0
+
+    for hit in hits:
+        where = hit.workspace_name or hit.workspace_id or "未归属"
+        print(
+            f"{_local_time(hit.timestamp or 0)}  {where}  {hit.title or '未命名会话'}"
+            f"  [{hit.role or hit.entry_type}]"
+        )
+        print(f"    {hit.snippet}")
+        print(f"    会话 {hit.session_id}  条目 {hit.entry_id}  seq {hit.seq}")
+    print(f"--- 命中 {len(hits)} 条 ---", file=sys.stderr)
+    if behind:
+        print(f"（索引还落后 {behind} 个会话）", file=sys.stderr)
+
+    if args.open:
+        try:
+            config = resolve_chat()
+        except ConfigError as exc:
+            print(f"配置错误：{exc}", file=sys.stderr)
+            return 2
+        return _interactive(
+            argparse.Namespace(
+                workspace=hits[0].workspace_id,
+                session=hits[0].session_id,
+                new_session=False,
+                session_name=None,
+                yes=False,
+                allow_full_access=False,
+            ),
+            config,
+        )
     return 0
 
 

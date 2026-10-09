@@ -135,3 +135,83 @@ describe('SessionNav（会话按项目管理）', () => {
     expect(screen.getByText('有活动 run 的会话不能删除')).toBeTruthy()
   })
 })
+
+describe('内容检索（阶段 57）', () => {
+  const HIT = {
+    session_id: 's1',
+    entry_id: 'e-9',
+    seq: 9,
+    entry_type: 'message',
+    role: 'user',
+    timestamp: 0,
+    snippet: '…把会话数据搬到专用目录…',
+    title: 'Avid 的会话',
+    workspace_id: 'w1',
+    workspace_name: 'w1',
+    byte_offset: 100,
+    byte_length: 50,
+  }
+
+  it('搜索框变化回调 onSearchQuery（装配层据此去查索引）', () => {
+    const onSearchQuery = vi.fn()
+    render(
+      <SessionNav sessions={SESSIONS} workspaceId="w1" selectedId={null} onSelect={() => {}} onSearchQuery={onSearchQuery} />,
+    )
+
+    fireEvent.change(screen.getByLabelText('搜索会话'), { target: { value: '会话数据' } })
+
+    expect(onSearchQuery).toHaveBeenCalledWith('会话数据')
+  })
+
+  it('内容命中单独一段：给标题、角色与片段，点了回调整条命中', () => {
+    const onSelectHit = vi.fn()
+    render(
+      <SessionNav
+        sessions={SESSIONS}
+        workspaceId="w1"
+        selectedId={null}
+        onSelect={() => {}}
+        contentHits={[HIT]}
+        onSelectHit={onSelectHit}
+      />,
+    )
+
+    fireEvent.change(screen.getByLabelText('搜索会话'), { target: { value: '会话数据' } })
+    expect(screen.getByText('内容命中 1 条')).toBeTruthy()
+    expect(screen.getByText('…把会话数据搬到专用目录…')).toBeTruthy()
+
+    fireEvent.click(screen.getByText('…把会话数据搬到专用目录…'))
+
+    expect(onSelectHit).toHaveBeenCalledWith(HIT)
+  })
+
+  it('还在查的时候说「正在查内容…」，别让人以为没结果', () => {
+    render(
+      <SessionNav
+        sessions={SESSIONS}
+        workspaceId="w1"
+        selectedId={null}
+        onSelect={() => {}}
+        contentSearching
+      />,
+    )
+
+    fireEvent.change(screen.getByLabelText('搜索会话'), { target: { value: '会话' } })
+
+    expect(screen.getByText('正在查内容…')).toBeTruthy()
+  })
+
+  it('搜索框空着时不显示内容段（没查就别占地方）', () => {
+    render(
+      <SessionNav
+        sessions={SESSIONS}
+        workspaceId="w1"
+        selectedId={null}
+        onSelect={() => {}}
+        contentHits={[HIT]}
+      />,
+    )
+
+    expect(screen.queryByText(/内容命中/)).toBeNull()
+  })
+})
