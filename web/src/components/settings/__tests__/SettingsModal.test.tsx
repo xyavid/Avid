@@ -9,6 +9,7 @@ const getByokSettings = vi.fn()
 const saveByokSettings = vi.fn()
 const resetByokSettings = vi.fn()
 const testByokModel = vi.fn()
+const fetchByokModels = vi.fn()
 const getSessionsDir = vi.fn()
 const setSessionsDir = vi.fn()
 const pickFolder = vi.fn()
@@ -18,6 +19,7 @@ vi.mock('../../../api/client', () => ({
   saveByokSettings: (...a: unknown[]) => saveByokSettings(...a),
   resetByokSettings: (...a: unknown[]) => resetByokSettings(...a),
   testByokModel: (...a: unknown[]) => testByokModel(...a),
+  fetchByokModels: (...a: unknown[]) => fetchByokModels(...a),
   getSessionsDir: (...a: unknown[]) => getSessionsDir(...a),
   setSessionsDir: (...a: unknown[]) => setSessionsDir(...a),
   pickFolder: (...a: unknown[]) => pickFolder(...a),
@@ -69,6 +71,7 @@ beforeEach(() => {
       { step: 'tool', ok: true, detail: '模型正确返回了工具调用' },
     ],
   })
+  fetchByokModels.mockReset().mockResolvedValue({ ok: true, models: [], detail: '' })
   getSessionsDir.mockReset().mockResolvedValue({
     dir: '/home/user/.avid/sessions',
     default_dir: '/home/user/.avid/sessions',
@@ -256,3 +259,69 @@ describe('SettingsModal（设置界面 · BYOK 模型段）', () => {
     expect(onClose).toHaveBeenCalledTimes(2)
   })
 })
+
+  it('模型 id 输入框不再被其它定宽控件挤没：行可换行、id 占剩余宽度且有下限', async () => {
+    render(<SettingsModal onClose={() => {}} />)
+    await waitFor(() => expect(getByokSettings).toHaveBeenCalled())
+
+    fireEvent.click(screen.getByRole('button', { name: '新增提供商' }))
+    fireEvent.click(screen.getByRole('button', { name: '添加模型' }))
+
+    const idInput = screen.getByPlaceholderText('模型 id，例如 deepseek-chat')
+    expect(idInput.className).toContain('flex-1')
+    expect(idInput.className).toContain('min-w-[200px]')
+    expect((idInput.parentElement as HTMLElement).className).toContain('flex-wrap')
+  })
+
+  it('获取模型：拿当前表单的地址与密钥拉列表，点一个填进空行（不新增重复行）', async () => {
+    fetchByokModels.mockResolvedValue({
+      ok: true,
+      models: ['deepseek-chat', 'deepseek-reasoner'],
+      detail: '端点提供了 2 个模型',
+    })
+    render(<SettingsModal onClose={() => {}} />)
+    await waitFor(() => expect(getByokSettings).toHaveBeenCalled())
+
+    fireEvent.click(screen.getByRole('button', { name: '新增提供商' }))
+    fireEvent.click(screen.getByRole('button', { name: '添加模型' }))
+    fireEvent.change(screen.getByPlaceholderText('deepseek'), { target: { value: 'gw' } })
+    fireEvent.change(screen.getByPlaceholderText('DeepSeek'), { target: { value: '网关' } })
+    fireEvent.change(screen.getByPlaceholderText('中转站 / 自部署服务的接口地址'), {
+      target: { value: 'https://gw.example/v1' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('输入 API 密钥（可留空）'), { target: { value: 'sk-gw' } })
+
+    fireEvent.click(screen.getByRole('button', { name: '获取模型' }))
+
+    // The payload is the form as typed (unsaved endpoint included), so the list can precede saving.
+    const sent = await waitFor(() => {
+      expect(fetchByokModels).toHaveBeenCalledOnce()
+      return fetchByokModels.mock.calls[0]![0] as { base_url: string; api_key: string | null }
+    })
+    expect(sent.base_url).toBe('https://gw.example/v1')
+    expect(sent.api_key).toBe('sk-gw')
+
+    fireEvent.click(await screen.findByRole('button', { name: 'deepseek-reasoner' }))
+
+    const ids = screen.getAllByPlaceholderText('模型 id，例如 deepseek-chat') as HTMLInputElement[]
+    expect(ids).toHaveLength(1)
+    expect(ids[0]!.value).toBe('deepseek-reasoner')
+  })
+
+  it('获取模型失败：把原因说出来，不假装拿到空列表', async () => {
+    fetchByokModels.mockResolvedValue({
+      ok: false,
+      models: [],
+      detail: '端点路径不存在：多半是 base_url 少了 /v1（OpenAI 兼容端点要以 /v1 结尾）',
+    })
+    render(<SettingsModal onClose={() => {}} />)
+    await waitFor(() => expect(getByokSettings).toHaveBeenCalled())
+
+    fireEvent.click(screen.getByRole('button', { name: '新增提供商' }))
+    fireEvent.change(screen.getByPlaceholderText('中转站 / 自部署服务的接口地址'), {
+      target: { value: 'https://gw.example' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '获取模型' }))
+
+    expect(await screen.findByText(/base_url 少了 \/v1/)).toBeTruthy()
+  })

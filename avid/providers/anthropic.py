@@ -18,6 +18,7 @@ from .protocol import (
     content_parts,
     http_error,
     iter_sse_events,
+    model_ids,
     prompt_too_long,
     usage_of,
 )
@@ -36,6 +37,27 @@ _STOP_REASONS = {
     "tool_use": "tool_calls",
     "max_tokens": "length",
 }
+
+
+def models_url(config: Config) -> str:
+    """Listing endpoint, tolerating a base URL that already ends with /v1."""
+    base = config.base_url.rstrip("/")
+    if not base.endswith("/v1"):
+        base = f"{base}/v1"
+    return f"{base}/models"
+
+
+def list_models(config: Config, *, client: httpx.Client | None = None) -> list[str]:
+    """Model ids the endpoint offers; metadata GET with the same auth as a Messages call."""
+    http = client or shared_client()
+    response = send(http, "GET", models_url(config), headers=_headers(config))
+    if response.status_code != 200:
+        raise http_error(response.status_code, response.text)
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise LLMError(f"{models_url(config)} 返回的不是 JSON：{response.text[:200]}") from exc
+    return model_ids(payload)
 
 
 def messages_url(config: Config) -> str:

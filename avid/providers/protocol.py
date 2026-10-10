@@ -156,3 +156,19 @@ def assistant_message(text: str, tool_calls: list[dict[str, Any]]) -> dict[str, 
     if tool_calls:
         message["tool_calls"] = tool_calls
     return message
+
+
+def model_ids(payload: Any) -> list[str]:
+    """Model ids from a listing payload: OpenAI-shaped gateways and Anthropic both answer
+    `{"data": [{"id": ...}]}`, and a bare list of ids is accepted for hand-rolled relays.
+    """
+    items = payload.get("data") if isinstance(payload, Mapping) else payload
+    if not isinstance(items, list):
+        return []
+    ids = []
+    for item in items:
+        if isinstance(item, str) and item:
+            ids.append(item)
+        elif isinstance(item, Mapping) and str(item.get("id", "")).strip():
+            ids.append(str(item["id"]))
+    return ids

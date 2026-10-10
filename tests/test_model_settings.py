@@ -238,6 +238,72 @@ def test_test_endpoint_reports_smoke_failure(tmp_path, monkeypatch):
     assert "工具" in body["steps"][1]["detail"]
 
 
+# ---------------- POST /models: the 获取模型 listing ----------------
+
+
+def _fake_send(monkeypatch, response):
+    """Replace the transport call so URL, auth header and parsing run for real."""
+    from avid.providers import openai_compat
+
+    seen: dict = {}
+
+    def fake(http, method, url, *, headers, json_body=None, policy=None):
+        seen.update(method=method, url=url, headers=headers)
+        return response
+
+    monkeypatch.setattr(openai_compat, "send", fake)
+    return seen
+
+
+def test_models_endpoint_lists_ids_with_the_chat_auth(tmp_path, monkeypatch):
+    import httpx
+
+    seen = _fake_send(
+        monkeypatch,
+        httpx.Response(200, json={"data": [{"id": "deepseek-chat"}, {"id": "deepseek-reasoner"}]}),
+    )
+    http = client(tmp_path)
+
+    body = http.post(
+        "/api/settings/byok/models", json={"provider": provider_payload(api_key="sk-test")}
+    ).json()
+
+    assert body["ok"] is True
+    assert body["models"] == ["deepseek-chat", "deepseek-reasoner"]
+    assert seen["method"] == "GET"
+    assert seen["url"] == "https://api.deepseek.example/v1/models"
+    assert seen["headers"]["Authorization"] == "Bearer sk-test"
+
+
+def test_models_endpoint_reports_a_bad_path_in_plain_words(tmp_path, monkeypatch):
+    import httpx
+
+    _fake_send(monkeypatch, httpx.Response(404, text='{"error":"not found"}'))
+    http = client(tmp_path)
+
+    body = http.post(
+        "/api/settings/byok/models", json={"provider": provider_payload(api_key="sk-test")}
+    ).json()
+
+    assert body["ok"] is False
+    assert body["models"] == []
+    assert "/v1" in body["detail"]
+
+
+def test_models_endpoint_says_so_when_the_endpoint_offers_nothing(tmp_path, monkeypatch):
+    import httpx
+
+    _fake_send(monkeypatch, httpx.Response(200, json={"data": []}))
+    http = client(tmp_path)
+
+    body = http.post(
+        "/api/settings/byok/models", json={"provider": provider_payload(api_key="sk-test")}
+    ).json()
+
+    assert body["ok"] is False
+    assert "/models" in body["detail"]
+
+
 # ---------------- DELETE: reset and fall back ----------------
 
 

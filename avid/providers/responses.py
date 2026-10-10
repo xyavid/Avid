@@ -28,6 +28,7 @@ from .protocol import (
     http_error,
     image_data_url,
     iter_sse_events,
+    model_ids,
     prompt_too_long,
     usage_of,
 )
@@ -444,3 +445,21 @@ def stream(
         raise LLMError(f"请求 {url} 失败：{exc}") from exc
 
     return state.to_turn()
+
+
+def models_url(config: Config) -> str:
+    """Listing endpoint, next to /responses."""
+    return f"{config.base_url.rstrip('/')}/models"
+
+
+def list_models(config: Config, *, client: httpx.Client | None = None) -> list[str]:
+    """Model ids the endpoint offers; metadata GET with the same auth as a chat call."""
+    http = client or shared_client()
+    response = send(http, "GET", models_url(config), headers=_headers(config))
+    if response.status_code != 200:
+        raise http_error(response.status_code, response.text)
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise LLMError(f"{models_url(config)} 返回的不是 JSON：{response.text[:200]}") from exc
+    return model_ids(payload)

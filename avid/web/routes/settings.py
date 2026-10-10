@@ -20,12 +20,16 @@ from ...providers.byok import (
     ModelDecl,
     ProviderDecl,
 )
+from ...providers.client import list_models
 from ...providers.config import ConfigError
-from ...providers.verify import verify_provider
+from ...providers.protocol import LLMError
+from ...providers.verify import classify_error, verify_provider
 from ...security import userdirs
 from ...services.errors import InvalidRequest
 from ..schemas import (
     ByokModel,
+    ByokModelsIn,
+    ByokModelsOut,
     ByokProviderIn,
     ByokProviderOut,
     ByokSettingsIn,
@@ -145,6 +149,27 @@ def post_byok_test(body: ByokTestIn) -> ByokTestOut:
             VerifyStepOut(step=step.step, ok=step.ok, detail=step.detail) for step in report.steps
         ],
     )
+
+
+@router.post("/settings/byok/models", response_model=ByokModelsOut)
+def post_byok_models(body: ByokModelsIn) -> ByokModelsOut:
+    """Ask the endpoint which models it offers, so the settings panel can fill the ids in.
+
+    Runs against the payload rather than saved config (same as the connectivity check), and an
+    unsupported or misconfigured endpoint reports a reason instead of raising.
+    """
+    provider = _to_decl(body.provider)
+    try:
+        config = byok.config_from_provider(provider, "", secret=body.provider.api_key)
+    except ConfigError as exc:
+        return ByokModelsOut(ok=False, detail=str(exc))
+    try:
+        models = list_models(config)
+    except LLMError as exc:
+        return ByokModelsOut(ok=False, detail=classify_error(str(exc)))
+    if not models:
+        return ByokModelsOut(ok=False, detail="端点没有返回任何模型（它可能不提供 /models 列表）")
+    return ByokModelsOut(ok=True, models=models, detail=f"端点提供了 {len(models)} 个模型")
 
 
 @router.delete("/settings/byok", status_code=status.HTTP_204_NO_CONTENT)

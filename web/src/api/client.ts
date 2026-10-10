@@ -8,6 +8,7 @@
 import type {
   Branch,
   BranchList,
+  ByokModelsResult,
   ByokSettings,
   ByokSettingsInput,
   ByokTestResult,
@@ -330,6 +331,21 @@ export function testByokModel(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ provider, model_id: modelId }),
+  })
+}
+
+/**
+ * Ask the endpoint which models it offers (GET {base_url}/models), so the settings panel can fill
+ * the ids in instead of typing them: same unsaved payload as the connectivity check, and an
+ * endpoint that cannot answer comes back as `ok: false` with a reason rather than an exception.
+ */
+export function fetchByokModels(
+  provider: ByokSettingsInput['providers'][number],
+): Promise<ByokModelsResult> {
+  return request('/api/settings/byok/models', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider }),
   })
 }
 

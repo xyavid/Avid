@@ -68,6 +68,11 @@ def chat_completion(
     )
 
 
+def list_models(config: Config, *, client: httpx.Client | None = None) -> list[str]:
+    """Model ids the endpoint advertises, for the settings panel's 获取模型 button."""
+    return _impl(config.resolved_provider).list_models(config, client=client)
+
+
 def stream_completion(
     config: Config,
     messages: list[dict[str, Any]],

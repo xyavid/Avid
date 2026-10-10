@@ -244,6 +244,24 @@ class ByokTestOut(BaseModel):
     steps: list[VerifyStepOut] = Field(default_factory=list)
 
 
+class ByokModelsIn(BaseModel):
+    """Model-listing payload: the same unsaved provider declaration the connectivity check takes."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider: ByokProviderIn
+
+
+class ByokModelsOut(BaseModel):
+    """What the endpoint offers; ``ok`` means there is a list to pick from, and every other
+    outcome carries a readable reason in ``detail``.
+    """
+
+    ok: bool
+    models: list[str] = Field(default_factory=list)
+    detail: str = ""
+
+
 class SessionsDirOut(BaseModel):
     """Effective session directory; ``editable`` is false when the environment variable wins."""
 

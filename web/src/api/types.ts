@@ -362,6 +362,16 @@ export interface ByokTestResult {
 }
 
 /**
+ * `POST /api/settings/byok/models` response: the ids the endpoint advertises. `ok` means there is
+ * a list to pick from; otherwise `detail` carries the reason (bad path, no key, not a JSON list).
+ */
+export interface ByokModelsResult {
+  ok: boolean
+  models: string[]
+  detail: string
+}
+
+/**
  * `GET /api/settings/sessions` response: current/default session dir and where the value comes
  * from. `source` 'env' means `editable` is false — the env var wins over the settings file.
  */

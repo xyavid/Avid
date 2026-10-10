@@ -3,20 +3,30 @@
  * configuration so adding a provider never touches code.
  * Keys are write-only (never prefilled; GET returns only `key_set`) with implicit auth (a key sends
  * the protocol's standard headers, blank sends none), saving PUTs the full provider list plus
- * bindings in one payload that the server rejects wholesale on validation failure, and Test probes
- * a minimal chat turn + a tool call against the current form values.
+ * bindings in one payload that the server rejects wholesale on validation failure, Test probes
+ * a minimal chat turn + a tool call against the current form values, and 获取模型 asks the
+ * endpoint for its model list (same unsaved payload) so ids get picked instead of typed.
  */
 
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 
 import {
+  fetchByokModels,
   getByokSettings,
   resetByokSettings,
   saveByokSettings,
   testByokModel,
 } from '../../api/client'
-import type { ByokProtocol, ByokSettings, ByokTestResult, ProviderEntry, ProviderInput } from '../../api/types'
+import type {
+  ByokModelsResult,
+  ByokProtocol,
+  ByokSettings,
+  ByokTestResult,
+  ModelEntry,
+  ProviderEntry,
+  ProviderInput,
+} from '../../api/types'
 import { cx } from '../../ui/cx'
 import { Icon } from '../../ui/Icon'
 import { Input } from '../../ui/Input'
@@ -36,6 +46,27 @@ const PROTOCOL_LABELS: Record<ByokProtocol, string> = {
 }
 
 const STATUS = 'mt-a8 font-ui text-hint'
+
+/** Secondary button next to the model rows (添加模型 / 获取模型). */
+const SMALL_BUTTON =
+  'rounded-sm border-hairline border-hair px-a8 py-a2 font-ui text-micro text-ink-light transition-colors duration-fast ease-out hover:bg-overlay-light hover:text-ink'
+
+/** A fresh model row; the listing reuses it when it appends instead of filling a blank row. */
+const BLANK_MODEL: ModelEntry = {
+  id: '',
+  label: null,
+  context_window: null,
+  max_output: null,
+  reasoning_efforts: [],
+  capabilities: { tool_calling: true },
+}
+
+/** 获取模型 panel: what the endpoint answered, or why it could not. */
+type CatalogState = {
+  state: 'idle' | 'loading' | 'ready' | 'error'
+  models: string[]
+  detail: string
+}
 
 function emptyDraft(): ProviderInput {
   return {
@@ -344,8 +375,35 @@ function ProviderEditor({ draft, isNew, onSave, onCancel }: EditorProps) {
   const [headersText, setHeadersText] = useState(JSON.stringify(draft.headers, null, 2))
   const [extraText, setExtraText] = useState(JSON.stringify(draft.extra_body, null, 2))
   const [error, setError] = useState<string | null>(null)
+  const [catalog, setCatalog] = useState<CatalogState>({ state: 'idle', models: [], detail: '' })
 
   const patch = (part: Partial<ProviderInput>) => setForm((f) => ({ ...f, ...part }))
+
+  const listModels = async () => {
+    setCatalog({ state: 'loading', models: [], detail: '' })
+    let result: ByokModelsResult
+    try {
+      result = await fetchByokModels(form)
+    } catch (e) {
+      setCatalog({ state: 'error', models: [], detail: e instanceof Error ? e.message : String(e) })
+      return
+    }
+    setCatalog({
+      state: result.ok ? 'ready' : 'error',
+      models: result.models,
+      detail: result.detail,
+    })
+  }
+
+  /** Pick from the listing: the first row still missing an id, else a new row. */
+  const fillModel = (id: string) => {
+    const blank = form.models.findIndex((m) => !m.id.trim())
+    patch(
+      blank >= 0
+        ? { models: form.models.map((m, i) => (i === blank ? { ...m, id } : m)) }
+        : { models: [...form.models, { ...BLANK_MODEL, id }] },
+    )
+  }
 
   const submit = () => {
     if (!/^[a-z0-9-]+$/.test(form.id)) {
@@ -425,8 +483,9 @@ function ProviderEditor({ draft, isNew, onSave, onCancel }: EditorProps) {
       <Field label="模型" hint="至少一个；绑到 chat 槽位需要支持工具调用">
         <div className="flex flex-col gap-a4">
           {form.models.map((m, index) => (
-            <div key={index} className="flex items-center gap-a4">
+            <div key={index} className="flex flex-wrap items-center gap-a4">
               <Input
+                className="min-w-[200px] flex-1"
                 value={m.id}
                 onChange={(e) =>
                   patch({
@@ -447,7 +506,7 @@ function ProviderEditor({ draft, isNew, onSave, onCancel }: EditorProps) {
                   })
                 }
                 placeholder="窗口"
-                className="!w-[88px]"
+                className="!w-[88px] shrink-0"
               />
               <select
                 value={m.capabilities.tool_calling === null || m.capabilities.tool_calling === undefined ? 'unset' : m.capabilities.tool_calling ? 'true' : 'false'}
@@ -534,28 +593,50 @@ function ProviderEditor({ draft, isNew, onSave, onCancel }: EditorProps) {
               </select>
             </div>
           ))}
-          <button
-            type="button"
-            aria-label="添加模型"
-            onClick={() =>
-              patch({
-                models: [
-                  ...form.models,
-                  {
-                    id: '',
-                    label: null,
-                    context_window: null,
-                    max_output: null,
-                    reasoning_efforts: [],
-                    capabilities: { tool_calling: true },
-                  },
-                ],
-              })
-            }
-            className="self-start rounded-sm border-hairline border-hair px-a8 py-a2 font-ui text-micro text-ink-light transition-colors duration-fast ease-out hover:bg-overlay-light hover:text-ink"
-          >
-            添加模型
-          </button>
+          <div className="flex flex-wrap items-center gap-a8">
+            <button
+              type="button"
+              aria-label="添加模型"
+              onClick={() => patch({ models: [...form.models, { ...BLANK_MODEL }] })}
+              className={SMALL_BUTTON}
+            >
+              添加模型
+            </button>
+            <button
+              type="button"
+              onClick={() => void listModels()}
+              disabled={catalog.state === 'loading' || !/^https?:\/\//.test(form.base_url.trim())}
+              title="按上面的接口地址与密钥请求 /models，读回它提供的模型；点列表里的一个填进模型 id"
+              className={SMALL_BUTTON + ' disabled:cursor-not-allowed disabled:opacity-40'}
+            >
+              {catalog.state === 'loading' ? '获取中…' : '获取模型'}
+            </button>
+            {catalog.state === 'ready' && (
+              <span className="font-ui text-hint text-ink-muted">{catalog.detail}</span>
+            )}
+          </div>
+          {catalog.state === 'ready' && (
+            <div
+              data-testid="byok-model-catalog"
+              className="max-h-[180px] overflow-y-auto rounded-sm border-hairline border-hair bg-card p-a4"
+            >
+              {catalog.models.map((id) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => fillModel(id)}
+                  className="block w-full truncate rounded-sm px-a8 py-a4 text-left font-ui text-caption text-ink transition-colors duration-fast ease-out hover:bg-overlay-light"
+                >
+                  {id}
+                </button>
+              ))}
+            </div>
+          )}
+          {catalog.state === 'error' && (
+            <p role="alert" className="font-ui text-hint text-danger">
+              {catalog.detail}
+            </p>
+          )}
         </div>
       </Field>
 
