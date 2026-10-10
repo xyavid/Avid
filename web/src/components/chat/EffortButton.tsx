@@ -2,7 +2,8 @@
  * Reasoning-effort chip in the composer: picks what the effort parameter carries, from the levels
  * the selected model declares itself (`reasoning_efforts`), plus an unset option that keeps the
  * parameter out of the request. Width follows the level name — those strings are provider-defined
- * and vary in length — and nothing renders when the model declares no levels.
+ * and vary in length — and with no declaration the chip stays put and says where to declare them,
+ * since a control that silently disappears is one nobody finds.
  */
 
 import { useState } from 'react'
@@ -20,7 +21,8 @@ export type EffortButtonProps = {
 
 export function EffortButton({ effort, onChange, levels }: EffortButtonProps) {
   const [open, setOpen] = useState(false)
-  if (levels.length === 0) return null
+  const declared = levels.length > 0
+  const label = declared ? effort ?? '不设' : '未声明'
 
   const pick = (level: string | null) => {
     onChange(level)
@@ -33,7 +35,7 @@ export function EffortButton({ effort, onChange, levels }: EffortButtonProps) {
         type="button"
         aria-label="推理强度"
         aria-expanded={open}
-        title={`推理强度 ${effort ?? '不设'}`}
+        title={`推理强度 ${label}`}
         onClick={() => setOpen((value) => !value)}
         className={cx(
           'inline-flex h-[26px] items-center gap-a6 rounded-sm px-a8 font-ui text-caption transition-colors duration-fast ease-out hover:bg-overlay-light focus-visible:bg-overlay-light',
@@ -42,7 +44,7 @@ export function EffortButton({ effort, onChange, levels }: EffortButtonProps) {
       >
         <Icon name="activity" size={12} />
         {/* nowrap: the chip is meant to be as wide as its level name, never squeezed into two lines. */}
-        <span className="whitespace-nowrap">{effort ?? '不设'}</span>
+        <span className="whitespace-nowrap">{label}</span>
         <span
           className={cx('text-ink-muted transition-transform duration-fast ease-out', open ? '' : 'rotate-180')}
         >
@@ -54,26 +56,33 @@ export function EffortButton({ effort, onChange, levels }: EffortButtonProps) {
         <div
           role="dialog"
           aria-label="推理强度"
-          className="absolute bottom-full right-0 z-20 mb-a8 w-[180px] rounded-md border-hairline border-hair bg-card p-a8 shadow-soft"
+          className="absolute bottom-full right-0 z-20 mb-a8 w-[240px] rounded-md border-hairline border-hair bg-card p-a8 shadow-soft"
         >
-          {[null, ...levels].map((level) => (
-            <button
-              key={level ?? 'unset'}
-              type="button"
-              onClick={() => pick(level)}
-              className={cx(
-                'flex w-full items-center justify-between gap-a8 rounded-sm px-a8 py-a4 text-left font-ui text-caption transition-colors duration-fast ease-out',
-                effort === level ? 'bg-accent-light text-accent' : 'text-ink hover:bg-overlay-light',
-              )}
-            >
-              <span>{level ?? '不设'}</span>
-              {effort === level && (
-                <span className="shrink-0 text-accent">
-                  <Icon name="check" size={12} />
-                </span>
-              )}
-            </button>
-          ))}
+          {!declared && (
+            <p className="px-a8 py-a4 font-ui text-hint leading-[1.6] text-ink-muted">
+              这个模型还没声明档位：到「设置 → 模型」里它的「强度档位」填上端点认的档位（逗号分隔，
+              例如 low, medium, high），保存后这里就能挑。
+            </p>
+          )}
+          {declared &&
+            [null, ...levels].map((level) => (
+              <button
+                key={level ?? 'unset'}
+                type="button"
+                onClick={() => pick(level)}
+                className={cx(
+                  'flex w-full items-center justify-between gap-a8 rounded-sm px-a8 py-a4 text-left font-ui text-caption transition-colors duration-fast ease-out',
+                  effort === level ? 'bg-accent-light text-accent' : 'text-ink hover:bg-overlay-light',
+                )}
+              >
+                <span>{level ?? '不设'}</span>
+                {effort === level && (
+                  <span className="shrink-0 text-accent">
+                    <Icon name="check" size={12} />
+                  </span>
+                )}
+              </button>
+            ))}
         </div>
       )}
     </div>

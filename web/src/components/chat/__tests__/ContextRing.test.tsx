@@ -80,4 +80,13 @@ describe('上下文容量环', () => {
     fireEvent.click(screen.getByRole('button', { name: '上下文容量 92.0%' }))
     expect(hot.container.querySelector('div[style*="width"]')?.className).toContain('bg-danger')
   })
+
+  it('环比按钮小一号：16px 的图形放在 26px 的点击区里（读数贴边太挤）', () => {
+    const { container } = render(<ContextRing usage={null} />)
+
+    const svg = container.querySelector('svg') as SVGSVGElement
+    expect(svg.getAttribute('width')).toBe('16')
+    expect(svg.getAttribute('height')).toBe('16')
+    expect((container.querySelector('button') as HTMLElement).className).toContain('w-[26px]')
+  })
 })

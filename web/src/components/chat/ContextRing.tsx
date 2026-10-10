@@ -1,5 +1,5 @@
 /**
- * Context-capacity ring in the composer's left cluster, with a click-open breakdown.
+ * Context-capacity ring in the composer toolbar, with a click-open breakdown.
  * Readings come from the `run_status` / `run_finished` usage snapshots (per-round while
  * running, the persisted one after); a missing reading shows "—" and an empty track — not
  * reported is not the same as 0 — and the three parts are all the kernel accounts for
@@ -14,8 +14,9 @@ import { cx } from '../../ui/cx'
 /** Utilization above which the ring turns danger. */
 const DANGER_AT = 0.85
 
-const RING_SIZE = 20
-const RING_STROKE = 3
+// The glyph sits inside a 26px hit area: 16px reads as a quiet readout, 20px crowded the row.
+const RING_SIZE = 16
+const RING_STROKE = 2.5
 
 function ratioOf(usage: UsageReport | null): number | null {
   const ratio = usage?.context.utilization

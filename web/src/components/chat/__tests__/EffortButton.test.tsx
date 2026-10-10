@@ -51,8 +51,17 @@ describe('EffortButton（输入区推理强度）', () => {
     expect(label?.className ?? '').not.toContain('max-w')
   })
 
-  it('模型没声明档位时整块不渲染（这个模型不提这件事）', () => {
-    const { container } = render(<EffortButton {...base} levels={[]} />)
-    expect(container.querySelector('button')).toBeNull()
+  it('模型没声明档位：胶囊仍在（否则用户找不到它），点开说明去哪声明', () => {
+    render(<EffortButton {...base} levels={[]} />)
+
+    const chip = screen.getByRole('button', { name: /推理强度/ })
+    expect(chip.textContent).toContain('未声明')
+
+    fireEvent.click(chip)
+    const dialog = screen.getByRole('dialog', { name: '推理强度' })
+    expect(dialog.textContent).toContain('设置')
+    expect(dialog.textContent).toContain('强度档位')
+    // Nothing to pick: no 不设 and no level rows.
+    expect(within(dialog).queryByText('不设')).toBeNull()
   })
 })

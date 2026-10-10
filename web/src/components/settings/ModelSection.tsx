@@ -564,7 +564,7 @@ function ProviderEditor({ draft, isNew, onSave, onCancel }: EditorProps) {
                 }
                 placeholder="强度档位，逗号分隔"
                 className="!w-[150px] shrink-0"
-                title="这个模型认哪些推理强度（例如 low, medium, high 或 max）；每个运行时在输入区挑一个。端点不认这个参数时会在报错里给出提示"
+                title="这个模型认哪些推理强度（例如 low, medium, high 或 max）；每个运行时在输入区挑一个。留空 = 输入区就没有档位选择。端点不认这个参数时会在报错里给出提示"
                 aria-label={`模型 ${m.id || '（未命名）'} 的推理强度档位`}
               />
               <select

@@ -305,12 +305,13 @@ describe('Composer 工具栏（附件居左只有图标；窄了收文字）', (
     expect(names[names.length - 1]).toBe('发送')
   })
 
-  it('模型没声明档位：推理强度整块不出现（这个模型不提这件事）', () => {
+  it('模型没声明档位：推理强度胶囊仍在（点开是「去哪声明」）', () => {
     renderComposer({
       model: 'stub/a',
       byokModels: [{ ref: 'stub/a', label: '假端点 · stub-a' }],
     })
 
-    expect(screen.queryByRole('button', { name: /推理强度/ })).toBeNull()
+    const chip = screen.getByRole('button', { name: /推理强度/ })
+    expect(chip.textContent).toContain('未声明')
   })
 })
