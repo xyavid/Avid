@@ -1,6 +1,6 @@
 /**
  * Input area: auto-growing textarea, with image attach / permission on the left, the context ring
- * and model chip in the middle, and send / stop on the right; Enter sends, Shift+Enter breaks, and
+ * in the middle, and the model + effort chips sitting against send / stop on the right; Enter sends, Shift+Enter breaks, and
  * an IME-composing Enter never sends. While busy the text stays editable (Enter queues, insert
  * targets the running step) and stop stays cooperative — the terminal state comes from events;
  * images from paste / drop / picker are downscaled by `prepareImage`, and `full` goes out with
@@ -252,13 +252,13 @@ export function Composer({
             />
             <PermissionButton full={full} onToggleFull={onToggleFull} compact={compact} />
           </div>
-          <div className="flex min-w-0 items-center gap-a8">
+          <div className="flex items-center gap-a8">
             <ContextRing usage={usage} />
+          </div>
+          <div className="flex min-w-0 items-center gap-a8">
             {onChangeModel && (
               <ModelButton model={model} onChange={onChangeModel} candidates={byokModels} />
             )}
-          </div>
-          <div className="flex items-center gap-a8">
             {onChangeEffort && (
               <EffortButton effort={effort} onChange={onChangeEffort} levels={effortLevels} />
             )}

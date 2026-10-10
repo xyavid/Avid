@@ -303,6 +303,14 @@ describe('Composer 工具栏（附件居左只有图标；窄了收文字）', (
     expect(at(/模型/)).toBe(3)
     expect(at(/推理强度/)).toBe(4)
     expect(names[names.length - 1]).toBe('发送')
+
+    // 模型与强度贴成一对、和动作同一组靠最右；容量环独占中区，撞到就停（不重叠）。
+    // 每个胶囊都在自己的 relative 包裹层里，所以比的是包裹层的父节点（那一组）。
+    const groupOf = (name: string | RegExp) =>
+      screen.getByRole('button', { name }).parentElement?.parentElement
+    expect(groupOf('模型')).toBe(groupOf('推理强度'))
+    expect(groupOf('推理强度')).toBe(screen.getByRole('button', { name: '发送' }).parentElement)
+    expect(groupOf(/上下文容量/)).not.toBe(groupOf('模型'))
   })
 
   it('模型没声明档位：推理强度胶囊仍在（点开是「去哪声明」）', () => {
