@@ -31,6 +31,7 @@ import {
 import type { Meta, SessionSummary, UsageReport, WorkspaceSummary } from '../../api/types'
 import { ApprovalBar } from '../../components/chat/ApprovalBar'
 import { Composer } from '../../components/chat/Composer'
+import { RunningRow } from '../../components/chat/RunningRow'
 import { Timeline } from '../../components/chat/Timeline'
 import type { TimelineItem } from '../../state/timeline'
 import {
@@ -661,6 +662,9 @@ export function ConversationPage() {
               />
             </div>
           )}
+          {/* Pinned above the input: visible however far the answer has scrolled, and the gap
+              that keeps a growing answer from sitting on the composer. */}
+          {liveHere && <RunningRow />}
           <Composer
             full={full}
             onToggleFull={setFull}

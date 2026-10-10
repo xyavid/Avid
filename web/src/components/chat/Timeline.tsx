@@ -309,31 +309,6 @@ export function Timeline({
   return (
     <div className="flex flex-col gap-a16" data-testid={testId}>
       {nodes}
-      {liveTail && <RunIndicator />}
-    </div>
-  )
-}
-
-/** Bottom-of-timeline running row: the same three-dot cycle the bubble uses while it waits, and
- *  the air that keeps a growing answer from sitting on the composer. */
-function RunIndicator() {
-  return (
-    <div
-      role="status"
-      aria-label="运行中"
-      data-testid="run-indicator"
-      className="flex items-center gap-[3px] px-a8 pb-a16 pt-a4"
-    >
-      {[0, 1, 2].map((step) => (
-        <span
-          key={step}
-          className="h-[4px] w-[4px] rounded-full bg-accent"
-          style={{
-            animation: 'hana-cycling-dots 1.2s var(--ease-standard) infinite',
-            animationDelay: `${step * 0.2}s`,
-          }}
-        />
-      ))}
     </div>
   )
 }
