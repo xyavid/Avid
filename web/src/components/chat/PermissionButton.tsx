@@ -85,6 +85,12 @@ export function PermissionButton({ full, onToggleFull, compact = false }: Permis
         <Icon name={current.icon} size={12} />
         <span className={compact ? 'sr-only' : undefined}>{current.label}</span>
         <span className="sr-only">权限</span>
+        {!compact && (
+          // Same affordance as the model chip: a chevron means the control opens a menu.
+          <span className={cx('transition-transform duration-fast ease-out', open ? '' : 'rotate-180')}>
+            <Icon name="chevron-down" size={12} />
+          </span>
+        )}
       </button>
 
       {open && (

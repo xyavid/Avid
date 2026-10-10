@@ -89,6 +89,14 @@ describe('PermissionButton（输入区权限按钮）', () => {
     expect(chip.getAttribute('title')).toBe('默认权限')
   })
 
+  it('带下拉箭头（与模型胶囊同一个「点开是菜单」的说法）；收起时只剩图标', () => {
+    const { container, rerender } = render(<PermissionButton full={false} onToggleFull={() => {}} />)
+    expect(container.querySelectorAll('button svg').length).toBe(2)
+
+    rerender(<PermissionButton full={false} onToggleFull={() => {}} compact />)
+    expect(container.querySelectorAll('button svg').length).toBe(1)
+  })
+
   it('没有常驻边框：框只在悬停 / 键盘聚焦 / 展开时出现', () => {
     const { rerender } = render(<PermissionButton full={false} onToggleFull={() => {}} />)
     const chip = () => screen.getByRole('button', { name: /权限/ })

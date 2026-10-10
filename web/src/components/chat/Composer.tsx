@@ -1,10 +1,10 @@
 /**
- * Input area: auto-growing textarea, with image attach / permission / model on the left and
- * send / stop on the right; Enter sends, Shift+Enter breaks, and an IME-composing Enter never
- * sends. While busy the text stays editable (Enter queues, insert targets the running step) and
- * stop stays cooperative — the terminal state comes from events; images from paste / drop /
- * picker are downscaled by `prepareImage`, and `full` goes out with StartRunInput so the hook
- * can attach `full_access_ack`.
+ * Input area: auto-growing textarea, with image attach / permission on the left, the context ring
+ * and model chip in the middle, and send / stop on the right; Enter sends, Shift+Enter breaks, and
+ * an IME-composing Enter never sends. While busy the text stays editable (Enter queues, insert
+ * targets the running step) and stop stays cooperative — the terminal state comes from events;
+ * images from paste / drop / picker are downscaled by `prepareImage`, and `full` goes out with
+ * StartRunInput so the hook can attach `full_access_ack`.
  */
 
 import { useLayoutEffect, useRef, useState, type RefObject } from 'react'
@@ -15,6 +15,7 @@ import { MAX_IMAGES, humanBytes, isImageFile, prepareImage } from '../../state/i
 import { Icon, type IconName } from '../../ui/Icon'
 import { IconButton } from '../../ui/IconButton'
 import { ContextRing } from './ContextRing'
+import { EffortButton } from './EffortButton'
 import { PermissionButton } from './PermissionButton'
 import { ModelButton } from './ModelButton'
 
@@ -105,6 +106,8 @@ export function Composer({
   const fileRef = useRef<HTMLInputElement>(null)
   const toolbarRef = useRef<HTMLDivElement>(null)
   const compact = useCompact(toolbarRef)
+  // Effort levels follow the selected model's own declaration.
+  const effortLevels = byokModels.find((candidate) => candidate.ref === model)?.reasoning_efforts ?? []
   // No model, no send: the run start carries the model explicitly, not a server-side default.
   // Images alone count; busy is not a block — queue/insert go through a separate path.
   const canSend =
@@ -228,23 +231,13 @@ export function Composer({
         <div
           ref={toolbarRef}
           data-testid="composer-toolbar"
-          className="mt-a8 flex items-center justify-between"
+          className="mt-a8 flex items-center justify-between gap-a8"
         >
           <div className="flex items-center gap-a8">
             <AttachButton
               disabled={disabled || images.length >= MAX_IMAGES}
               onClick={() => fileRef.current?.click()}
             />
-            <PermissionButton full={full} onToggleFull={onToggleFull} compact={compact} />
-            {onChangeModel && (
-              <ModelButton
-                model={model}
-                onChange={onChangeModel}
-                effort={effort}
-                onChangeEffort={onChangeEffort}
-                candidates={byokModels}
-              />
-            )}
             <input
               ref={fileRef}
               type="file"
@@ -257,31 +250,42 @@ export function Composer({
                 void addFiles(files)
               }}
             />
-            <ContextRing usage={usage} />
+            <PermissionButton full={full} onToggleFull={onToggleFull} compact={compact} />
           </div>
-          {busy ? (
-            <div className="flex items-center gap-a8">
-              {onQueue && (
-                <ActionButton
-                  icon="send"
-                  label="排队"
-                  disabled={!canSend}
-                  onClick={() => submit('queue')}
-                />
-              )}
-              {onInsert && (
-                <ActionButton
-                  icon="plus"
-                  label="插入"
-                  disabled={!canSend}
-                  onClick={() => submit('insert')}
-                />
-              )}
-              <StopButton onClick={onStop} />
-            </div>
-          ) : (
-            <SendButton disabled={!canSend} onClick={() => submit('send')} />
-          )}
+          <div className="flex min-w-0 items-center gap-a8">
+            <ContextRing usage={usage} />
+            {onChangeModel && (
+              <ModelButton model={model} onChange={onChangeModel} candidates={byokModels} />
+            )}
+          </div>
+          <div className="flex items-center gap-a8">
+            {onChangeEffort && (
+              <EffortButton effort={effort} onChange={onChangeEffort} levels={effortLevels} />
+            )}
+            {busy ? (
+              <>
+                {onQueue && (
+                  <ActionButton
+                    icon="send"
+                    label="排队"
+                    disabled={!canSend}
+                    onClick={() => submit('queue')}
+                  />
+                )}
+                {onInsert && (
+                  <ActionButton
+                    icon="plus"
+                    label="插入"
+                    disabled={!canSend}
+                    onClick={() => submit('insert')}
+                  />
+                )}
+                <StopButton onClick={onStop} />
+              </>
+            ) : (
+              <SendButton disabled={!canSend} onClick={() => submit('send')} />
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -334,7 +338,8 @@ function AttachButton({ disabled, onClick }: { disabled: boolean; onClick: () =>
   )
 }
 
-/** Primary action button (send / stop): accent fill, icon, label. */
+/** Primary action button (send / stop): accent fill, icon, label; nowrap so a tight row never
+ *  folds the label — the model chip is the one that truncates. */
 function ActionButton({
   icon,
   label,
@@ -351,7 +356,7 @@ function ActionButton({
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className="inline-flex h-[26px] items-center gap-a6 rounded-sm bg-accent px-a10 font-ui text-caption text-card transition-colors duration-fast ease-out hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
+      className="inline-flex h-[26px] items-center gap-a6 whitespace-nowrap rounded-sm bg-accent px-a10 font-ui text-caption text-card transition-colors duration-fast ease-out hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
     >
       <Icon name={icon} size={13} />
       {label}

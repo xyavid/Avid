@@ -3,10 +3,17 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { Composer } from '../Composer'
+import type { ModelCandidate } from '../../../api/types'
 
 afterEach(cleanup)
 
-function renderComposer(overrides?: { busy?: boolean; disabled?: boolean; model?: string | null }) {
+function renderComposer(overrides?: {
+  busy?: boolean
+  disabled?: boolean
+  model?: string | null
+  byokModels?: ModelCandidate[]
+}) {
+  const { byokModels = [], ...rest } = overrides ?? {}
   const onSend = vi.fn()
   const onStop = vi.fn()
   const view = render(
@@ -16,9 +23,12 @@ function renderComposer(overrides?: { busy?: boolean; disabled?: boolean; model?
       // A model is required; give one by default — the unset-model case overrides it with null.
       model="stub/a"
       onChangeModel={() => {}}
+      effort={null}
+      onChangeEffort={() => {}}
+      byokModels={byokModels}
       onSend={onSend}
       onStop={onStop}
-      {...overrides}
+      {...rest}
     />,
   )
   return { onSend, onStop, ...view }
@@ -274,5 +284,33 @@ describe('Composer 工具栏（附件居左只有图标；窄了收文字）', (
 
     act(() => push.forEach((apply) => apply(700)))
     expect(screen.getByText('默认').className).not.toContain('sr-only')
+  })
+
+  it('三区排列：左（附件 / 权限）· 中（容量环 / 模型）· 右（推理强度 / 动作）', () => {
+    renderComposer({
+      model: 'stub/a',
+      byokModels: [{ ref: 'stub/a', label: '假端点 · stub-a', reasoning_efforts: ['low', 'high'] }],
+    })
+
+    const names = within(screen.getByTestId('composer-toolbar'))
+      .getAllByRole('button')
+      .map((button) => button.getAttribute('aria-label') ?? button.textContent ?? '')
+    const at = (pattern: RegExp) => names.findIndex((name) => pattern.test(name))
+
+    expect(at(/添加图片/)).toBe(0)
+    expect(at(/权限/)).toBe(1)
+    expect(at(/容量/)).toBe(2)
+    expect(at(/模型/)).toBe(3)
+    expect(at(/推理强度/)).toBe(4)
+    expect(names[names.length - 1]).toBe('发送')
+  })
+
+  it('模型没声明档位：推理强度整块不出现（这个模型不提这件事）', () => {
+    renderComposer({
+      model: 'stub/a',
+      byokModels: [{ ref: 'stub/a', label: '假端点 · stub-a' }],
+    })
+
+    expect(screen.queryByRole('button', { name: /推理强度/ })).toBeNull()
   })
 })

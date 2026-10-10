@@ -30,6 +30,21 @@ describe('模型选择（阶段 54：由用户自己选，没有「跟随设置�
     expect(chip.getAttribute('aria-expanded')).toBe('false')
   })
 
+  it('没有常驻边框：框只在悬停/展开时出现，没选模型靠强调色而不是边框', () => {
+    const { rerender } = render(<ModelButton {...base} model="stub/stub-chat" />)
+    const classes = () => screen.getByRole('button', { name: /模型/ }).className.split(' ')
+
+    expect(classes()).not.toContain('border-hairline')
+    expect(classes()).not.toContain('border-hair')
+    expect(classes()).toContain('hover:bg-overlay-light')
+
+    // The accent tint carries "not chosen yet" now that the outline is gone.
+    rerender(<ModelButton {...base} />)
+    expect(classes()).not.toContain('border-accent')
+    expect(classes()).toContain('text-accent')
+    expect(classes()).toContain('hover:bg-accent-light')
+  })
+
   it('展开就是候选列表：不列"跟随设置"，也没有服务端解析的模型名', () => {
     render(<ModelButton {...base} />)
 
@@ -68,37 +83,13 @@ describe('模型选择（阶段 54：由用户自己选，没有「跟随设置�
     expect(screen.getByRole('button', { name: /模型/ }).textContent).toContain('ghost/removed')
   })
 
-  it('推理强度：档位来自所选模型的声明列表，选项是「不设 + 那几档」', () => {
-    const onChangeEffort = vi.fn()
-    render(
-      <ModelButton
-        {...base}
-        model="command/deepseek/deepseek-v4.1-flash"
-        effort="high"
-        onChangeEffort={onChangeEffort}
-      />,
-    )
+  it('推理强度不再挂在模型胶囊里：它有自己的控件，胶囊只留模型名与箭头', () => {
+    render(<ModelButton {...base} model="command/deepseek/deepseek-v4.1-flash" />)
 
-    // The chip carries the current effort; unset takes no slot.
-    expect(screen.getByRole('button', { name: /模型/ }).textContent).toContain('· high')
+    const chip = screen.getByRole('button', { name: /模型/ })
+    expect(chip.textContent).toContain('command · deepseek-v4.1-flash')
 
-    fireEvent.click(screen.getByRole('button', { name: /模型/ }))
-    const dialog = screen.getByRole('dialog', { name: '模型' })
-    expect(dialog.textContent).toContain('推理强度')
-    for (const level of ['不设', 'low', 'medium', 'high', 'max']) {
-      expect(dialog.textContent).toContain(level)
-    }
-
-    fireEvent.click(screen.getByText('max'))
-    expect(onChangeEffort).toHaveBeenCalledWith('max')
-    expect(screen.queryByRole('dialog', { name: '模型' })).toBeNull()
-  })
-
-  it('没声明档位的模型：不出现强度那一段（这个模型不提这件事）', () => {
-    render(<ModelButton {...base} model="stub/stub-chat" onChangeEffort={vi.fn()} />)
-
-    fireEvent.click(screen.getByRole('button', { name: /模型/ }))
-
+    fireEvent.click(chip)
     expect(screen.getByRole('dialog', { name: '模型' }).textContent).not.toContain('推理强度')
   })
 

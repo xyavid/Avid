@@ -126,7 +126,8 @@ Web  POST /api/sessions/{id}/runs ─┴─► services/runs.RunRegistry（线�
 | 加一个界面 | `web/src/surfaces/` 加页面并在 `app/App.tsx` 挂路由；颜色 / 字号 / 圆角只取 `styles/tokens.css` 的 token，不写散档 |
 | 加一个右列面板 | `components/dock/Dock.tsx` 的 `PANELS` 加一条 + `state/dock.ts` 的 `DockPanelId` 与 `PANEL_IDS` 同步；面板视图在 `components/dock/`，数据由页面下发（Dock 是纯展示，不发请求） |
 | 改对话时间线（段落顺序 / 工具行 / 思考段 / 收尾折叠） | `web/src/state/timeline.ts` 是单点（段落模型 + 事件→段落 + 历史归并 + 一键折叠判定 `turnGroups`），渲染在 `components/chat/Timeline.tsx`——过程与收尾共用它，别在页面里另起一套 |
-| 改模型选择 / 候选来源 | `web/src/state/runModel.ts`（选哪个、记不记得住、候选没了怎么办）+ `components/chat/ModelButton.tsx`（画它）；候选来自 `GET /api/meta` 的 `capabilities.models`，设置页只负责那份列表 |
+| 改模型选择 / 候选来源 | `web/src/state/runModel.ts`（选哪个、记不记得住、候选没了怎么办）+ `components/chat/ModelButton.tsx`（画它）；推理强度另有 `components/chat/EffortButton.tsx`，档位同样来自候选自己的声明；候选来自 `GET /api/meta` 的 `capabilities.models`，设置页只负责那份列表 |
+| 改输入区工具栏的排列 / 宽度适应 | `components/chat/Composer.tsx` 的 `data-testid="composer-toolbar"` 一行分三区（附件+权限 / 容量环+模型 / 推理强度+动作），`useCompact` 按行宽（阈值 `COMPACT_BELOW`）决定胶囊收不收文字 |
 | 改 markdown 支持的写法 / 危险协议名单 | `web/src/markdown/parse.ts` 是「标准解析器（@lezer/markdown，CommonMark+GFM）→ 渲染模型」的翻译层与协议闸门，`Markdown.tsx` 只负责画（全程 React 元素，不注入 HTML）；软换行成断行、外链图降级成链接是有意偏离，写在模块注释里 |
 
 ## 2. 提交规范

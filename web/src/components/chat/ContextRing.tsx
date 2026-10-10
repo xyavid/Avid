@@ -94,7 +94,7 @@ export function ContextRing({ usage }: ContextRingProps) {
         title={`上下文容量 ${pct(ratio)}`}
         onClick={() => setOpen((value) => !value)}
         className={cx(
-          'inline-flex h-[26px] w-[26px] items-center justify-center rounded-sm transition-colors duration-fast ease-out hover:bg-overlay-light focus-visible:bg-overlay-light focus:outline-none',
+          'inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-sm transition-colors duration-fast ease-out hover:bg-overlay-light focus-visible:bg-overlay-light focus:outline-none',
           hot ? 'text-danger' : 'text-ink-light',
         )}
       >
@@ -105,7 +105,7 @@ export function ContextRing({ usage }: ContextRingProps) {
         <div
           role="dialog"
           aria-label="上下文容量"
-          className="absolute bottom-full left-0 z-20 mb-a8 w-[320px] rounded-md border-hairline border-hair bg-card p-a12 shadow-soft"
+          className="absolute bottom-full left-1/2 z-20 mb-a8 w-[320px] -translate-x-1/2 rounded-md border-hairline border-hair bg-card p-a12 shadow-soft"
         >
           <div className="flex items-baseline justify-between gap-a8">
             <span className="font-ui text-ui text-ink">上下文容量</span>
