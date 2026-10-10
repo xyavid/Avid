@@ -14,6 +14,7 @@ import { cx } from '../../ui/cx'
 import { itemKey, subagentSteps, turnGroups } from '../../state/timeline'
 import { AssistantMessage } from './AssistantMessage'
 import { MessageActions } from './MessageActions'
+import { RunningRow } from './RunningRow'
 import { ReasoningBlock } from './ReasoningBlock'
 import { ToolCard } from './ToolCard'
 import { TurnSummary } from './TurnSummary'
@@ -309,6 +310,7 @@ export function Timeline({
   return (
     <div className="flex flex-col gap-a16" data-testid={testId}>
       {nodes}
+      {liveTail && <RunningRow />}
     </div>
   )
 }

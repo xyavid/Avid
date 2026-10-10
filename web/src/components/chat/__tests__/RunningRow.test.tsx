@@ -18,5 +18,7 @@ describe('RunningRow（输入区上方的运行中指示）', () => {
       expect(dot.getAttribute('style')).toContain(`animation-delay: ${index * 0.2}s`)
     }
     expect(container.querySelector('[data-testid="run-indicator"]')).toBe(row)
+    // 它占的是动作行那个槽（间距也一致）：位置与列宽由时间线给，见 Timeline 用例。
+    expect(row.className).toContain('mt-a4')
   })
 })

@@ -234,6 +234,20 @@ describe('Timeline（段落 → 对话列）', () => {
     expect(screen.getAllByRole('button', { name: '复制' }).length).toBeGreaterThan(0)
   })
 
+  it('运行中在动作行那个槽位挂三点头；结束之后换成动作行', () => {
+    const items = turn()
+    const { rerender } = render(<Timeline items={items} workspaceRoot="/w" liveTail />)
+
+    const indicator = screen.getByRole('status', { name: '运行中' })
+    expect(indicator.querySelectorAll('span')).toHaveLength(3)
+    expect(indicator.className).toContain('mt-a4')
+    expect(screen.queryByRole('button', { name: '复制' })).toBeNull()
+
+    rerender(<Timeline items={items} workspaceRoot="/w" />)
+    expect(screen.queryByRole('status', { name: '运行中' })).toBeNull()
+    expect(screen.getAllByRole('button', { name: '复制' }).length).toBeGreaterThan(0)
+  })
+
   it('两轮对话各挂一行：复制数 = 用户消息数 + 回话数', () => {
     const items: TimelineItem[] = [
       { kind: 'user', entryId: 'e1', text: '第一问', ts: 1 },
