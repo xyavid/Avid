@@ -74,6 +74,8 @@ class Config:
     context_window: int | None = None
     # Protocol family (openai / anthropic / responses); the BYOK resolver fills it from the protocol.
     provider: str | None = None
+    # BYOK provider id, half of a reasoning record's route; None for hand-built configs.
+    provider_id: str | None = None
     # Per-step cap on parallel tool calls; 1 is fully serial and unsafe tools never overlap.
     max_parallel_tool_calls: int = DEFAULT_MAX_PARALLEL_TOOL_CALLS
     # BYOK passthrough (ai/byok.py): extra request headers (custom auth), fixed body fields

@@ -102,6 +102,20 @@ type MessagePayload = {
   content?: unknown
   tool_calls?: Array<{ id?: unknown; function?: { name?: unknown; arguments?: unknown } }>
   tool_call_id?: unknown
+  /** CoT record written by the kernel (阶段 63); the kernel re-sends it only to the same route. */
+  reasoning?: unknown
+}
+
+/** Readable text of an archived reasoning record; opaque blocks (redacted, signatures) carry none. */
+function archivedReasoning(message: MessagePayload): string {
+  const blocks = (message.reasoning as { blocks?: unknown } | undefined)?.blocks
+  if (!Array.isArray(blocks)) return ''
+  return blocks
+    .map((block) => {
+      const item = block as { text?: unknown; thinking?: unknown }
+      return typeof item.text === 'string' ? item.text : typeof item.thinking === 'string' ? item.thinking : ''
+    })
+    .join('')
 }
 
 /** Same rule as `classify_tool_status` in `avid/web/schemas.py` (prefixes, plus a marker within
@@ -320,6 +334,17 @@ export function itemsFromEntries(entries: Entry[]): TimelineItem[] {
       continue
     }
     if (role === 'assistant') {
+      const thinking = archivedReasoning(message)
+      if (thinking.trim()) {
+        // Sits before the answer, the order it streamed in; the record is archived, not replayed here.
+        items.push({
+          kind: 'reasoning',
+          text: thinking,
+          startedAt: entry.timestamp,
+          endedAt: entry.timestamp,
+          streaming: false,
+        })
+      }
       const text = messageContent(message.content)
       if (text.trim()) {
         items.push({ kind: 'assistant', entryId: entry.entry_id, text, streaming: false, ts: entry.timestamp })

@@ -306,6 +306,14 @@ class TestAnthropic:
             "role": "assistant",
             "content": "Reading it.",
             "tool_calls": turn.tool_calls,
+            # 阶段 63：思考按路由记在消息上（整块含签名），回传只发生在同路由 + 工具链。
+            "reasoning": {
+                "route": "/claude-test",
+                "protocol": "anthropic",
+                "blocks": [
+                    {"type": "thinking", "thinking": "let me look", "signature": "sig"}
+                ],
+            },
         }
 
     def test_stream_turn_matches_non_stream(self):

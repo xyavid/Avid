@@ -444,6 +444,7 @@ def config_from_provider(
         model=model_id,
         context_window=window if window is not None else window_for(model_id),
         provider=PROTOCOL_FAMILY[provider.protocol],
+        provider_id=provider.id,
         max_parallel_tool_calls=_parallel_cap(env),
         extra_headers=extra_headers or None,
         extra_body=dict(provider.extra_body) or None,

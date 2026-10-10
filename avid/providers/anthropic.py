@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import contextlib
 import json
+from collections.abc import Mapping
 from typing import Any
 
 import httpx
 
+from . import reasoning
 from .config import Config
 from .protocol import (
     DeltaCallback,
@@ -103,10 +105,25 @@ def _tool_use_block(call: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _replayable(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Blocks the endpoint can match: thinking needs its signature, redacted needs its payload."""
+    kept = []
+    for block in blocks:
+        if block.get("type") == "thinking" and block.get("signature"):
+            kept.append({"type": "thinking", "thinking": block.get("thinking", ""),
+                         "signature": block["signature"]})
+        elif block.get("type") == "redacted_thinking" and block.get("data"):
+            kept.append({"type": "redacted_thinking", "data": block["data"]})
+    return kept
+
+
+def build_messages(
+    messages: list[dict[str, Any]], config: Config | None = None
+) -> list[dict[str, Any]]:
     """Convert OpenAI-shaped messages to Anthropic shape, buffering tool results together."""
     out: list[dict[str, Any]] = []
     pending_results: list[dict[str, Any]] = []
+    replay = reasoning.plan_replay(messages, config) if config is not None else {}
 
     def flush_results() -> None:
         # Consecutive tool results must share one user message, so they are buffered first.
@@ -114,7 +131,7 @@ def build_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
             out.append({"role": "user", "content": list(pending_results)})
             pending_results.clear()
 
-    for message in messages:
+    for index, message in enumerate(messages):
         role = message.get("role")
         if role == "tool":
             pending_results.append(
@@ -127,7 +144,10 @@ def build_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         if role == "assistant":
             flush_results()
-            blocks: list[dict[str, Any]] = []
+            # Replayed thinking must precede the text and tool_use blocks it belongs to.
+            blocks: list[dict[str, Any]] = list(
+                _replayable(replay.get(index, [])) if replay else []
+            )
             text = _text_of(message.get("content"))
             if text:
                 blocks.append({"type": "text", "text": text})
@@ -188,7 +208,7 @@ def build_request(
     request: dict[str, Any] = {
         "model": config.model,
         "max_tokens": max_tokens if max_tokens is not None else DEFAULT_MAX_TOKENS,
-        "messages": build_messages(messages),
+        "messages": build_messages(messages, config),
     }
     if system:
         request["system"] = system
@@ -225,19 +245,32 @@ def _call_of(block: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _thinking_block(block: Mapping[str, Any]) -> dict[str, Any] | None:
+    """One replayable thinking block, kept verbatim: the endpoint matches thinking to its signature."""
+    kind = block.get("type")
+    if kind == "thinking":
+        return {"type": "thinking", "thinking": str(block.get("thinking") or ""),
+                "signature": str(block.get("signature") or "")}
+    if kind == "redacted_thinking":
+        return {"type": "redacted_thinking", "data": str(block.get("data") or "")}
+    return None
+
+
 def parse_turn(data: dict[str, Any]) -> Turn:
     """Parse a non-streaming Messages response into a Turn."""
     texts: list[str] = []
-    reasonings: list[str] = []
+    thinks: list[dict[str, Any]] = []
     calls: list[dict[str, Any]] = []
     for block in data.get("content") or []:
         kind = block.get("type")
         if kind == "text":
             texts.append(str(block.get("text") or ""))
-        elif kind == "thinking":
-            reasonings.append(str(block.get("thinking") or ""))
         elif kind == "tool_use":
             calls.append(_call_of(block))
+        else:
+            kept = _thinking_block(block)
+            if kept is not None:
+                thinks.append(kept)
     text = "".join(texts)
     return Turn(
         message=assistant_message(text, calls),
@@ -246,8 +279,27 @@ def parse_turn(data: dict[str, Any]) -> Turn:
         usage=usage_of(data),
         model=str(data.get("model", "")),
         finish_reason=_finish_of(data.get("stop_reason")),
-        reasoning="".join(reasonings),
+        reasoning="".join(str(block.get("thinking") or "") for block in thinks),
+        reasoning_blocks=tuple(thinks),
     )
+
+
+def _carried_reasoning(request: Mapping[str, Any]) -> bool:
+    """Whether this request replayed thinking blocks: read off the body we actually send."""
+    for message in request.get("messages") or []:
+        content = message.get("content") if isinstance(message, Mapping) else None
+        if isinstance(content, list) and any(
+            isinstance(block, Mapping) and block.get("type") in ("thinking", "redacted_thinking")
+            for block in content
+        ):
+            return True
+    return False
+
+
+def _record(config: Config, turn: Turn) -> Turn:
+    """Tag this turn's thinking blocks with the route that produced them, on the message itself."""
+    reasoning.attach(turn.message, turn.reasoning_blocks, route=reasoning.route_of(config))
+    return turn
 
 
 def chat(
@@ -276,15 +328,21 @@ def chat(
                     response.status_code,
                     response.text,
                     sent_reasoning_effort=bool(config.reasoning_effort),
+                    sent_reasoning_replay=_carried_reasoning(request),
                 )
     try:
-        return parse_turn(response.json())
+        return _record(config, parse_turn(response.json()))
     except ValueError as exc:
         raise LLMError(f"响应不是合法 JSON：{response.text[:200]}") from exc
 
 
 # Streaming blocks are keyed by content_block index, which arrives before the deltas filling it.
-_BLOCK_KINDS = {"text": "text", "thinking": "thinking", "tool_use": "tool"}
+_BLOCK_KINDS = {
+    "text": "text",
+    "thinking": "thinking",
+    "redacted_thinking": "redacted",
+    "tool_use": "tool",
+}
 
 
 class _Accumulator:
@@ -299,7 +357,9 @@ class _Accumulator:
 
     def _block(self, index: int, kind: str = "text", **extra: Any) -> dict[str, Any]:
         return self.blocks.setdefault(
-            index, {"kind": kind, "text": "", "id": "", "name": "", "args": "", **extra}
+            index,
+            {"kind": kind, "text": "", "id": "", "name": "", "args": "", "signature": "",
+             "data": "", **extra},
         )
 
     def feed(self, event: dict[str, Any]) -> tuple[str, str]:
@@ -320,6 +380,7 @@ class _Accumulator:
                 _BLOCK_KINDS.get(str(block.get("type")), "text"),
                 id=str(block.get("id", "")),
                 name=str(block.get("name", "")),
+                data=str(block.get("data", "")),
             )
             return "", ""
         if kind == "content_block_delta":
@@ -336,6 +397,9 @@ class _Accumulator:
                 piece = str(delta.get("thinking") or "")
                 slot["text"] += piece
                 return "", piece
+            if dtype == "signature_delta":
+                slot["signature"] += str(delta.get("signature") or "")
+                return "", ""
             if dtype == "input_json_delta":
                 slot["args"] += str(delta.get("partial_json") or "")
             return "", ""
@@ -350,13 +414,18 @@ class _Accumulator:
 
     def to_turn(self) -> Turn:
         texts: list[str] = []
-        reasonings: list[str] = []
+        thinks: list[dict[str, Any]] = []
         calls: list[dict[str, Any]] = []
         for slot in self.blocks.values():
             if slot["kind"] == "text":
                 texts.append(str(slot["text"]))
             elif slot["kind"] == "thinking":
-                reasonings.append(str(slot["text"]))
+                thinks.append(
+                    {"type": "thinking", "thinking": str(slot["text"]),
+                     "signature": str(slot["signature"])}
+                )
+            elif slot["kind"] == "redacted":
+                thinks.append({"type": "redacted_thinking", "data": str(slot["data"])})
             elif slot["kind"] == "tool":
                 calls.append(
                     {
@@ -378,7 +447,8 @@ class _Accumulator:
             usage=usage_of(usage_input),
             model=self.model,
             finish_reason=_finish_of(self.stop_reason),
-            reasoning="".join(reasonings),
+            reasoning="".join(str(block.get("thinking") or "") for block in thinks),
+            reasoning_blocks=tuple(thinks),
         )
 
 
@@ -418,6 +488,7 @@ def stream(
                     response.status_code,
                     response.text,
                     sent_reasoning_effort=bool(config.reasoning_effort),
+                    sent_reasoning_replay=_carried_reasoning(request),
                 )
             for event in iter_sse_events(response.iter_lines()):
                 text_piece, thinking_piece = acc.feed(event)
@@ -428,4 +499,4 @@ def stream(
     except httpx.HTTPError as exc:
         raise LLMError(f"请求 {messages_url(config)} 失败：{exc}") from exc
 
-    return acc.to_turn()
+    return _record(config, acc.to_turn())

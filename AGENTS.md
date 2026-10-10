@@ -128,6 +128,7 @@ Web  POST /api/sessions/{id}/runs ─┴─► services/runs.RunRegistry（线�
 | 改对话时间线（段落顺序 / 工具行 / 思考段 / 收尾折叠） | `web/src/state/timeline.ts` 是单点（段落模型 + 事件→段落 + 历史归并 + 一键折叠判定 `turnGroups`），渲染在 `components/chat/Timeline.tsx`——过程与收尾共用它，别在页面里另起一套 |
 | 改模型选择 / 候选来源 | `web/src/state/runModel.ts`（选哪个、记不记得住、候选没了怎么办）+ `components/chat/ModelButton.tsx`（画它）；推理强度另有 `components/chat/EffortButton.tsx`，档位同样来自候选自己的声明；候选来自 `GET /api/meta` 的 `capabilities.models`，设置页只负责那份列表 |
 | 改 BYOK 配置界面 / 拉取模型清单 | 界面在 `web/src/components/settings/ModelSection.tsx`（表单 / 连通校验 / 「获取模型」）；端点面在 `avid/web/routes/settings.py`（`/settings/byok` 的 GET·PUT·DELETE、`/test`、`/models`）；配置校验与落盘单点在 `avid/providers/byok.py`，列模型的请求形状在 `providers/{openai_compat,responses,anthropic}.py` 的 `list_models`（每一族自己的 URL 与鉴权），共用解析在 `protocol.py` 的 `model_ids` |
+| 改思考（CoT）怎么存 / 怎么回传 | 判定单点在 `avid/providers/reasoning.py`（记录形状 + 「同路由 + 工具链才回传」）；各族的线格式在 `providers/{openai_compat,anthropic,responses}.py`（openai 补 `reasoning_content`、anthropic 回传带签名的 thinking 块、responses 只归档）；对外发送是白名单，记录字段不许漏上线路 |
 | 改输入区工具栏的排列 / 宽度适应 | `components/chat/Composer.tsx` 的 `data-testid="composer-toolbar"` 一行分三区（附件+权限 / 容量环+模型 / 推理强度+动作），`useCompact` 按行宽（阈值 `COMPACT_BELOW`）决定胶囊收不收文字 |
 | 改 markdown 支持的写法 / 危险协议名单 | `web/src/markdown/parse.ts` 是「标准解析器（@lezer/markdown，CommonMark+GFM）→ 渲染模型」的翻译层与协议闸门，`Markdown.tsx` 只负责画（全程 React 元素，不注入 HTML）；软换行成断行、外链图降级成链接是有意偏离，写在模块注释里 |
 

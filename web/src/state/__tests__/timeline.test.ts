@@ -118,6 +118,36 @@ describe('itemsFromEntries：会话条目 → 段落', () => {
     expect(items[1]).toMatchObject({ kind: 'assistant', entryId: 'e2', text: '我先跑一遍。', streaming: false })
   })
 
+  it('落档的思考段：条目里带 reasoning 记录时，正文前先出思考段（刷新后也看得见）', () => {
+    const items = itemsFromEntries([
+      entry(1, { role: 'user', content: '看一下' }),
+      entry(2, {
+        role: 'assistant',
+        content: '我看完了。',
+        reasoning: {
+          route: 'command/deepseek/deepseek-v4.1-flash',
+          protocol: 'openai',
+          blocks: [{ type: 'text', text: '先读 pyproject。' }],
+        },
+      }),
+    ])
+
+    expect(items.map((i) => i.kind)).toEqual(['user', 'reasoning', 'assistant'])
+    expect(items[1]).toMatchObject({ kind: 'reasoning', text: '先读 pyproject。', streaming: false })
+  })
+
+  it('思考记录里没有可读文本（比如只有加密块）就不出思考段', () => {
+    const items = itemsFromEntries([
+      entry(1, {
+        role: 'assistant',
+        content: '看完了。',
+        reasoning: { route: 'r/m', protocol: 'openai', blocks: [{ type: 'redacted_thinking', data: 'xxxx' }] },
+      }),
+    ])
+
+    expect(items.map((i) => i.kind)).toEqual(['assistant'])
+  })
+
   it('工具结果按 tool_call_id 归位；失败口径与后端 classify_tool_status 一致', () => {
     const items = itemsFromEntries([
       assistantEntry(2, '', [

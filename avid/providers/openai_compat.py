@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 
+from . import reasoning
 from .config import Config
 from .protocol import (
     DEFAULT_MAX_TOKENS,
@@ -42,25 +43,43 @@ def build_payload(config: Config, prompt: str) -> dict[str, Any]:
     return payload
 
 
-def _wire_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Translate content parts into /chat/completions blocks; plain-text messages pass through."""
-    return [_wire_message(message) for message in messages]
+def _wire_messages(
+    messages: list[dict[str, Any]], replay: dict[int, list[dict[str, Any]]] | None = None
+) -> list[dict[str, Any]]:
+    """Rebuild every message from the protocol's own fields, in order."""
+    plan = replay or {}
+    return [_wire_message(message, plan.get(index)) for index, message in enumerate(messages)]
 
 
-def _wire_message(message: dict[str, Any]) -> dict[str, Any]:
+def _wire_message(
+    message: Mapping[str, Any], replayed: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    """One outgoing message, built by whitelist: keys we do not name (the reasoning record, future
+    extras) never reach the endpoint, and replayed reasoning rides in its own protocol field.
+    """
+    out: dict[str, Any] = {"role": message.get("role")}
     parts = content_parts(message.get("content"))
     if parts is None:
-        return message
-    blocks: list[dict[str, Any]] = []
-    for part in parts:
-        if not isinstance(part, Mapping):
-            continue
-        if part.get("type") == "image":
-            # Inline data URL: no stable URL to reference, and the bytes sit in the entry.
-            blocks.append({"type": "image_url", "image_url": {"url": image_data_url(part)}})
-        elif isinstance(part.get("text"), str):
-            blocks.append({"type": "text", "text": part["text"]})
-    return {**message, "content": blocks}
+        out["content"] = message.get("content", "")
+    else:
+        blocks: list[dict[str, Any]] = []
+        for part in parts:
+            if not isinstance(part, Mapping):
+                continue
+            if part.get("type") == "image":
+                # Inline data URL: no stable URL to reference, and the bytes sit in the entry.
+                blocks.append({"type": "image_url", "image_url": {"url": image_data_url(part)}})
+            elif isinstance(part.get("text"), str):
+                blocks.append({"type": "text", "text": part["text"]})
+        out["content"] = blocks
+    if message.get("tool_calls"):
+        out["tool_calls"] = message["tool_calls"]
+    if message.get("tool_call_id"):
+        out["tool_call_id"] = message["tool_call_id"]
+    text = reasoning.text_of(replayed or [])
+    if text:
+        out["reasoning_content"] = text
+    return out
 
 
 def build_request(
@@ -75,7 +94,7 @@ def build_request(
     request: dict[str, Any] = {
         "model": config.model,
         "messages": ([{"role": "system", "content": system}] if system else [])
-        + _wire_messages(messages),
+        + _wire_messages(messages, reasoning.plan_replay(messages, config)),
     }
     # A None max_tokens leaves the field out, so the provider decides the output cap.
     if max_tokens is not None:
@@ -119,6 +138,25 @@ def _reasoning_text(raw: Mapping[str, Any]) -> str:
     return ""
 
 
+def _carried_reasoning(request: Mapping[str, Any]) -> bool:
+    """Whether this request replayed reasoning: the error hint is read off what we really sent."""
+    messages = request.get("messages")
+    if not isinstance(messages, list):
+        return False
+    return any(isinstance(m, Mapping) and m.get("reasoning_content") for m in messages)
+
+
+def _reasoning_blocks(raw: Mapping[str, Any]) -> tuple[dict[str, Any], ...]:
+    text = _reasoning_text(raw)
+    return ({"type": "text", "text": text},) if text else ()
+
+
+def _record(config: Config, turn: Turn) -> Turn:
+    """Attach this turn's reasoning to its message, tagged with the route that produced it."""
+    reasoning.attach(turn.message, turn.reasoning_blocks, route=reasoning.route_of(config))
+    return turn
+
+
 def parse_turn(data: dict[str, Any]) -> Turn:
     """Parse a non-streaming chat-completions response into a Turn."""
     try:
@@ -140,6 +178,7 @@ def parse_turn(data: dict[str, Any]) -> Turn:
         model=str(data.get("model", "")),
         finish_reason=str(choice.get("finish_reason", "")),
         reasoning=_reasoning_text(raw),
+        reasoning_blocks=_reasoning_blocks(raw),
     )
 
 
@@ -175,6 +214,7 @@ def post(
                     response.status_code,
                     response.text,
                     sent_reasoning_effort=bool(config.reasoning_effort),
+                    sent_reasoning_replay=_carried_reasoning(request),
                 )
 
     try:
@@ -197,7 +237,7 @@ def chat(
     request = build_request(
         config, messages, system=system, tools=tools, max_tokens=max_tokens
     )
-    return parse_turn(post(config, request, client=client))
+    return _record(config, parse_turn(post(config, request, client=client)))
 
 
 @dataclass(frozen=True)
@@ -222,6 +262,7 @@ class StreamState:
             model=self.model,
             finish_reason=self.finish_reason,
             reasoning=self.reasoning,
+            reasoning_blocks=_reasoning_blocks({"reasoning_content": self.reasoning}),
         )
 
 
@@ -329,6 +370,7 @@ def stream(
                     response.status_code,
                     response.text,
                     sent_reasoning_effort=bool(config.reasoning_effort),
+                    sent_reasoning_replay=_carried_reasoning(request),
                 )
             for chunk in iter_sse_events(response.iter_lines()):
                 state = merge_stream_chunk(state, chunk)
@@ -343,7 +385,7 @@ def stream(
     except httpx.HTTPError as exc:
         raise LLMError(f"请求 {config.chat_completions_url} 失败：{exc}") from exc
 
-    return state.to_turn()
+    return _record(config, state.to_turn())
 
 
 def models_url(config: Config) -> str:

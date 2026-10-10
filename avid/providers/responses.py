@@ -15,6 +15,7 @@ from typing import Any
 
 import httpx
 
+from . import reasoning
 from .config import Config
 from .protocol import (
     DEFAULT_MAX_TOKENS,
@@ -151,6 +152,11 @@ def _headers(config: Config, *, stream: bool = False) -> dict[str, str]:
     return headers
 
 
+def _reasoning_blocks(items: list[Any]) -> tuple[dict[str, Any], ...]:
+    text = _reasoning_text(items)
+    return ({"type": "text", "text": text},) if text else ()
+
+
 def _reasoning_text(items: list[Any]) -> str:
     """Join the summary text of every reasoning item into one string."""
     parts: list[str] = []
@@ -217,6 +223,7 @@ def parse_turn(data: dict[str, Any]) -> Turn:
         model=str(data.get("model", "")),
         finish_reason=_finish_reason(data),
         reasoning=_reasoning_text(output),
+        reasoning_blocks=_reasoning_blocks(output),
     )
 
 
@@ -250,6 +257,12 @@ def post(
         raise LLMError(f"响应不是合法 JSON：{response.text[:200]}") from exc
 
 
+def _record(config: Config, turn: Turn) -> Turn:
+    """Archive this turn's reasoning on its message; this family does not replay it yet."""
+    reasoning.attach(turn.message, turn.reasoning_blocks, route=reasoning.route_of(config))
+    return turn
+
+
 def chat(
     config: Config,
     messages: list[dict[str, Any]],
@@ -263,7 +276,7 @@ def chat(
     request = build_request(
         config, messages, system=system, tools=tools, max_tokens=max_tokens
     )
-    return parse_turn(post(config, request, client=client))
+    return _record(config, parse_turn(post(config, request, client=client)))
 
 
 @dataclass(frozen=True)
@@ -288,6 +301,7 @@ class StreamState:
             model=self.model,
             finish_reason=self.finish_reason,
             reasoning=self.reasoning,
+            reasoning_blocks=_reasoning_blocks([{"type": "reasoning", "summary": [{"text": self.reasoning}]}]),
         )
 
 
@@ -444,7 +458,7 @@ def stream(
     except httpx.HTTPError as exc:
         raise LLMError(f"请求 {url} 失败：{exc}") from exc
 
-    return state.to_turn()
+    return _record(config, state.to_turn())
 
 
 def models_url(config: Config) -> str:

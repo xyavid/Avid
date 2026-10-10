@@ -37,6 +37,11 @@ _PROMPT_TOO_LONG_SIGNS = (
 
 
 #: Appended only when a 400/422 answer follows a request that really sent reasoning_effort.
+_REASONING_REPLAY_HINT = (
+    "（这条像是端点不接受回传的思考字段：这条历史里带着上一轮的思考，已经按「同路由 + 工具链」"
+    "才回传；换个模型或改这条端点的协议后再试）"
+)
+
 _REASONING_EFFORT_HINT = (
     "（这条像是端点不认 reasoning_effort：在输入区把这次的推理强度改回「不设」，"
     "或者到「设置 → 模型」里把这一档从该模型的档位列表里去掉；"
@@ -44,12 +49,21 @@ _REASONING_EFFORT_HINT = (
 )
 
 
-def http_error(status_code: int, body: str, *, sent_reasoning_effort: bool = False) -> LLMError:
+def http_error(
+    status_code: int,
+    body: str,
+    *,
+    sent_reasoning_effort: bool = False,
+    sent_reasoning_replay: bool = False,
+) -> LLMError:
     """The one conversion from an endpoint error response to an exception, so the body excerpt,
     status code and repair hints stay consistent across the three protocols."""
     message = f"HTTP {status_code} — {body[:500]}"
-    if sent_reasoning_effort and status_code in (400, 422):
-        message += _REASONING_EFFORT_HINT
+    if status_code in (400, 422):
+        if sent_reasoning_effort:
+            message += _REASONING_EFFORT_HINT
+        if sent_reasoning_replay:
+            message += _REASONING_REPLAY_HINT
     return LLMError(message)
 
 
@@ -81,6 +95,8 @@ class Turn:
     finish_reason: str
     # Reasoning stays out of message: echoing it back pollutes or is rejected by the endpoint.
     reasoning: str = ""
+    # Native reasoning blocks (text, or Anthropic thinking + signature) for the route's own record.
+    reasoning_blocks: tuple[dict[str, Any], ...] = ()
 
 
 DeltaCallback = Callable[[str], None]
