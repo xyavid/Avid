@@ -116,6 +116,43 @@ def test_put_writes_config_and_secret_and_takes_effect(tmp_path):
     ]
 
 
+def test_put_keeps_model_reasoning_levels(tmp_path):
+    """档位是模型自己声明的：存了就得落盘、回读也得带回来，否则输入区永远没有档位可挑。"""
+    http = client(tmp_path)
+    models = [
+        {
+            "id": "reasoner",
+            "context_window": 65536,
+            "reasoning_efforts": ["low", "medium", "high"],
+            "capabilities": {"tool_calling": True},
+        }
+    ]
+
+    body = http.put(
+        "/api/settings/byok",
+        json={"providers": [provider_payload(models=models, api_key="sk-x")], "bindings": {"chat": None}},
+    ).json()
+
+    assert body["providers"][0]["models"][0]["reasoning_efforts"] == ["low", "medium", "high"]
+    # 落盘那份（重开连接走 GET，等于界面刷新后的读取）
+    assert http.get("/api/settings/byok").json()["providers"][0]["models"][0]["reasoning_efforts"] == [
+        "low",
+        "medium",
+        "high",
+    ]
+    # 运行期认的也是它：解析出来的模型带着档位，meta 的候选也带着
+    assert list(load_byok().providers["deepseek"].models[0].reasoning_efforts) == [
+        "low",
+        "medium",
+        "high",
+    ]
+    assert http.get("/api/meta").json()["capabilities"]["models"][0]["reasoning_efforts"] == [
+        "low",
+        "medium",
+        "high",
+    ]
+
+
 def test_put_without_key_keeps_existing_secret(tmp_path):
     http = client(tmp_path)
     http.put(

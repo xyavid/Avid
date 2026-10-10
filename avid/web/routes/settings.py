@@ -62,6 +62,7 @@ def _to_decl(body: ByokProviderIn) -> ProviderDecl:
                 label=m.label,
                 context_window=m.context_window,
                 max_output=m.max_output,
+                reasoning_efforts=tuple(m.reasoning_efforts),
                 capabilities=ModelCapabilities(**m.capabilities.model_dump()),
             )
             for m in body.models
@@ -85,6 +86,7 @@ def _provider_out(provider: ProviderDecl, secrets: dict[str, str]) -> ByokProvid
                 label=m.label,
                 context_window=m.context_window,
                 max_output=m.max_output,
+                reasoning_efforts=list(m.reasoning_efforts),
                 capabilities=CapabilityFlags(
                     **{name: getattr(m.capabilities, name) for name in CAPABILITY_FIELDS}
                 ),
