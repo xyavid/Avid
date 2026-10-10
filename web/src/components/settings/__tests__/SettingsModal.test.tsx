@@ -10,6 +10,7 @@ const saveByokSettings = vi.fn()
 const resetByokSettings = vi.fn()
 const testByokModel = vi.fn()
 const fetchByokModels = vi.fn()
+const getByokFile = vi.fn()
 const getSessionsDir = vi.fn()
 const setSessionsDir = vi.fn()
 const pickFolder = vi.fn()
@@ -20,6 +21,7 @@ vi.mock('../../../api/client', () => ({
   resetByokSettings: (...a: unknown[]) => resetByokSettings(...a),
   testByokModel: (...a: unknown[]) => testByokModel(...a),
   fetchByokModels: (...a: unknown[]) => fetchByokModels(...a),
+  getByokFile: (...a: unknown[]) => getByokFile(...a),
   getSessionsDir: (...a: unknown[]) => getSessionsDir(...a),
   setSessionsDir: (...a: unknown[]) => setSessionsDir(...a),
   pickFolder: (...a: unknown[]) => pickFolder(...a),
@@ -72,6 +74,7 @@ beforeEach(() => {
     ],
   })
   fetchByokModels.mockReset().mockResolvedValue({ ok: true, models: [], detail: '' })
+  getByokFile.mockReset().mockResolvedValue({ path: '/home/u/.avid/models.json', exists: false, raw: '' })
   getSessionsDir.mockReset().mockResolvedValue({
     dir: '/home/user/.avid/sessions',
     default_dir: '/home/user/.avid/sessions',
@@ -324,4 +327,38 @@ describe('SettingsModal（设置界面 · BYOK 模型段）', () => {
     fireEvent.click(screen.getByRole('button', { name: '获取模型' }))
 
     expect(await screen.findByText(/base_url 少了 \/v1/)).toBeTruthy()
+  })
+
+  it('配置文件：给出 models.json 的路径与磁盘内容，可复制路径、可从文件重读', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    getByokFile.mockResolvedValue({
+      path: '/home/u/.avid/models.json',
+      exists: true,
+      raw: '{\n  "providers": []\n}\n',
+    })
+    render(<SettingsModal onClose={() => {}} />)
+    await waitFor(() => expect(getByokSettings).toHaveBeenCalled())
+
+    fireEvent.click(screen.getByText('配置文件（models.json）'))
+
+    expect(await screen.findByText('/home/u/.avid/models.json')).toBeTruthy()
+    expect(screen.getByText(/"providers"/)).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: '复制路径' }))
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('/home/u/.avid/models.json'))
+
+    // 从文件重读 = 再走一次 GET（手改了文件的人不必刷新页面）
+    getByokSettings.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: '从文件重读' }))
+    await waitFor(() => expect(getByokSettings).toHaveBeenCalled())
+  })
+
+  it('还没有配置文件时说明它会在第一次保存后出现', async () => {
+    render(<SettingsModal onClose={() => {}} />)
+    await waitFor(() => expect(getByokSettings).toHaveBeenCalled())
+
+    fireEvent.click(screen.getByText('配置文件（models.json）'))
+
+    expect(await screen.findByText(/保存一次就会出现/)).toBeTruthy()
   })

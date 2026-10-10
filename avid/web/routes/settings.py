@@ -27,6 +27,7 @@ from ...providers.verify import classify_error, verify_provider
 from ...security import userdirs
 from ...services.errors import InvalidRequest
 from ..schemas import (
+    ByokFileOut,
     ByokModel,
     ByokModelsIn,
     ByokModelsOut,
@@ -151,6 +152,21 @@ def post_byok_test(body: ByokTestIn) -> ByokTestOut:
             VerifyStepOut(step=step.step, ok=step.ok, detail=step.detail) for step in report.steps
         ],
     )
+
+
+@router.get("/settings/byok/file", response_model=ByokFileOut)
+def get_byok_file() -> ByokFileOut:
+    """The config file itself: path plus the raw JSON, so the panel can show what is on disk and
+    a hand-edited file is easy to check. A missing file is a normal state, not an error.
+    """
+    path = byok.config_path()
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ByokFileOut(path=str(path), exists=False)
+    except OSError as exc:
+        raise InvalidRequest(f"读不了 {path}（{exc}）") from exc
+    return ByokFileOut(path=str(path), exists=True, raw=raw)
 
 
 @router.post("/settings/byok/models", response_model=ByokModelsOut)

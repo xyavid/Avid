@@ -13,12 +13,14 @@ import type { ReactNode } from 'react'
 
 import {
   fetchByokModels,
+  getByokFile,
   getByokSettings,
   resetByokSettings,
   saveByokSettings,
   testByokModel,
 } from '../../api/client'
 import type {
+  ByokFileInfo,
   ByokModelsResult,
   ByokProtocol,
   ByokSettings,
@@ -27,6 +29,7 @@ import type {
   ProviderEntry,
   ProviderInput,
 } from '../../api/types'
+import { copyText } from '../../markdown'
 import { cx } from '../../ui/cx'
 import { Icon } from '../../ui/Icon'
 import { Input } from '../../ui/Input'
@@ -121,9 +124,35 @@ export function ModelSection() {
   const [status, setStatus] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
   const [testing, setTesting] = useState<string | null>(null)
   const [testResults, setTestResults] = useState<Record<string, ByokTestResult>>({})
+  const [file, setFile] = useState<ByokFileInfo | null>(null)
+  const [pathCopied, setPathCopied] = useState(false)
+
+  const loadFile = () =>
+    getByokFile()
+      .then(setFile)
+      .catch(() => setFile(null))
+
+  /** Hand-edited the file? Pull it back in instead of retyping (and refresh the shown raw text). */
+  const rereadFile = async () => {
+    setBusy(true)
+    setStatus(null)
+    try {
+      const next = await getByokSettings()
+      setSettings(next)
+      setProviders(next.providers.map(entryToInput))
+      setChatBinding(next.bindings.chat ?? '')
+      await loadFile()
+      setStatus({ kind: 'ok', text: '已按磁盘上的 models.json 重读' })
+    } catch (e) {
+      setStatus({ kind: 'error', text: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setBusy(false)
+    }
+  }
 
   useEffect(() => {
     let alive = true
+    void loadFile()
     getByokSettings()
       .then((s) => {
         if (!alive) return
@@ -150,6 +179,7 @@ export function ModelSection() {
       setSettings(next)
       setProviders(next.providers.map(entryToInput))
       setChatBinding(next.bindings.chat ?? '')
+      await loadFile()
       setStatus({ kind: 'ok', text: '已保存，下一条消息立即使用这份配置' })
     } catch (e) {
       setStatus({ kind: 'error', text: e instanceof Error ? e.message : String(e) })
@@ -217,6 +247,57 @@ export function ModelSection() {
           </p>
         </div>
       )}
+
+      {/* The file itself: what is on disk right now, for checking a save or hand-editing. */}
+      <details className="mt-a8 rounded-md border-hairline border-hair bg-paper p-a8" data-testid="byok-file">
+        <summary className="cursor-pointer font-ui text-micro text-ink-muted">
+          配置文件（models.json）
+        </summary>
+        <div className="mt-a4">
+          <div className="flex flex-wrap items-center gap-a8">
+            <code className="min-w-0 flex-1 truncate font-mono text-micro text-ink">
+              {file?.path ?? '读取中…'}
+            </code>
+            <button
+              type="button"
+              disabled={file === null}
+              onClick={() => {
+                if (file === null) return
+                void copyText(file.path).then((ok) => {
+                  if (!ok) return
+                  setPathCopied(true)
+                  window.setTimeout(() => setPathCopied(false), 1500)
+                })
+              }}
+              className={SMALL_BUTTON}
+            >
+              {pathCopied ? '已复制' : '复制路径'}
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void rereadFile()}
+              title="手工改过这个文件时，用它把磁盘上的内容读回界面（会丢掉未保存的编辑）"
+              className={SMALL_BUTTON + ' disabled:cursor-not-allowed disabled:opacity-40'}
+            >
+              从文件重读
+            </button>
+          </div>
+          {file !== null && file.exists && (
+            <pre className="mt-a6 max-h-[220px] overflow-auto rounded-sm border-hairline border-hair bg-card p-a8 font-mono text-micro text-ink-light">
+              {file.raw}
+            </pre>
+          )}
+          {file !== null && !file.exists && (
+            <p className="mt-a6 font-ui text-hint text-ink-muted">
+              还没有这个文件——保存一次就会出现；也可以自己建好它，再点「从文件重读」。
+            </p>
+          )}
+          <p className="mt-a6 font-ui text-micro text-ink-muted">
+            密钥不在这个文件里（在 0600 的 secrets.json）。手工编辑后点「从文件重读」，或刷新页面。
+          </p>
+        </div>
+      </details>
 
       {/* Provider list */}
       {providers.map((p) => {

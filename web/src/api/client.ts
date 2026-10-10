@@ -8,6 +8,7 @@
 import type {
   Branch,
   BranchList,
+  ByokFileInfo,
   ByokModelsResult,
   ByokSettings,
   ByokSettingsInput,
@@ -332,6 +333,11 @@ export function testByokModel(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ provider, model_id: modelId }),
   })
+}
+
+/** The config file itself: path + raw JSON, for the panel's 配置文件 block. */
+export function getByokFile(): Promise<ByokFileInfo> {
+  return request('/api/settings/byok/file')
 }
 
 /**

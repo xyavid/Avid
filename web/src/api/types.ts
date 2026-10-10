@@ -372,6 +372,16 @@ export interface ByokModelsResult {
 }
 
 /**
+ * `GET /api/settings/byok/file`: where the config lives on disk plus its raw JSON — the file
+ * holds no key (those are in secrets.json), so the panel can show exactly what a hand-editor sees.
+ */
+export interface ByokFileInfo {
+  path: string
+  exists: boolean
+  raw: string
+}
+
+/**
  * `GET /api/settings/sessions` response: current/default session dir and where the value comes
  * from. `source` 'env' means `editable` is false — the env var wins over the settings file.
  */

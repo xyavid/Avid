@@ -252,6 +252,17 @@ class ByokModelsIn(BaseModel):
     provider: ByokProviderIn
 
 
+class ByokFileOut(BaseModel):
+    """Where the BYOK config lives on disk and what it holds right now; the file never holds a
+    key (those live in secrets.json), so echoing it verbatim is safe and lets the panel show the
+    same thing a hand-editor would see.
+    """
+
+    path: str
+    exists: bool
+    raw: str = ""
+
+
 class ByokModelsOut(BaseModel):
     """What the endpoint offers; ``ok`` means there is a list to pick from, and every other
     outcome carries a readable reason in ``detail``.

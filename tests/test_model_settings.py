@@ -341,6 +341,27 @@ def test_models_endpoint_says_so_when_the_endpoint_offers_nothing(tmp_path, monk
     assert "/models" in body["detail"]
 
 
+def test_config_file_endpoint_shows_the_path_and_raw_json(tmp_path):
+    """界面要能看到磁盘上那份 models.json：路径 + 原样内容（密钥本就不在这个文件里）。"""
+    http = client(tmp_path)
+
+    empty = http.get("/api/settings/byok/file").json()
+    assert empty["path"].endswith("models.json")
+    assert empty["exists"] is False
+    assert empty["raw"] == ""
+
+    http.put(
+        "/api/settings/byok",
+        json={"providers": [provider_payload(api_key="sk-x")], "bindings": {"chat": None}},
+    )
+
+    body = http.get("/api/settings/byok/file").json()
+    assert body["exists"] is True
+    assert "sk-x" not in body["raw"]
+    parsed = json.loads(body["raw"])
+    assert [p["id"] for p in parsed["providers"]] == ["deepseek"]
+
+
 # ---------------- DELETE: reset and fall back ----------------
 
 
