@@ -297,7 +297,9 @@ class ContextManager:
             content = TAIL_HEADER + "\n\n" + "\n\n".join(
                 text for _spec, text in tail_blocks
             )
-            message = {"role": "user", "content": content}
+            # `tail` marks a kernel-injected message: reasoning replay must not read it as the
+            # start of a new turn (it is dropped from the wire by the protocol whitelist).
+            message = {"role": "user", "content": content, "tail": True}
             messages.append(message)
             tail_chars = message_chars(message)
 

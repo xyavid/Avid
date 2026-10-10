@@ -63,14 +63,25 @@ def plan_replay(
 ) -> dict[int, list[dict[str, Any]]]:
     """Index → blocks to send with this request.
 
-    Two conditions, and both must hold: the record's route is this request's route, and the message
-    is answered by a tool result in the same turn (think → tool_call → tool_result). Anything else
-    is deliberately left behind — a previous turn's CoT must not be re-fed to a new question, and a
-    record from another model must not ride along with this one.
+    Three conditions, and all must hold: the record's route is this request's route, the message
+    belongs to the live chain (the trailing tool calls and results, injected tail skipped), and a
+    tool result answers it (think → tool_call → tool_result). Anything else is deliberately left
+    behind — a finished turn's CoT is not re-fed to a new question, and a record from another model
+    does not ride along.
     """
     route = route_of(config)
     plan: dict[int, list[dict[str, Any]]] = {}
-    for index, message in enumerate(messages):
+    # The live chain is the trailing run of tool calls and results, with the kernel's injected
+    # tail (`tail: true`) skipped: a chain followed by a finished answer or a new question is
+    # history and is left behind.
+    end = len(messages)
+    while end > 0 and messages[end - 1].get("tail") is True:
+        end -= 1
+    start = end
+    while start > 0 and messages[start - 1].get("role") in ("tool", "assistant"):
+        start -= 1
+    for index in range(start, end):
+        message = messages[index]
         if message.get("role") != "assistant":
             continue
         record = record_of(message)

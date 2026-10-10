@@ -108,6 +108,25 @@ def test_reasoning_is_not_replayed_without_a_tool_result():
         assert THINKING not in str(message.get("content", ""))
 
 
+def test_a_finished_turn_chain_is_not_replayed_again():
+    """上一轮已经收尾的 think→tool→result 不该在下一轮的请求里再发一遍（连续性要求已经过去）。"""
+    config = make_config()
+    messages = [
+        {"role": "user", "content": "第一轮"},
+        assistant_turn(config=config, thinking="第一轮的思考"),
+        {"role": "tool", "tool_call_id": "c1", "content": "结果"},
+        assistant_turn(config=config, text="第一轮答案", with_tools=False),
+        {"role": "user", "content": "第二轮"},
+        assistant_turn(config=config, thinking="第二轮的思考"),
+        {"role": "tool", "tool_call_id": "c1", "content": "结果2"},
+    ]
+
+    carriers = [m for m in wire_messages(config, messages) if m.get("reasoning_content")]
+
+    assert len(carriers) == 1
+    assert carriers[0]["reasoning_content"] == "第二轮的思考"
+
+
 def test_cross_route_reasoning_is_dropped():
     other = make_config(model="gpt-5")
     config = make_config()
