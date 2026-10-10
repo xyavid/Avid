@@ -362,3 +362,14 @@ describe('SettingsModal（设置界面 · BYOK 模型段）', () => {
 
     expect(await screen.findByText(/保存一次就会出现/)).toBeTruthy()
   })
+
+  it('读不到配置文件时说实话（服务端可能是旧版本）', async () => {
+    getByokFile.mockRejectedValue(new Error('HTTP 404'))
+    render(<SettingsModal onClose={() => {}} />)
+    await waitFor(() => expect(getByokSettings).toHaveBeenCalled())
+
+    fireEvent.click(screen.getByText('配置文件（models.json）'))
+
+    expect(await screen.findByText(/重启/)).toBeTruthy()
+  })
+

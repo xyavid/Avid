@@ -125,12 +125,20 @@ export function ModelSection() {
   const [testing, setTesting] = useState<string | null>(null)
   const [testResults, setTestResults] = useState<Record<string, ByokTestResult>>({})
   const [file, setFile] = useState<ByokFileInfo | null>(null)
+  // A 404 here means the server predates this panel: say so instead of loading forever.
+  const [fileError, setFileError] = useState(false)
   const [pathCopied, setPathCopied] = useState(false)
 
   const loadFile = () =>
     getByokFile()
-      .then(setFile)
-      .catch(() => setFile(null))
+      .then((next) => {
+        setFile(next)
+        setFileError(false)
+      })
+      .catch(() => {
+        setFile(null)
+        setFileError(true)
+      })
 
   /** Hand-edited the file? Pull it back in instead of retyping (and refresh the shown raw text). */
   const rereadFile = async () => {
@@ -291,6 +299,11 @@ export function ModelSection() {
           {file !== null && !file.exists && (
             <p className="mt-a6 font-ui text-hint text-ink-muted">
               还没有这个文件——保存一次就会出现；也可以自己建好它，再点「从文件重读」。
+            </p>
+          )}
+          {fileError && (
+            <p role="alert" className="mt-a6 font-ui text-hint text-danger">
+              读不到这个文件：服务端可能比界面旧（新端点没上线），重启一次 `avid web` 再刷新页面。
             </p>
           )}
           <p className="mt-a6 font-ui text-micro text-ink-muted">
