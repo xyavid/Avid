@@ -206,6 +206,31 @@ function listItemOf(node: SyntaxNode, doc: string, refs: Map<string, Ref>): List
   return { checked, blocks: blocksOf(node, doc, refs) }
 }
 
+/** Raw cell texts of one row: split on unescaped pipes, dropping the row's own delimiters. */
+function rawCells(line: string): string[] {
+  const parts: string[] = []
+  let current = ''
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index]
+    if (char === '\\' && index + 1 < line.length) {
+      current += char + line[index + 1]
+      index += 1
+      continue
+    }
+    if (char === '|') {
+      parts.push(current)
+      current = ''
+      continue
+    }
+    current += char
+  }
+  parts.push(current)
+  if (parts.length > 1 && parts[0]!.trim() === '') parts.shift()
+  if (parts.length > 1 && parts[parts.length - 1]!.trim() === '') parts.pop()
+  return parts
+}
+
+
 function tableOf(node: SyntaxNode, doc: string, refs: Map<string, Ref>): Block {
   const nodes = children(node)
   // Alignment comes from the delimiter row; header and body take TableCell nodes only.
@@ -227,10 +252,23 @@ function tableOf(node: SyntaxNode, doc: string, refs: Map<string, Ref>): Block {
             if (text.endsWith(':')) return 'right'
             return 'left'
           })
-  const cells = (row: SyntaxNode) =>
-    children(row)
+  // The delimiter row fixes the width. An empty cell (the common `| | 之前 |`) arrives with no
+  // node at all, so the raw line is what says where it was; ragged body rows are legal too, so
+  // rows are padded or trimmed to that width.
+  const width = align.length
+  const cells = (row: SyntaxNode) => {
+    const parsed = children(row)
       .filter((cell) => cell.name === 'TableCell')
       .map((cell) => inlineOf(cell, doc, refs))
+    const found: Inline[][] = []
+    let next = 0
+    for (const text of rawCells(doc.slice(row.from, row.to))) {
+      found.push(text.trim() === '' ? [{ kind: 'text', text: '' }] : (parsed[next++] ?? textOf(text)))
+    }
+    if (width === 0) return found
+    while (found.length < width) found.push([{ kind: 'text', text: '' }])
+    return found.slice(0, width)
+  }
   const head = nodes.find((child) => child.name === 'TableHeader')
   return {
     kind: 'table',

@@ -120,6 +120,20 @@ describe('markdown 渲染', () => {
     expect(container.querySelectorAll('hr')).toHaveLength(1)
   })
 
+  it('表头第一格是空的：那一格也画出来（几列就几列，不会整体错位）', () => {
+    const { container } = render(
+      <Markdown>{'| | 之前 | 现在 |\n| --- | --- | --- |\n| `a.js` | 25 | 25 |'}</Markdown>,
+    )
+
+    const head = [...container.querySelectorAll('thead th')]
+    const body = [...container.querySelectorAll('tbody td')]
+    expect(head).toHaveLength(3)
+    expect(body).toHaveLength(3)
+    expect(head[0]!.textContent).toBe('')
+    expect(head[1]!.textContent).toBe('之前')
+    expect(body[0]!.textContent).toBe('a.js')
+  })
+
   it('表格：表头有底色、单元格是发丝线整格', () => {
     const { container } = render(<Markdown>{'| 甲 | 乙 |\n| --- | --- |\n| 1 | 2 |'}</Markdown>)
 

@@ -88,6 +88,25 @@ describe('块级：CommonMark/GFM 结构', () => {
     expect(table.rows[0]![0]![0]).toMatchObject({ kind: 'strong' })
   })
 
+  it('表头第一格是空的：那一格不能丢（列宽由分隔行定）', () => {
+    // 真实来源：模型爱写「| | 之前 | 现在 |」，空表头格曾整格消失，表体三格就与表头错位。
+    const table = parseBlocks('| | 之前 | 现在 |\n| --- | --- | --- |\n| `a.js` | 25 | 25 |')[0]
+    if (table?.kind !== 'table') throw new Error('期望表格')
+
+    expect(table.head.map(textOf)).toEqual(['', '之前', '现在'])
+    expect(table.rows[0]!.map(textOf)).toEqual(['a.js', '25', '25'])
+  })
+
+  it('表体行格数不齐：按分隔行补齐空格、多出来的截掉（GFM 的口径）', () => {
+    const table = parseBlocks(
+      '| 甲 | 乙 | 丙 |\n| --- | --- | --- |\n| 1 |\n| 1 | 2 | 3 | 4 |',
+    )[0]
+    if (table?.kind !== 'table') throw new Error('期望表格')
+
+    expect(table.rows[0]!.map(textOf)).toEqual(['1', '', ''])
+    expect(table.rows[1]!.map(textOf)).toEqual(['1', '2', '3'])
+  })
+
   it('表格单元格里的竖线可以转义', () => {
     const table = parseBlocks('| 甲 |\n| --- |\n| a \\| b |')[0]
     if (table?.kind !== 'table') throw new Error('期望表格')
