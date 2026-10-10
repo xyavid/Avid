@@ -310,7 +310,8 @@ describe('Composer 工具栏（附件居左只有图标；窄了收文字）', (
       screen.getByRole('button', { name }).parentElement?.parentElement
     expect(groupOf('模型')).toBe(groupOf('推理强度'))
     expect(groupOf('推理强度')).toBe(screen.getByRole('button', { name: '发送' }).parentElement)
-    expect(groupOf(/上下文容量/)).not.toBe(groupOf('模型'))
+    // 容量环也进这一组：跟着模型往右贴，不再独占中区。
+    expect(groupOf(/上下文容量/)).toBe(groupOf('模型'))
   })
 
   it('模型没声明档位：推理强度胶囊仍在（点开是「去哪声明」）', () => {
