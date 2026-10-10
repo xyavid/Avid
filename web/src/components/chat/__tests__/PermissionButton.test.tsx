@@ -88,4 +88,26 @@ describe('PermissionButton（输入区权限按钮）', () => {
     expect(chip.textContent).toContain('默认')
     expect(chip.getAttribute('title')).toBe('默认权限')
   })
+
+  it('没有常驻边框：框只在悬停 / 键盘聚焦 / 展开时出现', () => {
+    const { rerender } = render(<PermissionButton full={false} onToggleFull={() => {}} />)
+    const chip = () => screen.getByRole('button', { name: /权限/ })
+    const classes = () => chip().className.split(' ')
+
+    expect(classes()).not.toContain('border-hairline')
+    expect(classes()).not.toContain('border-hair')
+    expect(classes()).toContain('hover:bg-overlay-light')
+    expect(classes()).toContain('focus-visible:bg-overlay-light')
+
+    // Open shows the same box as hover, or the click would land on nothing.
+    fireEvent.click(chip())
+    expect(classes()).toContain('bg-overlay-light')
+    fireEvent.click(chip())
+
+    // Full access keeps its danger tint at rest and on hover — the box is never neutral grey there.
+    rerender(<PermissionButton full onToggleFull={() => {}} />)
+    expect(classes()).not.toContain('border-hairline')
+    expect(classes()).toContain('bg-danger/[0.08]')
+    expect(classes()).toContain('hover:bg-danger/[0.14]')
+  })
 })

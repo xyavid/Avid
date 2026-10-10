@@ -1,9 +1,10 @@
 /**
  * Permission chip in the composer: shows whether this run has full access (skips the
- * destructive-command confirmation, turns the sandbox off) and opens the two-state card;
- * `compact` keeps the icon alone, with the state text left in the accessible name. Enabling full
- * access takes an explicit confirm click while returning to default does not; on send the hook
- * attaches `full_access_ack` — the UI only states the intent.
+ * destructive-command confirmation, turns the sandbox off) and opens the two-state card; it has
+ * no resting border — the box appears on hover, keyboard focus or while open — and `compact`
+ * keeps the icon alone, with the state text left in the accessible name. Enabling full access
+ * takes an explicit confirm click while returning to default does not; on send the hook attaches
+ * `full_access_ack` — the UI only states the intent.
  */
 
 import { useEffect, useState } from 'react'
@@ -74,8 +75,11 @@ export function PermissionButton({ full, onToggleFull, compact = false }: Permis
         onClick={() => setOpen((v) => !v)}
         title={compact ? `${current.label}权限` : undefined}
         className={cx(
-          'inline-flex h-[26px] items-center gap-[5px] rounded-sm border-hairline px-a8 font-ui text-hint font-medium transition-colors duration-fast ease-out hover:bg-overlay-light',
-          full ? 'border-transparent bg-danger/[0.08] text-danger' : 'border-hair text-ink-light',
+          'inline-flex h-[26px] items-center gap-[5px] rounded-sm px-a8 font-ui text-hint font-medium transition-colors duration-fast ease-out',
+          full
+            ? 'bg-danger/[0.08] text-danger hover:bg-danger/[0.14]'
+            : 'text-ink-light hover:bg-overlay-light focus-visible:bg-overlay-light',
+          open && !full && 'bg-overlay-light',
         )}
       >
         <Icon name={current.icon} size={12} />
