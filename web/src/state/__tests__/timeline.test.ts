@@ -128,12 +128,15 @@ describe('itemsFromEntries：会话条目 → 段落', () => {
           route: 'command/deepseek/deepseek-v4.1-flash',
           protocol: 'openai',
           blocks: [{ type: 'text', text: '先读 pyproject。' }],
+          ms: 2400,
         },
       }),
     ])
 
     expect(items.map((i) => i.kind)).toEqual(['user', 'reasoning', 'assistant'])
     expect(items[1]).toMatchObject({ kind: 'reasoning', text: '先读 pyproject。', streaming: false })
+    // 时长随记录一起存：重开看到的不是「思考完成」，而是「思考 · 2.4s」。
+    expect((items[1] as { endedAt: number; startedAt: number }).endedAt).toBe(2 + 2400)
   })
 
   it('思考记录里没有可读文本（比如只有加密块）就不出思考段', () => {

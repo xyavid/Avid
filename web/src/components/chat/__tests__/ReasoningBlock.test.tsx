@@ -55,3 +55,10 @@ describe('思考块', () => {
     expect(screen.queryByText(/想完了/)).toBeNull()
   })
 })
+
+  it('存档条目没有时长：写「思考完成」，不编一个 1ms', () => {
+    render(<ReasoningBlock text="看过 pyproject 了。" durationMs={0} />)
+
+    expect(screen.getByText('思考完成')).toBeTruthy()
+    expect(screen.queryByText(/ms|秒/)).toBeNull()
+  })

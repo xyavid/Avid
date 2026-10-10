@@ -30,9 +30,11 @@ export function ReasoningBlock({ text, streaming = false, durationMs = null }: R
 
   if (text === '') return null
 
+  // A rebuilt-from-entries card carries no duration (start and end are the entry's own stamp):
+  // zero means "unknown", not "instant", so it reads 思考完成 instead of a fake 1ms.
   const label = streaming
     ? '思考中…'
-    : durationMs === null
+    : durationMs === null || durationMs <= 0
       ? '思考完成'
       : `思考 · ${durationLabel(durationMs)}`
 

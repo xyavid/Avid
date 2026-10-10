@@ -8,10 +8,15 @@
 
 from __future__ import annotations
 
+import time
+
+from support import bound_workspace, make_turn, wait_terminal
+
 from avid.index.extract import entry_text
 from avid.providers import anthropic, openai_compat, reasoning
 from avid.providers.config import Config
 from avid.providers.protocol import assistant_message, http_error
+from avid.services import Services
 from avid.session.projection import entries_to_messages
 from avid.session.types import MESSAGE_ENTRY, Entry
 
@@ -286,3 +291,41 @@ def test_the_boundary_attaches_the_record_with_the_route(monkeypatch):
         "protocol": "openai",
         "blocks": [{"type": "text", "text": THINKING}],
     }
+
+
+def test_the_rounds_thinking_duration_lands_in_the_record(sandbox, monkeypatch):
+    """思考时长从 delta 的真实到达时刻量、随记录落库：重开卡片写「思考 · 2.4s」而不是「思考完成」。"""
+    from avid.providers import reasoning as reasoning_module
+    from avid.services import runs as runs_module
+
+    def fake_stream(config, messages, *, on_reasoning=None, **kwargs):
+        # 生产路径：服务把 on_reasoning 接到 emit_delta，时长就是在那里量的。
+        assert on_reasoning is not None
+        on_reasoning("先看一眼")
+        time.sleep(0.05)
+        on_reasoning("再想一下")
+        turn = make_turn("看完了")
+        reasoning_module.attach(
+            turn.message,
+            [{"type": "text", "text": "先看一眼再想一下"}],
+            route=reasoning_module.route_of(config),
+        )
+        return turn
+
+    monkeypatch.setattr(runs_module, "stream_completion", fake_stream)
+    services = Services(root=sandbox / ".avid" / "sessions")
+    workspace = bound_workspace(services)
+    session_id = services.sessions.create(workspace=workspace)["id"]
+
+    record = services.runs.start(session_id, "看一眼")
+    assert wait_terminal(record)
+
+    page = services.sessions.entries(session_id, branch="main", order="asc")
+    records = []
+    for entry in page["entries"]:
+        found = ((entry or {}).get("message") or {}).get("reasoning")
+        if isinstance(found, dict):
+            records.append(found)
+    assert len(records) == 1
+    assert records[0]["blocks"][0]["text"] == "先看一眼再想一下"
+    assert 40 <= records[0]["ms"] <= 5000

@@ -106,6 +106,12 @@ type MessagePayload = {
   reasoning?: unknown
 }
 
+/** How long the round's thinking took, as the kernel measured it; 0 = not recorded. */
+function archivedReasoningMs(message: MessagePayload): number {
+  const ms = (message.reasoning as { ms?: unknown } | undefined)?.ms
+  return typeof ms === 'number' && Number.isFinite(ms) && ms > 0 ? Math.round(ms) : 0
+}
+
 /** Readable text of an archived reasoning record; opaque blocks (redacted, signatures) carry none. */
 function archivedReasoning(message: MessagePayload): string {
   const blocks = (message.reasoning as { blocks?: unknown } | undefined)?.blocks
@@ -336,12 +342,14 @@ export function itemsFromEntries(entries: Entry[]): TimelineItem[] {
     if (role === 'assistant') {
       const thinking = archivedReasoning(message)
       if (thinking.trim()) {
-        // Sits before the answer, the order it streamed in; the record is archived, not replayed here.
+        // Sits before the answer, the order it streamed in; the record is archived, not replayed
+        // here, and carries the thinking's own duration from the run that produced it.
+        const ms = archivedReasoningMs(message)
         items.push({
           kind: 'reasoning',
           text: thinking,
           startedAt: entry.timestamp,
-          endedAt: entry.timestamp,
+          endedAt: entry.timestamp + ms,
           streaming: false,
         })
       }

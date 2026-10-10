@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from contextlib import contextmanager, suppress
@@ -128,6 +129,17 @@ def session_title(content: Any) -> str | None:
     return line if len(line) <= TITLE_CHARS else line[:TITLE_CHARS] + "…"
 
 
+def _stamp_reasoning_ms(record: RunRecord, message: dict[str, Any]) -> None:
+    """How long this round's thinking took, written into its record; the window closes either way."""
+    started, last = record.reasoning_started_at, record.reasoning_last_at
+    record.reasoning_started_at = None
+    record.reasoning_last_at = None
+    reasoning = message.get("reasoning")
+    if not isinstance(reasoning, dict) or started is None or last is None:
+        return
+    reasoning["ms"] = max(0, int((last - started) * 1000))
+
+
 def _str_param(item: Any, name: str) -> str | None:
     """One string switch from a queued item; an empty string counts as absent, as in StartRunIn."""
     value = item.params.get(name)
@@ -148,6 +160,9 @@ class RunRecord:
     usage: dict[str, Any] | None = None
     text: str = ""
     error: dict[str, Any] | None = None
+    # Reasoning window of the round in flight (monotonic stamps); written into the record as ms.
+    reasoning_started_at: float | None = None
+    reasoning_last_at: float | None = None
     cancel_requested: bool = False
     cancel_reason: str | None = None
     finished_at: int | None = None
@@ -864,6 +879,13 @@ class RunRegistry:
         event_type: str = ASSISTANT_DELTA,
     ) -> None:
         """Emit a delta: never replayed and never persisted, so only live subscribers see it."""
+        if event_type == REASONING_DELTA:
+            # The production streaming path reports thinking here; the window is folded into the
+            # message's record by _message_sink, so the card still shows a duration after a reload.
+            stamp = time.monotonic()
+            if record.reasoning_started_at is None:
+                record.reasoning_started_at = stamp
+            record.reasoning_last_at = stamp
         # It travels the record.events queue all the same (subscribers wake on the same
         # condition), but cursor backfill skips it and _trim does not count it as durable.
         with record.condition:
@@ -1159,6 +1181,8 @@ class RunRegistry:
         """Message channel -> persistence plus one durable message event."""
 
         def sink(message: dict[str, Any]) -> None:
+            if message.get("role") == "assistant":
+                _stamp_reasoning_ms(record, message)
             # Identify before persisting: injected nudges are stored as notices so the UI does
             # not render them as words the user spoke, since their text comes from a hook.
             label = record.injected.pop(id(message), None)
