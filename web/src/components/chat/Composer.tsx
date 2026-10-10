@@ -1,18 +1,19 @@
 /**
- * Input area: auto-growing textarea with permission / model on the left and send / stop on
- * the right; Enter sends, Shift+Enter breaks, and an IME-composing Enter never sends.
- * While busy the text stays editable (Enter queues, insert targets the running step) and stop
- * stays cooperative — the terminal state comes from events; images from paste / drop / picker
- * are downscaled by `prepareImage`, and `full` goes out with StartRunInput so the hook can
- * attach `full_access_ack`.
+ * Input area: auto-growing textarea, with image attach / permission / model on the left and
+ * send / stop on the right; Enter sends, Shift+Enter breaks, and an IME-composing Enter never
+ * sends. While busy the text stays editable (Enter queues, insert targets the running step) and
+ * stop stays cooperative — the terminal state comes from events; images from paste / drop /
+ * picker are downscaled by `prepareImage`, and `full` goes out with StartRunInput so the hook
+ * can attach `full_access_ack`.
  */
 
-import { useRef, useState } from 'react'
+import { useLayoutEffect, useRef, useState, type RefObject } from 'react'
 
 import type { ModelCandidate, UsageReport } from '../../api/types'
 import type { DraftImage } from '../../state/imagePrep'
 import { MAX_IMAGES, humanBytes, isImageFile, prepareImage } from '../../state/imagePrep'
 import { Icon, type IconName } from '../../ui/Icon'
+import { IconButton } from '../../ui/IconButton'
 import { ContextRing } from './ContextRing'
 import { PermissionButton } from './PermissionButton'
 import { ModelButton } from './ModelButton'
@@ -20,9 +21,36 @@ import { ModelButton } from './ModelButton'
 const BARE_AREA =
   'max-h-[216px] w-full resize-none overflow-y-auto bg-transparent font-ui text-ui leading-[24px] text-ink placeholder:text-ink-muted focus:outline-none disabled:opacity-40'
 
+/** Width of the button row under which the chips drop their text. */
+const COMPACT_BELOW = 420
+
 function autogrow(el: HTMLTextAreaElement) {
   el.style.height = 'auto'
   el.style.height = `${Math.min(el.scrollHeight, 216)}px`
+}
+
+/**
+ * Whether the toolbar has run out of room for chip labels. Measured on the row itself rather
+ * than the viewport, since side columns and the dock narrow it without moving the window; a
+ * zero width (no layout box, jsdom) counts as unknown and keeps the labels.
+ */
+function useCompact(ref: RefObject<HTMLDivElement | null>): boolean {
+  const [compact, setCompact] = useState(false)
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (el === null) return
+    const apply = (width: number) => {
+      if (width > 0) setCompact(width < COMPACT_BELOW)
+    }
+    apply(el.getBoundingClientRect().width)
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) apply(entry.contentRect.width)
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [ref])
+  return compact
 }
 
 export type ComposerProps = {
@@ -75,6 +103,8 @@ export function Composer({
   const composingRef = useRef(false)
   const areaRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const toolbarRef = useRef<HTMLDivElement>(null)
+  const compact = useCompact(toolbarRef)
   // No model, no send: the run start carries the model explicitly, not a server-side default.
   // Images alone count; busy is not a block — queue/insert go through a separate path.
   const canSend =
@@ -195,9 +225,17 @@ export function Composer({
             {imageError}
           </p>
         )}
-        <div className="mt-a8 flex items-center justify-between">
+        <div
+          ref={toolbarRef}
+          data-testid="composer-toolbar"
+          className="mt-a8 flex items-center justify-between"
+        >
           <div className="flex items-center gap-a8">
-            <PermissionButton full={full} onToggleFull={onToggleFull} />
+            <AttachButton
+              disabled={disabled || images.length >= MAX_IMAGES}
+              onClick={() => fileRef.current?.click()}
+            />
+            <PermissionButton full={full} onToggleFull={onToggleFull} compact={compact} />
             {onChangeModel && (
               <ModelButton
                 model={model}
@@ -207,10 +245,6 @@ export function Composer({
                 candidates={byokModels}
               />
             )}
-            <AttachButton
-              disabled={disabled || images.length >= MAX_IMAGES}
-              onClick={() => fileRef.current?.click()}
-            />
             <input
               ref={fileRef}
               type="file"
@@ -267,12 +301,12 @@ function ImageChip({ image, onRemove }: { image: DraftImage; onRemove: () => voi
         {humanBytes(image.bytes)}
         {image.compressed ? '（已压缩）' : ''}
       </span>
-      <IconButton onClick={onRemove} label={`移除 ${image.name}`} />
+      <ChipRemoveButton onClick={onRemove} label={`移除 ${image.name}`} />
     </span>
   )
 }
 
-function IconButton({ onClick, label }: { onClick: () => void; label: string }) {
+function ChipRemoveButton({ onClick, label }: { onClick: () => void; label: string }) {
   return (
     <button
       type="button"
@@ -285,20 +319,18 @@ function IconButton({ onClick, label }: { onClick: () => void; label: string }) 
   )
 }
 
-/** Paperclip: opens the file picker; paste and drop are the other two entry points. */
+/** Paperclip, the row's leftmost control: opens the file picker; paste and drop are the other
+ *  two entry points. Icon only, and never squeezed — a 14px glyph has no room to give. */
 function AttachButton({ disabled, onClick }: { disabled: boolean; onClick: () => void }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      aria-label="添加图片"
+    <IconButton
+      icon="paperclip"
+      label="添加图片"
       title="添加图片（也可以直接粘贴或拖进来）"
-      className="inline-flex h-[22px] items-center gap-a4 rounded-sm px-a6 font-ui text-caption text-ink-muted transition-colors duration-fast ease-out hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
-    >
-      <Icon name="paperclip" size={13} />
-      图片
-    </button>
+      className="shrink-0"
+      disabled={disabled}
+      onClick={onClick}
+    />
   )
 }
 

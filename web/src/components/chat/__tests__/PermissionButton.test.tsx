@@ -76,4 +76,16 @@ describe('PermissionButton（输入区权限按钮）', () => {
     fireEvent.click(document.querySelector('[data-testid="popover-backdrop"]')!)
     expect(screen.queryByRole('dialog')).toBeNull()
   })
+
+  it('compact：文字收成不可见，可访问名与提示仍是「默认权限」', () => {
+    const { rerender } = render(<PermissionButton full={false} onToggleFull={() => {}} />)
+    expect(screen.getByText('默认').className).not.toContain('sr-only')
+
+    rerender(<PermissionButton full={false} onToggleFull={() => {}} compact />)
+
+    expect(screen.getByText('默认').className).toContain('sr-only')
+    const chip = screen.getByRole('button', { name: /权限/ })
+    expect(chip.textContent).toContain('默认')
+    expect(chip.getAttribute('title')).toBe('默认权限')
+  })
 })

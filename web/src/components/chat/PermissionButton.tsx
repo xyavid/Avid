@@ -1,8 +1,9 @@
 /**
  * Permission chip in the composer: shows whether this run has full access (skips the
- * destructive-command confirmation, turns the sandbox off) and opens the two-state card.
- * Enabling full access takes an explicit confirm click while returning to default does not;
- * on send the hook attaches `full_access_ack` — the UI only states the intent.
+ * destructive-command confirmation, turns the sandbox off) and opens the two-state card;
+ * `compact` keeps the icon alone, with the state text left in the accessible name. Enabling full
+ * access takes an explicit confirm click while returning to default does not; on send the hook
+ * attaches `full_access_ack` — the UI only states the intent.
  */
 
 import { useEffect, useState } from 'react'
@@ -31,9 +32,11 @@ const OPTIONS: { full: boolean; meta: typeof DEFAULT_META }[] = [
 export type PermissionButtonProps = {
   full: boolean
   onToggleFull: (full: boolean) => void
+  /** Narrow composer: draw the icon alone; the state text stays in the accessible name. */
+  compact?: boolean
 }
 
-export function PermissionButton({ full, onToggleFull }: PermissionButtonProps) {
+export function PermissionButton({ full, onToggleFull, compact = false }: PermissionButtonProps) {
   const [open, setOpen] = useState(false)
   const [confirmingFull, setConfirmingFull] = useState(false)
 
@@ -69,13 +72,14 @@ export function PermissionButton({ full, onToggleFull }: PermissionButtonProps) 
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
+        title={compact ? `${current.label}权限` : undefined}
         className={cx(
           'inline-flex h-[26px] items-center gap-[5px] rounded-sm border-hairline px-a8 font-ui text-hint font-medium transition-colors duration-fast ease-out hover:bg-overlay-light',
           full ? 'border-transparent bg-danger/[0.08] text-danger' : 'border-hair text-ink-light',
         )}
       >
         <Icon name={current.icon} size={12} />
-        <span>{current.label}</span>
+        <span className={compact ? 'sr-only' : undefined}>{current.label}</span>
         <span className="sr-only">权限</span>
       </button>
 

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { Composer } from '../Composer'
@@ -228,5 +228,51 @@ describe('Composer 忙时的两个动作（阶段 60）', () => {
     expect(screen.getByRole('button', { name: '排队' })).toBeTruthy()
     expect(screen.getByRole('button', { name: '插入' })).toBeTruthy()
     expect(screen.getByRole('button', { name: '停止' })).toBeTruthy()
+  })
+})
+
+describe('Composer 工具栏（附件居左只有图标；窄了收文字）', () => {
+  // jsdom has no layout and no ResizeObserver: drive the measured width by hand.
+  let push: Array<(width: number) => void> = []
+
+  beforeEach(() => {
+    push = []
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback: (entries: { contentRect: { width: number } }[]) => void) {
+          push.push((width) => callback([{ contentRect: { width } }]))
+        }
+        observe() {}
+        disconnect() {}
+      },
+    )
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    push = []
+  })
+
+  it('附件按钮在工具栏最左，且只有图标：可访问名与提示文字仍在', () => {
+    renderComposer()
+
+    const attach = screen.getByRole('button', { name: '添加图片' })
+    expect(within(screen.getByTestId('composer-toolbar')).getAllByRole('button')[0]).toBe(attach)
+    expect(attach.textContent).toBe('')
+    expect(attach.getAttribute('title')).toContain('粘贴')
+  })
+
+  it('工具栏窄过阈值：权限文字转成不可见，可访问名不变；变宽后恢复', () => {
+    renderComposer()
+
+    expect(screen.getByText('默认').className).not.toContain('sr-only')
+
+    act(() => push.forEach((apply) => apply(360)))
+    expect(screen.getByText('默认').className).toContain('sr-only')
+    expect(screen.getByRole('button', { name: /权限/ }).textContent).toContain('默认')
+
+    act(() => push.forEach((apply) => apply(700)))
+    expect(screen.getByText('默认').className).not.toContain('sr-only')
   })
 })
