@@ -6,7 +6,7 @@ import asyncio
 import logging
 import threading
 import uuid
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -97,6 +97,35 @@ _MESSAGE_EVENTS = {
     "assistant": ASSISTANT_MESSAGE,
     "tool": TOOL_RESULT_MESSAGE,
 }
+
+
+#: Cap on an auto-derived title; longer input keeps the head plus an ellipsis.
+TITLE_CHARS = 24
+
+
+def session_title(content: Any) -> str | None:
+    """Title for a session from its first user message: text parts only, one line, capped.
+
+    Image-only messages still get a title, since a nameless session is the thing being avoided.
+    """
+    if isinstance(content, str):
+        text = content
+        has_image = False
+    elif isinstance(content, list):
+        text = "\n".join(
+            str(part.get("text") or "")
+            for part in content
+            if isinstance(part, Mapping) and part.get("type") == "text"
+        )
+        has_image = any(
+            isinstance(part, Mapping) and part.get("type") == "image" for part in content
+        )
+    else:
+        return None
+    line = " ".join(text.split())
+    if not line:
+        return "（图片）" if has_image else None
+    return line if len(line) <= TITLE_CHARS else line[:TITLE_CHARS] + "…"
 
 
 def _str_param(item: Any, name: str) -> str | None:
@@ -976,6 +1005,11 @@ class RunRegistry:
                 self._finish(record, RUN_FINISHED, text=text, reason="command")
                 return
 
+            # A session the user never named takes its title from the first thing they asked;
+            # the write goes through the run's own recorder, the session's single writer.
+            if not any(message.get("role") == "user" for message in history):
+                self._name_from_first_message(record, recorder, content)
+
             state = RunState.for_run(
                 auto_approve=auto_approve,
                 ask=record.approvals.request if record.approvals is not None else None,
@@ -1102,6 +1136,22 @@ class RunRegistry:
             if isinstance(event.data.get("usage"), dict):
                 record.usage = event.data["usage"]
         self.emit(record, event.type, **event.data)
+
+    def _name_from_first_message(
+        self, record: RunRecord, recorder: SessionRecorder, content: Any
+    ) -> None:
+        """Name a fresh session after its first message; an existing name always wins, and a
+        title failure must never take a run down with it."""
+        try:
+            if (recorder.session.get_name() or "").strip():
+                return
+            title = session_title(content)
+            if not title:
+                return
+            recorder.session.set_name(title)
+            self.notify_index(record.session_id)
+        except SessionError as exc:
+            logger.warning("run %s: 自动命名失败 %s", record.run_id, exc)
 
     def _message_sink(
         self, record: RunRecord, recorder: SessionRecorder
