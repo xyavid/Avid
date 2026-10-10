@@ -616,7 +616,7 @@ export function ConversationPage() {
             <div
               ref={scroll.ref}
               onScroll={scroll.handleScroll}
-              className="scroll-auto flex h-full flex-col overflow-y-auto px-a16 pt-a16"
+              className="scroll-auto flex h-full flex-col overflow-y-auto px-a16 pt-a16 pb-a16"
             >
               {body}
             </div>

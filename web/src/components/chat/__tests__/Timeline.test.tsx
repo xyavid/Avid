@@ -223,6 +223,27 @@ describe('Timeline（段落 → 对话列）', () => {
     expect(screen.queryByRole('button', { name: '分支' })).toBeNull()
   })
 
+  it('运行中不挂动作行：复制/分支等结束（或停止）之后再出现', () => {
+    const items = turn()
+    const { rerender } = render(<Timeline items={items} workspaceRoot="/w" liveTail />)
+
+    expect(screen.queryByRole('button', { name: '复制' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '从此处分支' })).toBeNull()
+
+    rerender(<Timeline items={items} workspaceRoot="/w" />)
+    expect(screen.getAllByRole('button', { name: '复制' }).length).toBeGreaterThan(0)
+  })
+
+  it('运行中最底部有一行动效：三个点流水亮灭（跟气泡里的同一支动画）', () => {
+    const { rerender } = render(<Timeline items={turn()} workspaceRoot="/w" liveTail />)
+
+    const indicator = screen.getByRole('status', { name: '运行中' })
+    expect(indicator.querySelectorAll('span[style*="hana-cycling-dots"]').length).toBe(3)
+
+    rerender(<Timeline items={turn()} workspaceRoot="/w" />)
+    expect(screen.queryByRole('status', { name: '运行中' })).toBeNull()
+  })
+
   it('两轮对话各挂一行：复制数 = 用户消息数 + 回话数', () => {
     const items: TimelineItem[] = [
       { kind: 'user', entryId: 'e1', text: '第一问', ts: 1 },

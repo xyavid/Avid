@@ -102,6 +102,8 @@ type Ctx = {
   sessionId: string | null
   /** Drop an unclaimed pending input; omit to hide the drop button. */
   onDropInput?: (inputId: string) => void
+  /** A run is in flight: actions wait for it to end (or be stopped) instead of racing it. */
+  running: boolean
 }
 
 function pendingLabel(pending: TimelinePending): string {
@@ -160,7 +162,7 @@ function itemNodes(list: TimelineItem[], offset: number, ctx: Ctx): ReactNode[] 
             </p>
           )}
           <UserBubble images={bubbleImages(item.images, ctx.sessionId)}>{item.text}</UserBubble>
-          <MessageActions text={item.text} className="justify-end" />
+          {!ctx.running && <MessageActions text={item.text} className="justify-end" />}
         </div>
       )
     }
@@ -180,7 +182,9 @@ function itemNodes(list: TimelineItem[], offset: number, ctx: Ctx): ReactNode[] 
           <AssistantMessage streaming={item.streaming} showHead={showHead}>
             {item.text}
           </AssistantMessage>
-          {turn && <MessageActions text={turn.text} onBranch={branchHandler(turn.branchAt, ctx.onBranch)} />}
+          {turn && !ctx.running && (
+            <MessageActions text={turn.text} onBranch={branchHandler(turn.branchAt, ctx.onBranch)} />
+          )}
         </div>
       )
     }
@@ -278,6 +282,7 @@ export function Timeline({
       actions: turnActions(group.items),
       sessionId,
       onDropInput,
+      running,
     }
     const from = group.user === null ? 0 : 1
 
@@ -304,6 +309,31 @@ export function Timeline({
   return (
     <div className="flex flex-col gap-a16" data-testid={testId}>
       {nodes}
+      {liveTail && <RunIndicator />}
+    </div>
+  )
+}
+
+/** Bottom-of-timeline running row: the same three-dot cycle the bubble uses while it waits, and
+ *  the air that keeps a growing answer from sitting on the composer. */
+function RunIndicator() {
+  return (
+    <div
+      role="status"
+      aria-label="运行中"
+      data-testid="run-indicator"
+      className="flex items-center gap-[3px] px-a8 pb-a16 pt-a4"
+    >
+      {[0, 1, 2].map((step) => (
+        <span
+          key={step}
+          className="h-[4px] w-[4px] rounded-full bg-accent"
+          style={{
+            animation: 'hana-cycling-dots 1.2s var(--ease-standard) infinite',
+            animationDelay: `${step * 0.2}s`,
+          }}
+        />
+      ))}
     </div>
   )
 }
