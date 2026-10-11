@@ -54,6 +54,21 @@ describe('toolLabel：动作 + 目标', () => {
     expect(toolLabel('subagent', two, ROOT)).toMatchObject({ verb: '子智能体', target: '2 个子任务' })
   })
 
+  it('联网检索 / 抓取网页各自成词，URL 显示时去掉协议头', () => {
+    expect(toolLabel('web_search', JSON.stringify({ query: '文档抽取库对比' }))).toEqual({
+      icon: 'globe',
+      verb: '联网检索',
+      target: '文档抽取库对比',
+    })
+    expect(
+      toolLabel('web_fetch', JSON.stringify({ url: 'https://docs.python.org/3/library/html.parser.html' })),
+    ).toEqual({
+      icon: 'globe',
+      verb: '抓取网页',
+      target: 'docs.python.org/3/library/html.parser.html',
+    })
+  })
+
   it('未登记的工具回落：动词 = 工具名，目标 = 压缩后的参数', () => {
     expect(toolLabel('mcp__fs__stat', JSON.stringify({ path: 'x' }), ROOT)).toMatchObject({
       icon: 'file-frame',

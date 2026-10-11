@@ -55,6 +55,11 @@ export function toolLabel(name: string, args: string, root?: string | null): Too
       return { icon: 'list-checks', verb: '更新清单', target: or(todoCount(parsed)) }
     case 'load_skill':
       return { icon: 'sparkle', verb: '加载技能', target: or(text('name')) }
+    // One globe for both web tools: they are one capability, and the verb separates them.
+    case 'web_search':
+      return { icon: 'globe', verb: '联网检索', target: or(text('query')) }
+    case 'web_fetch':
+      return { icon: 'globe', verb: '抓取网页', target: or(text('url').replace(/^https?:\/\//, '')) }
     case 'subagent': {
       const tasks = subagentTasks(args)
       return {
