@@ -12,6 +12,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from avid import web_settings
 from avid.agent.tools import web
 from avid.agent.tools.extract import looks_like_shell
 
@@ -29,7 +30,7 @@ def mock_client(handler) -> httpx.Client:
 def search_key(monkeypatch, tmp_path) -> Path:
     """The search key in the same store the model keys live in, read per call."""
     path = tmp_path / "secrets.json"
-    path.write_text(json.dumps({web.SECRET_REF: "tvly-test"}), encoding="utf-8")
+    path.write_text(json.dumps({web_settings.SECRET_REF: "tvly-test"}), encoding="utf-8")
     monkeypatch.setenv("AVID_BYOK_SECRETS", str(path))
     return path
 
@@ -64,13 +65,13 @@ def test_search_without_a_key_fails_closed_and_says_where_to_put_it(tmp_path, mo
 
     assert text.startswith("错误：")
     assert "secrets.json" in text
-    assert web.SECRET_REF in text
-    assert web.SIGNUP_URL in text
+    assert web_settings.SECRET_REF in text
+    assert web_settings.SIGNUP_URL in text
 
 
 def test_search_uses_the_configured_endpoint_and_a_bearer_key(search_key, monkeypatch):
     captured: list[httpx.Request] = []
-    monkeypatch.setenv(web.ENV_SEARCH_URL, "https://search.example/v2")
+    monkeypatch.setenv(web_settings.ENV_SEARCH_URL, "https://search.example/v2")
 
     text = web.web_search({"query": "  how to parse html  "}, client=mock_client(json_handler(search_body(), capture=captured)))
 
@@ -88,7 +89,7 @@ def test_search_defaults_to_the_built_in_endpoint(search_key):
 
     web.web_search({"query": "x"}, client=mock_client(json_handler(search_body(), capture=captured)))
 
-    assert str(captured[0].url) == f"{web.DEFAULT_SEARCH_URL}/search"
+    assert str(captured[0].url) == f"{web_settings.DEFAULT_SEARCH_URL}/search"
 
 
 @pytest.mark.parametrize(("asked", "expected"), [(0, 1), (-3, 1), (999, web.MAX_RESULTS_CEILING)])
@@ -104,13 +105,13 @@ def test_search_clamps_max_results(search_key, asked: int, expected: int):
 
 def test_search_rejects_a_non_ascii_key(tmp_path, monkeypatch):
     path = tmp_path / "secrets.json"
-    path.write_text(json.dumps({web.SECRET_REF: "tvly-键"}), encoding="utf-8")
+    path.write_text(json.dumps({web_settings.SECRET_REF: "tvly-键"}), encoding="utf-8")
     monkeypatch.setenv("AVID_BYOK_SECRETS", str(path))
 
     text = web.web_search({"query": "x"})
 
     assert "非 ASCII" in text
-    assert web.SECRET_REF in text
+    assert web_settings.SECRET_REF in text
 
 
 def test_search_without_a_query_is_a_parameter_error(search_key):
@@ -251,7 +252,7 @@ def test_fetch_stops_after_the_redirect_cap():
 
 def test_fetch_can_be_opted_in_to_private_addresses(monkeypatch, search_key):
     """An internal wiki on a private address is a real case, so the guardrail is switchable."""
-    monkeypatch.setenv(web.ENV_ALLOW_PRIVATE, "1")
+    monkeypatch.setenv(web_settings.ENV_ALLOW_PRIVATE, "1")
     html = (FIXTURES / "main-article.html").read_text(encoding="utf-8")
     handler = lambda request: httpx.Response(200, text=html, headers={"content-type": "text/html"})  # noqa: E731
 

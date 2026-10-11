@@ -11,6 +11,9 @@ const resetByokSettings = vi.fn()
 const testByokModel = vi.fn()
 const fetchByokModels = vi.fn()
 const getByokFile = vi.fn()
+const getWebSettings = vi.fn()
+const saveWebSettings = vi.fn()
+const testWebSearch = vi.fn()
 const getSessionsDir = vi.fn()
 const setSessionsDir = vi.fn()
 const pickFolder = vi.fn()
@@ -22,6 +25,9 @@ vi.mock('../../../api/client', () => ({
   testByokModel: (...a: unknown[]) => testByokModel(...a),
   fetchByokModels: (...a: unknown[]) => fetchByokModels(...a),
   getByokFile: (...a: unknown[]) => getByokFile(...a),
+  getWebSettings: (...a: unknown[]) => getWebSettings(...a),
+  saveWebSettings: (...a: unknown[]) => saveWebSettings(...a),
+  testWebSearch: (...a: unknown[]) => testWebSearch(...a),
   getSessionsDir: (...a: unknown[]) => getSessionsDir(...a),
   setSessionsDir: (...a: unknown[]) => setSessionsDir(...a),
   pickFolder: (...a: unknown[]) => pickFolder(...a),
@@ -64,6 +70,25 @@ beforeEach(() => {
   window.localStorage.clear()
   document.documentElement.removeAttribute('data-theme')
   getByokSettings.mockReset().mockResolvedValue(EMPTY)
+  // The web section is not what these cases are about; it only has to render.
+  getWebSettings.mockReset().mockResolvedValue({
+    key_set: false,
+    search_url: 'https://api.tavily.com',
+    default_search_url: 'https://api.tavily.com',
+    search_url_source: 'default',
+    timeout_seconds: 30,
+    default_timeout_seconds: 30,
+    timeout_source: 'default',
+    allow_private_hosts: false,
+    env_search_url: 'AVID_WEB_SEARCH_URL',
+    env_timeout: 'AVID_WEB_TIMEOUT_SECONDS',
+    env_allow_private: 'AVID_WEB_ALLOW_PRIVATE_HOSTS',
+    signup_url: 'https://app.tavily.com',
+    secret_ref: 'tavily',
+    secrets_file: '/home/u/.avid/secrets.json',
+  })
+  saveWebSettings.mockReset().mockResolvedValue(undefined)
+  testWebSearch.mockReset().mockResolvedValue({ ok: true, message: '连得上' })
   saveByokSettings.mockReset().mockImplementation(async (input: unknown) => savedState(input))
   resetByokSettings.mockReset().mockResolvedValue(undefined)
   testByokModel.mockReset().mockResolvedValue({

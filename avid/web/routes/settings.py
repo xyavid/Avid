@@ -12,6 +12,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Request, Response, status
 
+from ...agent.tools import web as web_tools
 from ...providers import byok
 from ...providers.byok import (
     CAPABILITY_FIELDS,
@@ -26,6 +27,24 @@ from ...providers.protocol import LLMError
 from ...providers.verify import classify_error, verify_provider
 from ...security import userdirs
 from ...services.errors import InvalidRequest
+from ...web_settings import (
+    DEFAULT_SEARCH_URL,
+    DEFAULT_TIMEOUT_SECONDS,
+    ENV_ALLOW_PRIVATE,
+    ENV_SEARCH_URL,
+    ENV_TIMEOUT,
+    MAX_TIMEOUT_SECONDS,
+    MIN_TIMEOUT_SECONDS,
+    SECRET_REF,
+    SIGNUP_URL,
+    allow_private_hosts,
+    delete_search_key,
+    read_search_key,
+    resolved_search_url,
+    resolved_timeout,
+    save_settings,
+    write_search_key,
+)
 from ..schemas import (
     ByokFileOut,
     ByokModel,
@@ -41,6 +60,10 @@ from ..schemas import (
     SessionsDirIn,
     SessionsDirOut,
     VerifyStepOut,
+    WebSettingsIn,
+    WebSettingsOut,
+    WebTestIn,
+    WebTestOut,
 )
 from . import current_services
 
@@ -255,6 +278,100 @@ def put_sessions_settings(request: Request, body: SessionsDirIn) -> SessionsDirO
     # An active run refuses with 409 session_busy; see Services.rebind_session_store.
     current_services(request).rebind_session_store()
     return _sessions_out()
+
+
+# ---- web tools (search + fetch) ----
+
+#: A canned query, so the connectivity check costs exactly one search.
+TEST_QUERY = "avid connectivity check"
+
+
+def _web_out() -> WebSettingsOut:
+    url, url_source = resolved_search_url()
+    timeout, timeout_source = resolved_timeout()
+    return WebSettingsOut(
+        key_set=bool(read_search_key()),
+        search_url=url,
+        default_search_url=DEFAULT_SEARCH_URL,
+        search_url_source=url_source,
+        timeout_seconds=timeout,
+        default_timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
+        timeout_source=timeout_source,
+        allow_private_hosts=allow_private_hosts(),
+        env_search_url=ENV_SEARCH_URL,
+        env_timeout=ENV_TIMEOUT,
+        env_allow_private=ENV_ALLOW_PRIVATE,
+        signup_url=SIGNUP_URL,
+        secret_ref=SECRET_REF,
+        secrets_file=str(byok.secrets_path()),
+    )
+
+
+@router.get("/settings/web", response_model=WebSettingsOut)
+def get_web_settings() -> WebSettingsOut:
+    return _web_out()
+
+
+@router.put("/settings/web", response_model=WebSettingsOut)
+def put_web_settings(body: WebSettingsIn) -> WebSettingsOut:
+    """Validates before writing, so a rejected endpoint never leaves half of it saved; a field an
+    environment variable owns is refused rather than stored into a setting that cannot win."""
+    url = body.search_url.strip()
+    if url and not url.startswith(("http://", "https://")):
+        raise InvalidRequest(f"检索端点是接口根地址，要带协议头（http:// 或 https://）：{url}")
+    timeout = body.timeout_seconds
+    if timeout is not None and not MIN_TIMEOUT_SECONDS <= timeout <= MAX_TIMEOUT_SECONDS:
+        raise InvalidRequest(
+            f"超时要落在 {MIN_TIMEOUT_SECONDS:g} 到 {MAX_TIMEOUT_SECONDS:g} 秒之间：{timeout:g}"
+        )
+    key = (body.api_key or "").strip()
+    if key and not key.isascii():
+        raise InvalidRequest("Key 含非 ASCII 字符，不是有效的 Key；值里只放 Key 本身。")
+
+    effective_url, url_source = resolved_search_url()
+    if url_source == "env" and url != effective_url:
+        raise InvalidRequest(
+            f"环境变量 {ENV_SEARCH_URL} 已经定了检索端点，写设置也不生效；"
+            "先去掉那个环境变量再在这里改。"
+        )
+    effective_timeout, timeout_source = resolved_timeout()
+    if timeout_source == "env" and timeout is not None and timeout != effective_timeout:
+        raise InvalidRequest(
+            f"环境变量 {ENV_TIMEOUT} 已经定了超时，写设置也不生效；先去掉那个环境变量再在这里改。"
+        )
+
+    if body.api_key is not None:
+        if key:
+            write_search_key(key)
+        else:
+            delete_search_key()
+    try:
+        # An env-owned field is left alone: writing the env value into the file would take over
+        # silently the day that variable is removed.
+        save_settings(
+            search_url=None if url_source == "env" else (url or None),
+            timeout_seconds=None if timeout_source == "env" else timeout,
+        )
+    except OSError as exc:
+        raise InvalidRequest(f"设置写不进 {userdirs.settings_path()}（{exc}）") from exc
+    return _web_out()
+
+
+@router.post("/settings/web/test", response_model=WebTestOut)
+def test_web_settings(body: WebTestIn) -> WebTestOut:
+    """Runs a real search through the same core the model's tools use, so the panel cannot report
+    a working setup the tools would then fail on."""
+    key = (body.api_key or "").strip() or read_search_key()
+    if not key:
+        return WebTestOut(ok=False, message="还没有 Key：先在上面填入并保存，再测试。")
+    if not key.isascii():
+        return WebTestOut(ok=False, message="Key 含非 ASCII 字符，不是有效的 Key。")
+    url = (body.search_url or "").strip() or resolved_search_url()[0]
+
+    result = web_tools.search_once(TEST_QUERY, key=key, url=url, max_results=1)
+    if result.startswith("错误："):
+        return WebTestOut(ok=False, message=result)
+    return WebTestOut(ok=True, message=f"连得上：{result.splitlines()[0]}")
 
 
 __all__ = ["router"]

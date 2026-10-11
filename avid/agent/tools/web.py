@@ -11,7 +11,6 @@ audit line is needed for a read-only tool.
 from __future__ import annotations
 
 import ipaddress
-import os
 import re
 import socket
 from dataclasses import dataclass
@@ -20,20 +19,13 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
-from ...providers.byok import read_secrets, secrets_path
+from ... import web_settings
+from ...providers.byok import secrets_path
+from ...web_settings import ENV_ALLOW_PRIVATE, SECRET_REF, SIGNUP_URL
 from .extract import looks_like_shell, main_text
 from .registry import tool
 
-#: The search key lives in the same 0600 store as the model keys, under this reference.
-SECRET_REF = "tavily"
-SIGNUP_URL = "https://app.tavily.com"
-
-ENV_SEARCH_URL = "AVID_WEB_SEARCH_URL"
-ENV_TIMEOUT = "AVID_WEB_TIMEOUT_SECONDS"
-ENV_ALLOW_PRIVATE = "AVID_WEB_ALLOW_PRIVATE_HOSTS"
-
-DEFAULT_SEARCH_URL = "https://api.tavily.com"
-DEFAULT_TIMEOUT_SECONDS = 30.0
+#: Connecting is quicker than the whole exchange, so it gets its own shorter budget.
 CONNECT_TIMEOUT_SECONDS = 10.0
 
 DEFAULT_MAX_RESULTS = 5
@@ -72,30 +64,14 @@ class _Page:
 # ---- configuration ----
 
 
-def _env(name: str) -> str:
-    return os.environ.get(name, "").strip()
-
-
 def _timeout() -> httpx.Timeout:
-    raw = _env(ENV_TIMEOUT)
-    try:
-        total = float(raw) if raw else DEFAULT_TIMEOUT_SECONDS
-    except ValueError:
-        total = DEFAULT_TIMEOUT_SECONDS
-    return httpx.Timeout(max(1.0, total), connect=min(CONNECT_TIMEOUT_SECONDS, max(1.0, total)))
-
-
-def _search_url() -> str:
-    return _env(ENV_SEARCH_URL) or DEFAULT_SEARCH_URL
-
-
-def _allow_private() -> bool:
-    return _env(ENV_ALLOW_PRIVATE).lower() in {"1", "true", "yes", "on"}
+    total = web_settings.resolved_timeout()[0]
+    return httpx.Timeout(total, connect=min(CONNECT_TIMEOUT_SECONDS, total))
 
 
 def _search_key() -> str:
     """The key is read per call, so a key added later takes effect without a restart."""
-    key = (read_secrets().get(SECRET_REF) or "").strip()
+    key = web_settings.read_search_key()
     if not key:
         raise _Failure(
             f"错误：联网检索还没配置（{SECRET_REF} 没有 Key）。\n"
@@ -219,6 +195,39 @@ def _format_search(query: str, data: dict[str, Any]) -> str:
     return text
 
 
+def search_once(
+    query: str,
+    *,
+    key: str,
+    url: str,
+    max_results: int,
+    client: httpx.Client | None = None,
+) -> str:
+    """One search rendered as text; the settings connectivity check runs this same core, so what
+    the panel tests is what the model gets."""
+    owned = client is None
+    http = client or httpx.Client(timeout=_timeout())
+    try:
+        data = _search_request(url, key, query, max_results=max_results, client=http)
+    except httpx.TimeoutException:
+        return (
+            f"错误：联网检索超时（{url}）。可能是网络不通或服务暂时缓慢；"
+            "请稍后重试，不要用同一查询重复调用。"
+        )
+    except httpx.HTTPError as exc:
+        return (
+            f"错误：联网检索请求失败（{exc}）。可能是网络不通；"
+            "请稍后重试或改用本地信息，不要用同一查询重复调用。"
+        )
+    except _Failure as exc:
+        return str(exc)
+    finally:
+        if owned:
+            http.close()
+
+    return _format_search(query, data)
+
+
 @tool(
     name="web_search",
     description="联网检索公开网页，返回「标题 / 链接 / 摘要」清单。【只在需要联网才能"
@@ -255,27 +264,13 @@ def web_search(args: dict[str, Any], *, client: httpx.Client | None = None) -> s
     except _Failure as exc:
         return str(exc)
 
-    owned = client is None
-    http = client or httpx.Client(timeout=_timeout())
-    try:
-        data = _search_request(_search_url(), key, query, max_results=max_results, client=http)
-    except httpx.TimeoutException:
-        return (
-            f"错误：联网检索超时（{_search_url()}）。可能是网络不通或服务暂时缓慢；"
-            "请稍后重试，不要用同一查询重复调用。"
-        )
-    except httpx.HTTPError as exc:
-        return (
-            f"错误：联网检索请求失败（{exc}）。可能是网络不通；"
-            "请稍后重试或改用本地信息，不要用同一查询重复调用。"
-        )
-    except _Failure as exc:
-        return str(exc)
-    finally:
-        if owned:
-            http.close()
-
-    return _format_search(query, data)
+    return search_once(
+        query,
+        key=key,
+        url=web_settings.resolved_search_url()[0],
+        max_results=max_results,
+        client=client,
+    )
 
 
 # ---- fetch ----
@@ -447,7 +442,7 @@ def web_fetch(args: dict[str, Any], *, client: httpx.Client | None = None) -> st
     if not url:
         return "错误：缺少参数 url（要抓取的网页地址，需带 http/https 协议头）。"
 
-    allow_private = _allow_private()
+    allow_private = web_settings.allow_private_hosts()
     owned = client is None
     http = client or httpx.Client(timeout=_timeout())
     try:

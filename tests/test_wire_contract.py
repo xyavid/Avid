@@ -55,6 +55,10 @@ from avid.web.schemas import (
     StreamInfo,
     UsageOut,
     VerifyStepOut,
+    WebSettingsIn,
+    WebSettingsOut,
+    WebTestIn,
+    WebTestOut,
     WorkspaceOut,
     WorkspaceRef,
 )
@@ -103,6 +107,11 @@ PAIRS: list[tuple[type, str]] = [
     # sessions dir: its source may be an env var, in which case editable is false
     (SessionsDirOut, "SessionsDir"),
     (SessionsDirIn, "SessionsDirInput"),
+    # web settings: the key goes in only, and Out carries key_set plus who decided each value
+    (WebSettingsOut, "WebSettings"),
+    (WebSettingsIn, "WebSettingsInput"),
+    (WebTestIn, "WebTestInput"),
+    (WebTestOut, "WebTestResult"),
     # search: hits carry entry locators, behind says how far the index lags
     (SearchResultOut, "SearchResult"),
     (SearchHitOut, "SearchHit"),
@@ -186,6 +195,8 @@ def test_live_payloads_carry_every_declared_field(client):
             http.get(f"/api/sessions/{session_id}/branches").json()["branches"][0],
         ),
         (WorkspaceOut, workspace),
+        # Web settings: sources and key_set are computed per response.
+        (WebSettingsOut, http.get("/api/settings/web").json()),
     ]
     for model, payload in checks:
         missing = set(model.model_fields) - set(payload)

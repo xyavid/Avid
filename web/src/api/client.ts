@@ -27,6 +27,10 @@ import type {
   SessionDetail,
   SessionSummary,
   SessionsDir,
+  WebSettings,
+  WebSettingsInput,
+  WebTestInput,
+  WebTestResult,
   WorkspaceSummary,
 } from './types'
 
@@ -376,6 +380,32 @@ export function setSessionsDir(dir: string): Promise<SessionsDir> {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ dir }),
+  })
+}
+
+/**
+ * Web (search + fetch) settings: the same resolution the tools use, so what this section shows is
+ * what a run would do. The key goes in write-only and never rides back in a response.
+ */
+export function getWebSettings(): Promise<WebSettings> {
+  return request('/api/settings/web')
+}
+
+/** Save the endpoint, the timeout and (optionally) the key; a rejected field comes back as 400. */
+export function saveWebSettings(input: WebSettingsInput): Promise<WebSettings> {
+  return request('/api/settings/web', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+}
+
+/** Run one real search through the tool's own core, against the payload or the stored values. */
+export function testWebSearch(input: WebTestInput): Promise<WebTestResult> {
+  return request('/api/settings/web/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
   })
 }
 

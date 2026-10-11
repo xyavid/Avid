@@ -1,6 +1,7 @@
 /**
  * Settings modal shell (scrim + `hana-scale-in`) holding the model section (see ModelSection), the
- * session-storage section (see SessionsSection) and the appearance section.
+ * web-tools section (see WebSection), the session-storage section (see SessionsSection) and the
+ * appearance section.
  * Closes via the ✕ button, Esc or a scrim click.
  */
 
@@ -13,6 +14,7 @@ import { IconButton } from '../../ui/IconButton'
 import { Tabs } from '../../ui/Tabs'
 import { ModelSection } from './ModelSection'
 import { SessionsSection } from './SessionsSection'
+import { WebSection } from './WebSection'
 
 const MODE_LABELS: Record<string, string> = { light: '浅色', dark: '深色', auto: '跟随系统' }
 const LABEL_TO_MODE: Record<string, 'light' | 'dark' | 'auto'> = {
@@ -61,6 +63,15 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
             密钥只写入本机密钥文件，任何界面与日志都不会回传。
           </p>
           <ModelSection />
+        </section>
+
+        <section className="mt-a24">
+          <h3 className="font-ui text-hint font-medium text-ink-muted">联网</h3>
+          <p className="mt-a8 font-ui text-hint leading-[1.6] text-ink-muted">
+            两个可选工具：web_search 检索公开网页，web_fetch 取回某个页面并转成纯文本。
+            没配 Key 时只有这两个工具不可用。
+          </p>
+          <WebSection />
         </section>
 
         <section className="mt-a24">

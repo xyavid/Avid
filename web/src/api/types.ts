@@ -398,6 +398,50 @@ export interface SessionsDirInput {
 }
 
 /**
+ * `GET /api/settings/web` response: the settings the web tools actually use. Every value carries
+ * its `*_source` ('env' wins over the settings file, which wins over the default), and the search
+ * key only ever comes back as `key_set` — never the key itself.
+ */
+export interface WebSettings {
+  key_set: boolean
+  search_url: string
+  default_search_url: string
+  search_url_source: 'env' | 'settings' | 'default'
+  timeout_seconds: number
+  default_timeout_seconds: number
+  timeout_source: 'env' | 'settings' | 'default'
+  allow_private_hosts: boolean
+  env_search_url: string
+  env_timeout: string
+  env_allow_private: string
+  signup_url: string
+  secret_ref: string
+  secrets_file: string
+}
+
+/**
+ * PUT payload: `search_url` empty (and `timeout_seconds` null) restores the default, while
+ * `api_key: null` leaves the stored key alone and `api_key: ''` clears it.
+ */
+export interface WebSettingsInput {
+  api_key?: string | null
+  search_url: string
+  timeout_seconds: number | null
+}
+
+/** POST /api/settings/web/test payload: probes what is given, so an unsaved key can be tried. */
+export interface WebTestInput {
+  api_key?: string | null
+  search_url?: string | null
+}
+
+/** Result of that probe: `ok` false with the tool's own message as `message`. */
+export interface WebTestResult {
+  ok: boolean
+  message: string
+}
+
+/**
  * One content hit: enough to show a snippet and jump back to the source (session + entry + byte
  * offset). `entry_type` is the entry type (message / notice / error), `role` the message role.
  */

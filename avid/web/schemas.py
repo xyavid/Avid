@@ -290,6 +290,51 @@ class SessionsDirIn(BaseModel):
     dir: str = Field(max_length=MAX_PATH_CHARS)
 
 
+class WebSettingsOut(BaseModel):
+    """Effective web-tool settings: every value carries who decided it, and the key comes back
+    only as ``key_set``."""
+
+    key_set: bool
+    search_url: str
+    default_search_url: str
+    search_url_source: Literal["env", "settings", "default"]
+    timeout_seconds: float
+    default_timeout_seconds: float
+    timeout_source: Literal["env", "settings", "default"]
+    allow_private_hosts: bool
+    env_search_url: str
+    env_timeout: str
+    env_allow_private: str
+    signup_url: str
+    secret_ref: str
+    secrets_file: str
+
+
+class WebSettingsIn(BaseModel):
+    """Endpoint and timeout are written as a whole (empty string or null restores the default);
+    ``api_key`` is write-only, and null there means "leave the stored key alone"."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    api_key: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
+    search_url: str = Field(default="", max_length=MAX_PATH_CHARS)
+    timeout_seconds: float | None = None
+
+
+class WebTestIn(BaseModel):
+    """Probes the payload when given, so a key can be tried before it is saved."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    api_key: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
+    search_url: str | None = Field(default=None, max_length=MAX_PATH_CHARS)
+
+
+class WebTestOut(BaseModel):
+    ok: bool
+    message: str
+
+
 class SearchHitOut(BaseModel):
     """One content hit: enough to show a snippet and jump back to the raw entry."""
 
