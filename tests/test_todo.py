@@ -5,10 +5,8 @@ import inspect
 import pytest
 
 from avid.agent.state import RunState
-from avid.agent.todo import (
-    TodoList,
-    todo_write,
-)
+from avid.agent.todo import TodoList
+from avid.agent.tools.todo import todo_write
 
 
 @pytest.fixture

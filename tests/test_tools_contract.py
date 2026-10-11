@@ -2,6 +2,9 @@
 
 import inspect
 import json
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -9,6 +12,8 @@ from avid.agent.tools import TOOL_IMPLS, TOOLS
 from avid.agent.tools.schemas import tool
 from avid.agent.tools.validate import validate_arguments
 from avid.cli import AGENT_TOOL_HELP, build_parser
+
+ROOT = Path(__file__).resolve().parent.parent
 
 NAMES = [item["function"]["name"] for item in TOOLS]
 VALID_TYPES = {"string", "integer", "number", "boolean", "array", "object"}
@@ -120,6 +125,32 @@ def test_expected_tools_are_registered():
 
 def test_names_are_unique():
     assert len(NAMES) == len(set(NAMES))
+
+
+@pytest.mark.parametrize(
+    "entry_point",
+    ["avid.agent.todo", "avid.cli", "avid.services.runs"],
+)
+def test_derived_tables_match_the_live_registry_from_every_entry_point(entry_point: str):
+    """`TOOLS` / `TOOL_IMPLS` are snapshotted while the tools package imports, so a declaration
+    that registers later — through an import cycle back into the agent layer — is silently missing
+    from every derived table. Each entry point gets a fresh interpreter because pytest's own import
+    order imports the tools package first and would hide exactly this."""
+    program = (
+        f"import importlib; importlib.import_module({entry_point!r})\n"
+        "from avid.agent.tools import TOOL_IMPLS, TOOLS, registry\n"
+        "snapshot = sorted(item['function']['name'] for item in TOOLS)\n"
+        "live = sorted(spec.name for spec in registry.specs())\n"
+        "assert snapshot == live, ('snapshot', snapshot, 'live', live)\n"
+        "assert snapshot == sorted(TOOL_IMPLS), snapshot\n"
+        "print(len(snapshot))\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", program], capture_output=True, text=True, cwd=ROOT, check=False
+    )
+
+    assert proc.returncode == 0, f"{entry_point}：快照与注册表不一致\n{proc.stdout}{proc.stderr}"
+    assert proc.stdout.strip() == str(len(NAMES))
 
 
 def test_placeholder_args_stay_schema_valid():
