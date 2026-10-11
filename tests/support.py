@@ -51,6 +51,8 @@ PLACEHOLDER_ARGS: dict[str, str] = {
     '"deliverable": "结论摘要"}]}',
     "load_skill": '{"name": "demo"}',
     "ask_user": '{"question": "选哪个？", "options": ["甲", "乙"]}',
+    "web_search": '{"query": "placeholder"}',
+    "web_fetch": '{"url": "https://example.com/"}',
 }
 
 

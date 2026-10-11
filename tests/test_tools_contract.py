@@ -112,6 +112,8 @@ def test_expected_tools_are_registered():
         "read_file",
         "subagent",
         "todo_write",
+        "web_fetch",
+        "web_search",
         "write_file",
     ]
 
