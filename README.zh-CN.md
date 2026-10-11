@@ -76,9 +76,10 @@ pnpm -C web install && pnpm -C web run copy:dist
 - **模型连接（BYOK）**：`~/.avid/models.json`（提供商与绑定，只存密钥引用）+ `~/.avid/secrets.json`
   （明文密钥，0600）。用界面「设置 → 模型」维护，或手编这两份文件；没配就发送消息会提示缺什么。
 - **联网（可选）**：`web_search` 检索公开网页，`web_fetch` 把某个页面取回来转成纯文本（自动去掉导航）。
-  需要一个检索服务 Key，写进 `~/.avid/secrets.json`（与模型 Key 同库、同 0600 纪律），形如
-  `{"tavily": "tvly-…"}`（申请：https://app.tavily.com，免费额度即可）。没配时只有这两个工具
-  失败关闭，其余能力不受影响。`web_fetch` 只取公网地址：本机与内网一律拒绝，免得把本地服务当成
+  需要一个检索服务 Key（申请：https://app.tavily.com，免费额度即可）：界面「设置 → 联网」里填，
+  或手编 `~/.avid/secrets.json`（与模型 Key 同库、同 0600 纪律），形如 `{"tavily": "tvly-…"}`。
+  同一段还能改接口地址与单次超时（落 `~/.avid/settings.json` 的 `web` 块，环境变量优先），
+  并有「测试连接」真发一次检索。没配时只有这两个工具失败关闭，其余能力不受影响。`web_fetch` 只取公网地址：本机与内网一律拒绝，免得把本地服务当成
   网页内容；确实要取内网站点时设 `AVID_WEB_ALLOW_PRIVATE_HOSTS=1`（另外两个开关见下表）。
 - **确认与授权**：非交互场景用 `--yes` 代答毁灭级确认；`--allow-full-access` 跳过确认并关沙箱
   （凭据拒读仍然生效）。

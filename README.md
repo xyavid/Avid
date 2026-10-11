@@ -89,10 +89,12 @@ All flags: `avid --help`, `avid web --help`, `avid workspace --help`, `avid sess
   only) + `~/.avid/secrets.json` (plaintext keys, mode 0600). Maintain them from Settings → Models
   in the UI, or by hand; with nothing configured, sending a message says what is missing.
 - **Web access (optional)**: `web_search` looks up the public web and `web_fetch` turns one page
-  into plain text (navigation stripped). They need a search-service key in `~/.avid/secrets.json`
-  — the same file and 0600 discipline as model keys — for example `{"tavily": "tvly-…"}`
-  (sign up at https://app.tavily.com; the free tier is enough). With no key only these two tools
-  fail closed. `web_fetch` reaches public addresses only: loopback and private ranges are refused
+  into plain text (navigation stripped). They need a search-service key (sign up at
+  https://app.tavily.com; the free tier is enough): set it in Settings → Web, or by hand in
+  `~/.avid/secrets.json` as `{"tavily": "tvly-…"}` — the same file and 0600 discipline as model
+  keys. That section also carries the endpoint and per-call timeout (stored in the `web` block of
+  `~/.avid/settings.json`, an environment variable still wins) and a "test" button that runs one
+  real search. With no key only these two tools fail closed. `web_fetch` reaches public addresses only: loopback and private ranges are refused
   so a local service cannot be mistaken for a web page, and `AVID_WEB_ALLOW_PRIVATE_HOSTS=1` is the
   switch for an internal site. `AVID_WEB_SEARCH_URL` overrides the search endpoint (self-hosted or
   proxy) and `AVID_WEB_TIMEOUT_SECONDS` the per-call timeout (default 30).
