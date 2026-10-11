@@ -16,8 +16,9 @@ English · [中文](README.zh-CN.md)
 ## What it does
 
 - **Tool use** — built-in tools for reading, writing and editing files, globbing and grepping
-  (structured `path:line:text` hits), running shell commands and tracking todos, plus MCP tools the
-  workspace declares and `ask_user` when only you know the answer; every call is validated first.
+  (structured `path:line:text` hits), running shell commands and tracking todos, searching and
+  fetching the web (optional, needs a search key), plus MCP tools the workspace declares and
+  `ask_user` when only you know the answer; every call is validated first.
   Read-only calls in one step run in parallel; writes and shell commands stay exclusive.
 - **Subagents** — independent subtasks run in parallel, each handed a structured task brief.
 - **Skills** — reusable instructions (`SKILL.md`): the catalog shows one line, the full text loads
@@ -87,6 +88,14 @@ All flags: `avid --help`, `avid web --help`, `avid workspace --help`, `avid sess
 - **Model connections (BYOK)**: `~/.avid/models.json` (providers and bindings, secret references
   only) + `~/.avid/secrets.json` (plaintext keys, mode 0600). Maintain them from Settings → Models
   in the UI, or by hand; with nothing configured, sending a message says what is missing.
+- **Web access (optional)**: `web_search` looks up the public web and `web_fetch` turns one page
+  into plain text (navigation stripped). They need a search-service key in `~/.avid/secrets.json`
+  — the same file and 0600 discipline as model keys — for example `{"tavily": "tvly-…"}`
+  (sign up at https://app.tavily.com; the free tier is enough). With no key only these two tools
+  fail closed. `web_fetch` reaches public addresses only: loopback and private ranges are refused
+  so a local service cannot be mistaken for a web page, and `AVID_WEB_ALLOW_PRIVATE_HOSTS=1` is the
+  switch for an internal site. `AVID_WEB_SEARCH_URL` overrides the search endpoint (self-hosted or
+  proxy) and `AVID_WEB_TIMEOUT_SECONDS` the per-call timeout (default 30).
 - **Approvals**: `--yes` answers the destructive-command prompt in non-interactive runs;
   `--allow-full-access` skips the prompt and the sandbox (credential refusal still applies).
 - **Session storage**: one directory holds every workspace's sessions, one subdirectory per

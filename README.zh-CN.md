@@ -15,6 +15,7 @@
 ## 功能
 
 - **工具调用** —— 读写改文件、glob、内容检索（`grep_search`，给 路径:行号:文本）、shell、todo、
+  联网（`web_search` 检索 / `web_fetch` 取正文，可选，需检索服务 Key）、
   工作区声明的 MCP 工具，以及「只有你知道答案」时的 `ask_user`；一律参数校验后执行。
   同一批里的只读调用并行跑，写与 shell 命令独占（并发档写在工具声明里，不是提示词里）。
 - **子智能体** —— 互不依赖的子任务并行派发，每个子任务拿到一份结构化的任务提示。
@@ -74,6 +75,11 @@ pnpm -C web install && pnpm -C web run copy:dist
 - **工作区约定**：放一份 `AGENTS.md` 在工作区根目录，它会自动进入模型的常驻上下文。
 - **模型连接（BYOK）**：`~/.avid/models.json`（提供商与绑定，只存密钥引用）+ `~/.avid/secrets.json`
   （明文密钥，0600）。用界面「设置 → 模型」维护，或手编这两份文件；没配就发送消息会提示缺什么。
+- **联网（可选）**：`web_search` 检索公开网页，`web_fetch` 把某个页面取回来转成纯文本（自动去掉导航）。
+  需要一个检索服务 Key，写进 `~/.avid/secrets.json`（与模型 Key 同库、同 0600 纪律），形如
+  `{"tavily": "tvly-…"}`（申请：https://app.tavily.com，免费额度即可）。没配时只有这两个工具
+  失败关闭，其余能力不受影响。`web_fetch` 只取公网地址：本机与内网一律拒绝，免得把本地服务当成
+  网页内容；确实要取内网站点时设 `AVID_WEB_ALLOW_PRIVATE_HOSTS=1`（另外两个开关见下表）。
 - **确认与授权**：非交互场景用 `--yes` 代答毁灭级确认；`--allow-full-access` 跳过确认并关沙箱
   （凭据拒读仍然生效）。
 - **会话存储**：所有工作区的会话集中在一个目录里，按工作区 id 分子目录（工作区的名字在注册表里，
@@ -98,6 +104,9 @@ pnpm -C web install && pnpm -C web run copy:dist
 | `AVID_ALLOWED_HOSTS` | Web 服务额外信任的域名（局域网部署） |
 | `AVID_BYOK_CONFIG` | 换一份 `models.json`（默认 `~/.avid/models.json`） |
 | `AVID_BYOK_SECRETS` | 换一份 `secrets.json`（默认 `~/.avid/secrets.json`） |
+| `AVID_WEB_SEARCH_URL` | 换检索接口根地址（默认 `https://api.tavily.com`；自建或代理用） |
+| `AVID_WEB_TIMEOUT_SECONDS` | 联网检索与抓取的单次超时，默认 30 秒 |
+| `AVID_WEB_ALLOW_PRIVATE_HOSTS` | 设为 `1` 才允许 `web_fetch` 取内网/本机地址 |
 
 
 ## 开发

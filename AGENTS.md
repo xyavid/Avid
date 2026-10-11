@@ -9,8 +9,8 @@ Avid 是一个自建的 agent 运行时（harness）：模型调用、工具执�
 - **核心用途**：先做通用内核，场景后接；用同一个内核承载编码、检索、业务流等不同任务。
 - **目标**：改动任一模块（模型 / 工具 / 上下文策略）不需要动其它部分。
 - **验收基准**：参考场景 **R**（读取本地文件 + 计算）——回归以它为准。
-- **技术栈**：内核 Python 3.12，`uv` 管理依赖，运行期依赖只有 `httpx`；前端在 `web/`（React 18 + Vite + pnpm + TypeScript）。
-- **能力**：模型调用 → 多步循环 → 10 个内置工具 + stdio MCP → 权限（毁灭级命令双确认 + 凭据拒读 + bwrap 沙箱 + 审计）→ hook 四事件 → 技能 → 上下文压缩 → 会话持久化与内容检索索引 → 本地 Web 服务与浏览器界面（对话时间线、会话 / 工作区管理、设置、图片输入、补充输入）。
+- **技术栈**：内核 Python 3.12，`uv` 管理依赖，运行期依赖只有 `httpx`（由 `tests/test_runtime_deps.py` 钉住，加依赖会让它红）；前端在 `web/`（React 18 + Vite + pnpm + TypeScript）。
+- **能力**：模型调用 → 多步循环 → 12 个内置工具（含联网 `web_search` / `web_fetch`）+ stdio MCP → 权限（毁灭级命令双确认 + 凭据拒读 + bwrap 沙箱 + 审计）→ hook 四事件 → 技能 → 上下文压缩 → 会话持久化与内容检索索引 → 本地 Web 服务与浏览器界面（对话时间线、会话 / 工作区管理、设置、图片输入、补充输入）。
 - **仓库形态**：包平铺在仓库根（`avid/`，无 src 层）；仓库内没有 docs/ 体系，也没有评测仪器——**代码与注释是唯一现状**（见 §4）。
 
 **仓库现状问谁**：不问文档，问代码——每个模块的职责、边界与不变量写在模块 docstring 与注释里；跨包边界由 `tests/test_web_boundaries.py` 的门禁（A1–A14）钉住，前端契约由 `test_wire_contract.py` / `test_event_contract.py` 双侧钉住。
@@ -95,7 +95,7 @@ Web  POST /api/sessions/{id}/runs ─┴─► services/runs.RunRegistry（线�
 | 应用服务 | `services/`：`runs` 运行注册表与重放缓冲、`approvals` 待决表、`inbox` 补充输入表、`sessions` 读视图、`workspaces`、`workspace_registry`（含会话目录的 `sessions_root`）、`session_migration`（旧布局一次性搬迁）、`picker` | 内核的第二个调用方 |
 | 附件 | `attachments.py`（根级叶子，stdlib-only） | 图片分块的形状 / 判型 / 上限 / 文本渲染与成本口径 / 线格式 ref 的唯一处；字节内联在会话条目里 |
 | 传输适配 | `web/`：FastAPI 路由 + pydantic DTO + SSE 编帧 + 静态资源 | 线格式的唯一所有者 |
-| 工具 | `agent/tools/`：`registry` 单点声明（name/description/schema/concurrency/writes 全在一处）、`files`/`search`/`shell`/`subagent`/`interaction`/`skill`/`mcp`、`safety`（并发判定）、`validate` 参数校验 | 10 个内置工具 + 该工作区声明的 MCP 工具 |
+| 工具 | `agent/tools/`：`registry` 单点声明（name/description/schema/concurrency/writes 全在一处）、`files`/`search`/`shell`/`subagent`/`interaction`/`skill`/`mcp`/`web`（联网，`extract` 是它的 HTML→文本叶子）、`safety`（并发判定）、`validate` 参数校验 | 12 个内置工具 + 该工作区声明的 MCP 工具 |
 | 工作区 | `workspaces.py` + `~/.avid/workspaces.json` | 用户级注册表（索引，非权威） |
 | 前端 | `web/`（React 18 + Vite + pnpm）：`api/types.ts` 与 `events/types.ts` 契约种子、`styles/tokens.css` 纸本 token 层、`markdown/` 自研渲染、`surfaces/` 页面 | 浏览器侧全部代码；交付走 `copy:dist` 进 `avid/web/static/` |
 
@@ -120,6 +120,7 @@ Web  POST /api/sessions/{id}/runs ─┴─► services/runs.RunRegistry（线�
 | 改索引哪些文本 / 怎么检索 | `avid/index/extract.py` 是「哪段文本进 search_text」的唯一规则处；查询语法与作用域在 `avid/index/queries.py`（用户输入当字面量，&lt;3 字回落 LIKE）；schema 变更走 `avid/index/db.py` 的 MIGRATIONS 追加一条 |
 | 改图片附件的类型 / 上限 / 渲染 | `avid/attachments.py` 是单点（前端同口径的数字在 `web/src/state/imagePrep.ts`）；各家运输形状在 `providers/{openai_compat,anthropic,responses}.py`；读侧端点在 `web/routes/sessions.py` |
 | 改补充输入 / 排队语义 | `avid/services/inbox.py`（表与三条不变量）+ `agent/run.py` 的唯一交付点；端点面在 `web/routes/inputs.py`，界面在 `Composer.tsx`（忙时两动作）与 `Timeline.tsx`（待办标记） |
+| 改联网（检索后端 / 取文规则 / 地址护栏 / 上限） | 模型可见的名字与参数单点在 `agent/tools/web.py`（换检索后端 = 换这一层之下的实现，模型侧不动）；取文规则在 `agent/tools/extract.py`（零依赖的链接密度启发式，已知边界写在模块注释）；Key 的 ref 名与 `AVID_WEB_*` 开关同在 `web.py` 顶部；运行期依赖的扩权由 `tests/test_runtime_deps.py` 拦 |
 | 改会话存哪 / 会话目录布局 | 解析单点在 `security/userdirs.sessions_dir()`（环境变量 → 设置文件 → 默认）；布局在 `services/workspace_registry.sessions_root()`（`<会话目录>/<工作区 id>`）；界面在设置页「会话存储」段（`web/src/components/settings/SessionsSection.tsx`） |
 | 调毁灭级名单 / 权限阈值 / 文案 | `security/`（名单在 `action.DENY_PATTERNS`，决策在 `engine.py`）；压缩阈值在 `agent/compaction.py` |
 | 加一个事件 | `agent/events.py`（唯一单点）；同时在 `web/src/events/types.ts` 的 EVENTS 块里加同名成员——`tests/test_event_contract.py` 拦住两侧漂移 |
