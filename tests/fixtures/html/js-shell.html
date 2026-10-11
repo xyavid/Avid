@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<!-- Structural recreation of a client-rendered page (SPA-shaped: the visible prose is built by
+     JavaScript, so the served HTML carries navigation and a bundle but no article text).
+     Not a verbatim capture. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Quick Start — Example</title>
+<style>.shell{display:flex} .nav{width:240px}</style>
+</head>
+<body>
+<div id="root"></div>
+<nav class="nav">
+  <ul>
+    <li><a href="/docs/1">Doc section 1</a></li>
+    <li><a href="/docs/2">Doc section 2</a></li>
+    <li><a href="/docs/3">Doc section 3</a></li>
+    <li><a href="/docs/4">Doc section 4</a></li>
+    <li><a href="/docs/5">Doc section 5</a></li>
+    <li><a href="/docs/6">Doc section 6</a></li>
+    <li><a href="/docs/7">Doc section 7</a></li>
+    <li><a href="/docs/8">Doc section 8</a></li>
+    <li><a href="/docs/9">Doc section 9</a></li>
+    <li><a href="/docs/10">Doc section 10</a></li>
+    <li><a href="/docs/11">Doc section 11</a></li>
+    <li><a href="/docs/12">Doc section 12</a></li>
+    <li><a href="/docs/13">Doc section 13</a></li>
+    <li><a href="/docs/14">Doc section 14</a></li>
+    <li><a href="/docs/15">Doc section 15</a></li>
+    <li><a href="/docs/16">Doc section 16</a></li>
+    <li><a href="/docs/17">Doc section 17</a></li>
+    <li><a href="/docs/18">Doc section 18</a></li>
+    <li><a href="/docs/19">Doc section 19</a></li>
+    <li><a href="/docs/20">Doc section 20</a></li>
+    <li><a href="/docs/21">Doc section 21</a></li>
+    <li><a href="/docs/22">Doc section 22</a></li>
+    <li><a href="/docs/23">Doc section 23</a></li>
+    <li><a href="/docs/24">Doc section 24</a></li>
+    <li><a href="/docs/25">Doc section 25</a></li>
+    <li><a href="/docs/26">Doc section 26</a></li>
+    <li><a href="/docs/27">Doc section 27</a></li>
+    <li><a href="/docs/28">Doc section 28</a></li>
+    <li><a href="/docs/29">Doc section 29</a></li>
+    <li><a href="/docs/30">Doc section 30</a></li>
+    <li><a href="/docs/31">Doc section 31</a></li>
+    <li><a href="/docs/32">Doc section 32</a></li>
+    <li><a href="/docs/33">Doc section 33</a></li>
+    <li><a href="/docs/34">Doc section 34</a></li>
+    <li><a href="/docs/35">Doc section 35</a></li>
+    <li><a href="/docs/36">Doc section 36</a></li>
+    <li><a href="/docs/37">Doc section 37</a></li>
+    <li><a href="/docs/38">Doc section 38</a></li>
+    <li><a href="/docs/39">Doc section 39</a></li>
+    <li><a href="/docs/40">Doc section 40</a></li>
+  </ul>
+</nav>
+<script>
+  const chunk1 = { id: 1, render: () => createElement("div", { className: "c1" }) };
+  const chunk2 = { id: 2, render: () => createElement("div", { className: "c2" }) };
+  const chunk3 = { id: 3, render: () => createElement("div", { className: "c3" }) };
+  const chunk4 = { id: 4, render: () => createElement("div", { className: "c4" }) };
+  const chunk5 = { id: 5, render: () => createElement("div", { className: "c5" }) };
+  const chunk6 = { id: 6, render: () => createElement("div", { className: "c6" }) };
+  const chunk7 = { id: 7, render: () => createElement("div", { className: "c7" }) };
+  const chunk8 = { id: 8, render: () => createElement("div", { className: "c8" }) };
+  const chunk9 = { id: 9, render: () => createElement("div", { className: "c9" }) };
+  const chunk10 = { id: 10, render: () => createElement("div", { className: "c10" }) };
+  const chunk11 = { id: 11, render: () => createElement("div", { className: "c11" }) };
+  const chunk12 = { id: 12, render: () => createElement("div", { className: "c12" }) };
+  const chunk13 = { id: 13, render: () => createElement("div", { className: "c13" }) };
+  const chunk14 = { id: 14, render: () => createElement("div", { className: "c14" }) };
+  const chunk15 = { id: 15, render: () => createElement("div", { className: "c15" }) };
+  const chunk16 = { id: 16, render: () => createElement("div", { className: "c16" }) };
+  const chunk17 = { id: 17, render: () => createElement("div", { className: "c17" }) };
+  const chunk18 = { id: 18, render: () => createElement("div", { className: "c18" }) };
+  const chunk19 = { id: 19, render: () => createElement("div", { className: "c19" }) };
+  const chunk20 = { id: 20, render: () => createElement("div", { className: "c20" }) };
+  const chunk21 = { id: 21, render: () => createElement("div", { className: "c21" }) };
+  const chunk22 = { id: 22, render: () => createElement("div", { className: "c22" }) };
+  const chunk23 = { id: 23, render: () => createElement("div", { className: "c23" }) };
+  const chunk24 = { id: 24, render: () => createElement("div", { className: "c24" }) };
+  const chunk25 = { id: 25, render: () => createElement("div", { className: "c25" }) };
+  const chunk26 = { id: 26, render: () => createElement("div", { className: "c26" }) };
+  const chunk27 = { id: 27, render: () => createElement("div", { className: "c27" }) };
+  const chunk28 = { id: 28, render: () => createElement("div", { className: "c28" }) };
+  const chunk29 = { id: 29, render: () => createElement("div", { className: "c29" }) };
+  const chunk30 = { id: 30, render: () => createElement("div", { className: "c30" }) };
+  const chunk31 = { id: 31, render: () => createElement("div", { className: "c31" }) };
+  const chunk32 = { id: 32, render: () => createElement("div", { className: "c32" }) };
+  const chunk33 = { id: 33, render: () => createElement("div", { className: "c33" }) };
+  const chunk34 = { id: 34, render: () => createElement("div", { className: "c34" }) };
+  const chunk35 = { id: 35, render: () => createElement("div", { className: "c35" }) };
+  const chunk36 = { id: 36, render: () => createElement("div", { className: "c36" }) };
+  const chunk37 = { id: 37, render: () => createElement("div", { className: "c37" }) };
+  const chunk38 = { id: 38, render: () => createElement("div", { className: "c38" }) };
+  const chunk39 = { id: 39, render: () => createElement("div", { className: "c39" }) };
+  const chunk40 = { id: 40, render: () => createElement("div", { className: "c40" }) };
+  const chunk41 = { id: 41, render: () => createElement("div", { className: "c41" }) };
+  const chunk42 = { id: 42, render: () => createElement("div", { className: "c42" }) };
+  const chunk43 = { id: 43, render: () => createElement("div", { className: "c43" }) };
+  const chunk44 = { id: 44, render: () => createElement("div", { className: "c44" }) };
+  const chunk45 = { id: 45, render: () => createElement("div", { className: "c45" }) };
+  const chunk46 = { id: 46, render: () => createElement("div", { className: "c46" }) };
+  const chunk47 = { id: 47, render: () => createElement("div", { className: "c47" }) };
+  const chunk48 = { id: 48, render: () => createElement("div", { className: "c48" }) };
+  const chunk49 = { id: 49, render: () => createElement("div", { className: "c49" }) };
+  const chunk50 = { id: 50, render: () => createElement("div", { className: "c50" }) };
+  const chunk51 = { id: 51, render: () => createElement("div", { className: "c51" }) };
+  const chunk52 = { id: 52, render: () => createElement("div", { className: "c52" }) };
+  const chunk53 = { id: 53, render: () => createElement("div", { className: "c53" }) };
+  const chunk54 = { id: 54, render: () => createElement("div", { className: "c54" }) };
+  const chunk55 = { id: 55, render: () => createElement("div", { className: "c55" }) };
+  const chunk56 = { id: 56, render: () => createElement("div", { className: "c56" }) };
+  const chunk57 = { id: 57, render: () => createElement("div", { className: "c57" }) };
+  const chunk58 = { id: 58, render: () => createElement("div", { className: "c58" }) };
+  const chunk59 = { id: 59, render: () => createElement("div", { className: "c59" }) };
+  const chunk60 = { id: 60, render: () => createElement("div", { className: "c60" }) };
+  const chunk61 = { id: 61, render: () => createElement("div", { className: "c61" }) };
+  const chunk62 = { id: 62, render: () => createElement("div", { className: "c62" }) };
+  const chunk63 = { id: 63, render: () => createElement("div", { className: "c63" }) };
+  const chunk64 = { id: 64, render: () => createElement("div", { className: "c64" }) };
+  const chunk65 = { id: 65, render: () => createElement("div", { className: "c65" }) };
+  const chunk66 = { id: 66, render: () => createElement("div", { className: "c66" }) };
+  const chunk67 = { id: 67, render: () => createElement("div", { className: "c67" }) };
+  const chunk68 = { id: 68, render: () => createElement("div", { className: "c68" }) };
+  const chunk69 = { id: 69, render: () => createElement("div", { className: "c69" }) };
+  const chunk70 = { id: 70, render: () => createElement("div", { className: "c70" }) };
+  const chunk71 = { id: 71, render: () => createElement("div", { className: "c71" }) };
+  const chunk72 = { id: 72, render: () => createElement("div", { className: "c72" }) };
+  const chunk73 = { id: 73, render: () => createElement("div", { className: "c73" }) };
+  const chunk74 = { id: 74, render: () => createElement("div", { className: "c74" }) };
+  const chunk75 = { id: 75, render: () => createElement("div", { className: "c75" }) };
+  const chunk76 = { id: 76, render: () => createElement("div", { className: "c76" }) };
+  const chunk77 = { id: 77, render: () => createElement("div", { className: "c77" }) };
+  const chunk78 = { id: 78, render: () => createElement("div", { className: "c78" }) };
+  const chunk79 = { id: 79, render: () => createElement("div", { className: "c79" }) };
+  const chunk80 = { id: 80, render: () => createElement("div", { className: "c80" }) };
+  const chunk81 = { id: 81, render: () => createElement("div", { className: "c81" }) };
+  const chunk82 = { id: 82, render: () => createElement("div", { className: "c82" }) };
+  const chunk83 = { id: 83, render: () => createElement("div", { className: "c83" }) };
+  const chunk84 = { id: 84, render: () => createElement("div", { className: "c84" }) };
+  const chunk85 = { id: 85, render: () => createElement("div", { className: "c85" }) };
+  const chunk86 = { id: 86, render: () => createElement("div", { className: "c86" }) };
+  const chunk87 = { id: 87, render: () => createElement("div", { className: "c87" }) };
+  const chunk88 = { id: 88, render: () => createElement("div", { className: "c88" }) };
+  const chunk89 = { id: 89, render: () => createElement("div", { className: "c89" }) };
+  const chunk90 = { id: 90, render: () => createElement("div", { className: "c90" }) };
+  const chunk91 = { id: 91, render: () => createElement("div", { className: "c91" }) };
+  const chunk92 = { id: 92, render: () => createElement("div", { className: "c92" }) };
+  const chunk93 = { id: 93, render: () => createElement("div", { className: "c93" }) };
+  const chunk94 = { id: 94, render: () => createElement("div", { className: "c94" }) };
+  const chunk95 = { id: 95, render: () => createElement("div", { className: "c95" }) };
+  const chunk96 = { id: 96, render: () => createElement("div", { className: "c96" }) };
+  const chunk97 = { id: 97, render: () => createElement("div", { className: "c97" }) };
+  const chunk98 = { id: 98, render: () => createElement("div", { className: "c98" }) };
+  const chunk99 = { id: 99, render: () => createElement("div", { className: "c99" }) };
+  const chunk100 = { id: 100, render: () => createElement("div", { className: "c100" }) };
+  const chunk101 = { id: 101, render: () => createElement("div", { className: "c101" }) };
+  const chunk102 = { id: 102, render: () => createElement("div", { className: "c102" }) };
+  const chunk103 = { id: 103, render: () => createElement("div", { className: "c103" }) };
+  const chunk104 = { id: 104, render: () => createElement("div", { className: "c104" }) };
+  const chunk105 = { id: 105, render: () => createElement("div", { className: "c105" }) };
+  const chunk106 = { id: 106, render: () => createElement("div", { className: "c106" }) };
+  const chunk107 = { id: 107, render: () => createElement("div", { className: "c107" }) };
+  const chunk108 = { id: 108, render: () => createElement("div", { className: "c108" }) };
+  const chunk109 = { id: 109, render: () => createElement("div", { className: "c109" }) };
+  const chunk110 = { id: 110, render: () => createElement("div", { className: "c110" }) };
+  const chunk111 = { id: 111, render: () => createElement("div", { className: "c111" }) };
+  const chunk112 = { id: 112, render: () => createElement("div", { className: "c112" }) };
+  const chunk113 = { id: 113, render: () => createElement("div", { className: "c113" }) };
+  const chunk114 = { id: 114, render: () => createElement("div", { className: "c114" }) };
+  const chunk115 = { id: 115, render: () => createElement("div", { className: "c115" }) };
+  const chunk116 = { id: 116, render: () => createElement("div", { className: "c116" }) };
+  const chunk117 = { id: 117, render: () => createElement("div", { className: "c117" }) };
+  const chunk118 = { id: 118, render: () => createElement("div", { className: "c118" }) };
+  const chunk119 = { id: 119, render: () => createElement("div", { className: "c119" }) };
+  const chunk120 = { id: 120, render: () => createElement("div", { className: "c120" }) };
+  hydrate(document.getElementById("root"), { chunks: [chunk1, chunk2] });
+</script>
+</body>
+</html>

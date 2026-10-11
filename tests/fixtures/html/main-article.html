@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<!-- Structural recreation of a documentation page (docs-shaped: navigation outside a <main>
+     wrapper, prose inside it, and inline links in paragraphs that must NOT be dropped just
+     because they are links). Not a verbatim capture. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Fetch a page — Example docs</title>
+</head>
+<body>
+<nav class="sidebar">
+  <ul>
+    <li><a href="/guide/install">Installation</a></li>
+    <li><a href="/guide/quickstart">Quick start</a></li>
+    <li><a href="/guide/fetch">Fetch a page</a></li>
+    <li><a href="/guide/extract">Extract text</a></li>
+    <li><a href="/guide/limits">Limits and timeouts</a></li>
+    <li><a href="/api/client">Client reference</a></li>
+    <li><a href="/api/errors">Errors</a></li>
+    <li><a href="/changelog">Changelog</a></li>
+  </ul>
+</nav>
+<main>
+  <h1>Fetch a page</h1>
+  <p>Fetching returns the decoded body of one URL. The call follows redirects, reports the final
+  URL, and refuses addresses that resolve to the local machine or to a private range, because a
+  page can contain a link that points anywhere. See <a href="/guide/limits">Limits</a> for the
+  byte and time budgets that apply to every request.</p>
+  <h2>Parameters</h2>
+  <p>The only required parameter is the URL itself. The scheme must be http or https; every other
+  scheme is rejected before any socket is opened. The result carries the content type, the
+  character set that was used to decode the body, and the number of characters that survived
+  extraction, so a caller can tell a real article from a page whose body is rendered later.</p>
+  <pre><code>result = fetch("https://example.com/guide")
+print(result.text)</code></pre>
+  <p>When the body is not text, the call returns a short explanation instead of the bytes. That
+  keeps binary payloads out of the model's context.</p>
+</main>
+<footer>
+  <ul>
+    <li><a href="/license">License</a></li>
+    <li><a href="/privacy">Privacy</a></li>
+    <li><a href="/terms">Terms</a></li>
+  </ul>
+</footer>
+</body>
+</html>
