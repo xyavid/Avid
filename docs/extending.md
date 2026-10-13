@@ -19,7 +19,8 @@
 | 新增一类上下文 | `agent/context.py` 的 `ContextManager.register_source(kind, fn)` 一行 |
 | 改压缩阈值 / 检查点结构 | `agent/compaction.py`（保留最近 N 轮 + 摘要；阈值触发与溢出兜底共用一个入口） |
 | 改系统提示词 | `agent/prompt.py` |
-| 改 hook 四事件 | `agent/hooks.py` |
+| 改本体在四个事件上的行为（权限闸门 / 输出预算 / 重复提醒 / 运行汇总） | `agent/guards.py`：普通函数，`execution.py`（Pre/PostToolUse）与 `stop.py`（Stop）直接调用；闸门是唯一持有策略层依赖的 agent 模块（`tests/test_web_boundaries.py` A13） |
+| 加/改用户钩子脚本 | 声明在工作区 `<root>/.avid/hooks.json`（`{"hooks": [{"event", "command", "args", "env", "timeout_seconds"}]}`），解析与执行都在 `agent/hooks.py`；脚本 stdin 收事件 JSON、stdout 回 `{"decision", "reason", "injected"}`，坏输出 / 超时 / 非零退出一律按拦截，事件字段按 `EVENT_FIELDS` 白名单挑（内核对象不进子进程）；新增事件要同时改 `EVENTS` 与该白名单 |
 
 ## 会话与索引
 
