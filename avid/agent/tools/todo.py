@@ -52,7 +52,9 @@ def todo_write(args: dict[str, Any], *, state: "RunState") -> str:
     try:
         state.todo.replace(args.get("todos"))
     except ValueError as exc:
+        # Nothing is published on a rejected update: the previous plan is still the plan.
         return f"错误：{exc}"
+    state.publish_plan()
 
     if not state.todo.items:
         return "已清空 TODO 列表。"

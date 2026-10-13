@@ -7,9 +7,31 @@ from typing import Any
 
 from .session import SessionBranch, StorageBackedSession
 from .types import MESSAGE_ENTRY, EntryType
-from .values import DEFAULT_BRANCH, branch_compaction, branch_usage
+from .values import DEFAULT_BRANCH, branch_compaction, branch_plan, branch_usage
 
 logger = logging.getLogger("avid.session.recorder")
+
+#: The plan rides inside an object: a bare list is not a value shape here, and the wrapper leaves
+#: room for a field beside the items.
+PLAN_ITEMS = "items"
+
+
+def stored_plan(session: Any, branch: str = DEFAULT_BRANCH) -> list[Any]:
+    """Read one branch's plan back item by item; anything that is not the declared shape reads as
+    no plan.
+
+    Item validity is the agent's business — its list drops what it cannot use, and says so — so
+    this only unwraps the value, and a corrupted slot never keeps a run from starting.
+    """
+    stored = session.get_value(branch_plan(branch))
+    if stored is None:
+        return []
+    value = stored.value
+    raw = value.get(PLAN_ITEMS) if isinstance(value, dict) else None
+    if not isinstance(raw, list):
+        logger.warning("计划值形状不对，按没有计划处理：%r", value)
+        return []
+    return list(raw)
 
 
 class SessionRecorder:
@@ -62,6 +84,19 @@ class SessionRecorder:
         # Kept out of the entry projection, so usage never becomes history and needs no type exception there.
         self.session.set_value(branch_usage(self.branch), payload)
         logger.debug("会话落库 usage：分支 %s", self.branch)
+
+    def record_plan(self, items: list[dict[str, Any]]) -> None:
+        """Per-branch plan value, written whole and removed once nothing is left to do.
+
+        A finished plan is not history to keep — the list exists to be worked off — so an empty or
+        all-completed list deletes the value instead of storing an empty one.
+        """
+        if not items or all(item.get("status") == "completed" for item in items):
+            self.session.delete_value(branch_plan(self.branch))
+            logger.debug("会话删除计划：分支 %s", self.branch)
+            return
+        self.session.set_value(branch_plan(self.branch), {PLAN_ITEMS: list(items)})
+        logger.info("会话落盘计划：分支 %s（%d 项）", self.branch, len(items))
 
     def record_compaction(self, summary: dict[str, Any], keep: int = 0) -> None:
         """Per-branch compaction cursor: projection replaces history up to the tip with the summary

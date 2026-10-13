@@ -155,6 +155,8 @@ class RunState:
     # Run-scoped runtime objects.
     todo: TodoList = field(default_factory=TodoList)
     skills: SkillLoader = field(default_factory=SkillLoader)
+    # Where a finished plan write goes; None (a subagent, a sessionless run) keeps the plan local.
+    on_plan: "Callable[[list[dict[str, str]]], None] | None" = None
     # MCP tool manager assembled by the run entry point; None means this run exposes no MCP tools.
     mcp: "McpManager | None" = None
     # Write-ahead file checkpointer, wired by session-aware entry points; None (sessionless
@@ -198,11 +200,18 @@ class RunState:
         scratch: bool = False,
         model_ref: str | None = None,
         effort: str | None = None,
+        plan: list[Any] | None = None,
+        on_plan: "Callable[[list[dict[str, str]]], None] | None" = None,
     ) -> "RunState":
         """Build a run state and rescan skills, where full comes only from an explicit full=True
         grant and a caller-supplied security spec is reused as-is, so enforcement and the start
-        event cannot disagree."""
+        event cannot disagree. A stored plan is adopted tolerantly: unusable items are dropped
+        rather than raising, because a run must start whatever the slot holds.
+        """
         is_full = full or permission_mode == PERMISSION_FULL
+        todo = TodoList()
+        if plan:
+            todo.load(plan)
         return cls(
             auto_approve=auto_approve,
             ask=ask,
@@ -230,9 +239,16 @@ class RunState:
             context_window=context_window,
             # The skill directory follows the workspace root and falls back to cwd.
             skills=SkillLoader(default_skills_dir(workspace_root)).scan(),
+            todo=todo,
+            on_plan=on_plan,
             # Declared hooks are read once per run, so an edited hooks.json lands next turn.
             hooks=hooks if hooks is not None else hooks_module.load_hooks(workspace_root),
         )
+
+    def publish_plan(self) -> None:
+        """Hand the current plan to whoever persists it; without a sink the plan stays in the run."""
+        if self.on_plan is not None:
+            self.on_plan([dict(item) for item in self.todo.items])
 
     def sandbox_grants(self) -> tuple[tuple[str, str], ...]:
         """Outside paths already granted for this run, as (path, ro/rw) pairs for the sandbox."""

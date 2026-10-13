@@ -27,7 +27,7 @@ from .projection import (
     messages_for_branch,
     repair_incomplete_batches,
 )
-from .recorder import SessionRecorder
+from .recorder import SessionRecorder, stored_plan
 from .session import validate_message
 from .types import (
     STORAGE_VERSION,
@@ -45,9 +45,11 @@ from .types import (
 from .values import (
     COMPACTION_NS,
     DEFAULT_BRANCH,
+    PLAN_NS,
     SCRATCH_NS,
     USAGE_NS,
     branch_compaction,
+    branch_plan,
     branch_tip,
     branch_usage,
     entry_label,
@@ -89,8 +91,10 @@ __all__ = [
     "DEFAULT_BRANCH",
     "USAGE_NS",
     "COMPACTION_NS",
+    "PLAN_NS",
     "SCRATCH_NS",
     "branch_compaction",
+    "branch_plan",
     "branch_tip",
     "branch_usage",
     "entry_label",
@@ -103,6 +107,7 @@ __all__ = [
     "JsonlSessionRepo",
     # Writer and read-side projections.
     "SessionRecorder",
+    "stored_plan",
     "MutationLine",
     "messages_for_branch",
     "entries_to_messages",

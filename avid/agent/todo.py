@@ -1,8 +1,16 @@
-"""The whole-list TODO store: replacement is all-or-nothing, and each run owns its own list."""
+"""The whole-list TODO store: replacement is all-or-nothing, and each run holds the current view.
+
+The list outlives a run through a per-branch session value, so there are two ways in: ``replace``
+validates what the model sent and rejects the whole update, while ``load`` repairs what was stored
+and drops only the items it cannot use — a corrupted slot must not keep a run from starting.
+"""
 
 from __future__ import annotations
 
+import logging
 from typing import Any, NoReturn
+
+logger = logging.getLogger("avid.agent.todo")
 
 VALID_STATUSES = ("pending", "in_progress", "completed")
 
@@ -48,6 +56,35 @@ class TodoList:
                 "请把其余项改成 pending 或 completed"
             )
 
+        self.items = cleaned
+
+    def load(self, raw: Any) -> None:
+        """Adopt a stored plan, repairing what is unusable: bad items are dropped, and extra
+        in-progress items are demoted, because only one step may be current."""
+        if not isinstance(raw, list):
+            logger.warning("计划不是数组，按没有计划处理：%r", raw)
+            self.items = []
+            return
+
+        cleaned: list[dict[str, str]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                logger.warning("计划里丢弃一个非对象条目：%r", item)
+                continue
+            content = item.get("content")
+            status = item.get("status")
+            if not isinstance(content, str) or not content.strip():
+                logger.warning("计划里丢弃一个没有内容的条目：%r", item)
+                continue
+            if status not in VALID_STATUSES:
+                logger.warning("计划里丢弃一个状态非法的条目：%r", item)
+                continue
+            if status == "in_progress" and any(
+                kept["status"] == "in_progress" for kept in cleaned
+            ):
+                logger.warning("计划里有第二项 in_progress，降为 pending：%r", item)
+                status = "pending"
+            cleaned.append({"content": content.strip(), "status": str(status)})
         self.items = cleaned
 
     def counts(self) -> dict[str, int]:

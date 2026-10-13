@@ -14,6 +14,9 @@ BRANCH_TIP_NS = "avid.branch.tip"
 USAGE_NS = "avid.usage"
 # Compaction cursor, one address per branch: records that history up to a tip seq was replaced by a summary.
 COMPACTION_NS = "avid.compaction"
+# The task plan, one address per branch: a plan is an intention that has to outlive the run that
+# wrote it, and each chain carries its own.
+PLAN_NS = "avid.plan"
 # Scratch marker, one address per session: this session was born as a throwaway side branch of another
 # one, so its runs stay read-only. It sits on the **session** rather than on a run, because the constraint
 # belongs to what the session is: whoever starts a run here gets the same tool table and the same sandbox.
@@ -62,6 +65,11 @@ def branch_usage(branch: str) -> ValueAddress:
 def branch_compaction(branch: str) -> ValueAddress:
     """The compaction cursor is per branch for the same reason: each chain compacts independently."""
     return ValueAddress(COMPACTION_NS, branch)
+
+
+def branch_plan(branch: str) -> ValueAddress:
+    """The plan is per branch for the same reason as usage: each chain is doing its own work."""
+    return ValueAddress(PLAN_NS, branch)
 
 
 def session_scratch() -> ValueAddress:
