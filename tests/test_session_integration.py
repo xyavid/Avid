@@ -141,8 +141,8 @@ def test_second_run_continues_from_the_session(hook_registry, session):
 
 
 def test_trigger_message_is_recorded_verbatim(hook_registry, session):
-    """What persists is exactly what the user typed: injected context goes into the system
-    prompt and never rewrites the user message."""
+    """What persists is exactly what the user typed: injected context rides the per-round tail
+    note and never rewrites the user message nor the frozen system prompt."""
 
     def inject(context):
         context.setdefault("injected", []).append("[环境] 测试注入")
@@ -157,8 +157,10 @@ def test_trigger_message_is_recorded_verbatim(hook_registry, session):
     stored = messages_for_branch(session)
     assert [message["content"] for message in stored] == ["原始问题", "答"]
     assert stored == messages
-    # Not lost: the injection rides this run's system prompt, rebuilt per round (never persisted).
-    assert "[环境] 测试注入" in chat.requests[0]["system"]
+    # Not lost: the injection rides the per-round note (never persisted, never in the system).
+    request = chat.requests[0]
+    assert "[环境] 测试注入" in request["messages"][-1]["content"]
+    assert "[环境] 测试注入" not in request["system"]
 
 
 def test_stop_nudge_is_persisted(hook_registry, session):

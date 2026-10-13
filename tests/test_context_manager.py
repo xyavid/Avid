@@ -10,6 +10,7 @@ from avid.agent.context import (
     PER_ROUND,
     SYSTEM,
     TAIL,
+    TAIL_HEADER,
     BlockSpec,
     ContextBudget,
     ContextManager,
@@ -82,14 +83,29 @@ def test_instructions_override_takes_effect():
     assert "## 可用技能" in request.system
 
 
-def test_injected_lands_last_in_system_and_later_composes_ignore_it():
+def test_injected_lands_in_the_tail_and_never_in_the_system():
+    """An extension may inject text, but not into the frozen blocks: the prefix has to stay the
+    body's own, so injected text rides in the per-round note instead."""
     manager = make_manager()
 
     first = manager.compose(injected=["[注入] 自定义背景"])
-    second = manager.compose(injected=["[注入] 第二次不该再进来"])
+    second = manager.compose(injected=["[注入] 第二次的内容"])
 
-    assert first.system.endswith("[注入] 自定义背景")
+    assert "[注入]" not in first.system and "[注入]" not in second.system
     assert second.system == first.system
+    assert "[注入] 自定义背景" in first.messages[-1]["content"]
+    assert "[注入] 第二次的内容" in second.messages[-1]["content"]
+    assert TAIL_HEADER in second.messages[-1]["content"]
+    # The note is rebuilt per round and never persisted
+    assert all(
+        "[注入]" not in str(m.get("content")) for m in manager.transcript.as_messages()
+    )
+
+
+def test_without_an_injection_the_tail_has_no_injected_block():
+    request = make_manager().compose()
+
+    assert "[注入]" not in request.messages[-1]["content"]
 
 
 def test_system_is_frozen_within_a_run():
@@ -412,8 +428,8 @@ def test_render_before_compose_is_rejected():
 
 
 def test_context_map_puts_stable_blocks_before_volatile_ones():
-    """KV-cache discipline is pinned into the declaration table: five frozen blocks first,
-    two per_round blocks last, and the order may not drift."""
+    """KV-cache discipline is pinned into the declaration table: five frozen blocks first, the
+    three per_round blocks last (injected text included), and the order may not drift."""
     from avid.agent.context import CONTEXT_MAP
 
     kinds = [spec.kind for spec in CONTEXT_MAP]
@@ -423,11 +439,12 @@ def test_context_map_puts_stable_blocks_before_volatile_ones():
         "bootstrap",
         "skill_always",
         "skill_catalog",
+        "injected",
         "plan",
         "run_state",
     ]
     stabilities = [spec.stability for spec in CONTEXT_MAP]
-    assert stabilities == ["frozen"] * 5 + ["per_round"] * 2
+    assert stabilities == ["frozen"] * 5 + ["per_round"] * 3
 
 
 def test_volatile_content_only_reaches_the_last_message():

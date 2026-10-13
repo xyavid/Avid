@@ -649,8 +649,9 @@ def test_a_long_tool_result_is_truncated_without_any_hook(hook_registry, monkeyp
 
 
 def test_user_prompt_submit_injects_context(hook_registry):
-    """Injected context goes into the system prompt while the user message keeps its original
-    text: kernel-written environment info must never read as user speech.
+    """Injected context rides the per-round note while the user message keeps its original text:
+    kernel-written environment info must never read as user speech, and the frozen blocks stay the
+    body's own so the prompt prefix keeps its cache.
     """
     hook_registry.register(
         "UserPromptSubmit", lambda ctx: ctx["injected"].append("[环境] 测试注入")
@@ -660,9 +661,11 @@ def test_user_prompt_submit_injects_context(hook_registry):
 
     run_loop(messages, config=CONFIG, chat=chat)
 
+    request = chat.requests[0]
     assert messages[0]["content"] == "原始问题"
-    assert chat.requests[0]["messages"][0]["content"] == "原始问题"
-    assert "[环境] 测试注入" in chat.requests[0]["system"]
+    assert request["messages"][0]["content"] == "原始问题"
+    assert "[环境] 测试注入" in request["messages"][-1]["content"]
+    assert "[环境] 测试注入" not in request["system"]
 
 
 def test_environment_block_lists_the_runs_tools(hook_registry):

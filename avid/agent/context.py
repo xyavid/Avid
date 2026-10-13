@@ -3,7 +3,9 @@ engine that renders it.
 
 Frozen blocks (instructions, environment, workspace AGENTS.md, skills) are joined once and stay
 byte-stable to keep the provider prefix cache, which the compaction call then reuses; the per-round
-blocks (plan, run state) join a tail note rebuilt every round and never written to the transcript.
+blocks (injected text, plan, run state) join a tail note rebuilt every round and never written to
+the transcript. Nothing an extension injects may reach the frozen blocks, or the prefix would break
+under it.
 """
 
 from __future__ import annotations
@@ -39,7 +41,7 @@ ENVIRONMENT = "environment"
 BOOTSTRAP = "bootstrap"
 SKILL_ALWAYS = "skill_always"
 SKILL_CATALOG = "skill_catalog"
-INJECTED = "injected"  # not a declared block: system text injected by UserPromptSubmit
+INJECTED = "injected"  # text injected by a UserPromptSubmit hook, rendered in the tail
 PLAN = "plan"
 RUN_STATE = "run_state"
 
@@ -128,6 +130,8 @@ class ContextManager:
         # The system prompt is frozen on the first compose so the provider prefix cache stays valid.
         self._system: str | None = None
         self._system_parts: dict[str, int] = {}
+        # Injected text is re-rendered into the tail every round, never frozen into the prefix.
+        self._injected: list[str] = []
 
     @classmethod
     def from_spec(
@@ -240,6 +244,11 @@ class ContextManager:
             "Use load_skill to read the full instructions when a skill applies."
         )
 
+    def _injected_body(self) -> str | None:
+        # Text an extension injected for this run; it sits in the tail, so the frozen blocks the
+        # prefix cache is built from stay the body's own.
+        return "\n\n".join(self._injected) or None
+
     def _plan_body(self) -> str | None:
         # An empty plan renders a placeholder, so no plan at all means no block.
         if not self.state.todo.items:
@@ -280,34 +289,28 @@ class ContextManager:
         return collected
 
     def compose(self, *, injected: list[str] | None = None) -> ComposedRequest:
-        """Compact and render; injected text joins the system prompt on the first round only."""
+        """Compact and render; injected text joins the tail note, never the frozen blocks."""
+        self._injected = [str(text) for text in (injected or []) if str(text).strip()]
         if self._system is None:
-            # Injected background that later disappears is worse than never injecting it at all.
-            # Freezing before compacting is also what lets the compaction request carry this prefix.
-            self._freeze_system(list(injected or []))
+            # Freezing before compacting is what lets the compaction request carry this prefix.
+            self._freeze_system()
         reports = self._compact()
         return self._assemble(reports)
 
     def system_prompt(self) -> str:
         """Render the system prompt alone, without compaction or tail, for baseline arms."""
         if self._system is None:
-            self._freeze_system([])
+            self._freeze_system()
         assert self._system is not None  # _freeze_system always assigns
         return self._system
 
-    def _freeze_system(self, injected: list[str]) -> None:
+    def _freeze_system(self) -> None:
         blocks = self._collect(FROZEN)
-        texts = [text for _spec, text in blocks]
-        texts += [str(text) for text in injected if str(text).strip()]
-        self._system = "\n\n".join(texts)
+        self._system = "\n\n".join(text for _spec, text in blocks)
         self._system_parts = {}
         for spec, text in blocks:
             self._system_parts[spec.kind] = (
                 self._system_parts.get(spec.kind, 0) + len(text)
-            )
-        for text in injected:
-            self._system_parts[INJECTED] = (
-                self._system_parts.get(INJECTED, 0) + len(str(text))
             )
 
     def render(self) -> ComposedRequest:
@@ -370,8 +373,8 @@ class ContextManager:
         return self._run_compaction(force=True)
 
 
-#: Declaration order is render order and the cache discipline: stable blocks first, the two
-#: per-round blocks last in the messages tail. Sources live on ContextManager; this table declares.
+#: Declaration order is render order and the cache discipline: stable blocks first, the per-round
+#: blocks last in the messages tail. Sources live on ContextManager; this table declares.
 CONTEXT_MAP: list[BlockSpec] = [
     BlockSpec(
         kind=INSTRUCTIONS,
@@ -412,6 +415,14 @@ CONTEXT_MAP: list[BlockSpec] = [
         stability=FROZEN,
         cap=None,
         source=lambda mgr: mgr._skill_catalog_body(),
+    ),
+    BlockSpec(
+        kind=INJECTED,
+        title=None,
+        section=TAIL,
+        stability=PER_ROUND,
+        cap=None,
+        source=lambda mgr: mgr._injected_body(),
     ),
     BlockSpec(
         kind=PLAN,
