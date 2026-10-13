@@ -52,8 +52,10 @@ from .session import (
     SessionError,
     SessionRecorder,
     branch_compaction,
+    branch_plan,
     branch_tip,
     messages_for_branch,
+    stored_plan,
 )
 from .web.app import (
     LOOPBACK_HOSTS,
@@ -364,6 +366,10 @@ def _run_session(args: argparse.Namespace, config, state: RunState | None = None
                     full=args.allow_full_access,
                     workspace_root=target.root,
                     question=_terminal_question(),
+                    # The plan outlives the run that wrote it: load it, and publish through the
+                    # session's single writer.
+                    plan=stored_plan(session, recorder.branch),
+                    on_plan=recorder.record_plan,
                 ),
                 on_message=notifying(indexer, recorder.on_message, session.metadata.id),
                 on_compaction=recorder.record_compaction,
@@ -497,6 +503,8 @@ def _interactive(args: argparse.Namespace, config) -> int:
                 full=args.allow_full_access,
                 workspace_root=target.root,
                 question=_terminal_question(),
+                plan=stored_plan(session, recorder.branch),
+                on_plan=recorder.record_plan,
             )
             state.checkpoint = checkpoint
             _start_mcp(state)
@@ -578,6 +586,9 @@ def _rewind_now(session, recorder: SessionRecorder, root: Path) -> None:
     else:
         session.set_value(branch_tip(recorder.branch), found.parent_id)
     session.delete_value(branch_compaction(recorder.branch))
+    # The plan belongs to the chain being rolled back, so it goes with it (values are single-slot
+    # and read without looking at the tip, so there is nothing to restore from).
+    session.delete_value(branch_plan(recorder.branch))
     lines = restore(
         root=root, session_id=session.metadata.id, through_seq=found.through_seq
     )

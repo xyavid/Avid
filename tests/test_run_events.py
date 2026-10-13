@@ -930,3 +930,30 @@ def test_rewind_command_without_a_user_input_says_so(sandbox):
     )
     assert finished.data["reason"] == "command"
 
+
+
+def test_the_run_publishes_the_plan_to_the_session(sandbox):
+    """Wiring: a todo_write inside a run lands in the session value, which is what the next turn
+    (and a reload) reads back."""
+    import json
+
+    from avid.agent.tools.todo import todo_write
+    from avid.session import stored_plan
+
+    plan = [{"content": "先改内核", "status": "in_progress"}, {"content": "再改界面", "status": "pending"}]
+    chat = ScriptedChat(
+        make_turn("", [tool_call("todo_write", json.dumps({"todos": plan}, ensure_ascii=False))]),
+        make_turn("计划好了"),
+    )
+    services = build(sandbox, chat, {"todo_write": todo_write})
+
+    record = run_to_end(services)
+
+    assert record.status == "finished"
+    wait_handle_released(services, record.session_id)
+    with services.runs.session_lock(record.session_id):
+        session = services.repo.open(services.runs.find_metadata(record.session_id))
+        try:
+            assert stored_plan(session) == plan
+        finally:
+            session.close()

@@ -9,6 +9,7 @@ message), and a write failure aborts the whole turn.
 from __future__ import annotations
 
 import itertools
+import json
 
 import pytest
 from support import run_loop
@@ -276,3 +277,89 @@ def test_a_summarized_history_is_not_summarized_again_next_run(hook_registry, se
     assert run2.run().text == "接着干完二"
     assert len(summarize_sizes) == 1
 
+
+
+def test_the_plan_outlives_the_run_that_wrote_it(hook_registry, session):
+    """todo_write during one run lands in the session; the next run renders it in the tail note,
+    which is how a long task survives the turn that planned it."""
+    from avid.agent.context import ContextManager
+    from avid.agent.tools.todo import todo_write
+    from avid.session import stored_plan
+
+    recorder = SessionRecorder(session)
+    plan = [
+        {"content": "先改内核", "status": "in_progress"},
+        {"content": "再改界面", "status": "pending"},
+    ]
+
+    def run(chat, prompt):
+        state = RunState.for_run(
+            plan=stored_plan(session, recorder.branch),
+            on_plan=recorder.record_plan,
+        )
+        manager = ContextManager(
+            transcript=Transcript(list(messages_for_branch(session)) + [
+                {"role": "user", "content": prompt}
+            ]),
+            state=state,
+            config=CONFIG,
+            tool_names=["todo_write"],
+        )
+        request = manager.compose()
+        run_loop(
+            [{"role": "user", "content": prompt}],
+            config=CONFIG,
+            chat=chat,
+            state=state,
+            registry={"todo_write": todo_write},
+            on_message=recorder.on_message,
+        )
+        return request, state
+
+    # Run 1: the model plans the work.
+    chat = FakeChat(
+        make_turn(
+            "",
+            [tool_call("todo_write", json.dumps({"todos": plan}, ensure_ascii=False))],
+        ),
+        make_turn("计划好了"),
+    )
+    request, _state = run(chat, "做两件事")
+    assert "## 当前计划" not in request.messages[-1]["content"]  # nothing planned yet
+
+    assert stored_plan(session, recorder.branch) == plan
+
+    # Run 2: a fresh state, same session — the plan comes back and reaches the model.
+    chat = FakeChat(make_turn("接着做"))
+    request, state = run(chat, "继续")
+
+    assert state.todo.items == plan
+    assert "## 当前计划" in request.messages[-1]["content"]
+    assert "先改内核" in request.messages[-1]["content"]
+    assert "## 当前计划" not in request.system
+
+
+def test_finishing_the_plan_removes_the_value(hook_registry, session):
+    """The list is worked off, not archived: completing everything takes the value away."""
+    from avid.agent.tools.todo import todo_write
+    from avid.session import branch_plan, stored_plan
+
+    recorder = SessionRecorder(session)
+    recorder.record_plan([{"content": "一件事", "status": "pending"}])
+    state = RunState.for_run(
+        plan=stored_plan(session, recorder.branch), on_plan=recorder.record_plan
+    )
+
+    run_loop(
+        [{"role": "user", "content": "做完它"}],
+        config=CONFIG,
+        chat=FakeChat(
+            make_turn("", [tool_call("todo_write", '{"todos": [{"content": "\u4e00\u4ef6\u4e8b", "status": "completed"}]}')]),
+            make_turn("做完了"),
+        ),
+        state=state,
+        registry={"todo_write": todo_write},
+        on_message=recorder.on_message,
+    )
+
+    assert session.get_value(branch_plan(recorder.branch)) is None

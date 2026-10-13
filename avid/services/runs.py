@@ -55,9 +55,11 @@ from ..session import (
     SessionMetadata,
     SessionRecorder,
     branch_compaction,
+    branch_plan,
     branch_tip,
     messages_for_branch,
     session_scratch,
+    stored_plan,
 )
 from ..session.types import ERROR_ENTRY, MESSAGE_ENTRY, NOTICE_ENTRY
 from .approvals import APPROVAL_TIMEOUT_SECONDS, ApprovalTable
@@ -989,6 +991,8 @@ class RunRegistry:
                     # The prefix covered by the compaction cursor belongs to the rewound-away
                     # chain; if it is not cleared the projection splices the summary onto a stub.
                     session.delete_value(branch_compaction(recorder.branch))
+                    # The plan belongs to the chain being rolled back, so it goes with it.
+                    session.delete_value(branch_plan(recorder.branch))
                     lines = restore(
                         root=Path(workspace.root),
                         session_id=session.metadata.id,
@@ -1036,6 +1040,10 @@ class RunRegistry:
                 security=safety,
                 # The utilization denominator follows this run's actual model configuration.
                 context_window=config.context_window,
+                # The plan outlives the run that wrote it: load it, and publish through the
+                # session's single writer.
+                plan=stored_plan(session, recorder.branch),
+                on_plan=recorder.record_plan,
             )
             # Write-ahead snapshots: both write paths of the files tool land the previous content
             # in this session's checkpoint directory. Subagents share this same sink, and the
