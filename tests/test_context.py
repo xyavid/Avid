@@ -25,14 +25,16 @@ def summarize_sentinel(*args, **kwargs):
 
 
 class Summarizer:
-    """Fake summarizer with fixed text that counts its calls."""
+    """Fake summarizer with fixed text that counts its calls and keeps every request."""
 
     def __init__(self, text="要点摘要"):
         self.calls = 0
         self.text = text
+        self.requests: list = []
 
     def __call__(self, config, messages, **kwargs):
         self.calls += 1
+        self.requests.append({"messages": [dict(m) for m in messages], **kwargs})
         return Turn(
             message={"role": "assistant", "content": self.text},
             text=self.text,
@@ -74,13 +76,9 @@ def prepare(transcript, state, *, budget=None, summarize=summarize_sentinel,
     return manager.compose()
 
 
-def reactive(transcript, state, *, budget=None, summarize=summarize_sentinel,
-             on_compaction=None):
-    manager = ContextManager(
-        transcript=transcript, state=state, config=CONFIG, summarize=summarize,
-        budget=budget, on_compaction=on_compaction,
-    )
-    return manager.reactive()
+def force_compact(manager):
+    """The /compact and overflow-fallback entry: one forced compaction through the same assembly."""
+    return manager.compact_now()
 
 
 def test_below_trigger_nothing_happens():
@@ -134,12 +132,71 @@ def test_force_bypasses_threshold_and_the_once_guard():
     transcript = Transcript(rounds(12))
     state = RunState()
     summarizer = Summarizer()
+    manager = ContextManager(
+        transcript=transcript, state=state, config=CONFIG, summarize=summarizer,
+        budget=budget(),
+    )
 
-    prepare(transcript, state, budget=budget(), summarize=summarizer)
-    report = reactive(transcript, state, budget=budget(), summarize=summarizer)
+    manager.compose()
+    report = force_compact(manager)
 
     assert report is not None
     assert summarizer.calls == 2  # force bypasses the once-per-run guard
+
+
+def test_compact_now_forces_and_reports_the_cursor():
+    """/compact on a below-threshold history still compacts once and writes the cursor."""
+    transcript = Transcript(rounds(12))
+    state = RunState()
+    covered: list = []
+    manager = ContextManager(
+        transcript=transcript, state=state, config=CONFIG, summarize=Summarizer(),
+        budget=budget(context_chars=10_000_000),
+        on_compaction=lambda summary, keep: covered.append((summary, keep)),
+    )
+    assert not manager.compose().changed  # far below the trigger
+
+    report = force_compact(manager)
+
+    assert report is not None and report.step == "compact_history"
+    assert len(covered) == 1
+    summary, keep = covered[0]
+    assert summary["content"].startswith("[历史摘要]") and keep == 20
+
+
+def test_compact_now_does_nothing_without_earlier_history():
+    summarizer = Summarizer()
+    manager = ContextManager(
+        transcript=Transcript(rounds(1)), state=RunState(), config=CONFIG,
+        summarize=summarizer, budget=budget(),
+    )
+
+    assert force_compact(manager) is None
+    assert summarizer.calls == 0
+
+
+def test_forced_compaction_sends_the_rounds_own_prefix():
+    """The point of the whole path: the compaction request repeats the round's system prompt, tool
+    table and pre-cut history byte for byte, so the call is a cache hit."""
+    tools = [{"type": "function", "function": {"name": "read_file", "parameters": {}}}]
+    summarizer = Summarizer()
+    manager = ContextManager(
+        transcript=Transcript(rounds(12)), state=RunState(), config=CONFIG,
+        tool_names=["read_file"], tool_schemas=tools, summarize=summarizer,
+        budget=budget(context_chars=10_000_000),
+    )
+    composed = manager.compose()
+    assert not composed.changed
+
+    force_compact(manager)
+
+    request = summarizer.requests[0]
+    instruction = request["messages"][-1]
+    assert request["system"] == composed.system
+    assert request["tools"] == tools
+    # The tail of the round sits at the end of its own request; the prefix excludes it either way.
+    assert request["messages"][:-1] == composed.messages[: len(request["messages"]) - 1]
+    assert instruction["tail"] is True and instruction["role"] == "user"
 
 
 def test_summarize_failure_keeps_history():

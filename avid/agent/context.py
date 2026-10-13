@@ -2,8 +2,8 @@
 engine that renders it.
 
 Frozen blocks (instructions, environment, workspace AGENTS.md, skills) are joined once and stay
-byte-stable to keep the provider prefix cache; the per-round blocks (plan, run state) join a tail
-note rebuilt every round and never written to the transcript.
+byte-stable to keep the provider prefix cache, which the compaction call then reuses; the per-round
+blocks (plan, run state) join a tail note rebuilt every round and never written to the transcript.
 """
 
 from __future__ import annotations
@@ -102,6 +102,7 @@ class ContextManager:
         config: Config,
         instructions: str | None = None,
         tool_names: Iterable[str] = (),
+        tool_schemas: list[dict[str, Any]] | None = None,
         budget: ContextBudget | None = None,
         summarize: Any = None,
         on_compaction: Callable[[dict[str, Any], int], None] | None = None,
@@ -114,6 +115,9 @@ class ContextManager:
             instructions if instructions is not None else prompt.DEFAULT_INSTRUCTIONS
         )
         self.tool_names = list(tool_names)
+        # The full schemas, not just the names: the compaction call sends them to keep the wire
+        # prefix identical to this round's request.
+        self.tool_schemas = list(tool_schemas or [])
         self.budget = budget or ContextBudget()
         self.summarize = summarize
         # Callback after the history is replaced (summary message, kept tail size); without it the
@@ -124,6 +128,29 @@ class ContextManager:
         # The system prompt is frozen on the first compose so the provider prefix cache stays valid.
         self._system: str | None = None
         self._system_parts: dict[str, int] = {}
+
+    @classmethod
+    def from_spec(
+        cls,
+        spec: Any,
+        *,
+        transcript: Transcript,
+        state: RunState,
+        on_compaction: Callable[[dict[str, Any], int], None] | None = None,
+    ) -> "ContextManager":
+        """Assemble from a RunSpec — the one construction a round and /compact must share, because a
+        compaction only hits the cache when its prefix comes out identical to the round's."""
+        return cls(
+            transcript=transcript,
+            state=state,
+            config=spec.config,
+            instructions=spec.instructions,
+            tool_names=spec.tool_names,
+            tool_schemas=spec.tools,
+            budget=spec.budget,
+            summarize=spec.summarize or spec.chat,
+            on_compaction=on_compaction,
+        )
 
     # ---- extension points ----
 
@@ -254,10 +281,11 @@ class ContextManager:
 
     def compose(self, *, injected: list[str] | None = None) -> ComposedRequest:
         """Compact and render; injected text joins the system prompt on the first round only."""
-        reports = self._compact()
         if self._system is None:
             # Injected background that later disappears is worse than never injecting it at all.
+            # Freezing before compacting is also what lets the compaction request carry this prefix.
             self._freeze_system(list(injected or []))
+        reports = self._compact()
         return self._assemble(reports)
 
     def system_prompt(self) -> str:
@@ -317,28 +345,29 @@ class ContextManager:
 
     # ---- compaction: delegated to the single path in compaction.py ----
 
-    def _compact(self) -> list[CompactReport]:
-        report = compact.run_compaction(
-            transcript=self.transcript,
-            state=self.state,
-            config=self.config,
-            chat=self.summarize,
-            limits=self.budget,
-            on_compaction=self.on_compaction,
-        )
-        return [report] if report is not None else []
-
-    def reactive(self) -> CompactReport | None:
-        """Overflow fallback: the same compaction path with force, skipping both guards."""
+    def _run_compaction(self, *, force: bool) -> CompactReport | None:
+        """The one place that hands the prefix over: /compact, the automatic trigger and the
+        overflow fallback all send a request identical to the round's up to the cut."""
         return compact.run_compaction(
             transcript=self.transcript,
             state=self.state,
             config=self.config,
             chat=self.summarize,
             limits=self.budget,
-            force=True,
+            force=force,
             on_compaction=self.on_compaction,
+            system=self.system_prompt(),
+            tools=self.tool_schemas,
         )
+
+    def _compact(self) -> list[CompactReport]:
+        report = self._run_compaction(force=False)
+        return [report] if report is not None else []
+
+    def compact_now(self) -> CompactReport | None:
+        """Force one compaction for /compact, skipping the trigger line and the once-per-run
+        guard; None means there was no earlier history or the summary failed."""
+        return self._run_compaction(force=True)
 
 
 #: Declaration order is render order and the cache discipline: stable blocks first, the two

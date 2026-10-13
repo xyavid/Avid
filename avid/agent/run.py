@@ -96,14 +96,10 @@ class Run:
         if state.context_window is None:
             state.context_window = spec.config.context_window
 
-        ctx = ContextManager(
+        ctx = ContextManager.from_spec(
+            spec,
             transcript=Transcript(self.messages),
             state=state,
-            config=spec.config,
-            instructions=spec.instructions,
-            tool_names=spec.tool_names,
-            budget=spec.budget,
-            summarize=spec.summarize or spec.chat,
             on_compaction=self.on_compaction,
         )
         transcript = ctx.transcript
@@ -213,7 +209,7 @@ class Run:
                 raise
             state.retried = True
             logger.warning("compact: 模型报上下文超限，兜底压缩后重试一次")
-            ctx.reactive()
+            ctx.compact_now()
             request = ctx.render()
             self._note_prompt_parts(state, request)
             return spec.chat(

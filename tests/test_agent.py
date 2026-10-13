@@ -1056,7 +1056,7 @@ def test_unknown_skill_returns_error_text_without_raising(hook_registry, tmp_pat
 # ---------- compaction pipeline wiring ----------
 #
 # Orchestration details (step order, thresholds, one-shot flags) live in tests/test_context.py;
-# here only the wiring, the single reactive retry and per-run state are checked.
+# here only the wiring, the single overflow retry and per-run state are checked.
 
 
 def test_context_pipeline_runs_before_every_model_call(hook_registry, monkeypatch):
@@ -1077,10 +1077,10 @@ def test_context_pipeline_runs_before_every_model_call(hook_registry, monkeypatc
     assert rounds == [1, 2]
 
 
-def test_prompt_too_long_triggers_one_reactive_retry(hook_registry, monkeypatch):
+def test_prompt_too_long_triggers_one_compaction_retry(hook_registry, monkeypatch):
     from avid.providers.client import PromptTooLongError
 
-    calls = {"chat": 0, "reactive": 0}
+    calls = {"chat": 0, "compact": 0}
 
     def fake_chat(config, messages, **kwargs):
         calls["chat"] += 1
@@ -1088,38 +1088,38 @@ def test_prompt_too_long_triggers_one_reactive_retry(hook_registry, monkeypatch)
             raise PromptTooLongError("超了")
         return make_turn("好的")
 
-    def fake_reactive(self):
-        calls["reactive"] += 1
+    def fake_compact(self):
+        calls["compact"] += 1
         self.transcript.replace_all([{"role": "user", "content": "[历史摘要] 压缩过了"}])
-        return CompactReport("reactive_compact", "摘要更早的 3 条", 999, 10)
+        return CompactReport("compact_history", "摘要更早的 3 条", 999, 10)
 
     monkeypatch.setattr(
-        "avid.agent.context.ContextManager.reactive", fake_reactive
+        "avid.agent.context.ContextManager.compact_now", fake_compact
     )
     messages = [{"role": "user", "content": "x"}]
 
     result = run_loop(messages, config=CONFIG, chat=fake_chat)
 
     assert result == "好的"
-    assert calls == {"chat": 2, "reactive": 1}
+    assert calls == {"chat": 2, "compact": 1}
     assert "历史摘要" in messages[0]["content"]
 
 
-def test_reactive_is_not_retried_twice(hook_registry, monkeypatch):
+def test_the_compaction_retry_is_not_retried_twice(hook_registry, monkeypatch):
     from avid.providers.client import PromptTooLongError
 
-    calls = {"chat": 0, "reactive": 0}
+    calls = {"chat": 0, "compact": 0}
 
     def always_too_long(config, messages, **kwargs):
         calls["chat"] += 1
         raise PromptTooLongError("还是超")
 
-    def fake_reactive(self):
-        calls["reactive"] += 1
-        return CompactReport("reactive_compact", "摘要", 999, 10)
+    def fake_compact(self):
+        calls["compact"] += 1
+        return CompactReport("compact_history", "摘要", 999, 10)
 
     monkeypatch.setattr(
-        "avid.agent.context.ContextManager.reactive", fake_reactive
+        "avid.agent.context.ContextManager.compact_now", fake_compact
     )
 
     with pytest.raises(PromptTooLongError):
@@ -1127,10 +1127,10 @@ def test_reactive_is_not_retried_twice(hook_registry, monkeypatch):
             [{"role": "user", "content": "x"}], config=CONFIG, chat=always_too_long
         )
 
-    assert calls == {"chat": 2, "reactive": 1}
+    assert calls == {"chat": 2, "compact": 1}
 
 
-def test_reactive_retry_sends_the_compressed_history(hook_registry, monkeypatch):
+def test_the_compaction_retry_sends_the_compressed_history(hook_registry, monkeypatch):
     """The retry must send the compressed history, never resend the old one unchanged."""
     from avid.providers.client import PromptTooLongError
 
@@ -1142,12 +1142,12 @@ def test_reactive_retry_sends_the_compressed_history(hook_registry, monkeypatch)
             raise PromptTooLongError("超了")
         return make_turn("好的")
 
-    def fake_reactive(self):
+    def fake_compact(self):
         self.transcript.replace_all([{"role": "user", "content": "压缩后的历史"}])
-        return CompactReport("reactive_compact", "摘要", 999, 10)
+        return CompactReport("compact_history", "摘要", 999, 10)
 
     monkeypatch.setattr(
-        "avid.agent.context.ContextManager.reactive", fake_reactive
+        "avid.agent.context.ContextManager.compact_now", fake_compact
     )
 
     run_loop([{"role": "user", "content": "x"}], config=CONFIG, chat=fake_chat)

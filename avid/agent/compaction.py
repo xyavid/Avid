@@ -1,8 +1,11 @@
 """Compaction subsystem: one path that keeps the recent turns and folds everything earlier into a
 single checkpoint message, triggered by the token budget or forced.
 
-The cut point never lands inside a tool batch, and the trigger line is derived from the model
-window minus the output reserve, falling back to CONTEXT_CHAR_LIMIT when no window reading exists.
+The request reuses the caller's prompt prefix (system, tools and the pre-cut history) whenever the
+caller can hand it over, and falls back to the standalone engine prompt on a tool call, an empty
+answer or an error; either way the cut never lands inside a tool batch, and the trigger line comes
+from the model window minus the output reserve, falling back to CONTEXT_CHAR_LIMIT without a
+reading.
 """
 
 from __future__ import annotations
@@ -313,6 +316,32 @@ def _update_message(checkpoint: str, conversation: str, repo: str | None) -> str
     return "\n\n".join(blocks)
 
 
+#: Lead-ins of the prefix-reuse instruction: the material is already in the context, so the task
+#: block has to say where it sits instead of carrying it again.
+REUSE_LEAD_CREATE = (
+    "The conversation above is the material to compact, and this instruction is not part of it."
+)
+REUSE_LEAD_UPDATE = (
+    "The conversation above is the material to compact, its first message is the existing "
+    "structured summary, and this instruction is not part of it."
+)
+
+
+def _reuse_instruction(*, update: bool, repo: str | None) -> str:
+    """The single message the prefix-reuse path appends: the task block verbatim plus the repo
+    probe, since the material itself already rides in the context."""
+    blocks = [REUSE_LEAD_UPDATE if update else REUSE_LEAD_CREATE]
+    if repo:
+        blocks.append(_tag("repo-state", repo))
+    blocks.append(
+        _tag(
+            "update-task" if update else "compaction-task",
+            UPDATE_TASK if update else CREATE_TASK,
+        )
+    )
+    return "\n\n".join(blocks)
+
+
 def checkpoint_of(content: str) -> str | None:
     """Reads the checkpoint back out of a summary message; None when it is an ordinary message."""
     if not content.startswith(SUMMARY_MESSAGE_HEADER):
@@ -378,6 +407,33 @@ def _summarize(body: str, *, config: Config, chat: Any, system: str) -> str | No
         logger.warning("compact: 摘要调用失败：%s", exc)
         return None
 
+    text = str(turn.text).strip()
+    return text or None
+
+
+def _summarize_reuse(
+    messages: list[dict[str, Any]],
+    *,
+    config: Config,
+    chat: Any,
+    system: str,
+    tools: list[dict[str, Any]],
+) -> str | None:
+    """One engine call over the caller's own prompt prefix; None means a tool call, an empty answer
+    or a failure, which sends the caller back to the standalone engine prompt.
+
+    The tool table is in the request because it is part of the cached prefix, so the engine is
+    handed tools it must not use; a turn that calls one is discarded, never executed.
+    """
+    try:
+        turn = chat(config, messages, system=system, tools=tools)
+    except (LLMError, OSError, ValueError) as exc:
+        logger.warning("compact: 复用前缀的摘要调用失败：%s", exc)
+        return None
+
+    if turn.tool_calls:
+        logger.warning("compact: 复用前缀的摘要调用发起了工具调用，改用引擎提示词路径")
+        return None
     text = str(turn.text).strip()
     return text or None
 
@@ -486,9 +542,16 @@ def run_compaction(
     limits: ContextBudget,
     force: bool = False,
     on_compaction: Any = None,
+    system: str | None = None,
+    tools: list[dict[str, Any]] | None = None,
 ) -> CompactReport | None:
     """Fold everything outside the keep window into one summary message, force=True skipping the
-    trigger line and the once-per-run guard; None means nothing ran, keeping the old history."""
+    trigger line and the once-per-run guard; None means nothing ran, keeping the old history.
+
+    system and tools are the caller's prompt prefix: with both in hand the request reuses them and
+    appends one instruction, which is what makes the call a cache hit; without them, or when that
+    attempt produces no summary, the engine-prompt path runs instead.
+    """
     _limits, trigger = effective_trigger(limits, state)
     before = transcript.estimate_chars()
     if not force and before <= trigger:
@@ -509,24 +572,34 @@ def run_compaction(
     workdir = Path(state.workspace_root) if state.workspace_root else None
     path = _save_transcript(earlier, workdir, state.run_tag)
     checkpoint = previous_checkpoint(messages)
-    if checkpoint is None:
-        body = _create_message(_original_request(earlier), render_conversation(earlier))
-        mode = "新建检查点"
-    else:
-        # The previous checkpoint is the first message of this history, so the new material starts
-        # after it and nothing is fed twice; repo_state is probed only here, never on a first pass.
-        body = _update_message(
-            checkpoint,
-            render_conversation(earlier[1:]),
-            repo_state(state.workspace_root),
+    update = checkpoint is not None
+    # The previous checkpoint is the first message of this history, so the new material starts after
+    # it and nothing is fed twice; repo_state is probed only here, never on a first pass.
+    repo = repo_state(state.workspace_root) if update else None
+    summary = None
+    if system and tools:
+        # The caller's own prefix, cut at the same boundary the summary replaces: every message
+        # before the cut is byte-identical to the previous round's request. The instruction is
+        # marked as injected, so the reasoning replay plan stays the one that request used.
+        summary = _summarize_reuse(
+            [*earlier, {"role": "user", "content": _reuse_instruction(update=update, repo=repo), "tail": True}],
+            config=config,
+            chat=chat,
+            system=system,
+            tools=tools,
         )
-        mode = "更新检查点"
-    # One engine prompt only: the task block says create or update, so the system prompt never
-    # follows the mode.
-    summary = _summarize(body, config=config, chat=chat, system=COMPACTION_SYSTEM)
+    if summary is None:
+        if checkpoint is None:
+            body = _create_message(_original_request(earlier), render_conversation(earlier))
+        else:
+            body = _update_message(checkpoint, render_conversation(earlier[1:]), repo)
+        # One engine prompt only: the task block says create or update, so the system prompt never
+        # follows the mode.
+        summary = _summarize(body, config=config, chat=chat, system=COMPACTION_SYSTEM)
     if summary is None:
         logger.warning("compact: 检查点生成失败，保留原历史")
         return None
+    mode = "更新检查点" if update else "新建检查点"
 
     tail = messages[cut:]
     transcript.replace_all(
