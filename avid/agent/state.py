@@ -160,10 +160,9 @@ class RunState:
     # Write-ahead file checkpointer, wired by session-aware entry points; None (sessionless
     # runs, tests) means the file tools write without snapshotting.
     checkpoint: Checkpointer | None = None
-    # Hook registry owned by the run, reached through the module so replacing the default works.
-    hooks: "hooks_module.HookRegistry" = field(
-        default_factory=lambda: hooks_module.DEFAULT_HOOKS
-    )
+    # Hook registry owned by the run: the workspace's declared scripts, or nothing when it declares
+    # none. A state built directly (no workspace root) starts empty.
+    hooks: "hooks_module.HookRegistry" = field(default_factory=hooks_module.HookRegistry)
 
     def __post_init__(self) -> None:
         """Resolve the security spec once here, because tools read it from worker threads."""
@@ -231,7 +230,8 @@ class RunState:
             context_window=context_window,
             # The skill directory follows the workspace root and falls back to cwd.
             skills=SkillLoader(default_skills_dir(workspace_root)).scan(),
-            hooks=hooks if hooks is not None else hooks_module.DEFAULT_HOOKS,
+            # Declared hooks are read once per run, so an edited hooks.json lands next turn.
+            hooks=hooks if hooks is not None else hooks_module.load_hooks(workspace_root),
         )
 
     def sandbox_grants(self) -> tuple[tuple[str, str], ...]:

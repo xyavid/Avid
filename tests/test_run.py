@@ -10,7 +10,7 @@ import pytest
 from support import ScriptedChat, make_turn, tool_call
 
 from avid.agent.events import RUN_STATUS, STOP_NUDGE
-from avid.agent.hooks import DEFAULT_HOOKS
+from avid.agent.hooks import HookRegistry
 from avid.agent.run import Run, RunCancelled
 from avid.agent.spec import RunSpec
 from avid.agent.state import RunState
@@ -111,12 +111,13 @@ def test_resolve_honors_explicit_parallel_override():
 
 def test_resolve_uses_hooks_default_when_omitted():
     spec = RunSpec.resolve(config=CONFIG, chat=ScriptedChat())
-    assert spec.hooks is None  # RunState.for_run fills in DEFAULT_HOOKS
+    assert spec.hooks is None  # RunState.for_run loads the workspace declaration instead
 
 
 def test_prebuilt_hooks_instance_flow_through():
-    spec = RunSpec.resolve(config=CONFIG, chat=ScriptedChat(), hooks=DEFAULT_HOOKS)
-    assert spec.hooks is DEFAULT_HOOKS
+    registry = HookRegistry()
+    spec = RunSpec.resolve(config=CONFIG, chat=ScriptedChat(), hooks=registry)
+    assert spec.hooks is registry
 
 
 # ---------------- Run pins ----------------

@@ -2,7 +2,8 @@
 points.
 
 What the body itself enforces is not here — those guards are plain code and are covered in
-test_guards.py; this file only pins how extra callbacks are registered and what BLOCK means.
+test_guards.py — and neither is the declared-script route (test_hook_scripts.py); this file pins how
+callbacks are registered and what BLOCK means.
 """
 
 import pytest
@@ -10,8 +11,6 @@ import pytest
 from avid.agent.hooks import (
     ALLOW,
     BLOCK,
-    DEFAULT_HOOKS,
-    EVENTS,
     HookRegistry,
 )
 
@@ -122,12 +121,6 @@ def test_register_hook_works_as_a_decorator(clean):
         return None
 
     assert clean.registered("Stop") == [my_hook]
-
-
-def test_the_default_registry_is_empty():
-    """The body registers no hooks: its gates are plain code, so a fresh registry blocks nothing."""
-    for event in EVENTS:
-        assert DEFAULT_HOOKS.registered(event) == []
 
 
 # ---- the registry belongs to the run ----

@@ -5,8 +5,6 @@ Plain functions, not hooks: these run on every call whatever the run's registry 
 point of the split — a replaceable registry must not be able to switch the body's gates off.
 """
 
-import pytest
-
 from avid.agent import guards
 from avid.agent.guards import brief
 from avid.agent.state import RunState
@@ -311,10 +309,3 @@ def test_the_body_gate_runs_without_any_registry():
 
     assert executed == [], "闸门不在了，凭据读取被执行了"
     assert "SECRET" not in content
-
-
-@pytest.mark.parametrize("event", ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"])
-def test_no_default_callback_is_registered(event):
-    from avid.agent.hooks import DEFAULT_HOOKS
-
-    assert DEFAULT_HOOKS.registered(event) == []
