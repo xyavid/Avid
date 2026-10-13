@@ -11,6 +11,7 @@ import json
 import re
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from support import make_turn as scripted_turn
@@ -633,3 +634,38 @@ def test_session_migrate_finds_the_previous_store_through_the_index(sandbox, cap
     moved = list(target.rglob("*.jsonl"))
     assert len(moved) == 1
     assert "索引记着的旧会话目录" in out.err
+
+
+def test_interactive_compact_reuses_the_round_prefix(sandbox, model, monkeypatch, capsys):
+    """'/compact' assembles like a round: the compaction request carries the session's own system
+    prompt and tool table, which is what makes it a cache hit instead of a fresh engine prompt."""
+    model.answer(*(["答"] * 12))  # twelve plain turns, so earlier history exists to compact
+    compaction_chat = FakeChat(make_turn("## Goal\n检查点"))
+    real_resolve = cli.RunSpec.resolve
+
+    def resolve(**kwargs):
+        # spec.chat is chat_completion by default; swap in the scripted one, the way cli.Run is
+        # swapped for the rounds (the rest of the assembly stays real).
+        return real_resolve(**{**kwargs, "chat": compaction_chat})
+
+    monkeypatch.setattr(cli, "RunSpec", SimpleNamespace(resolve=resolve))
+
+    answers = iter(["问题"] * 12 + ["/compact"])
+
+    def fake_input(prompt=""):
+        try:
+            return next(answers)
+        except StopIteration:
+            raise EOFError() from None
+
+    monkeypatch.setattr("builtins.input", fake_input)
+
+    assert cli.main(["--new-session"]) == 0
+
+    _out, err = capsys.readouterr()
+    assert "已压缩" in err
+    request = compaction_chat.requests[0]
+    assert request["system"] and "context-compaction engine" not in request["system"]
+    assert request["tools"]  # the tool table travels with the prefix
+    instruction = request["messages"][-1]
+    assert instruction["tail"] is True and "material to compact" in instruction["content"]
