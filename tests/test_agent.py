@@ -6,7 +6,7 @@ import pytest
 from support import run_loop
 
 from avid.agent.compaction import CompactReport
-from avid.agent.hooks import BLOCK, large_output_hook, permission_hook
+from avid.agent.hooks import BLOCK
 from avid.agent.state import MAX_CONSECUTIVE_DENIALS
 from avid.agent.tools import TOOLS
 from avid.providers.client import Turn, Usage
@@ -633,15 +633,15 @@ def test_post_tool_use_sees_the_raw_content(hook_registry):
     assert seen == ["原始"]
 
 
-def test_large_output_hook_truncates_real_tool_output(hook_registry, monkeypatch):
-    monkeypatch.setattr("avid.agent.hooks.MAX_TOOL_OUTPUT_CHARS", 100)
-    hook_registry.register("PostToolUse", large_output_hook)
+def test_a_long_tool_result_is_truncated_without_any_hook(hook_registry, monkeypatch):
+    """The output budget is the body's own guard: no registration, still truncated."""
+    monkeypatch.setattr("avid.agent.guards.MAX_TOOL_OUTPUT_CHARS", 100)
     chat = FakeChat(make_turn("", [tool_call("read_file")]), make_turn("好的"))
     messages = [{"role": "user", "content": "读"}]
 
     run_loop(messages, config=CONFIG, chat=chat, registry={"read_file": lambda a: "x" * 300})
 
-    assert "hook 按上下文预算截断" in messages[2]["content"]
+    assert "已按上下文预算截断" in messages[2]["content"]
     assert len(messages[2]["content"]) <= 100
 
 
@@ -797,7 +797,6 @@ def test_stop_receives_run_statistics(hook_registry):
 
 
 def test_hard_deny_message_reaches_the_model(hook_registry):
-    hook_registry.register("PreToolUse", permission_hook)
     executed = []
     chat = FakeChat(
         make_turn("", [tool_call("bash", '{"command": "rm -rf /"}')]),
@@ -1246,11 +1245,11 @@ def test_run_state_is_created_per_run(hook_registry, monkeypatch):
 
 def test_injected_budget_lowers_the_compaction_threshold(tmp_path, hook_registry):
     """An injected budget lowers the compaction threshold (the only entry for single-variable
-    comparisons): five 20k-char files push the transcript past it, while the default 400k
-    threshold compacts nothing.
+    comparisons): five 20k-char files land at ~40k characters once the body's output budget has
+    capped each result, enough to cross a 30k threshold; the default 400k compacts nothing.
     """
-    # The hook registry stays empty so character counts are computable: in production
-    # large_output_hook truncates every tool result to 8000 chars first.
+    # Each result is capped at MAX_TOOL_OUTPUT_CHARS by the body's own guard, so the arithmetic
+    # below depends on that cap, not on whether anyone registered a hook.
     from avid.agent.context import ContextBudget
 
     for index in range(5):
@@ -1280,7 +1279,7 @@ def test_injected_budget_lowers_the_compaction_threshold(tmp_path, hook_registry
     assert text == "读完了"
     assert compacted == [], "默认阈值下不该压缩（400k 远高于这份 transcript）"
 
-    text, compacted = run(ContextBudget(context_chars=50_000, keep_recent_turns=2))
+    text, compacted = run(ContextBudget(context_chars=30_000, keep_recent_turns=2))
     assert text == "读完了"
     assert compacted, "注入更低阈值后应当压缩"
     assert compacted[0].data["before"] > compacted[0].data["after"]

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 from ..providers.client import Turn
+from . import guards
 from .events import STOP_NUDGE
 from .hooks import BLOCK
 from .transcript import Transcript
@@ -90,10 +91,11 @@ def decide(
     emitted: Callable[[dict[str, Any]], None],
 ) -> RunOutcome | None:
     """Decide a tool-call-free round's end; None means a nudge went out and the loop continues."""
+    # The body's own tally is logged here; extra configuration may then withhold the ending.
     stop: dict[str, Any] = {
         "final_text": turn.text,
         "messages": transcript.as_messages(),
-        "summary": None,
+        "summary": guards.summarize_run(state),
         "nudge": None,
         **state.snapshot(),
     }

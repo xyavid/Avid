@@ -237,12 +237,13 @@ def policy_imports(path: Path) -> tuple[set[str], set[str]]:
 # Declared agent -> security edges, written as an assertion instead of an exemption list:
 # scheduling (run), context assembly (context/compaction), the tool protocol (execution), stop
 # and spec carry zero runtime security dependency. Only three edges exist: state (holds the
-# RunSecurity instance), hooks (registers the permission default callback) and files (the one
-# hard deny: credential reads). RunSecurity / ApprovalLedger names appear only under
-# TYPE_CHECKING.
+# RunSecurity instance), guards (the permission gate the loop itself enforces) and files (the one
+# hard deny: credential reads). The hook surface has no policy edge at all: a callback someone
+# registered must not be able to reach the verdict. RunSecurity / ApprovalLedger names appear only
+# under TYPE_CHECKING.
 AGENT_SECURITY_EDGES: dict[str, set[str]] = {
     "avid/agent/state.py": {"security.permission"},
-    "avid/agent/hooks.py": {"security.permission"},
+    "avid/agent/guards.py": {"security.permission"},
     # files takes only the credential gate (sensitive_reason)
     "avid/agent/tools/files.py": {"security.action"},
     # shell takes only the read-only fact (is_read_only) to decide parallel eligibility; the

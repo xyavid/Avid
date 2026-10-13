@@ -10,8 +10,9 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
-from . import events
-from .hooks import BLOCK, brief
+from . import events, guards
+from .guards import brief
+from .hooks import BLOCK
 from .state import RunState
 from .tools import ToolImpl, workspace
 from .tools.registry import specs
@@ -83,21 +84,6 @@ def execute_one(
     state.note_tool_call()
     started_at = time.monotonic()
 
-    before: dict[str, Any] = {
-        "tool": name,
-        "arguments": arguments,
-        "round": round_index,
-        "tool_call_id": tool_call_id,
-        "auto_approve": state.auto_approve,
-        # Run-level facts the permission layer reads; the workspace root is resolved at call time.
-        "permission_mode": state.permission_mode,
-        # The security spec travels as data, which is why this module imports nothing from policy.
-        "security": state.security,
-        "approval_ledger": state.ledger,
-        "workspace_root": state.workspace_root or str(workspace.WORKSPACE_ROOT),
-        # The approval callback is injected here so hooks never read stdin themselves.
-        "ask": state.ask,
-    }
     # parallel reports how many calls share this segment; it changes no execution semantics.
     state.emit(
         events.TOOL_CALL_STARTED,
@@ -107,22 +93,42 @@ def execute_one(
         tool_call_id=tool_call_id,
         parallel=parallel,
     )
-    if state.hooks.trigger("PreToolUse", before) == BLOCK:
+
+    def deny(kind: str, reason: str, content: str) -> str:
+        """One denial path: count it, announce it, and answer with the text the model may act on."""
         state.note_denial()
-        logger.info("  ✗ 已拦截 %s", name)
+        logger.info("  ✗ 已拦截 %s（%s）", name, reason)
         state.emit(
             events.TOOL_CALL_DENIED,
             tool=name,
             arguments=arguments,
             round=round_index,
             tool_call_id=tool_call_id,
-            kind=before.get("denied_kind") or "user",
-            reason=before.get("denied_reason") or "",
+            kind=kind,
+            reason=reason,
             parallel=parallel,
         )
-        # Whichever hook blocked the call decides the message; the fallback applies only
-        # when none is set.
-        return str(before.get("denied_content") or DENIED_CONTENT)
+        return content or DENIED_CONTENT
+
+    # Extra configuration decides first, so its veto never costs an approval prompt; the run's own
+    # gate below stays the final authority either way.
+    before: dict[str, Any] = {
+        "tool": name,
+        "arguments": arguments,
+        "round": round_index,
+        "tool_call_id": tool_call_id,
+        "workspace_root": state.workspace_root or str(workspace.WORKSPACE_ROOT),
+    }
+    if state.hooks.trigger("PreToolUse", before) == BLOCK:
+        return deny(
+            str(before.get("denied_kind") or "user"),
+            str(before.get("denied_reason") or ""),
+            str(before.get("denied_content") or ""),
+        )
+
+    denial = guards.check_permission(state, tool=name, arguments=arguments)
+    if denial is not None:
+        return deny(denial.kind, denial.reason, denial.content)
 
     # This call passed the gate, so the denial streak resets; a failing tool is not a denial.
     state.note_allowed()
@@ -138,25 +144,25 @@ def execute_one(
             "不要用同样的参数重复调用，先检查参数与环境。"
         )
 
+    # The body's own budget discipline runs on the real output, in this order: the repeat reminder
+    # is charged to the same cap the truncation below applies.
+    content = guards.note_repeat(state, tool=name, arguments=arguments, content=content)
+    content, truncated = guards.fit_tool_output(state, content=content)
+
+    # Extra configuration sees the final text and may stop it from entering the context.
     after: dict[str, Any] = {
         "tool": name,
         "arguments": arguments,
         "round": round_index,
         "tool_call_id": tool_call_id,
         "content": content,
-        "truncated": False,
-        # Spills must land in this run's workspace and carry the run tag, or runs collide.
+        "truncated": truncated,
         "workspace_root": state.workspace_root or str(workspace.WORKSPACE_ROOT),
-        "run_tag": state.run_tag,
-        # Repeat counting lives on the run state; the next round sees the updated counts.
-        "repeat_calls": state.repeat_calls,
-        # PostToolUse may run concurrently, so counting goes through the atomic increment.
-        "bump_repeat": state.note_repeat,
     }
     if state.hooks.trigger("PostToolUse", after) == BLOCK:
         # A blocked PostToolUse keeps the tool's real execution but swaps what enters the context.
         after["content"] = str(after.get("denied_content") or POST_BLOCKED_CONTENT)
-        after["blocked"] = True
+        after["truncated"] = truncated
         logger.info("  ✗ 结果被 PostToolUse 拦截 %s", name)
     final = str(after["content"])
     state.emit(
