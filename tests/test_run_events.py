@@ -44,6 +44,7 @@ from avid.providers.client import LLMError
 from avid.services import Services, runs
 from avid.services.errors import RunNotFound
 from avid.session import (
+    DEFAULT_BRANCH,
     BranchScan,
     EntryQuery,
     SessionRecorder,
@@ -775,6 +776,42 @@ def test_compact_command_finishes_without_calling_the_model(sandbox):
         e for e in collect(services, record.run_id) if e.type == RUN_FINISHED
     )
     assert finished.data["reason"] == "command"
+
+
+def test_compact_command_reuses_the_session_prefix(sandbox):
+    """'/compact' assembles exactly like a round: the request repeats that round's system prompt and
+    tool table, and its messages are the session's own, cut at the kept window."""
+    tools = RecordingTools()
+    turns = [
+        make_turn("", [tool_call("read_file", '{"path": "f.txt"}', f"call_{i}")])
+        for i in range(12)
+    ]
+    chat = ScriptedChat(*turns, make_turn("完成"), make_turn("## Goal\n检查点"))
+    services = build(sandbox, chat, tools.registry("read_file"))
+    session_id = new_session(services)
+
+    record = services.runs.start(session_id, "开始")
+    assert wait_terminal(record) and record.status == "finished"
+
+    wait_handle_released(services, session_id)
+    with services.runs.session_lock(session_id):
+        session = services.repo.open(services.runs.find_metadata(session_id))
+        try:
+            history = messages_for_branch(session, DEFAULT_BRANCH)
+        finally:
+            session.close()
+
+    last_round = chat.requests[-1]  # the round that answered "完成"
+    record = services.runs.start(session_id, "/compact")
+    assert wait_terminal(record)
+
+    compaction = chat.requests[-1]
+    assert "已压缩" in record.text
+    assert compaction["system"] == last_round["system"]
+    assert compaction["tools"] == last_round["tools"]
+    cut = len(compaction["messages"]) - 1
+    assert compaction["messages"][:-1] == history[:cut]
+    assert cut < len(history)  # the kept window stays out of the request
 
 
 def test_unknown_command_answers_with_help_text(sandbox):

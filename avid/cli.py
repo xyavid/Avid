@@ -14,18 +14,20 @@ from pathlib import Path
 
 from .agent import commands as commands_module
 from .agent.checkpoints import DirCheckpointSink, restore, restore_tally, rewind_target
+from .agent.context import ContextManager
 from .agent.run import Run
 from .agent.spec import RunSpec
 from .agent.state import RunState
 from .agent.tools import TOOLS, build_toolset, workspace
 from .agent.tools.mcp import McpManager
+from .agent.transcript import Transcript
 from .index import SessionIndexer, queries
 from .index import check as index_check
 from .index import db as index_db
 from .index.indexer import notifying, workspace_lookup
 from .index.writer import indexed_store_root
 from .providers.byok import resolve_chat
-from .providers.client import LLMError, ask, chat_completion
+from .providers.client import LLMError, ask
 from .providers.config import Config, ConfigError
 from .providers.usage import Usage, hit_ratio
 from .security import userdirs
@@ -471,7 +473,7 @@ def _interactive(args: argparse.Namespace, config) -> int:
                 if match.name == "rewind":
                     _rewind_now(session, recorder, Path(target.root))
                 else:
-                    _compact_now(session, recorder, config, target)
+                    _compact_now(session, recorder, config, target, args)
                 continue
             if match is not None and match.kind == commands_module.KIND_SKILL:
                 body = commands_module.skill_text(match.name, workspace_root=target.root)
@@ -527,15 +529,29 @@ def _interactive(args: argparse.Namespace, config) -> int:
     return 0
 
 
-def _compact_now(session, recorder: SessionRecorder, config, target) -> None:
-    """/compact body: forces compaction of the current history and writes the cursor."""
-    report = commands_module.compact_session(
-        history=messages_for_branch(session, recorder.branch),
-        config=config,
-        summarize=chat_completion,
+def _compact_now(session, recorder: SessionRecorder, config, target, args) -> None:
+    """/compact body: one forced compaction assembled exactly like a round, since the request only
+    reuses the cache when its prefix is the prefix that round sent."""
+    state = RunState.for_run(
+        auto_approve=args.yes,
+        full=args.allow_full_access,
         workspace_root=target.root,
-        on_compaction=recorder.record_compaction,
+        question=_terminal_question(),
     )
+    # Same assembly as a turn, MCP included: a tool table that differs by one entry breaks the
+    # prefix at its first byte.
+    _start_mcp(state)
+    try:
+        schemas, impls = build_toolset(state)
+        context = ContextManager.from_spec(
+            RunSpec.resolve(config=config, tools=schemas, registry=impls),
+            transcript=Transcript(messages_for_branch(session, recorder.branch)),
+            state=state,
+            on_compaction=recorder.record_compaction,
+        )
+        report = context.compact_now()
+    finally:
+        state.close_mcp()
     if report is None:
         print("没有可压缩的更早历史（或摘要失败），会话保持不变", file=sys.stderr)
     else:

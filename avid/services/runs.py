@@ -16,6 +16,7 @@ from typing import Any
 from .. import attachments
 from ..agent import commands as commands_module
 from ..agent.checkpoints import DirCheckpointSink, restore, restore_tally, rewind_target
+from ..agent.context import ContextManager
 from ..agent.events import (
     ASSISTANT_DELTA,
     ASSISTANT_MESSAGE,
@@ -41,6 +42,7 @@ from ..agent.spec import RunSpec
 from ..agent.state import RunState
 from ..agent.tools import TOOLS, build_toolset, without_writers
 from ..agent.tools.mcp import McpManager
+from ..agent.transcript import Transcript
 from ..index.indexer import SessionIndexer, notifying
 from ..providers.byok import resolve_chat
 from ..providers.client import LLMError, chat_completion, stream_completion
@@ -967,24 +969,8 @@ class RunRegistry:
             history = messages_for_branch(session, recorder.branch)
             messages = [*history, {"role": "user", "content": content}]
 
-            # Command branch: no model call, ending in one assistant entry (SSE lifecycle intact).
-            if record.command == "compact":
-                report = commands_module.compact_session(
-                    history=list(history),
-                    config=config,
-                    summarize=chat_completion,
-                    workspace_root=workspace.root,
-                    on_compaction=recorder.record_compaction,
-                )
-                text = (
-                    f"已压缩：{report.describe()}"
-                    if report is not None
-                    else "没有可压缩的更早历史（或摘要失败），会话保持不变"
-                )
-                self._message_sink(record, recorder)({"role": "assistant", "content": text})
-                record.text = text
-                self._finish(record, RUN_FINISHED, text=text, reason="command")
-                return
+            # Command branch: no round model call, ending in one assistant entry (SSE lifecycle
+            # intact). `compact` runs further down: it needs the same assembly a round gets.
             if record.command == "rewind":
                 branch_view = session.branch(recorder.branch)
                 chain = (
@@ -1090,6 +1076,24 @@ class RunRegistry:
                 tools=schemas,
                 registry=impls,
             )
+            if record.command == "compact":
+                # Assembled exactly like the round below: the compaction request only reuses the
+                # cache when its prefix is the prefix that round sent.
+                report = ContextManager.from_spec(
+                    spec,
+                    transcript=Transcript(list(history)),
+                    state=state,
+                    on_compaction=recorder.record_compaction,
+                ).compact_now()
+                text = (
+                    f"已压缩：{report.describe()}"
+                    if report is not None
+                    else "没有可压缩的更早历史（或摘要失败），会话保持不变"
+                )
+                self._message_sink(record, recorder)({"role": "assistant", "content": text})
+                record.text = text
+                self._finish(record, RUN_FINISHED, text=text, reason="command")
+                return
             outcome = Run(
                 messages,
                 spec,

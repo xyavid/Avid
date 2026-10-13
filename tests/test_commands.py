@@ -1,41 +1,11 @@
-"""In-session commands: parse rules, skill text, and the /compact executor."""
+"""In-session commands: parse rules and skill text; both command bodies are the caller's wiring.
+
+`/compact` is exercised where it now lives — `ContextManager.compact_now` in test_context.py.
+"""
 
 from __future__ import annotations
 
 from avid.agent import commands
-from avid.providers.client import Turn, Usage
-from avid.providers.config import Config
-
-CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")
-
-
-class Summarizer:
-    def __init__(self, text="要点摘要"):
-        self.calls = 0
-        self.text = text
-
-    def __call__(self, config, messages, **kwargs):
-        self.calls += 1
-        return Turn(
-            message={"role": "assistant", "content": self.text},
-            text=self.text,
-            tool_calls=[],
-            usage=Usage(1, 1, 2),
-            model="m",
-            finish_reason="stop",
-        )
-
-
-def rounds(count):
-    messages = [{"role": "user", "content": "任务"}]
-    for index in range(count):
-        messages.append({"role": "assistant", "content": "", "tool_calls": [
-            {"id": f"c{index}", "type": "function",
-             "function": {"name": "read_file", "arguments": "{}"}}
-        ]})
-        messages.append({"role": "tool", "tool_call_id": f"c{index}", "content": "x" * 200})
-    return messages
-
 
 # ---------- parse rules ----------
 
@@ -100,40 +70,3 @@ def test_skill_text_reads_the_workspace_skill(tmp_path):
 
     assert body is not None and "使用 pdf 的步骤" in body
     assert commands.skill_text("never-exists", workspace_root=str(tmp_path)) is None
-
-
-# ---------- /compact executor ----------
-
-
-def test_compact_session_forces_and_persists(tmp_path):
-    summarizer = Summarizer()
-    covered: list = []
-
-    report = commands.compact_session(
-        history=rounds(12),
-        config=CONFIG,
-        summarize=summarizer,
-        workspace_root=str(tmp_path),
-        on_compaction=lambda summary, keep: covered.append((summary, keep)),
-    )
-
-    assert report is not None and report.step == "compact_history"
-    assert summarizer.calls == 1
-    assert len(covered) == 1
-    summary, keep = covered[0]
-    assert summary["content"].startswith("[历史摘要]")
-    assert keep == 20  # 10 rounds kept by default
-
-
-def test_compact_session_with_short_history_does_nothing():
-    summarizer = Summarizer()
-
-    report = commands.compact_session(
-        history=rounds(1),
-        config=CONFIG,
-        summarize=summarizer,
-        workspace_root=None,
-    )
-
-    assert report is None
-    assert summarizer.calls == 0
