@@ -1,144 +1,10 @@
 # Avid 协作约定
 
-本文件是本仓库的协作约定，对每个在本仓库工作的 agent 生效。
+分三层：本文件放规则与指引；描述性现状在 `docs/`（一主题一份，按需读）；阈值与不变量在模块 docstring。三层都不许复述代码行为。
 
-## 1. 项目简介
-
-Avid 是一个自建的 agent 运行时（harness）：模型调用、工具执行、多步循环、上下文与记忆、权限各层都由自己掌控，做到可替换、可调试。
-
-- **核心用途**：先做通用内核，场景后接；用同一个内核承载编码、检索、业务流等不同任务。
-- **目标**：改动任一模块（模型 / 工具 / 上下文策略）不需要动其它部分。
-- **验收基准**：参考场景 **R**（读取本地文件 + 计算）——回归以它为准。
-- **技术栈**：内核 Python 3.12，`uv` 管理依赖，运行期依赖只有 `httpx`（由 `tests/test_runtime_deps.py` 钉住，加依赖会让它红）；前端在 `web/`（React 18 + Vite + pnpm + TypeScript）。
-- **能力**：模型调用 → 多步循环 → 12 个内置工具（含联网 `web_search` / `web_fetch`）+ stdio MCP → 权限（毁灭级命令双确认 + 凭据拒读 + bwrap 沙箱 + 审计）→ hook 四事件 → 技能 → 上下文压缩 → 会话持久化与内容检索索引 → 本地 Web 服务与浏览器界面（对话时间线、会话 / 工作区管理、设置、图片输入、补充输入）。
-- **仓库形态**：包平铺在仓库根（`avid/`，无 src 层）；仓库内没有 docs/ 体系，也没有评测仪器——**代码与注释是唯一现状**（见 §4）。
-
-**仓库现状问谁**：不问文档，问代码——每个模块的职责、边界与不变量写在模块 docstring 与注释里；跨包边界由 `tests/test_web_boundaries.py` 的门禁（A1–A14）钉住，前端契约由 `test_wire_contract.py` / `test_event_contract.py` 双侧钉住。
-
-### 1.1 常用命令
-
-```bash
-uv sync && uv sync --extra web   # 内核依赖 / 追加 Web 依赖（fastapi·uvicorn·pydantic）
-uv tool install --editable ".[web]"   # 装成命令：任何目录直接敲 `avid`（改代码立即生效）
-avid --agent "读 pyproject.toml，告诉我项目名"
-avid web --port 8765
-avid session search "词"          # 按内容检索历史会话（本地索引，不调模型）
-avid index check --fix          # 校验会话索引，需要时补/修（删掉 ~/.avid/index 也不伤会话）
-
-uv run pytest                    # stress 门禁默认不跑（见 pyproject 的 addopts）
-uv run pytest -m stress          # 复杂度与长会话门禁
-uv run ruff check avid tests && uv run mypy   # 与 CI 同一套静态检查
-
-pnpm -C web install               # 前端依赖
-pnpm -C web run verify            # 前端门禁：typecheck + vitest + build + gate:size（体积预算）
-pnpm -C web run copy:dist         # 构建产物交付到 avid/web/static/（avid web 服务它）
-```
-
-**模型连接只认 BYOK 配置**：`~/.avid/models.json` + 0600 的
-`~/.avid/secrets.json`，由界面「设置 → 模型」或手编文件维护（结构见
-`avid/providers/byok.py` 模块注释）；未配置时运行报「还没有模型配置」。`.env`
-是可选的：它只承载运行期开关，日常运行不需要（命令装法是
-`uv tool install --editable ".[web]"`，之后任何目录直接敲 `avid`）。
-安装、配置项与 CLI 全量参数见 `README.md`（英文）与 `README.zh-CN.md`（中文）。
-
-### 1.2 数据流
-
-CLI 与 Web 是**两个平级接线点**，内核不知道有几个调用方（`services/`）：
-
-```text
-CLI  avid --agent / --session ─┐
-Web  POST /api/sessions/{id}/runs ─┴─► services/runs.RunRegistry（线程 + 事件重放缓冲）
-                                       ▼
-                         agent/run.Run —— 只表达调度顺序（subagent 递归用）
-                           ├ ContextManager(context).compose()  装配 SYSTEM / tail 块，编排压缩
-                           ├ chat() → Turn             正文 + tool_calls
-                           └ execution.execute_batch()
-                                ├ security/action 归一化 → security/engine 裁决（默认放行；毁灭级问一次）
-                                ├ security/sandbox 按能力账本组装 bwrap argv
-                                └ 工具 handler（agent/tools/*，含 MCP 包装）
-       on_message ─► SessionRecorder ─► <会话目录>/<工作区 id>/*.jsonl（durable 真相；默认 ~/.avid/sessions）
-       on_event   ─► RunRegistry 缓冲 ─► SSE ─► 浏览器消费方（React 前端 web/）
-       ── 待决：一张表两种 kind —— 毁灭级裁决（allow/deny）与模型的提问
-          （ask_user 的 question/options → answer）；同一组端点、同一个界面槽，超时对提问
-          是「没答」（模型据此降级），对审批是「拒绝」
-       ── 补充输入：POST /api/sessions/{id}/inputs（mode=now|after）
-          → services/inbox.SessionInbox（会话级内存表）→ run 线程在轮次边界领取
-          → transcript.append + on_message 落库（与首条消息同一条路，写者仍只有 recorder）；
-          队列跨刷新、不跨进程；没赶上的 now 降级为 after（不消失）
-       ── 旁路（可丢的派生层）：装配层在提交成功后 notify(session_id)
-          ─► avid/index 的队列（同会话合并） ─► 增量扫描 JSONL ─► ~/.avid/index/sessions.sqlite
-          ─► GET /api/search 与 `avid session search` 读它；列表仍以 JSONL 为准
-```
-
-- **`on_message` 是消息的唯一出口**：循环不 import 会话层，落库与否由回调决定。
-- **`on_event` 是步骤级事实的通道**，不是第二个消息通道；事件不写进会话 JSONL。
-- **索引是可丢的派生层**：JSONL 是唯一权威，库里的每一列都能从 JSONL + 注册表
-  重算；写失败只落后（`last_error`），`avid index check|rebuild` 是恢复路径。通知只从装配层发，
-  `session/` 不知道索引存在（`tests/test_web_boundaries.py` 的 A14 钉住这条边）。
-- **会话存储**集中在一个专用目录：解析单点是 `security/userdirs.sessions_dir()`
-  （`AVID_SESSIONS_DIR` → `~/.avid/settings.json` 的 `sessions_dir` → `~/.avid/sessions`），
-  目录内按工作区 id 分子目录；归属只认 header 的 `workspaceId`。旧位置用
-  `avid session migrate` 显式搬（先出清单再动手）。
-- 压缩通路（保留最近 N 轮 + 一段结构化检查点；阈值触发与溢出兜底共用一个入口）在 `agent/compaction.py`，编排归 `ContextManager`（`agent/context.py`）。
-- 跨包依赖方向由 `tests/test_web_boundaries.py` 门禁钉住：循环与工具协议对策略层零运行时依赖（A13）；
-会话索引对会话层单向只读（A14：`session/` 不得 import `index/`，`index/` 不得依赖 services/web/agent/providers）。
-
-### 1.3 关键子系统
-
-| 子系统 | 位置 | 职责 |
-|---|---|---|
-| Agent 核心 | `agent/`：`run`（唯一循环）、`spec` 运行输入收口、`state.RunState` 全部可变状态、`context` 上下文装配（CONTEXT_MAP 声明表）、`compaction` 压缩通路（保留最近 N 轮 + 摘要）、`stop` 终止路径（StopReason）、`execution` 工具协议、`transcript` 消息唯一所有者、`events` 事件名单点、`hooks` 默认回调、`todo`/`prompt`/`skills` | 一次运行的生命周期与上下文策略 |
-| 模型适配 | `providers/`：`{openai_compat,anthropic,responses}` 实现 + `__init__` 注册表、`transport` 退避重试、`protocol` 共享词表、`client`、`usage` 四家 usage 归一、`byok` 模型配置、`verify` 连通校验 | 换模型只动这一层 |
-| 安全 | `security/`：`action` 归一化与风险分类、`engine`（默认直接跑；毁灭级问一次；凭据硬拒；full 跳过询问）、`sandbox` bwrap（会话目录进掩蔽名单）、`audit`、`permission` 唯一装配点、`userdirs`（用户级目录 + 设置文件 + 会话目录解析） | 毁灭级名单、阈值与文案的高频变化集中地 |
-| 会话 | `session/`：条目树 + 值 + 分支 + 变更线，`memory` 与 `jsonl` 两后端共用一套一致性用例，`recorder` 是唯一写入者 | 磁盘上的会话真相 |
-| 会话索引 | `avid/index/`：`db`（SQLite 连接 + user_version 迁移）、`scanner`（字节→行→记录，带行偏移）、`extract`（哪段文本进 search_text）、`writer`（条目与游标同事务）、`indexer`（发现/增量/补齐/重建 + 通知队列）、`queries`（读侧与 FTS 检索）、`check`（校验与修） | JSONL 之上的派生查询层，可删可重建 |
-| 应用服务 | `services/`：`runs` 运行注册表与重放缓冲、`approvals` 待决表、`inbox` 补充输入表、`sessions` 读视图、`workspaces`、`workspace_registry`（含会话目录的 `sessions_root`）、`session_migration`（旧布局一次性搬迁）、`picker` | 内核的第二个调用方 |
-| 附件 | `attachments.py`（根级叶子，stdlib-only） | 图片分块的形状 / 判型 / 上限 / 文本渲染与成本口径 / 线格式 ref 的唯一处；字节内联在会话条目里 |
-| 传输适配 | `web/`：FastAPI 路由 + pydantic DTO + SSE 编帧 + 静态资源 | 线格式的唯一所有者 |
-| 工具 | `agent/tools/`：`registry` 单点声明（name/description/schema/concurrency/writes 全在一处）、`files`/`search`/`shell`/`subagent`/`interaction`/`skill`/`mcp`/`web`（联网，`extract` 是它的 HTML→文本叶子）、`safety`（并发判定）、`validate` 参数校验 | 12 个内置工具 + 该工作区声明的 MCP 工具 |
-| 工作区 | `workspaces.py` + `~/.avid/workspaces.json` | 用户级注册表（索引，非权威） |
-| 前端 | `web/`（React 18 + Vite + pnpm）：`api/types.ts` 与 `events/types.ts` 契约种子、`styles/tokens.css` 纸本 token 层、`markdown/` 自研渲染、`surfaces/` 页面 | 浏览器侧全部代码；交付走 `copy:dist` 进 `avid/web/static/` |
-
-### 1.4 入口点
-
-| 入口 | 位置 |
-|---|---|
-| CLI | `avid/cli.py`：无参数进交互会话（`/compact`、`/rewind` 与 `/<技能名>`，解析单点在 `agent/commands.py`）；带问题为单轮 / `--agent` / `--session` / `avid workspace` / `avid session dir|migrate|search` / `avid index check|rebuild` / `avid web` |
-| Web 服务 | `avid/web/app.py`（FastAPI）；接口面看 `avid/web/routes/` 与 `schemas.py`；`GET /api/search` 是唯一读索引的端点 |
-| 测试 | `tests/`，镜像 `avid/` 结构；`tests/test_web_boundaries.py` 是分层门禁 |
-| 模块入口 | `avid/__main__.py`（`python -m avid`） |
-
-### 1.5 常见改动落点
-
-| 要改什么 | 动哪里 |
-|---|---|
-| 新增工具 | 在实现函数上挂 `@tool(...)`——`agent/tools/registry.py` 是单点（schema、并发档、writes 全在这一处），其余表全部派生 |
-| 改并发档 / 判据 | `@tool(concurrency=…)` 三档：`safe`（只读，可并行）/ `exclusive`（屏障）/ `conditional`（配 `assess(arguments, state)`，**只能把默认独占降成并行**）；bash 的只读判定在 `security/command_parse.is_read_only`，判据表与用例同在 `tests/test_tool_concurrency.py` |
-| 新增会话内命令 | `agent/commands.py` 的 COMMANDS 加名字 + 执行分支（CLI 与 Web 自动继承解析）|
-| 新增模型协议 | `providers/` 加一个实现模块 + `__init__.py` 的 PROVIDERS 一条表项，对循环返回**同形** `Turn` |
-| 新增一类上下文 | `ContextManager.register_source(kind, fn)` 一行（`agent/context.py`） |
-| 改索引哪些文本 / 怎么检索 | `avid/index/extract.py` 是「哪段文本进 search_text」的唯一规则处；查询语法与作用域在 `avid/index/queries.py`（用户输入当字面量，&lt;3 字回落 LIKE）；schema 变更走 `avid/index/db.py` 的 MIGRATIONS 追加一条 |
-| 改图片附件的类型 / 上限 / 渲染 | `avid/attachments.py` 是单点（前端同口径的数字在 `web/src/state/imagePrep.ts`）；各家运输形状在 `providers/{openai_compat,anthropic,responses}.py`；读侧端点在 `web/routes/sessions.py` |
-| 改补充输入 / 排队语义 | `avid/services/inbox.py`（表与三条不变量）+ `agent/run.py` 的唯一交付点；端点面在 `web/routes/inputs.py`，界面在 `Composer.tsx`（忙时两动作）与 `Timeline.tsx`（待办标记） |
-| 改联网（检索后端 / 取文规则 / 地址护栏 / 上限） | 模型可见的名字与参数单点在 `agent/tools/web.py`（换检索后端 = 换这一层之下的实现，模型侧不动）；取文规则在 `agent/tools/extract.py`（零依赖的链接密度启发式，已知边界写在模块注释）；配置从哪来、谁说了算单点在 `avid/web_settings.py`（env > settings.json 的 `web` 块 > 默认，与 sessions_dir 同形；工具与设置端点读同一份解析），界面在 `web/src/components/settings/WebSection.tsx`，端点在 `web/routes/settings.py`；运行期依赖的扩权由 `tests/test_runtime_deps.py` 拦 |
-| 改会话存哪 / 会话目录布局 | 解析单点在 `security/userdirs.sessions_dir()`（环境变量 → 设置文件 → 默认）；布局在 `services/workspace_registry.sessions_root()`（`<会话目录>/<工作区 id>`）；界面在设置页「会话存储」段（`web/src/components/settings/SessionsSection.tsx`） |
-| 调毁灭级名单 / 权限阈值 / 文案 | `security/`（名单在 `action.DENY_PATTERNS`，决策在 `engine.py`）；压缩阈值在 `agent/compaction.py` |
-| 加一个事件 | `agent/events.py`（唯一单点）；同时在 `web/src/events/types.ts` 的 EVENTS 块里加同名成员——`tests/test_event_contract.py` 拦住两侧漂移 |
-| 加一个界面 | `web/src/surfaces/` 加页面并在 `app/App.tsx` 挂路由；颜色 / 字号 / 圆角只取 `styles/tokens.css` 的 token，不写散档 |
-| 加一个右列面板 | `components/dock/Dock.tsx` 的 `PANELS` 加一条 + `state/dock.ts` 的 `DockPanelId` 与 `PANEL_IDS` 同步；面板视图在 `components/dock/`，数据由页面下发（Dock 是纯展示，不发请求） |
-| 改对话时间线（段落顺序 / 工具行 / 思考段 / 收尾折叠） | `web/src/state/timeline.ts` 是单点（段落模型 + 事件→段落 + 历史归并 + 一键折叠判定 `turnGroups`），渲染在 `components/chat/Timeline.tsx`——过程与收尾共用它，别在页面里另起一套 |
-| 改模型选择 / 候选来源 | `web/src/state/runModel.ts`（选哪个、记不记得住、候选没了怎么办）+ `components/chat/ModelButton.tsx`（画它）；推理强度另有 `components/chat/EffortButton.tsx`，档位同样来自候选自己的声明；候选来自 `GET /api/meta` 的 `capabilities.models`，设置页只负责那份列表 |
-| 改 BYOK 配置界面 / 拉取模型清单 | 界面在 `web/src/components/settings/ModelSection.tsx`（表单 / 连通校验 / 「获取模型」）；端点面在 `avid/web/routes/settings.py`（`/settings/byok` 的 GET·PUT·DELETE、`/test`、`/models`）；配置校验与落盘单点在 `avid/providers/byok.py`，列模型的请求形状在 `providers/{openai_compat,responses,anthropic}.py` 的 `list_models`（每一族自己的 URL 与鉴权），共用解析在 `protocol.py` 的 `model_ids` |
-| 改会话标题 / 自动命名 | 规则在 `services/runs.py`：`session_title(content)`（首条消息取一行、24 字截断、纯图给「（图片）」）与 `_name_from_first_message`（只在**本会话还没有名字**且这是历史里第一条用户消息时写，写者仍是 run 自己的 recorder）；名字是会话值（`avid.session.name`），改名入口在 `services/sessions.rename` |
-| 改思考（CoT）怎么存 / 怎么回传 | 判定单点在 `avid/providers/reasoning.py`（记录形状 + 「同路由 + 工具链才回传」）；各族的线格式在 `providers/{openai_compat,anthropic,responses}.py`（openai 补 `reasoning_content`、anthropic 回传带签名的 thinking 块、responses 只归档）；对外发送是白名单，记录字段不许漏上线路 |
-| 改输入区工具栏的排列 / 宽度适应 | `components/chat/Composer.tsx` 的 `data-testid="composer-toolbar"` 一行分三区（附件+权限 / 容量环+模型 / 推理强度+动作），`useCompact` 按行宽（阈值 `COMPACT_BELOW`）决定胶囊收不收文字 |
-| 改 markdown 支持的写法 / 危险协议名单 | `web/src/markdown/parse.ts` 是「标准解析器（@lezer/markdown，CommonMark+GFM）→ 渲染模型」的翻译层与协议闸门，`Markdown.tsx` 只负责画（全程 React 元素，不注入 HTML）；软换行成断行、外链图降级成链接是有意偏离，写在模块注释里 |
-
-## 2. 提交规范
+## 1. 提交规范
 
 自 `git init` 起，每完成一个可验证的小步就提交一次；同一件事不攒成一个大提交。
-
-**格式**
 
 ```
 <type>(<scope>): <简述>
@@ -152,7 +18,7 @@ Web  POST /api/sessions/{id}/runs ─┴─► services/runs.RunRegistry（线�
 - **正文**只在"为什么"无法从 diff 看出时写。diff 已说明"是什么"，正文补原因、取舍与被否掉的方案。
 - **粒度**一个提交一件事；提交后项目保持可运行。
 
-## 3. 改动流程
+## 2. 改动流程
 
 **较大改动**（新功能、改模块边界、动数据模型）先讨论后动工；小范围修改不走此流程。
 
@@ -172,7 +38,7 @@ Web  POST /api/sessions/{id}/runs ─┴─► services/runs.RunRegistry（线�
 2. **目录树**：完成后的完整目录结构，用文本树展示。
 3. **架构图**：完成后的模块划分与数据流向，手写 SVG 落盘到 `dev/architecture/<短名>.svg`（无外部依赖，浏览器可直接打开），图中标注每条数据流携带的内容。该图属过程文档，只存本地、不入库。
 
-每个取舍按 §5 的判据推导，出图时用一句话说明每个边界的依据。
+每个取舍按 §4 的判据推导，出图时用一句话说明每个边界的依据。
 
 ### 第二步：动工
 
@@ -187,9 +53,8 @@ Web  POST /api/sessions/{id}/runs ─┴─► services/runs.RunRegistry（线�
 
 每条验收标准都有证据、且你确认后，才进入下一件事。
 
-## 4. 注释与文档纪律
+## 3. 注释与文档
 
-- **没有 docs/ 目录**：仓库内的 md 只有 `README.md`（英文）与 `README.zh-CN.md`（中文）——两者互为译本，内容一回事（安装 / 配置 / 运行）、`AGENTS.md`（本约定）与技能的 `SKILL.md`（运行期契约）。
 - **代码与注释是唯一现状**：能力、边界、契约、阈值都写在代码与注释里；注释漂移按 bug 修。
 - **注释用英文，只写代码表达不了的东西**：
   - 留下：数字阈值、失败语义、跨模块不变量、外部契约、「这是唯一一处」的单点声明；
@@ -197,9 +62,11 @@ Web  POST /api/sessions/{id}/runs ─┴─► services/runs.RunRegistry（线�
   - 不写：历史沿革、与其它项目或参考实现的比较、设计过程复盘、举例、表格、分点列表——这些属于 `dev/plan/roadmap.md` 与 commit message；
   - 中文只留在**面向人与模型的字符串**里（界面文案、错误消息、prompt 文本、日志）；注释一律英文。
 - 改代码必须同步改注释；发现注释说谎，当场修。
-- **过程文档**（计划 / 诊断 / 架构图 / 会议记录）留 `dev/`，只存本地不入库；其中 `dev/tmp/` 存参考项目副本（约 5.8 GB / 4.3 万文件）——全仓 grep / find 把范围限定到 `avid/`、`tests/`、`web/src`，既快又不带噪声。
+- **docs/ 装描述性现状，一主题一份**（`kernel` / `modules` / `extending` / `web` / `commands`），索引在 `docs/README.md`。两条硬规矩：**每条结论锚到代码单点**（路径 + 符号，不写行号与行为描述）；**只描述，不排期**。过程文档（计划 / 诊断 / 架构图）留 `dev/`，不入库。
+- **现状问代码，不问文档**：模块职责与不变量问 docstring；跨包边界问 `tests/test_web_boundaries.py`（A1–A14）；前端契约问 `test_wire_contract.py` / `test_event_contract.py`。
+- `docs/` 与本文件的引用、体积、索引由 `tests/test_docs_contract.py` 护住。`dev/tmp/` 是参考项目副本（约 5.8 GB）——全仓 grep / find 限定到 `avid/`、`tests/`、`web/src`。
 
-## 5. 架构推导判据
+## 4. 架构推导判据
 
 设计结论动工前走一遍这十二组检查点；只分析与当前问题真正相关的，不为凑齐条目制造复杂度。
 
@@ -211,16 +78,43 @@ Web  POST /api/sessions/{id}/runs ─┴─► services/runs.RunRegistry（线�
 6. **不变量**——先列「永远不能破」的性质，再指派唯一守护层，并检查没有绕过路径。
 7. **失败与恢复**——失败路径与正常路径同级设计；临时 / 永久 / 业务拒绝 / 权限拒绝 / 环境错误各有机制；异步化先回答为什么不能同步。
 8. **并发**——设计期显式建模：谁与谁同时动什么、谁提供互斥、一致性在哪个窗口对谁成立。
-9. **不可靠边界**——外部依赖逐个回答不可用时怎么办；远程调用按丢失 / 重复 / 延迟 / 中断建模，给超时、幂等与对账方案。
+9. **不可靠边界**——外部依赖逐个回答不可用的时怎么办；远程调用按丢失 / 重复 / 延迟 / 中断建模，给超时、幂等与对账方案。
 10. **边界代价**——先算代价再决定；方案比较至少两个；结论写「解决了什么 / 牺牲了什么 / 何时成立 / 什么信号出现时重审」。
-11. **可逆性**——按撤销难度分配论证成本；难撤销者（数据模型、公开 API）要迁移方案与回滚点。
+11. **可逆性**——按撤销难度分配论证成本；难逆转者（数据模型、公开 API）要迁移方案与回滚点。
 12. **运行与演进**——性能从工作负载推导；安全按信任边界处理；每个架构写明适用条件与失效信号，以及下一次变化最可能落在哪。
 
 禁止用「最佳实践」「行业标准」「更优雅」代替具体机制与取舍。
 
-## 6. 测试约定
+## 5. 测试约定
 
 - **单元测试先写**：要写单元测试就在写实现之前写；实现完成后补的单元测试不算数、不写。
 - **E2E 是默认测试手段**：复杂功能一律用 E2E 验证是否真的跑通，不用单元测试代替。E2E 末尾必须产出一个**可重复的产物**——同一条命令重跑得到同样结论，产物落在仓库里、可被他人直接打开检查。
 - **隔离测试先列失败清单**：必须对某个系统做隔离测试时，先把「它可能怎么坏」逐条列全，再写代码。
-- **全套 E2E 只在收尾跑**：开发期间只跑与本次改动直接相关的最小验证，全套 E2E 留到 §3 第三步「举证」执行一次。
+- **全套 E2E 只在收尾跑**：开发期间只跑与本次改动直接相关的最小验证，全套 E2E 留到 §2 第三步「举证」执行一次。
+
+## 6. 寻路：改什么动哪
+
+只收最高频的改动，完整表与时序细节在 `docs/extending.md`。
+
+| 改什么 | 唯一落点 |
+|---|---|
+| 新增工具 | `avid/agent/tools/registry.py` 的 `@tool`（schema / 并发 / writes 都在那一处） |
+| 改并发档 / 判据 | `@tool(concurrency=…)` + `avid/agent/tools/safety.py` |
+| 新增会话内命令 | `avid/agent/commands.py` 的 `COMMANDS` |
+| 新增模型协议 | `avid/providers/` 加实现 + `__init__.py` 的 `PROVIDERS` |
+| 新增一类上下文 | `avid/agent/context.py` 的 `register_source` |
+| 加一个事件 | `avid/agent/events.py` + `web/src/events/types.ts` 的 `EVENTS` |
+| 加一个界面 | `web/src/surfaces/` + `web/src/app/App.tsx` 路由 |
+| 加一个右列面板 | `web/src/components/dock/Dock.tsx` 的 `PANELS` + `web/src/state/dock.ts` |
+| 改索引哪些文本 / 怎么检索 | `avid/index/extract.py` / `queries.py` |
+| 改会话存哪 | `security/userdirs.sessions_dir()` |
+
+**docs（按需读）**
+
+| 想知道什么 | 读哪份 |
+|---|---|
+| 数据流、压缩通路、分层门禁 | `docs/kernel.md` |
+| 有哪些子系统 / 入口在哪 | `docs/modules.md` |
+| 上面那张表之外的改动落点 | `docs/extending.md` |
+| 前端单点 / 端点面 / 契约 | `docs/web.md` |
+| 跑什么命令、举证要求 | `docs/commands.md` |
