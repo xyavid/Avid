@@ -37,11 +37,8 @@ from ..agent.events import (
     RunEvent,
     now_ms,
 )
-from ..agent.run import Run
-from ..agent.spec import RunSpec
 from ..agent.state import RunCancelled, RunState
-from ..agent.tools import TOOLS, build_toolset, without_writers
-from ..agent.tools.mcp import McpManager
+from ..agent.tools import TOOLS
 from ..agent.transcript import Transcript
 from ..index.indexer import SessionIndexer, notifying
 from ..providers.byok import resolve_chat
@@ -59,10 +56,10 @@ from ..session import (
     branch_tip,
     messages_for_branch,
     session_scratch,
-    stored_plan,
 )
 from ..session.types import ERROR_ENTRY, MESSAGE_ENTRY, NOTICE_ENTRY
 from .approvals import APPROVAL_TIMEOUT_SECONDS, ApprovalTable
+from .assembly import assemble
 from .errors import (
     AttachmentRejected,
     InvalidRequest,
@@ -1022,7 +1019,21 @@ class RunRegistry:
             if not any(message.get("role") == "user" for message in history):
                 self._name_from_first_message(record, recorder, content)
 
-            state = RunState.for_run(
+            # Write-ahead snapshots: both write paths of the files tool land the previous content
+            # in this session's checkpoint directory. Subagents share this same sink, and the
+            # parent session stays open while they run.
+            checkpoint = DirCheckpointSink(
+                root=Path(workspace.root),
+                session_id=session.metadata.id,
+                tip_seq=recorder.tip_seq,
+            )
+            # No injected chat means the production path: main rounds stream, summaries do not.
+            streaming = chat is None
+            assembly = assemble(
+                config=config,
+                messages=messages,
+                workspace_root=workspace.root,
+                recorder=recorder,
                 auto_approve=auto_approve,
                 ask=record.approvals.request if record.approvals is not None else None,
                 # Same pending table, same UI slot: model questions also wait for a human here.
@@ -1031,28 +1042,27 @@ class RunRegistry:
                 steers=lambda: self._take_steers(record),
                 observer=lambda event: self._observe(record, event),
                 full=full_ack,
-                workspace_root=workspace.root,
                 scratch=scratched,
                 # Child runs reuse this model and effort (see the RunState field comments).
                 model_ref=record.model,
                 effort=record.effort,
-                # The very same spec as in run_started: the event and the enforcement agree.
+                # The very same object the run_started event reported: the event and the
+                # enforcement cannot disagree.
                 security=safety,
                 # The utilization denominator follows this run's actual model configuration.
                 context_window=config.context_window,
-                # The plan outlives the run that wrote it: load it, and publish through the
-                # session's single writer.
-                plan=stored_plan(session, recorder.branch),
-                on_plan=recorder.record_plan,
+                checkpoint=checkpoint,
+                # An injected registry (tests, benchmarks) keeps its old meaning: no MCP at all.
+                tools=TOOLS if self.tool_registry is not None else None,
+                registry=self.tool_registry,
+                chat=chat if chat is not None else self.streaming_chat(record),
+                summarize=chat_completion if streaming else None,
+                on_message=self._message_sink(record, recorder),
+                # MCP servers live for the duration of the run; a server that fails to start is
+                # logged and skipped instead of blocking the run.
+                warn=lambda message: logger.warning("run %s: %s", record.run_id, message),
             )
-            # Write-ahead snapshots: both write paths of the files tool land the previous content
-            # in this session's checkpoint directory. Subagents share this same sink, and the
-            # parent session stays open while they run.
-            state.checkpoint = DirCheckpointSink(
-                root=Path(workspace.root),
-                session_id=session.metadata.id,
-                tip_seq=recorder.tip_seq,
-            )
+            state = assembly.state
             record.state = state
             # A cancel can land between thread start and this point, while record.state is
             # still None; the loop checks state.cancelled, so an unreplayed cancel would be
@@ -1060,35 +1070,11 @@ class RunRegistry:
             if record.cancel_requested:
                 state.cancel(record.cancel_reason or "user")
 
-            # MCP servers live for the duration of the run: started here, closed in finally.
-            # A server that fails to start is logged and skipped instead of blocking the run.
-            mcp = McpManager(state.workspace_root)
-            state.mcp = mcp
-            for warning in mcp.start_all():
-                logger.warning("run %s: %s", record.run_id, warning)
-
-            # No injected chat means the production path: main rounds stream, summaries do not.
-            streaming = chat is None
-            mcp_schemas, mcp_impls = build_toolset(state)
-            if self.tool_registry is not None:
-                # An injected registry (tests, benchmarks) keeps its old meaning: no MCP tools.
-                schemas, impls = TOOLS, self.tool_registry
-                if scratched:  # read-only applies no matter who supplied the table
-                    schemas, impls = without_writers(schemas, impls)
-            else:
-                schemas, impls = mcp_schemas, mcp_impls
-            spec = RunSpec.resolve(
-                config=config,
-                chat=chat if chat is not None else self.streaming_chat(record),
-                summarize=chat_completion if streaming else None,
-                tools=schemas,
-                registry=impls,
-            )
             if record.command == "compact":
                 # Assembled exactly like the round below: the compaction request only reuses the
                 # cache when its prefix is the prefix that round sent.
                 report = ContextManager.from_spec(
-                    spec,
+                    assembly.spec,
                     transcript=Transcript(list(history)),
                     state=state,
                     on_compaction=recorder.record_compaction,
@@ -1102,13 +1088,7 @@ class RunRegistry:
                 record.text = text
                 self._finish(record, RUN_FINISHED, text=text, reason="command")
                 return
-            outcome = Run(
-                messages,
-                spec,
-                state=state,
-                on_message=self._message_sink(record, recorder),
-                on_compaction=recorder.record_compaction,
-            ).run()
+            outcome = assembly.run()
             record.text = outcome.text
             self._finish(record, RUN_FINISHED, text=outcome.text, reason=outcome.reason)
         except RunCancelled as exc:

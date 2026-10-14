@@ -25,6 +25,7 @@ from avid.agent.tools import workspace
 from avid.providers.client import Turn, Usage
 from avid.security import sandbox as sandbox_module
 from avid.security.sandbox import BACKEND_BWRAP, BackendProbe
+from avid.services import assembly as assembly_module
 
 
 class FakeChat:
@@ -65,7 +66,7 @@ class Model:
                 messages, spec, kwargs = self._args
                 return RealRun(messages, spec, **kwargs).run()
 
-        self.monkeypatch.setattr(cli, "Run", FakeRun)
+        self.monkeypatch.setattr(assembly_module, "Run", FakeRun)
         return chat
 
 
@@ -299,7 +300,7 @@ def test_run_state_carries_the_workspace_and_the_default_permission(sandbox, mod
         def run(self):
             return RunOutcome(text="答", reason=STOP_FINAL_TEXT)
 
-    monkeypatch.setattr(cli, "Run", FakeRun)
+    monkeypatch.setattr(assembly_module, "Run", FakeRun)
 
     assert cli.main(["--agent", "--new-session", "问"]) == 0
 
@@ -326,7 +327,7 @@ def test_allow_full_access_turns_on_full_permission(sandbox, model, monkeypatch,
         def run(self):
             return RunOutcome(text="答", reason=STOP_FINAL_TEXT)
 
-    monkeypatch.setattr(cli, "Run", FakeRun)
+    monkeypatch.setattr(assembly_module, "Run", FakeRun)
 
     assert cli.main(["--agent", "--new-session", "--allow-full-access", "问"]) == 0
 
@@ -470,7 +471,7 @@ def test_interactive_rewind_restores_files_and_moves_the_tip_back(
             messages, spec, kwargs = self._args
             return RealRun(messages, spec, **kwargs).run()
 
-    monkeypatch.setattr(cli, "Run", FakeRun)
+    monkeypatch.setattr(assembly_module, "Run", FakeRun)
 
     answers = iter(["写一下", "改成第二版", "/rewind"])
 
@@ -641,14 +642,14 @@ def test_interactive_compact_reuses_the_round_prefix(sandbox, model, monkeypatch
     prompt and tool table, which is what makes it a cache hit instead of a fresh engine prompt."""
     model.answer(*(["答"] * 12))  # twelve plain turns, so earlier history exists to compact
     compaction_chat = FakeChat(make_turn("## Goal\n检查点"))
-    real_resolve = cli.RunSpec.resolve
+    real_resolve = assembly_module.RunSpec.resolve
 
     def resolve(**kwargs):
-        # spec.chat is chat_completion by default; swap in the scripted one, the way cli.Run is
-        # swapped for the rounds (the rest of the assembly stays real).
+        # spec.chat is chat_completion by default; swap in the scripted one, the way the loop
+        # is swapped for the rounds (the rest of the assembly stays real).
         return real_resolve(**{**kwargs, "chat": compaction_chat})
 
-    monkeypatch.setattr(cli, "RunSpec", SimpleNamespace(resolve=resolve))
+    monkeypatch.setattr(assembly_module, "RunSpec", SimpleNamespace(resolve=resolve))
 
     answers = iter(["问题"] * 12 + ["/compact"])
 

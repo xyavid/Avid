@@ -15,11 +15,7 @@ from pathlib import Path
 from .agent import commands as commands_module
 from .agent.checkpoints import DirCheckpointSink, restore, restore_tally, rewind_target
 from .agent.context import ContextManager
-from .agent.run import Run
-from .agent.spec import RunSpec
-from .agent.state import RunState
-from .agent.tools import TOOLS, build_toolset, workspace
-from .agent.tools.mcp import McpManager
+from .agent.tools import TOOLS, workspace
 from .agent.transcript import Transcript
 from .index import SessionIndexer, queries
 from .index import check as index_check
@@ -36,6 +32,7 @@ from .security.permission import (
     PERMISSION_NORMAL,
     RunSecurity,
 )
+from .services.assembly import assemble
 from .services.session_migration import apply_migration, plan_migration
 from .services.workspace_registry import (
     Workspace,
@@ -55,7 +52,6 @@ from .session import (
     branch_plan,
     branch_tip,
     messages_for_branch,
-    stored_plan,
 )
 from .web.app import (
     LOOPBACK_HOSTS,
@@ -132,12 +128,9 @@ def _resolve_workspace(selection: str | None) -> Workspace:
     return found if found is not None else bound_workspace(root)
 
 
-def _start_mcp(state: RunState) -> None:
-    """Starts this run's MCP servers, warning about failures instead of aborting the run."""
-    manager = McpManager(state.workspace_root)
-    state.mcp = manager
-    for warning in manager.start_all():
-        print(f"警告：{warning}", file=sys.stderr)
+def _mcp_warning(message: str) -> None:
+    """An MCP server that did not come up must be visible, so it goes to stderr not to the log."""
+    print(f"警告：{message}", file=sys.stderr)
 
 
 def _announce_security(security: RunSecurity | None) -> None:
@@ -260,32 +253,27 @@ def main(argv: list[str] | None = None) -> int:
             return _run_session(args, config)
         try:
             target = _resolve_workspace(args.workspace)
-            state = RunState.for_run(
-                auto_approve=args.yes,
-                full=args.allow_full_access,
-                workspace_root=target.root,
-                question=_terminal_question(),
-            )
         except (WorkspaceNotFound, WorkspaceInvalid) as exc:
             print(f"工作区错误：{exc}", file=sys.stderr)
             return 2
-        _announce_security(state.security)
-        _start_mcp(state)
-        schemas, impls = build_toolset(state)
+        assembly = assemble(
+            config=config,
+            messages=[{"role": "user", "content": args.prompt}],
+            workspace_root=target.root,
+            auto_approve=args.yes,
+            full=args.allow_full_access,
+            question=_terminal_question(),
+            warn=_mcp_warning,
+        )
+        _announce_security(assembly.state.security)
         try:
-            print(
-                Run(
-                    [{"role": "user", "content": args.prompt}],
-                    RunSpec.resolve(config=config, tools=schemas, registry=impls),
-                    state=state,
-                ).run().text
-            )
+            print(assembly.run().text)
         except LLMError as exc:
             print(f"循环中止：{exc}", file=sys.stderr)
             return 1
         finally:
             # MCP server processes live exactly as long as the run does.
-            state.close_mcp()
+            assembly.close()
         return 0
 
     try:
@@ -329,8 +317,8 @@ def _run_session(args: argparse.Namespace, config) -> int:
     back.
 
     Assembled here, not in main(): the state needs the session's stored plan and its checkpoint
-    sink, and both only exist once the session is open. This is the same wiring the interactive
-    path uses, so a one-shot --session run sees the same tool table and the same snapshots.
+    sink, and both only exist once the session is open. Same assembly as the interactive path, so
+    a one-shot --session run sees the same tool table and the same snapshots.
     """
     try:
         target = _resolve_workspace(args.workspace)
@@ -343,7 +331,7 @@ def _run_session(args: argparse.Namespace, config) -> int:
     )
     repo = JsonlSessionRepo(sessions_root(target), workspace=target.id)
     session = None
-    state = None
+    assembly = None
     indexer = None
     created = False
     try:
@@ -366,31 +354,24 @@ def _run_session(args: argparse.Namespace, config) -> int:
         recorder.ensure_branch()
         messages = [*history, {"role": "user", "content": args.prompt}]
 
-        state = RunState.for_run(
+        assembly = assemble(
+            config=config,
+            messages=messages,
+            workspace_root=target.root,
+            recorder=recorder,
             auto_approve=args.yes,
             full=args.allow_full_access,
-            workspace_root=target.root,
             question=_terminal_question(),
-            # The plan outlives the run that wrote it: load it, and publish through the session's
-            # single writer.
-            plan=stored_plan(session, recorder.branch),
-            on_plan=recorder.record_plan,
+            # Checkpoints belong to the session: snapshots land under the branch tip.
+            checkpoint=DirCheckpointSink(
+                root=Path(target.root), session_id=session.metadata.id, tip_seq=recorder.tip_seq
+            ),
+            on_message=notifying(indexer, recorder.on_message, session.metadata.id),
+            warn=_mcp_warning,
         )
-        # Checkpoints belong to the session: snapshots land under the branch tip.
-        state.checkpoint = DirCheckpointSink(
-            root=Path(target.root), session_id=session.metadata.id, tip_seq=recorder.tip_seq
-        )
-        _announce_security(state.security)
-        _start_mcp(state)
-        schemas, impls = build_toolset(state)
+        _announce_security(assembly.state.security)
         try:
-            reply = Run(
-                messages,
-                RunSpec.resolve(config=config, tools=schemas, registry=impls),
-                state=state,
-                on_message=notifying(indexer, recorder.on_message, session.metadata.id),
-                on_compaction=recorder.record_compaction,
-            ).run().text
+            reply = assembly.run().text
         except LLMError as exc:
             print(f"循环中止：{exc}", file=sys.stderr)
             return 1
@@ -405,9 +386,9 @@ def _run_session(args: argparse.Namespace, config) -> int:
         if session is not None and not session.closed:
             session.close()
         repo.close()
-        if state is not None:
+        if assembly is not None:
             # MCP server processes live exactly as long as the run does.
-            state.close_mcp()
+            assembly.close()
 
     print(reply)
     print(
@@ -514,35 +495,30 @@ def _interactive(args: argparse.Namespace, config) -> int:
                 print(commands_module.help_text(workspace_root=target.root), file=sys.stderr)
                 continue
 
-            # Plain input: a fresh RunState per turn keeps the flags and workspace; MCP follows it.
-            state = RunState.for_run(
+            # Plain input: a fresh assembly per turn keeps the flags and workspace; MCP follows it.
+            messages = [
+                *messages_for_branch(session, recorder.branch),
+                {"role": "user", "content": text},
+            ]
+            assembly = assemble(
+                config=config,
+                messages=messages,
+                workspace_root=target.root,
+                recorder=recorder,
                 auto_approve=args.yes,
                 full=args.allow_full_access,
-                workspace_root=target.root,
                 question=_terminal_question(),
-                plan=stored_plan(session, recorder.branch),
-                on_plan=recorder.record_plan,
+                checkpoint=checkpoint,
+                on_message=notifying(indexer, recorder.on_message, session.metadata.id),
+                warn=_mcp_warning,
             )
-            state.checkpoint = checkpoint
-            _start_mcp(state)
             try:
-                schemas, impls = build_toolset(state)
-                messages = [
-                    *messages_for_branch(session, recorder.branch),
-                    {"role": "user", "content": text},
-                ]
-                outcome = Run(
-                    messages,
-                    RunSpec.resolve(config=config, tools=schemas, registry=impls),
-                    state=state,
-                    on_message=notifying(indexer, recorder.on_message, session.metadata.id),
-                    on_compaction=recorder.record_compaction,
-                ).run()
+                outcome = assembly.run()
             except LLMError as exc:
                 print(f"循环中止：{exc}", file=sys.stderr)
                 continue
             finally:
-                state.close_mcp()
+                assembly.close()
             print(outcome.text)
             print(f"--- {outcome.reason} ---", file=sys.stderr)
     finally:
@@ -557,29 +533,28 @@ def _interactive(args: argparse.Namespace, config) -> int:
 def _compact_now(session, recorder: SessionRecorder, config, target, args) -> None:
     """/compact body: one forced compaction assembled exactly like a round, since the request only
     reuses the cache when its prefix is the prefix that round sent."""
-    state = RunState.for_run(
+    # The same assembly a turn gets, MCP and plan included: a tool table that differs by one entry
+    # breaks the prefix at its first byte.
+    assembly = assemble(
+        config=config,
+        messages=messages_for_branch(session, recorder.branch),
+        workspace_root=target.root,
+        recorder=recorder,
         auto_approve=args.yes,
         full=args.allow_full_access,
-        workspace_root=target.root,
         question=_terminal_question(),
-        # The same plan source a turn reads, so the per-round tail block renders identically.
-        plan=stored_plan(session, recorder.branch),
-        on_plan=recorder.record_plan,
+        warn=_mcp_warning,
     )
-    # Same assembly as a turn, MCP included: a tool table that differs by one entry breaks the
-    # prefix at its first byte.
-    _start_mcp(state)
     try:
-        schemas, impls = build_toolset(state)
         context = ContextManager.from_spec(
-            RunSpec.resolve(config=config, tools=schemas, registry=impls),
-            transcript=Transcript(messages_for_branch(session, recorder.branch)),
-            state=state,
+            assembly.spec,
+            transcript=Transcript(assembly.messages),
+            state=assembly.state,
             on_compaction=recorder.record_compaction,
         )
         report = context.compact_now()
     finally:
-        state.close_mcp()
+        assembly.close()
     if report is None:
         print("没有可压缩的更早历史（或摘要失败），会话保持不变", file=sys.stderr)
     else:

@@ -91,14 +91,14 @@ def test_a3_run_is_the_only_loop_and_stays_a_scheduler():
     assert stop.count("state.hooks.trigger(") == 1, "终止路径只该有 Stop 一个 hook 调用点"
     assert "while " not in run, "循环里不该出现手写 while"
 
-    # There is no second loop: Run has exactly three callers (run.py defines without calling).
+    # There is no second loop: Run has exactly two callers (run.py defines without calling). The
+    # hosts reach it through services/assembly.py, so a new call site means a new loop.
     callers = {
         item.split(":")[0]
         for item in code_hits(files_under(suffix=".py"), r"\bRun\(")
     }
     assert callers == {
-        "avid/cli.py",
-        "avid/services/runs.py",
+        "avid/services/assembly.py",
         "avid/agent/tools/subagent.py",
     }, callers
 
@@ -143,8 +143,9 @@ def test_a6_event_names_are_single_sourced():
 
 def test_a10_the_message_callback_is_wired_in_a_known_set_of_places():
     """The message callback appears only in these places; one more means declaring it here with a
-    reason (run.py calls it, recorder.py exposes it, cli.py and services/runs.py wire it to runs,
-    services/sessions.py copies history through it directly).
+    reason (run.py calls it, recorder.py exposes it, services/assembly.py takes it from a host and
+    hands it to the loop, the hosts wire it to their runs, services/sessions.py copies history
+    through it directly).
     """
     found = {
         item.split(":")[0]
@@ -154,6 +155,7 @@ def test_a10_the_message_callback_is_wired_in_a_known_set_of_places():
         "avid/agent/run.py",
         "avid/session/recorder.py",
         "avid/cli.py",
+        "avid/services/assembly.py",
         "avid/services/runs.py",
         "avid/services/sessions.py",
     }, found
