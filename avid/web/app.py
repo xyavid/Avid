@@ -3,11 +3,13 @@ fallback."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -167,10 +169,22 @@ def create_app(
     allowed_hosts: frozenset[str] | None = None,
 ) -> FastAPI:
     """Builds the application: trust middleware, error handlers, routers and the static fallback."""
+    assembled = services or Services(workspace_root=workspace_root)
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        yield
+        # Ctrl-C and SIGTERM reach here before the loop closes, and this is the only exit `avid
+        # web` has: the runs still in flight are cancelled and waited for, then the layers they
+        # write through are closed. In a thread, because that wait must not block the loop the
+        # open streams are shutting down on.
+        await asyncio.to_thread(assembled.close)
+
     app = FastAPI(
         title="Avid",
         version=f"api-v{API_VERSION}",
         description="自建 agent 运行时（harness）的 Web API 与事件流",
+        lifespan=lifespan,
     )
     # On app.state so WebSocket endpoints (the terminal bridge) reuse the same allowlist.
     app.state.allowed_hosts = trusted_hosts(allowed_hosts)
@@ -178,7 +192,7 @@ def create_app(
         TrustBoundaryMiddleware, allowed_hosts=app.state.allowed_hosts
     )
     # A workspace root is only meaningful for self-assembly: given, the process is single-workspace.
-    app.state.services = services or Services(workspace_root=workspace_root)
+    app.state.services = assembled
     app.state.static_dir = Path(static_dir) if static_dir is not None else STATIC_DIR
     app.state.build = load_build_info(app.state.static_dir)
 

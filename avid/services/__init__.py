@@ -273,6 +273,15 @@ class Services:
         self.workspaces.rebind()
 
     def close(self) -> None:
+        """End the process, runs first: every layer below is safe to close twice.
+
+        The order is the whole contract. A run settling after the indexer stopped would drop its
+        one notification, and one settling after the repositories closed would lose its last
+        write; so the runs are cancelled and waited for before either happens.
+        """
+        stranded = self.runs.drain()
+        if stranded:
+            logger.warning("退出时这些运行没停下，不再等：%s", "、".join(stranded))
         if self.indexer is not None:
             self.indexer.stop()
         self.workspaces.close()

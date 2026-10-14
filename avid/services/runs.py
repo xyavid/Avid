@@ -93,6 +93,10 @@ MAX_EVENT_BUFFER = 4096
 # consuming their buffer, and a dropped buffer is exactly the silent gap I5 forbids.
 SWEEP_MIN_AGE_SECONDS = 30.0
 
+# How long the process's exit waits for the runs it cancelled: one may be inside a model call or
+# a tool that only notices the flag when it returns, and the exit cannot wait on it forever.
+DRAIN_TIMEOUT_SECONDS = 10.0
+
 # Message role -> durable message event.
 _MESSAGE_EVENTS = {
     "user": USER_MESSAGE,
@@ -457,6 +461,31 @@ class RunRegistry:
             record.condition.notify_all()
         logger.info("请求取消 %s", run_id)
         return record
+
+    def drain(self, timeout: float = DRAIN_TIMEOUT_SECONDS) -> list[str]:
+        """Cancel every run in flight and wait for it to settle; return the ids that did not.
+
+        Called when the process is ending, where nothing later will wait again: a run still alive
+        holds a session handle and a recorder, both of which the layers above are about to close.
+        """
+        deadline = time.monotonic() + timeout
+        stranded: list[str] = []
+        for run_id in self.active_runs():
+            with suppress(RunFinished, RunNotFound):
+                self.cancel(run_id)
+            try:
+                record = self.get(run_id)
+            except RunNotFound:
+                continue  # settled and was reclaimed between the listing and here
+            with record.condition:
+                while not record.terminal:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        stranded.append(run_id)
+                        break
+                    # One deadline for all of them: the wait is for the exit, not per run.
+                    record.condition.wait(remaining)
+        return stranded
 
     # ---- Input channel ----
 

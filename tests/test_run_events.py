@@ -580,6 +580,57 @@ def test_cancel_arriving_before_the_state_exists_is_not_lost(sandbox, monkeypatc
     assert record.cancel_reason == "user"
 
 
+def test_drain_cancels_the_runs_in_flight_and_waits_for_them(sandbox):
+    """Ending the process cancels what is still running and waits for it to settle: a run left
+    alive holds a session handle past the repositories' close and loses its last write.
+    """
+    started = threading.Event()
+
+    def gated(arguments, **kwargs):
+        started.set()
+        assert wait_for(lambda: kwargs["state"].cancelled, 5), "取消没到工具"
+        return "ok"
+
+    services = build(
+        sandbox,
+        ScriptedChat(make_turn("", [tool_call("read_file")]), make_turn("完")),
+        {"read_file": gated},
+    )
+    record = services.runs.start(new_session(services), "跑一下")
+    assert started.wait(5), "运行没走到工具那一步"
+
+    assert services.runs.drain() == []
+    assert record.status == "cancelled" and record.cancel_reason == "user"
+    assert services.runs.active_runs() == []
+
+
+def test_drain_gives_up_and_names_the_runs_that_did_not_stop(sandbox):
+    """The wait is bounded: a run stuck where the flag is never read must not hold the exit
+    forever, but it has to be named, not silently abandoned.
+    """
+    held = threading.Event()
+    entered = threading.Event()
+
+    def stuck(arguments, **kwargs):
+        entered.set()
+        held.wait(5)
+        return "ok"
+
+    services = build(
+        sandbox,
+        ScriptedChat(make_turn("", [tool_call("read_file")]), make_turn("完")),
+        {"read_file": stuck},
+    )
+    record = services.runs.start(new_session(services), "跑一下")
+    assert entered.wait(5), "运行没走到工具那一步"
+
+    assert services.runs.drain(timeout=0.2) == [record.run_id]
+
+    held.set()
+    assert wait_terminal(record), record.status
+    assert record.status == "cancelled"
+
+
 def test_run_record_reports_the_real_round_and_tokens(sandbox):
     """``GET /api/runs/{id}`` reports round/tokens from the state, not a stale 0: many_rounds(2)
     is two tool rounds plus a final round, so round reaches 3 and tokens accumulate per round.
