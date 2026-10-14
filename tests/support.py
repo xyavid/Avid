@@ -231,8 +231,20 @@ def run_loop(messages, *, on_message=None, ask=None, on_event=None, state=None, 
     from avid.agent.state import RunState
 
     state_kwargs = {key: kwargs.pop(key) for key in list(kwargs) if key in _STATE_KWARGS}
+    # The two callbacks are aliases for state fields, so they classify with them: given a
+    # caller-built state they have nowhere to go, and dropping them silently is how a test ends up
+    # asserting against a run it never configured.
+    if ask is not None:
+        state_kwargs["ask"] = ask
+    if on_event is not None:
+        state_kwargs["observer"] = on_event
     if state is None:
-        state = RunState.for_run(ask=ask, observer=on_event, **state_kwargs)
+        state = RunState.for_run(**state_kwargs)
+    elif state_kwargs:
+        raise ValueError(
+            f"run_loop 同时给了 state 与状态类参数 {sorted(state_kwargs)}："
+            "这些只在自建 state 时生效，传了 state 就会被静默丢掉"
+        )
     outcome = Run(
         messages,
         RunSpec.resolve(**kwargs),

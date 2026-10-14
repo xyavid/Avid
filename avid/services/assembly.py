@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -125,6 +126,11 @@ def assemble(
     )
     state.checkpoint = checkpoint
 
+    if (tools is None) != (registry is None):
+        raise ValueError(
+            "tools 与 registry 必须一起给或一起不给：半个工具表只会让每次调用回「未知工具」"
+        )
+
     if tools is None:
         # Nothing injected: the table is the built-ins plus this run's MCP servers.
         manager = McpManager(workspace_root)
@@ -132,21 +138,30 @@ def assemble(
         report = warn or logger.warning
         for warning in manager.start_all():
             report(warning)
-        schemas, impls = build_toolset(state)
-    else:
-        schemas, impls = tools, registry or {}
-        if scratch:
-            schemas, impls = without_writers(schemas, impls)
 
-    spec = RunSpec.resolve(
-        config=config,
-        chat=chat or chat_completion,
-        summarize=summarize,
-        instructions=instructions,
-        budget=budget,
-        tools=schemas,
-        registry=impls,
-    )
+    try:
+        if tools is None:
+            schemas, impls = build_toolset(state)
+        else:
+            assert registry is not None  # the pair guard above
+            schemas, impls = tools, registry
+            if scratch:
+                schemas, impls = without_writers(schemas, impls)
+        spec = RunSpec.resolve(
+            config=config,
+            chat=chat or chat_completion,
+            summarize=summarize,
+            instructions=instructions,
+            budget=budget,
+            tools=schemas,
+            registry=impls,
+        )
+    except BaseException:
+        # Nothing receives the run when assembly fails, so servers started above would outlive it:
+        # the caller has no state to close, which is exactly why the closure belongs here.
+        with suppress(Exception):
+            state.close_mcp()
+        raise
     return RunAssembly(
         messages=messages,
         spec=spec,
