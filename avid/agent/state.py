@@ -33,6 +33,10 @@ SteerProbe = Callable[[], "list[dict[str, Any]]"]
 MAX_CONSECUTIVE_DENIALS = 5
 
 
+class RunCancelled(RuntimeError):
+    """Cancellation, raised only at step boundaries so no compensating write is needed."""
+
+
 class Checkpointer(Protocol):
     """Write-ahead snapshot contract of the files-tool write paths (checkpoints.py), where None
     means success and a string is the error text telling the caller to refuse the write."""
@@ -299,14 +303,10 @@ class RunState:
     def check_cancelled(self) -> None:
         """Called at the loop's checkpoints; it raises RunCancelled when the run should stop."""
         if self.cancelled:
-            from .run import RunCancelled
-
             raise RunCancelled(self.cancel_reason or "cancelled")
         if self.cancel_probe is not None:
             reason = self.cancel_probe()
             if reason:
-                from .run import RunCancelled
-
                 raise RunCancelled(reason)
 
     def note_tool_call(self) -> None:

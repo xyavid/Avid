@@ -11,9 +11,9 @@ from support import ScriptedChat, make_turn, tool_call
 
 from avid.agent.events import RUN_STATUS, STOP_NUDGE
 from avid.agent.hooks import HookRegistry
-from avid.agent.run import Run, RunCancelled
+from avid.agent.run import Run
 from avid.agent.spec import RunSpec
-from avid.agent.state import RunState
+from avid.agent.state import RunCancelled, RunState
 from avid.agent.stop import STOP_BLANK_NOTICE, STOP_FINAL_TEXT
 from avid.agent.tools import TOOL_IMPLS, TOOLS
 from avid.providers.client import DEFAULT_MAX_TOKENS

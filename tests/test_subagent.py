@@ -433,7 +433,7 @@ def test_run_subagent_uses_an_injected_chat_as_is(monkeypatch):
 
 
 def test_check_cancelled_consults_the_external_probe():
-    from avid.agent.run import RunCancelled
+    from avid.agent.state import RunCancelled
 
     state = RunState(cancel_probe=lambda: "外部要求停止")
 
@@ -477,7 +477,7 @@ def test_run_subagent_wires_probe_observer_and_state(monkeypatch):
     """run_subagent builds the child RunState itself: probe and observer land on it, and the
     reference goes to on_state."""
     from avid.agent import run as run_module
-    from avid.agent.run import RunCancelled
+    from avid.agent.state import RunCancelled
 
     seen = {}
 
@@ -579,7 +579,7 @@ def test_parent_cancel_surfaces_quickly(monkeypatch):
 def test_deadline_reaches_child_checkpoints(monkeypatch):
     """On deadline the timeout text returns and the child stops at its next checkpoint."""
     from avid.agent import run as run_module
-    from avid.agent.run import RunCancelled
+    from avid.agent.state import RunCancelled
 
     raised = []
 

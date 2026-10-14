@@ -9,9 +9,9 @@ import copy
 
 from support import ScriptedChat, make_turn, tool_call
 
-from avid.agent.run import Run, RunCancelled
+from avid.agent.run import Run
 from avid.agent.spec import RunSpec
-from avid.agent.state import RunState
+from avid.agent.state import RunCancelled, RunState
 from avid.providers.config import Config
 
 CONFIG = Config(api_key="k", base_url="https://api.test/v1", model="m")

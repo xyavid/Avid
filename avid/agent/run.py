@@ -27,10 +27,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger("avid.agent.run")
 
 
-class RunCancelled(RuntimeError):
-    """Cancellation, raised only at step boundaries so no compensating write is needed."""
-
-
 def _submit_input(
     transcript: Transcript, state: RunState, tool_names: list[str]
 ) -> tuple[int, list[str]] | None:
