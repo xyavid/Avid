@@ -15,7 +15,9 @@ import pytest
 
 from avid.security.permission import (
     BackendProbe,
+    brokerize,
     build_spec,
+    decide,
 )
 from avid.security.sandbox import (
     BACKEND_BWRAP,
@@ -294,6 +296,45 @@ def test_grants_are_mounted_and_masked_targets_are_refused(tmp_path, home):
     assert masked.count(str(home / ".ssh")) == 1
 
 
+def mounted(built: list[str], flag: str, path: str) -> bool:
+    """True when the argv mounts path with flag; one mount is flag, source, target."""
+    return any(built[index] == flag and built[index + 1] == path for index in range(len(built) - 1))
+
+
+def test_rw_grants_wider_than_the_call_are_refused(tmp_path, home):
+    """A rw grant buys every write under it, so /, one component under it, and the ancestors of home,
+    the workspace or a mask are dropped; the narrow target and every ro grant are untouched.
+    """
+    spec = build_spec(policy="workspace", root=str(tmp_path / "ws"), home=home, probe=WORKING)
+    target = tmp_path / "outside"
+    target.mkdir()
+
+    for wide in ("/", "/etc", "/tmp", str(home), str(tmp_path)):
+        built = argv(spec, ["bash", "-c", "ls"], grants=[(wide, "rw")])
+        assert not mounted(built, "--bind", wide), wide
+
+    writable = argv(spec, ["bash", "-c", "ls"], grants=[(str(target), "rw")])
+    readable = argv(spec, ["bash", "-c", "ls"], grants=[("/etc", "ro")])
+    assert mounted(writable, "--bind", str(target))
+    assert mounted(readable, "--ro-bind", "/etc")
+
+
+def test_one_command_cannot_widen_its_grant_to_the_root(tmp_path, home):
+    """Regression: the writable targets of `mkdir -p <target> && ls /` include `/`, and dropping it
+    must not cost the target the call actually approved."""
+    target = tmp_path / "probe"
+    target.mkdir()
+    command = f"mkdir -p {target} && ls /"
+    spec = build_spec(policy="workspace", root=str(tmp_path / "ws"), home=home, probe=WORKING)
+    decision = decide(brokerize("bash", {"command": command}, root=spec.root))
+
+    assert decision.allowed
+    assert ("/", "rw") in decision.grants
+    built = argv(spec, ["bash", "-c", command], grants=decision.grants)
+    assert mounted(built, "--bind", str(target))
+    assert not mounted(built, "--bind", "/")
+
+
 def test_grants_are_ignored_when_not_enforced(tmp_path, home):
     outside = tmp_path / "a.txt"
     outside.write_text("x", encoding="utf-8")
@@ -480,6 +521,30 @@ def test_real_run_can_read_a_granted_path_read_only(real_spec, tmp_path):
     assert "outside" in done.stdout
     assert "Read-only file system" in done.stdout + done.stderr
     target.unlink(missing_ok=True)
+
+
+def test_real_run_never_gets_the_host_tmp_writable(real_spec, tmp_path):
+    """The guard in one real run: a rw grant on /tmp is dropped, so the sandbox's own empty tmpfs
+    stays in place and the host's /tmp is neither readable nor writable.
+    """
+    sentinel = Path("/tmp") / f"avid-wide-{tmp_path.name}.txt"
+    sentinel.write_text("host\n", encoding="utf-8")
+    try:
+        done = subprocess.run(
+            argv(
+                real_spec,
+                ["bash", "-c", f"cat {sentinel} 2>&1; echo sandbox > {sentinel}"],
+                grants=[("/tmp", "rw")],
+            ),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert "host" not in done.stdout
+        assert sentinel.read_text(encoding="utf-8") == "host\n"
+    finally:
+        sentinel.unlink(missing_ok=True)
 
 
 # ---- degraded env blacklist ----

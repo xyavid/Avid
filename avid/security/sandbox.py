@@ -376,7 +376,9 @@ class SandboxSpec:
     def _allowed_grants(
         self, grants: Iterable[tuple[str, str]]
     ) -> list[tuple[str, str]]:
-        """Drop grants that land on a masked path: host policy outranks a run capability."""
+        """Drop grants that host policy outranks: a masked path, or a writable mount of a path so
+        wide it stands for a whole subtree the user never approved.
+        """
         allowed: list[tuple[str, str]] = []
         for path, access in grants:
             if not path:
@@ -392,8 +394,25 @@ class SandboxSpec:
             if masked:
                 logger.warning("拒绝在掩蔽路径上挂载能力：%s", path)
                 continue
+            if access == "rw" and self._too_wide_for_rw(text):
+                logger.warning("拒绝把宽路径挂成可写：%s", path)
+                continue
             allowed.append((text, access))
         return allowed
+
+    def _too_wide_for_rw(self, text: str) -> bool:
+        """True when a writable mount of text would cover far more than one call's target.
+
+        A rw grant buys every write under it, and the / baseline is read-only already, so a wider
+        grant is never the narrowest way to run the command. Rather than ask, such grants are dropped:
+        an approval for "touch /tmp/x" must not become a writable host /tmp. A ro grant stays.
+        """
+        if len(Path(text).parts) <= 2:
+            # / itself, or one component under it: /etc, /home, /usr, /tmp — and one of these bound
+            # over the sandbox's own /tmp mount would expose the host's tmp instead.
+            return True
+        watched = (self.home, self.root, *self.mask_dirs, *self.mask_files)
+        return any(item and _contains(text, str(Path(item).expanduser())) for item in watched)
 
 
 def _contains(base: str | Path, path: str | Path) -> bool:
