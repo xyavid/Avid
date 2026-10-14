@@ -7,8 +7,8 @@ CLI  avid --agent / --session ─┐
 Web  POST /api/sessions/{id}/runs ─┴─► services/runs.RunRegistry（线程 + 事件重放缓冲）
                                        ▼
                          agent/run.Run —— 只表达调度顺序（subagent 递归用）
-                           ├ ContextManager(context).compose()  装配 SYSTEM / tail 块，编排压缩
-                           ├ chat() → Turn             正文 + tool_calls
+                           ├ ContextManager.compose()  装配 SYSTEM / tail 块，编排压缩
+                           ├ ContextManager.call() → Turn   正文 + tool_calls；报超限则压缩后重发一次
                            └ execution.execute_batch()
                                 ├ security/action 归一化 → security/engine 裁决（默认放行；毁灭级问一次）
                                 ├ security/sandbox 按能力账本组装 bwrap argv
@@ -36,20 +36,20 @@ Web  POST /api/sessions/{id}/runs ─┴─► services/runs.RunRegistry（线�
 
 ## 运行输入与状态
 
-- `agent/spec.py` 是运行输入的收口（一次运行要什么，全在这一处）；`agent/state.py` 的 `RunState` 装全部可变状态。
-- 每步产出一个 `Turn`（正文 + tool_calls）；`agent/stop.py` 的 `StopReason` 是唯一终止路径。
+- `agent/spec.py` 收口一轮由什么组成（模型配置、chat、工具表与 schema、各项上限）；`agent/state.py` 的 `RunState` 是权限、沙箱、工作区、钩子与全部可变状态的唯一权威。一份事实只有一个所有者：spec 不重复持有任何 state 字段。
+- 每步产出一个 `Turn`（正文 + tool_calls）；`agent/stop.py` 的 `StopReason` 是唯一终止路径，连续拒绝停机（`denial_halt`）也在那里产出。
 - **跨 run 的意图存会话值，不在 RunState 里**：usage、压缩游标与任务计划（`avid.plan/<分支>`）都是值，宿主起 run 时读进 RunState、用回写回调交回 recorder；计划全部 completed（或清空）时删值，`/rewind` 跟着删。判断一份状态该存哪：Transcript 拥有说过/做过，会话值拥有跨 run 的意图，RunState 拥有本轮派生量。
 
 ## 上下文与压缩
 
 - 装配在 `agent/context.py`：`CONTEXT_MAP` 声明表一行一个块（kind / 标题 / 段落 / 稳定性 / 上限 / 取值），顺序即渲染顺序即缓存纪律——五个稳定块在前，每轮块（注入文本 / 计划 / 运行状态）在后，拼成末端那条不进 transcript 的注记；计划块的**源数据**是会话值，注记只是它这一轮的视图。
-- 压缩通路在 `agent/compaction.py`：保留最近 N 轮 + 一段结构化检查点（已验证事实与假设分开放）；阈值触发、`/compact` 与溢出兜底共用一个入口，预算字段集中在 `ContextBudget`。压缩那次调用由 `ContextManager._run_compaction` 交出冻结的 system 与工具表，请求于是与上一轮同前缀（求的是一次缓存命中），请求里唯一的增量是末尾那条指令；模型若发起工具调用、答空或报错，回退到 `COMPACTION_SYSTEM` + 拍平文本的独立引擎提示词路径，两条都不成才保留原历史。
+- 压缩通路在 `agent/compaction.py`：保留最近 N 轮 + 一段结构化检查点（已验证事实与假设分开放）；阈值触发、`/compact`（`ContextManager.compact_now`）与溢出兜底（`ContextManager.call` 捕获 `PromptTooLongError` 后压缩重发一次）共用一个入口，预算字段集中在 `ContextBudget`。压缩那次调用由 `ContextManager._run_compaction` 交出冻结的 system 与工具表，请求于是与上一轮同前缀（求的是一次缓存命中），请求里唯一的增量是末尾那条指令；模型若发起工具调用、答空或报错，回退到 `COMPACTION_SYSTEM` + 拍平文本的独立引擎提示词路径，两条都不成才保留原历史。
 - 循环的四个点各有两段：本体那段在 `agent/guards.py`（Pre 的权限闸门、Post 的输出预算与重复提醒、Stop 的运行汇总，普通函数，执行路径直接调用），额外配置那段是 `agent/hooks.py` 按工作区 `.avid/hooks.json` 装配的用户脚本（默认无声明＝无钩子）；两段都不改工具调用与结果的形状，脚本只能判定与注入。
 - **本文件自身也是上下文**：workspace 根目录的 `AGENTS.md` 进 `BOOTSTRAP` 块（标题「工作区约定」），字符上限是 `prompt.AGENTS_MD_MAX_CHARS`（16000）——这是它必须保持精简的原因，体积由 `tests/test_docs_contract.py` 守住（预算 6000）。
 
 ## 跨包分层门禁
 
-`tests/test_web_boundaries.py` 用 grep 与 AST 断言钉住跨包依赖方向，不跑任何东西（A1–A14）：
+`tests/test_web_boundaries.py` 用 grep 与 AST 断言钉住跨包依赖方向，不跑任何东西（A1–A15）：
 
 - **A13**：循环与工具协议对策略层零运行时依赖——调度不 import `security/`，裁决只经 `agent/execution.py` 的边界。
 - **A14**：会话索引对会话层单向只读——`session/` 不得 import `index/`；`index/` 不得依赖 `services/`、`web/`、`agent/`、`providers/`。

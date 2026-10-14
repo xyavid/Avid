@@ -4,7 +4,7 @@
 
 | 子系统 | 位置 | 职责 |
 |---|---|---|
-| Agent 核心 | `agent/` | 一次运行的生命周期与上下文策略：`run`（唯一循环）、`spec` 运行输入收口、`state.RunState` 全部可变状态、`context` 上下文装配（`CONTEXT_MAP` 声明表）、`compaction` 压缩通路、`stop` 终止路径（`StopReason`）、`execution` 工具协议、`transcript` 消息唯一所有者、`events` 事件名单点、`guards` 本体的闸门与守卫、`hooks` 用户钩子脚本的声明与执行、`todo` / `prompt` / `skills` |
+| Agent 核心 | `agent/` | 一次运行的生命周期与上下文策略：`run`（唯一循环，只表达调度顺序）、`spec` 一轮的模型与工具表收口、`state.RunState` 权限/沙箱/工作区与全部可变状态的唯一权威、`context` 上下文装配（`CONTEXT_MAP` 声明表）与 `call`（一轮模型调用，含溢出兜底）、`compaction` 压缩通路、`stop` 终止路径（`StopReason`，含连续拒绝停机）、`execution` 工具协议、`transcript` 消息唯一所有者、`events` 事件名单点、`guards` 本体的闸门与守卫、`hooks` 用户钩子脚本的声明与执行、`todo` / `prompt` / `skills` |
 | 模型适配 | `providers/` | 换模型只动这一层：`openai_compat` / `anthropic` / `responses` 三个实现 + `__init__.py` 注册表、`transport` 退避重试、`protocol` 共享词表、`client`、`usage` usage 归一、`byok` 模型配置、`verify` 连通校验、`reasoning` 思考记录与回传判定 |
 | 安全 | `security/` | 毁灭级名单、阈值与文案的高频变化集中地：`action` 归一化与风险分类、`engine` 裁决（默认直接跑；毁灭级问一次；凭据硬拒；full 模式跳过询问）、`sandbox` bwrap、`audit`、`permission` 唯一装配点、`userdirs`（用户级目录 + 设置文件 + 会话目录解析）、`command_parse`（bash 只读判定） |
 | 会话 | `session/` | 磁盘上的会话真相：条目树 + 值 + 分支 + 变更线，`memory` 与 `jsonl` 两后端共用一套一致性用例，`recorder` 是唯一写入者 |

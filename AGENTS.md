@@ -63,7 +63,7 @@
   - 中文只留在**面向人与模型的字符串**里（界面文案、错误消息、prompt 文本、日志）；注释一律英文。
 - 改代码必须同步改注释；发现注释说谎，当场修。
 - **docs/ 只装两样东西**：锚到代码单点的描述性现状（路径 + 符号，不写行号；只描述、不排期），与不含代码事实的判据（`design`）；写作规矩与索引见 `docs/README.md`。过程文档（计划 / 诊断 / 架构图）留 `dev/`，不入库。
-- **现状问代码，不问文档**：模块职责与不变量问 docstring；跨包边界问 `tests/test_web_boundaries.py`（A1–A14）；前端契约问 `test_wire_contract.py` / `test_event_contract.py`。
+- **现状问代码，不问文档**：模块职责与不变量问 docstring；跨包边界问 `tests/test_web_boundaries.py`（A1–A15）；前端契约问 `test_wire_contract.py` / `test_event_contract.py`。
 - `docs/` 与本文件的引用、体积、索引由 `tests/test_docs_contract.py` 护住。`dev/tmp/` 是参考项目副本（约 5.8 GB）——全仓 grep / find 限定到 `avid/`、`tests/`、`web/src`。
 
 ## 4. 架构推导判据

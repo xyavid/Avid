@@ -13,7 +13,7 @@
 
 ## 六份
 
-- [kernel.md](kernel.md) — 数据流、运行生命周期、上下文与压缩、跨包分层门禁（A1–A14）
+- [kernel.md](kernel.md) — 数据流、运行生命周期、上下文与压缩、跨包分层门禁（A1–A15）
 - [modules.md](modules.md) — 子系统清单、入口点清单
 - [extending.md](extending.md) — 改动落点全表
 - [web.md](web.md) — 前端单点声明、端点面、SSE 与静态资源交付
