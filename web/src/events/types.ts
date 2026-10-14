@@ -24,7 +24,6 @@ export type AvidEventType =
   | 'approval_requested'
   | 'approval_resolved'
   | 'context_compacted'
-  | 'todo_reminder'
   | 'stop_nudge'
   | 'run_finished'
   | 'run_failed'
@@ -47,7 +46,6 @@ export const DURABLE_EVENT_TYPES: readonly AvidEventType[] = [
   'approval_requested',
   'approval_resolved',
   'context_compacted',
-  'todo_reminder',
   'stop_nudge',
   'run_finished',
   'run_failed',

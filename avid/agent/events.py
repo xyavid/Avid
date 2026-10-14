@@ -17,7 +17,6 @@ TOOL_CALL_DENIED = "tool_call_denied"
 APPROVAL_REQUESTED = "approval_requested"
 APPROVAL_RESOLVED = "approval_resolved"
 CONTEXT_COMPACTED = "context_compacted"
-TODO_REMINDER = "todo_reminder"
 STOP_NUDGE = "stop_nudge"
 RUN_FINISHED = "run_finished"
 RUN_FAILED = "run_failed"
@@ -44,7 +43,6 @@ DURABLE_EVENT_TYPES: tuple[str, ...] = (
     APPROVAL_REQUESTED,
     APPROVAL_RESOLVED,
     CONTEXT_COMPACTED,
-    TODO_REMINDER,
     STOP_NUDGE,
     RUN_FINISHED,
     RUN_FAILED,
@@ -68,7 +66,6 @@ EventType = Literal[
     "approval_requested",
     "approval_resolved",
     "context_compacted",
-    "todo_reminder",
     "stop_nudge",
     "run_finished",
     "run_failed",
@@ -152,7 +149,6 @@ __all__ = [
     "RUN_STATUS",
     "STOP_NUDGE",
     "TERMINAL_EVENT_TYPES",
-    "TODO_REMINDER",
     "TOOL_CALL_DENIED",
     "TOOL_CALL_FINISHED",
     "TOOL_CALL_STARTED",

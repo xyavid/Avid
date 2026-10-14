@@ -34,7 +34,6 @@ from avid.agent.events import (
     RUN_FINISHED,
     RUN_STARTED,
     RUN_STATUS,
-    TODO_REMINDER,
     TOOL_CALL_FINISHED,
     TOOL_CALL_STARTED,
     TOOL_RESULT_MESSAGE,
@@ -610,7 +609,6 @@ def test_plan_travels_in_the_tail_not_in_the_history(sandbox):
     assert [entry for entry in entries if entry["type"] == NOTICE_ENTRY] == []
 
     kinds = [event.type for event in collect(services, record.run_id)]
-    assert kinds.count(TODO_REMINDER) == 0
     assert kinds.count(USER_MESSAGE) == 1
 
     # Projection invariant: the stored history holds no kernel-written reminder text.
