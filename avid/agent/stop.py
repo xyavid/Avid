@@ -35,6 +35,12 @@ BLANK_ANSWER_NOTICE = (
     "（本次运行没有产生可见答复：{reason}。请看上一条工具结果，或重试这一轮。）"
 )
 
+# Closing text of a run halted by consecutive denials; it names the way out, not just the fact.
+DENIAL_HALT = (
+    "（运行已停止：连续 {streak} 次工具调用被权限策略拒绝，期间没有一次通过。"
+    "请向用户说明需要哪个目标或哪条命令的授权，再开新一轮。）"
+)
+
 
 def is_blank(turn: Turn) -> bool:
     """True when the round has no visible text; truncation and an empty stop look alike here."""
@@ -134,3 +140,23 @@ def decide(
         logger.warning("Stop 拦截次数已达上限 %d，照常退出", max_blocks)
         return RunOutcome(text=turn.text, reason=STOP_HOOK_BUDGET_EXIT)
     return RunOutcome(text=turn.text, reason=STOP_FINAL_TEXT)
+
+
+def denial_halt(
+    state: "RunState",
+    transcript: Transcript,
+    *,
+    emitted: Callable[[dict[str, Any]], None],
+) -> RunOutcome:
+    """End a run whose consecutive-denial streak has hit its budget, with the notice that says so.
+
+    The loop owns the branch and its threshold, and a fresh steer still pre-empts the halt there;
+    this runs only once the run is genuinely over, so the notice always reaches the user.
+    """
+    streak = state.denial_streak
+    logger.warning("连续 %d 次工具调用被拒，运行提前结束", streak)
+    text = DENIAL_HALT.format(streak=streak)
+    message = {"role": "assistant", "content": text}
+    transcript.append(message)
+    emitted(message)
+    return RunOutcome(text=text, reason=STOP_DENIAL_HALTED)

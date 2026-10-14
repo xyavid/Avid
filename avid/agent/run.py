@@ -18,7 +18,7 @@ from .execution import execute_batch
 from .hooks import BLOCK
 from .spec import RunSpec
 from .state import RunState
-from .stop import STOP_DENIAL_HALTED, STOP_PROMPT_BLOCKED, RunOutcome, decide
+from .stop import STOP_PROMPT_BLOCKED, RunOutcome, decide, denial_halt
 from .transcript import Transcript
 
 if TYPE_CHECKING:
@@ -180,16 +180,7 @@ class Run:
                 pending_steers = self._take_steers(state)
                 if pending_steers:
                     continue
-                halt = (
-                    f"（运行已停止：连续 {state.denial_streak} 次工具调用被权限策略拒绝，"
-                    "期间没有一次通过。请向用户说明需要哪个目标或哪条命令的授权，"
-                    "再开新一轮。）"
-                )
-                logger.warning("连续 %d 次工具调用被拒，运行提前结束", state.denial_streak)
-                message = {"role": "assistant", "content": halt}
-                transcript.append(message)
-                self._emit(message)
-                return RunOutcome(text=halt, reason=STOP_DENIAL_HALTED)
+                return denial_halt(state, transcript, emitted=self._emit)
         raise AssertionError("轮次循环没有正常出口")  # pragma: no cover
 
     def _call_model(
