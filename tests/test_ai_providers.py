@@ -734,6 +734,18 @@ def test_anthropic_keeps_tool_results_and_a_following_image_message_apart():
     assert out[3]["content"][1]["type"] == "image"
 
 
+def test_anthropic_merges_consecutive_text_user_messages():
+    """Anthropic requires alternating roles; merging must keep both texts, not drop the first."""
+    out = anthropic.build_messages(
+        [
+            {"role": "user", "content": "第一句"},
+            {"role": "user", "content": "第二句"},
+        ]
+    )
+
+    assert out == [{"role": "user", "content": "第一句\n\n第二句"}]
+
+
 def test_responses_parts_become_input_items():
     request = responses.build_request(RESPONSES_CONFIG, [_PARTS_MESSAGE])
     item = request["input"][0]

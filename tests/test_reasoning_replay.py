@@ -160,6 +160,45 @@ def test_other_protocol_reasoning_is_dropped():
     assert THINKING not in str(assistant.get("content", ""))
 
 
+def test_a_live_chain_without_a_tool_result_is_not_planned():
+    """The plan's own guard, not the wire layer's: an assistant at the chain's tail that no tool
+    result answers must not be planned."""
+    config = make_config()
+    messages = [
+        {"role": "user", "content": "看一下项目"},
+        assistant_turn(config=config),  # tool_calls, but nothing follows
+    ]
+
+    assert reasoning.plan_replay(messages, config) == {}
+
+
+def test_a_trailing_injected_note_does_not_break_the_live_chain():
+    """The kernel's per-round tail note sits after the chain and must not cut it off."""
+    config = make_config()
+    messages = [
+        {"role": "user", "content": "看一下项目"},
+        assistant_turn(config=config),
+        {"role": "tool", "tool_call_id": "c1", "content": "ok"},
+        {"role": "user", "content": "（本轮注记）", "tail": True},
+    ]
+
+    assert 1 in reasoning.plan_replay(messages, config)
+
+
+def test_cross_protocol_reasoning_is_not_even_planned():
+    """Same route key, different protocol: the plan must drop it by protocol, not leave it to the
+    wire layer's block-shape filter (which masks the difference for openai-shaped records)."""
+    signed = assistant_turn(config=make_config(family="anthropic"), signature="sig-1")
+    config = make_config()  # openai: same route key, different protocol
+    messages = [
+        {"role": "user", "content": "看一下项目"},
+        signed,
+        {"role": "tool", "tool_call_id": "c1", "content": "ok"},
+    ]
+
+    assert reasoning.plan_replay(messages, config) == {}
+
+
 # ---------------- ③ anthropic：块 + 签名 ----------------
 
 
@@ -181,9 +220,16 @@ def test_anthropic_replays_thinking_blocks_before_text_and_tool_use():
 
 def test_anthropic_drops_blocks_without_a_signature():
     config = make_config(family="anthropic")
+    call = {"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}
+    message = assistant_message("", [call])
+    # A real thinking block without a signature; assistant_turn would build a text block here,
+    # which the type filter drops anyway — that is not what this case is about.
+    reasoning.attach(
+        message, [{"type": "thinking", "thinking": THINKING}], route=reasoning.route_of(config)
+    )
     messages = [
         {"role": "user", "content": "看一下项目"},
-        assistant_turn(config=config, signature=None),  # 只有文本、没有签名
+        message,
         {"role": "tool", "tool_call_id": "c1", "content": "ok"},
     ]
 

@@ -453,6 +453,17 @@ def test_the_ledger_keys_destructive_commands_by_normalized_text(sandbox: Path, 
     assert again.answered_by == "ledger"
 
 
+def test_review_key_uses_the_resolved_target_for_non_bash_tools(sandbox: Path):
+    """Non-bash tools key on the resolved path. Reserved for a destructive non-bash call: today
+    only bash reaches the damage branch, so no decide() path exercises this."""
+    from avid.security.action import brokerize
+    from avid.security.engine import review_key
+
+    action = brokerize("write_file", {"path": "a.txt"}, root=str(sandbox))
+
+    assert review_key(action) == ("path", str(sandbox / "a.txt"))
+
+
 def test_path_grants_are_rw_and_win_over_ro(sandbox: Path, specs):
     ledger = ApprovalLedger()
     ledger.remember(("path", "/tmp/out.txt", "ro"))
