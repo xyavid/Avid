@@ -1,27 +1,24 @@
-"""RunSpec: one run's read-only input.
+"""RunSpec: one run's read-only input, and what one is.
 
 resolve() is the only construction entry — model config resolution, window probing, the tool table
-and schemas, and the parallel limit all land there; mutable run-time state (RunState) is not part
-of it.
+and schemas, and the parallel limit all land there. Everything mutable, and every fact about the
+machine the run touches (permission, sandbox, workspace root, hooks), belongs to RunState: this
+holds the model and tool tables the run is composed of, so there is one owner per fact.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from ..providers.byok import resolve_chat
 from ..providers.client import DEFAULT_MAX_TOKENS, Turn, chat_completion, fetch_context_length
 from ..providers.config import Config
 from .context import ContextBudget
-from .hooks import HookRegistry
 from .state import MAX_CONSECUTIVE_DENIALS
 from .stop import MAX_STOP_BLOCKS
 from .tools import TOOL_IMPLS, TOOLS, ToolImpl
-
-if TYPE_CHECKING:
-    from ..security.permission import ApprovalLedger, RunSecurity
 
 
 @dataclass(frozen=True)
@@ -35,12 +32,6 @@ class RunSpec:
     instructions: str | None
     summarize: Callable[..., Turn] | None
     budget: ContextBudget | None
-    auto_approve: bool
-    permission_mode: str | None
-    ledger: "ApprovalLedger | None"
-    security: "RunSecurity | None"
-    workspace_root: str | None
-    hooks: HookRegistry | None
     max_tokens: int | None
     max_stop_blocks: int
     max_consecutive_denials: int
@@ -57,12 +48,6 @@ class RunSpec:
         instructions: str | None = None,
         summarize: Callable[..., Turn] | None = None,
         budget: ContextBudget | None = None,
-        auto_approve: bool = False,
-        permission_mode: str | None = None,
-        ledger: "ApprovalLedger | None" = None,
-        security: "RunSecurity | None" = None,
-        workspace_root: str | None = None,
-        hooks: HookRegistry | None = None,
         max_tokens: int | None = DEFAULT_MAX_TOKENS,
         max_stop_blocks: int = MAX_STOP_BLOCKS,
         max_consecutive_denials: int = MAX_CONSECUTIVE_DENIALS,
@@ -88,12 +73,6 @@ class RunSpec:
             instructions=instructions,
             summarize=summarize,
             budget=budget,
-            auto_approve=auto_approve,
-            permission_mode=permission_mode,
-            ledger=ledger,
-            security=security,
-            workspace_root=workspace_root,
-            hooks=hooks,
             max_tokens=max_tokens,
             max_stop_blocks=max_stop_blocks,
             max_consecutive_denials=max_consecutive_denials,

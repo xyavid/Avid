@@ -195,21 +195,49 @@ def new_session(services: Any, name: str | None = None) -> str:
     return services.sessions.create(workspace=bound_workspace(services), name=name)["id"]
 
 
-def run_loop(messages, *, on_message=None, ask=None, on_event=None, state=None, **spec_kwargs):
+#: run_loop kwargs that describe the run's state rather than its spec. RunState is the one owner
+#: of these facts (permission, sandbox, workspace root, plan sinks), so a test naming one means
+#: "build the state with it"; everything else goes to RunSpec.resolve.
+_STATE_KWARGS = frozenset(
+    {
+        "auto_approve",
+        "ask",
+        "question",
+        "steers",
+        "observer",
+        "permission_mode",
+        "ledger",
+        "workspace_root",
+        "hooks",
+        "context_window",
+        "full",
+        "security",
+        "scratch",
+        "model_ref",
+        "effort",
+        "plan",
+        "on_plan",
+    }
+)
+
+
+def run_loop(messages, *, on_message=None, ask=None, on_event=None, state=None, **kwargs):
     """Test entry point with the old ``agent_loop`` kwargs, backed by ``RunSpec`` + ``Run``.
 
     Returns the final text; callers needing the stop reason use ``Run`` directly (``RunOutcome``).
     """
     from avid.agent.run import Run
     from avid.agent.spec import RunSpec
+    from avid.agent.state import RunState
 
+    state_kwargs = {key: kwargs.pop(key) for key in list(kwargs) if key in _STATE_KWARGS}
+    if state is None:
+        state = RunState.for_run(ask=ask, observer=on_event, **state_kwargs)
     outcome = Run(
         messages,
-        RunSpec.resolve(**spec_kwargs),
+        RunSpec.resolve(**kwargs),
         state=state,
         on_message=on_message,
-        ask=ask,
-        on_event=on_event,
     ).run()
     return outcome.text
 

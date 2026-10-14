@@ -78,17 +78,9 @@ class Run:
         spec = self.spec
         state = self.state
         if state is None:
-            state = RunState.for_run(
-                auto_approve=spec.auto_approve,
-                ask=self.ask,
-                observer=self.on_event,
-                permission_mode=spec.permission_mode,
-                ledger=spec.ledger,
-                security=spec.security,
-                workspace_root=spec.workspace_root,
-                hooks=spec.hooks,
-                context_window=spec.config.context_window,
-            )
+            # A bare state for callers that passed none (tests, benchmarks). Permission, sandbox,
+            # workspace root and the plan sinks are the caller's to build and pass in.
+            state = RunState.for_run(ask=self.ask, observer=self.on_event)
         # A caller-built state has no probed window yet (probing happens in resolve), so fill it in.
         if state.context_window is None:
             state.context_window = spec.config.context_window
