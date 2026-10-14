@@ -239,13 +239,16 @@ def policy_imports(path: Path) -> tuple[set[str], set[str]]:
 
 # Declared agent -> security edges, written as an assertion instead of an exemption list:
 # scheduling (run), context assembly (context/compaction), the tool protocol (execution), stop
-# and spec carry zero runtime security dependency. Only three edges exist: state (holds the
-# RunSecurity instance), guards (the permission gate the loop itself enforces) and files (the one
-# hard deny: credential reads). The hook surface has no policy edge at all: a callback someone
-# registered must not be able to reach the verdict. RunSecurity / ApprovalLedger names appear only
-# under TYPE_CHECKING.
+# and spec carry zero runtime security dependency. Only four edges exist: state (holds the
+# RunSecurity instance, and resolves the user-level declaration path), guards (the permission gate
+# the loop itself enforces) and files / shell (one fact each, named below). The hook surface and
+# the tool modules have no policy edge at all: a callback someone registered must not be able to
+# reach the verdict, so both take the declaration path from their caller. RunSecurity /
+# ApprovalLedger names appear only under TYPE_CHECKING.
 AGENT_SECURITY_EDGES: dict[str, set[str]] = {
-    "avid/agent/state.py": {"security.permission"},
+    # userdirs is a stdlib-only path leaf, taken for the hook declaration's location; the
+    # package-level import records the package name too.
+    "avid/agent/state.py": {"security", "security.permission", "security.userdirs"},
     "avid/agent/guards.py": {"security.permission"},
     # files takes only the credential gate (sensitive_reason)
     "avid/agent/tools/files.py": {"security.action"},

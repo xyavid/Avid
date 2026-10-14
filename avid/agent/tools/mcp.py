@@ -1,7 +1,8 @@
 """stdio MCP client: the entry point for the external tool ecosystem.
 
 It speaks newline-delimited JSON-RPC over stdio, and each remote tool is wrapped into the same
-shape as a built-in tool.
+shape as a built-in tool. The declaration file is user-level and its path is handed in by the
+caller: this module must not reach the security layer for it, and a run may not write it either.
 
 """
 
@@ -20,7 +21,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import workspace
 from .registry import ToolImpl
 
 logger = logging.getLogger("avid.agent.tools.mcp")
@@ -38,12 +38,6 @@ class McpError(RuntimeError):
     """A failed MCP interaction: a dead process, a broken handshake, a bad reply or a timeout."""
 
 
-def mcp_config_path(workspace_root: str | None) -> Path:
-    """Returns the workspace-level configuration path, ``<root>/.avid/mcp.json``."""
-    base = Path(workspace_root) if workspace_root else Path(workspace.WORKSPACE_ROOT)
-    return base / ".avid" / "mcp.json"
-
-
 @dataclass(frozen=True)
 class ServerSpec:
     """One server declaration from the configuration file."""
@@ -55,9 +49,8 @@ class ServerSpec:
     timeout: float = DEFAULT_CALL_TIMEOUT_SECONDS
 
 
-def _load_specs(workspace_root: str | None) -> tuple[list[ServerSpec], list[str]]:
+def _load_specs(path: Path) -> tuple[list[ServerSpec], list[str]]:
     """Reads the configuration into server declarations, warning rather than raising on errors."""
-    path = mcp_config_path(workspace_root)
     if not path.exists():
         return [], []
     try:
@@ -291,8 +284,10 @@ def _schema_of(server_name: str, tool: dict[str, Any]) -> dict[str, Any]:
 class McpManager:
     """The MCP tool source for one run: it assembles, backstops and closes the servers."""
 
-    def __init__(self, workspace_root: str | None) -> None:
+    def __init__(self, workspace_root: str | None, *, config_path: Path) -> None:
+        """``workspace_root`` is where the servers run; ``config_path`` is the declaration read."""
         self.workspace_root = workspace_root
+        self.config_path = config_path
         self._servers: list[McpServer] = []
         self._started = False
 
@@ -301,7 +296,7 @@ class McpManager:
         if self._started:
             return []
         self._started = True
-        specs, warnings = _load_specs(self.workspace_root)
+        specs, warnings = _load_specs(self.config_path)
         for spec in specs:
             server = McpServer(spec, cwd=self.workspace_root)
             try:
@@ -364,6 +359,5 @@ __all__ = [
     "McpManager",
     "McpServer",
     "ServerSpec",
-    "mcp_config_path",
     "tool_name_of",
 ]

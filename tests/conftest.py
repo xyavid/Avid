@@ -60,13 +60,13 @@ def avid_home(tmp_path, monkeypatch):
 
 @pytest.fixture
 def hook_registry(monkeypatch):
-    """A per-test hook registry: the workspace declaration is replaced by it, so a test registers
-    exactly the callbacks it means to and no hooks.json can leak in from the sandbox."""
+    """A per-test hook registry: the declaration file is replaced by it, so a test registers
+    exactly the callbacks it means to and no hooks.json can leak in from the user-level dir."""
     from avid.agent import hooks as hooks_module
     from avid.agent.hooks import HookRegistry
 
     registry = HookRegistry()
-    monkeypatch.setattr(hooks_module, "load_hooks", lambda workspace_root=None: registry)
+    monkeypatch.setattr(hooks_module, "load_hooks", lambda path: registry)
     return registry
 
 

@@ -6,13 +6,13 @@
 |---|---|---|
 | Agent 核心 | `agent/` | 一次运行的生命周期与上下文策略：`run`（唯一循环，只表达调度顺序）、`spec` 一轮的模型与工具表收口、`state.RunState` 权限/沙箱/工作区与全部可变状态的唯一权威、`context` 上下文装配（`CONTEXT_MAP` 声明表）与 `call`（一轮模型调用，含溢出兜底）、`compaction` 压缩通路、`stop` 终止路径（`StopReason`，含连续拒绝停机）、`execution` 工具协议、`transcript` 消息唯一所有者、`events` 事件名单点、`guards` 本体的闸门与守卫、`hooks` 用户钩子脚本的声明与执行、`todo` / `prompt` / `skills` |
 | 模型适配 | `providers/` | 换模型只动这一层：`openai_compat` / `anthropic` / `responses` 三个实现 + `__init__.py` 注册表、`transport` 退避重试、`protocol` 共享词表、`client`、`usage` usage 归一、`byok` 模型配置、`verify` 连通校验、`reasoning` 思考记录与回传判定 |
-| 安全 | `security/` | 毁灭级名单、阈值与文案的高频变化集中地：`action` 归一化与风险分类、`engine` 裁决（默认直接跑；毁灭级问一次；凭据硬拒；full 模式跳过询问）、`sandbox` bwrap、`audit`、`permission` 唯一装配点、`userdirs`（用户级目录 + 设置文件 + 会话目录解析）、`command_parse`（bash 只读判定） |
+| 安全 | `security/` | 毁灭级名单、阈值与文案的高频变化集中地：`action` 归一化与风险分类、`engine` 裁决（默认直接跑；毁灭级问一次；凭据硬拒；full 模式跳过询问）、`sandbox` bwrap、`audit`、`permission` 唯一装配点、`userdirs`（用户级目录 + 设置文件 + 会话目录与钩子 / MCP 声明的解析）、`command_parse`（bash 只读判定） |
 | 会话 | `session/` | 磁盘上的会话真相：条目树 + 值 + 分支 + 变更线，`memory` 与 `jsonl` 两后端共用一套一致性用例，`recorder` 是唯一写入者 |
 | 会话索引 | `avid/index/` | JSONL 之上的派生查询层，可删可重建：`db`（连接 + user_version 迁移）、`scanner`（字节→行→记录，带行偏移）、`extract`（哪段文本进 search_text）、`writer`（条目与游标同事务）、`indexer`（发现 / 增量 / 补齐 / 重建 + 通知队列）、`queries`（读侧与 FTS 检索）、`check`（校验与修） |
 | 应用服务 | `services/` | 内核的第二个调用方：`assembly` 装配单点（`assemble` 建 state + 工具表 + spec，`RunAssembly.run()` 是唯一构造 `Run` 处）、`runs` 运行注册表与重放缓冲、`approvals` 待决表、`inbox` 补充输入表、`sessions` 读视图、`workspaces`、`workspace_registry`（含会话目录的 `sessions_root`）、`session_migration` 旧布局一次性搬迁、`picker` |
 | 附件 | `attachments.py` | 根级叶子，stdlib-only：图片分块的形状 / 判型 / 上限 / 文本渲染与成本口径 / 线格式 ref 的唯一处；字节内联在会话条目里 |
 | 传输适配 | `avid/web/` | FastAPI 路由 + pydantic DTO + SSE 编帧 + 静态资源；线格式的唯一所有者 |
-| 工具 | `agent/tools/` | 12 个内置工具 + 工作区声明的 MCP 工具：`registry` 单点声明、`files` / `search` / `shell` / `subagent` / `interaction` / `skill` / `mcp` / `web`（联网，`extract` 是它的 HTML→文本叶子）、`safety`（并发判定）、`validate` 参数校验 |
+| 工具 | `agent/tools/` | 12 个内置工具 + 用户级 `mcp.json` 声明的 MCP 工具（路径由 `services/assembly.py` 传给 `mcp.py`）：`registry` 单点声明、`files` / `search` / `shell` / `subagent` / `interaction` / `skill` / `mcp` / `web`（联网，`extract` 是它的 HTML→文本叶子）、`safety`（并发判定）、`validate` 参数校验 |
 | 工作区 | `workspaces.py` | 用户级注册表（`~/.avid/workspaces.json`，是索引不是权威） |
 | 前端 | `web/` | 浏览器侧全部代码（React 18 + Vite + pnpm + TypeScript）；细节见 [web.md](web.md) |
 

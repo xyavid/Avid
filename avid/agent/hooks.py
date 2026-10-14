@@ -1,5 +1,5 @@
-"""The hook surface: extra configuration on the loop's four events, declared in
-``<workspace>/.avid/hooks.json`` as scripts.
+"""The hook surface: extra configuration on the loop's four events, declared as scripts in one
+user-level file (``userdirs.hooks_config_path()``, handed in by the caller).
 
 The body registers nothing here — the permission gate, the output budget, the repeat reminder and
 the run summary are plain code in guards.py — so what a run enforces never depends on what someone
@@ -29,8 +29,6 @@ Hook = Callable[[dict[str, Any]], "str | None"]
 ALLOW = "allow"
 BLOCK = "block"
 
-#: Declaration file, beside the MCP one; a workspace without it configures no hooks at all.
-HOOKS_SUBDIR = Path(".avid") / "hooks.json"
 # A hook runs inside a tool call's own latency budget, so it gets seconds, not minutes.
 DEFAULT_HOOK_TIMEOUT_SECONDS = 5.0
 
@@ -129,10 +127,28 @@ class HookScript:
     timeout: float = DEFAULT_HOOK_TIMEOUT_SECONDS
 
 
-def hooks_config_path(workspace_root: str | None) -> Path:
-    """``<workspace root>/.avid/hooks.json``, or under the process cwd without a root."""
-    base = Path(workspace_root) if workspace_root is not None else Path.cwd()
-    return base / HOOKS_SUBDIR
+def read_config(path: Path) -> tuple[list[HookScript], list[str]]:
+    """Parse the declaration file; a missing file is not a warning, a broken entry is skipped."""
+    if not path.is_file():
+        return [], []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return [], [f"hooks.json 无法解析，已跳过全部钩子：{exc}"]
+    entries = payload.get("hooks") if isinstance(payload, dict) else None
+    if not isinstance(entries, list):
+        return [], [f"hooks.json 缺少 hooks 数组，已跳过：{path}"]
+
+    specs: list[HookScript] = []
+    warnings: list[str] = []
+    for index, entry in enumerate(entries, start=1):
+        if not isinstance(entry, dict):
+            warnings.append(f"hooks.json 第 {index} 项不是对象，已跳过")
+            continue
+        spec = _script_of(entry, index, warnings)
+        if spec is not None:
+            specs.append(spec)
+    return specs, warnings
 
 
 def _script_of(entry: dict[str, Any], index: int, warnings: list[str]) -> HookScript | None:
@@ -160,31 +176,6 @@ def _script_of(entry: dict[str, Any], index: int, warnings: list[str]) -> HookSc
         env=({str(k): str(v) for k, v in env.items()} if isinstance(env, dict) else {}),
         timeout=timeout if timeout > 0 else DEFAULT_HOOK_TIMEOUT_SECONDS,
     )
-
-
-def read_config(workspace_root: str | None) -> tuple[list[HookScript], list[str]]:
-    """Parse the declaration file; a missing file is not a warning, a broken entry is skipped."""
-    path = hooks_config_path(workspace_root)
-    if not path.is_file():
-        return [], []
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        return [], [f"hooks.json 无法解析，已跳过全部钩子：{exc}"]
-    entries = payload.get("hooks") if isinstance(payload, dict) else None
-    if not isinstance(entries, list):
-        return [], [f"hooks.json 缺少 hooks 数组，已跳过：{path}"]
-
-    specs: list[HookScript] = []
-    warnings: list[str] = []
-    for index, entry in enumerate(entries, start=1):
-        if not isinstance(entry, dict):
-            warnings.append(f"hooks.json 第 {index} 项不是对象，已跳过")
-            continue
-        spec = _script_of(entry, index, warnings)
-        if spec is not None:
-            specs.append(spec)
-    return specs, warnings
 
 
 def _payload(event: str, context: dict[str, Any]) -> dict[str, Any]:
@@ -262,10 +253,10 @@ def _script_callback(spec: HookScript) -> Hook:
     return callback
 
 
-def load_hooks(workspace_root: str | None) -> HookRegistry:
-    """This run's registry from the workspace declaration; every skip is logged where it happens."""
+def load_hooks(path: Path) -> HookRegistry:
+    """This run's registry from the declared file; every skip is logged where it happens."""
     registry = HookRegistry()
-    specs, warnings = read_config(workspace_root)
+    specs, warnings = read_config(path)
     for warning in warnings:
         logger.warning("%s", warning)
     for spec in specs:

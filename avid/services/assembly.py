@@ -26,6 +26,7 @@ from ..agent.tools import ToolImpl, build_toolset, without_writers
 from ..agent.tools.mcp import McpManager
 from ..providers.client import Turn, chat_completion
 from ..providers.config import Config
+from ..security import userdirs
 from ..session.recorder import SessionRecorder, stored_plan
 
 if TYPE_CHECKING:
@@ -133,8 +134,9 @@ def assemble(
 
     try:
         if tools is None:
-            # Nothing injected: the table is the built-ins plus this run's MCP servers.
-            manager = McpManager(workspace_root)
+            # Nothing injected: the table is the built-ins plus this run's MCP servers. The
+            # declaration is user-level (the tool layer must not resolve it) and read once here.
+            manager = McpManager(workspace_root, config_path=userdirs.mcp_config_path())
             state.mcp = manager
             report = warn or logger.warning
             for warning in manager.start_all():

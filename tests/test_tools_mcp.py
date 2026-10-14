@@ -12,7 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from avid.agent.tools.mcp import McpManager, mcp_config_path
+from avid.agent.tools.mcp import McpManager
+from avid.security import userdirs
 from avid.security.action import brokerize
 from avid.security.engine import decide
 from avid.security.permission import ApprovalLedger
@@ -25,11 +26,17 @@ CONFIG_BAD_SCRIPT = {
 }
 
 
-def write_config(workspace: Path, payload) -> Path:
-    path = mcp_config_path(str(workspace))
+def write_config(payload) -> Path:
+    """The user-level declaration, which is the only one the manager reads."""
+    path = userdirs.mcp_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
+
+
+def manager_for(workspace: Path) -> McpManager:
+    """A manager declared the way assembly builds it: workspace as cwd, user-level declaration."""
+    return McpManager(str(workspace), config_path=userdirs.mcp_config_path())
 
 
 @pytest.fixture
@@ -43,7 +50,7 @@ def workspace(tmp_path):
 
 
 def test_no_config_means_empty_toolset(workspace):
-    manager = McpManager(str(workspace))
+    manager = manager_for(workspace)
     warnings = manager.start_all()
 
     assert warnings == []
@@ -51,11 +58,11 @@ def test_no_config_means_empty_toolset(workspace):
 
 
 def test_malformed_config_is_skipped_with_a_warning(workspace):
-    path = mcp_config_path(str(workspace))
+    path = userdirs.mcp_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("{不是 JSON", encoding="utf-8")
 
-    manager = McpManager(str(workspace))
+    manager = manager_for(workspace)
     warnings = manager.start_all()
 
     assert len(warnings) == 1 and "mcp.json" in warnings[0]
@@ -63,8 +70,8 @@ def test_malformed_config_is_skipped_with_a_warning(workspace):
 
 
 def test_toolset_exposes_schema_and_working_impl(workspace):
-    write_config(workspace, CONFIG_OK)
-    manager = McpManager(str(workspace))
+    write_config(CONFIG_OK)
+    manager = manager_for(workspace)
     assert manager.start_all() == []
 
     schemas, impls = manager.toolset()
@@ -82,8 +89,8 @@ def test_toolset_exposes_schema_and_working_impl(workspace):
 
 
 def test_dead_server_becomes_a_warning_not_a_failure(workspace):
-    write_config(workspace, CONFIG_BAD_SCRIPT)
-    manager = McpManager(str(workspace))
+    write_config(CONFIG_BAD_SCRIPT)
+    manager = manager_for(workspace)
     warnings = manager.start_all()
 
     assert len(warnings) == 1 and "dead" in warnings[0]
@@ -93,7 +100,6 @@ def test_dead_server_becomes_a_warning_not_a_failure(workspace):
 
 def test_call_timeout_returns_error_text(workspace):
     write_config(
-        workspace,
         {
             "servers": [
                 {
@@ -105,7 +111,7 @@ def test_call_timeout_returns_error_text(workspace):
             ]
         },
     )
-    manager = McpManager(str(workspace))
+    manager = manager_for(workspace)
     assert manager.start_all() == []
 
     _, impls = manager.toolset()
@@ -117,8 +123,8 @@ def test_call_timeout_returns_error_text(workspace):
 
 
 def test_iserror_response_becomes_error_text(workspace):
-    write_config(workspace, CONFIG_OK)
-    manager = McpManager(str(workspace))
+    write_config(CONFIG_OK)
+    manager = manager_for(workspace)
     manager.start_all()
 
     _, impls = manager.toolset()
@@ -129,8 +135,8 @@ def test_iserror_response_becomes_error_text(workspace):
 
 
 def test_close_terminates_servers(workspace):
-    write_config(workspace, CONFIG_OK)
-    manager = McpManager(str(workspace))
+    write_config(CONFIG_OK)
+    manager = manager_for(workspace)
     manager.start_all()
     assert manager.processes_alive() == 1
 
@@ -148,8 +154,8 @@ def _action_args():
 def test_mcp_tools_execute_without_asking_or_using_the_ledger(workspace):
     """MCP tools execute directly: no asking, no ledger entry, and repeated calls get the
     same answer."""
-    write_config(workspace, CONFIG_OK)
-    manager = McpManager(str(workspace))
+    write_config(CONFIG_OK)
+    manager = manager_for(workspace)
     manager.start_all()
 
     ledger = ApprovalLedger()
@@ -170,8 +176,8 @@ def test_mcp_tools_execute_without_asking_or_using_the_ledger(workspace):
 
 
 def test_full_run_allows_mcp_without_asking(workspace):
-    write_config(workspace, CONFIG_OK)
-    manager = McpManager(str(workspace))
+    write_config(CONFIG_OK)
+    manager = manager_for(workspace)
     manager.start_all()
 
     decision = decide(
@@ -189,8 +195,8 @@ def test_full_run_allows_mcp_without_asking(workspace):
 def test_mcp_tools_are_not_questioned_even_without_an_answerer(workspace):
     """MCP semantics cannot be classified statically, but MCP tools never ask a human:
     they execute whether or not an answerer exists."""
-    write_config(workspace, CONFIG_OK)
-    manager = McpManager(str(workspace))
+    write_config(CONFIG_OK)
+    manager = manager_for(workspace)
     manager.start_all()
 
     asked = []

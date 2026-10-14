@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from ..providers.usage import Usage, hit_ratio
+from ..security import userdirs
 from ..security.permission import (
     PERMISSION_FULL,
     PERMISSION_NORMAL,
@@ -265,8 +266,11 @@ class RunState:
             skills=SkillLoader(default_skills_dir(workspace_root)).scan(),
             todo=todo,
             on_plan=on_plan,
-            # Declared hooks are read once per run, so an edited hooks.json lands next turn.
-            hooks=hooks if hooks is not None else hooks_module.load_hooks(workspace_root),
+            # Declared hooks are read once per run, so an edited hooks.json lands next turn. The
+            # declaration is user-level: a run may not author the gates it is then held to.
+            hooks=hooks
+            if hooks is not None
+            else hooks_module.load_hooks(userdirs.hooks_config_path()),
         )
 
     def publish_plan(self) -> None:

@@ -1,5 +1,6 @@
-"""The user-level Avid directory and the settings file kept there: one stdlib-only leaf shared by
-the workspace registry, the audit log, sandbox masking and the settings page.
+"""The user-level Avid directory and the files kept there: one stdlib-only leaf shared by the
+workspace registry, the audit log, sandbox masking, the settings page and the run's hook / MCP
+declarations.
 
 ``sessions_dir()`` is the single resolution point for the session store
 (``AVID_SESSIONS_DIR`` → ``settings.json``'s ``sessions_dir`` → ``<avid home>/sessions``), and
@@ -32,6 +33,10 @@ DEFAULT_SESSIONS_DIRNAME = "sessions"
 # The derived index lives beside the settings, inside the same masked directory.
 DEFAULT_INDEX_DIRNAME = "index"
 INDEX_DB_FILENAME = "sessions.sqlite"
+
+# Declared run configuration: hook scripts and MCP servers, one file each for all workspaces.
+HOOKS_FILENAME = "hooks.json"
+MCP_FILENAME = "mcp.json"
 
 
 def avid_home() -> Path:
@@ -134,9 +139,21 @@ def index_path() -> Path:
     return index_dir() / INDEX_DB_FILENAME
 
 
+def hooks_config_path() -> Path:
+    """The hook declaration: user-level, so every workspace shares one and a run cannot write it."""
+    return avid_home() / HOOKS_FILENAME
+
+
+def mcp_config_path() -> Path:
+    """The MCP declaration, beside the hook one and with the same reason for living there."""
+    return avid_home() / MCP_FILENAME
+
+
 __all__ = [
     "AVID_HOME_ENV",
+    "HOOKS_FILENAME",
     "INDEX_DIR_ENV",
+    "MCP_FILENAME",
     "SESSIONS_DIR_ENV",
     "SETTINGS_FILE",
     "SETTINGS_VERSION",
@@ -145,9 +162,11 @@ __all__ = [
     "default_index_dir",
     "default_sessions_dir",
     "home_dir",
+    "hooks_config_path",
     "index_dir",
     "index_dir_source",
     "index_path",
+    "mcp_config_path",
     "read_settings",
     "sessions_dir",
     "sessions_dir_source",

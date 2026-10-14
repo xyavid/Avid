@@ -54,7 +54,7 @@ def test_any_failure_once_servers_may_have_started_closes_them(monkeypatch, tmp_
     """The caller has no state to close when assembly raises, so the closure must happen inside."""
     started: list[StubMcp] = []
 
-    def factory(root: str | None) -> StubMcp:
+    def factory(root: str | None, *, config_path) -> StubMcp:
         manager = StubMcp(
             root,
             warnings=["一条启动警告"],
