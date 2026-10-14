@@ -1159,6 +1159,46 @@ def test_the_compaction_retry_sends_the_compressed_history(hook_registry, monkey
     assert seen[1][0] == "压缩后的历史"
 
 
+def test_an_overflow_in_a_young_session_is_rescued_by_compaction(hook_registry):
+    """A session with fewer rounds than the keep window that overflows has nowhere to cut, so the
+    fallback used to find nothing to summarize: the retry re-sent the same history, the provider
+    refused again and the run died. The forced path shrinks the window to leave one round outside.
+    """
+    from avid.agent.compaction import ContextBudget
+    from avid.providers.client import PromptTooLongError
+
+    sends = []
+
+    def refuses_until_compacted(config, messages, **kwargs):
+        sends.append([str(message.get("content"))[:12] for message in messages])
+        if not any(message.startswith("[历史摘要]") for message in sends[-1]):
+            raise PromptTooLongError("超了")
+        return make_turn("好了")
+
+    history = [
+        {"role": "user", "content": "任务"},
+        {"role": "assistant", "content": "", "tool_calls": [tool_call("read_file", call_id="c1")]},
+        {"role": "tool", "tool_call_id": "c1", "content": "结果一"},
+        {"role": "assistant", "content": "", "tool_calls": [tool_call("read_file", call_id="c2")]},
+        {"role": "tool", "tool_call_id": "c2", "content": "结果二"},
+    ]
+
+    result = run_loop(
+        history,
+        config=CONFIG,
+        chat=refuses_until_compacted,
+        summarize=FakeChat(make_turn("## Goal\n把这件事做完")),
+        budget=ContextBudget(context_chars=10, from_window=False),
+    )
+
+    assert result == "好了"
+    assert len(sends) == 2  # the refusal, then the retry with the compressed history
+    assert history[0]["content"].startswith("[历史摘要]")
+    # The checkpoint, the one round left outside the window, and this round's own reply.
+    assert [message["role"] for message in history] == ["user", "assistant", "tool", "assistant"]
+    assert history[1]["tool_calls"][0]["id"] == "c2"
+
+
 def test_compaction_is_logged(hook_registry, caplog):
     """Compaction emits one announce log line: the UI and the ledger share the same source."""
     from avid.agent.compaction import ContextBudget

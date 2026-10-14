@@ -164,7 +164,10 @@ def test_compact_now_forces_and_reports_the_cursor():
     assert summary["content"].startswith("[历史摘要]") and keep == 20
 
 
-def test_compact_now_does_nothing_without_earlier_history():
+def test_compact_now_does_nothing_with_only_one_round():
+    """The forced path shrinks the window to leave one round outside it, so a single round is the
+    floor: there is no earlier round to summarize, only the request itself.
+    """
     summarizer = Summarizer()
     manager = ContextManager(
         transcript=Transcript(rounds(1)), state=RunState(), config=CONFIG,

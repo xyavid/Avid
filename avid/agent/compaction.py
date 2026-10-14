@@ -568,6 +568,24 @@ def cut_point(transcript: Transcript, keep_recent_turns: int) -> int:
     return cut
 
 
+def _keep_window(messages: list[dict[str, Any]], keep_recent_turns: int, *, force: bool) -> int:
+    """The window this pass keeps, shrunk when the history has fewer rounds than it.
+
+    Forced compaction is the last resort — the provider refused the prompt, or the user asked for
+    it — and a window spanning the whole history leaves nothing to summarize: a session of two
+    rounds inflated by one huge tool result dies of the overflow with the whole history to spare.
+    One round stays outside, so the summary has material. Below two rounds there is nothing to
+    leave out and no floor to fall back on: summarizing the lone request would only re-send it to
+    the summarizer.
+    """
+    if not force:
+        return keep_recent_turns
+    rounds = sum(1 for message in messages if message.get("role") == "assistant")
+    if rounds < 2 or rounds >= keep_recent_turns:
+        return keep_recent_turns
+    return rounds - 1
+
+
 def run_compaction(
     *,
     transcript: Transcript,
@@ -598,7 +616,7 @@ def run_compaction(
         return None
 
     messages = transcript.as_messages()
-    cut = cut_point(transcript, limits.keep_recent_turns)
+    cut = cut_point(transcript, _keep_window(messages, limits.keep_recent_turns, force=force))
     earlier = messages[:cut]
     if not earlier:
         logger.info("compact: 保留窗口之外没有更早历史，无需压缩")

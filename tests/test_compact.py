@@ -642,6 +642,45 @@ def test_force_bypasses_threshold_and_the_once_guard(spill_root):
     assert first is not None and second is not None  # force bypasses the guard
 
 
+def test_forced_compaction_shrinks_the_window_for_a_short_history(spill_root):
+    """A history with fewer rounds than the keep window has no round outside it, so the window *is*
+    the whole history and there is nothing to summarize. A young session inflated by one huge tool
+    result overflows exactly there, and forced compaction is its last resort before the run dies:
+    it keeps one round instead of reporting that there was nothing to do.
+    """
+    transcript = Transcript(rounds(2))
+    state = RunState(workspace_root=str(spill_root))
+
+    report = run_compaction(
+        transcript=transcript, state=state, config=CONFIG, chat=FakeChat(), limits=budget(),
+        force=True,
+    )
+
+    assert report is not None, "兜底压缩在只有两轮的史上必须还能压"
+    # One round survives: the checkpoint plus the last round's two messages.
+    assert len(transcript) == 3
+    assert transcript.as_messages()[0]["content"].startswith("[历史摘要]")
+    assert transcript.as_messages()[1]["role"] == "assistant"
+
+
+def test_a_short_history_is_left_alone_without_the_force(spill_root):
+    """The threshold path stays conservative: it must not summarize a request that still has a
+    verbatim round to lose, since its own estimate may be wrong and the send may yet fit.
+    """
+    transcript = Transcript(rounds(2))
+
+    report = run_compaction(
+        transcript=transcript,
+        state=RunState(workspace_root=str(spill_root)),
+        config=CONFIG,
+        chat=FakeChat(),
+        limits=budget(),
+    )
+
+    assert report is None
+    assert len(transcript) == 5
+
+
 def test_cursor_hook_receives_summary_and_kept_count(spill_root):
     covered: list = []
     transcript = Transcript(rounds(12))
