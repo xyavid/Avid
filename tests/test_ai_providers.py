@@ -566,6 +566,85 @@ def test_responses_stream_folds_typed_events():
     assert thinking == ["略想"]
 
 
+def test_responses_stream_places_calls_by_output_index():
+    """``output_index`` counts every item in ``output``, not every call: a reasoning item ahead of
+    the calls shifts them, and placing by arrival order lands every argument fragment past the end
+    of the list — the call then reaches the tool with empty arguments.
+    """
+    events = [
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {"type": "reasoning", "summary": []},
+        },
+        {
+            "type": "response.output_item.added",
+            "output_index": 1,
+            "item": {
+                "type": "function_call",
+                "call_id": "fc_1",
+                "name": "read_file",
+                "arguments": "",
+            },
+        },
+        {"type": "response.output_item.added", "output_index": 2,
+         "item": {"type": "message", "role": "assistant", "content": []}},
+        {
+            "type": "response.output_item.added",
+            "output_index": 3,
+            "item": {"type": "function_call", "call_id": "fc_2", "name": "bash", "arguments": ""},
+        },
+        {"type": "response.function_call_arguments.delta", "output_index": 1, "delta": '{"path"'},
+        {"type": "response.function_call_arguments.delta", "output_index": 3, "delta": '{"command"'},
+        {"type": "response.function_call_arguments.delta", "output_index": 1, "delta": ': "a.txt"}'},
+        {"type": "response.function_call_arguments.delta", "output_index": 3, "delta": ': "ls"}'},
+        {"type": "response.output_text.delta", "delta": "读完"},
+        {"type": "response.completed", "response": {"model": "gpt-5", "status": "completed",
+         "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}},
+    ]
+    body = "".join(f"data: {json.dumps(event)}\n\n" for event in events)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+
+    with _mock(handler) as http:
+        turn = responses.stream(
+            RESPONSES_CONFIG, [{"role": "user", "content": "hi"}], client=http
+        )
+
+    assert [call["id"] for call in turn.tool_calls] == ["fc_1", "fc_2"]
+    assert [call["function"]["name"] for call in turn.tool_calls] == ["read_file", "bash"]
+    assert [call["function"]["arguments"] for call in turn.tool_calls] == [
+        '{"path": "a.txt"}',
+        '{"command": "ls"}',
+    ]
+    assert turn.text == "读完"
+
+
+def test_responses_stream_without_output_index_keeps_arguments_on_the_call():
+    """A provider that omits the field streams one call at a time, so the fragment belongs to the
+    most recent one; with nothing to attach to, the fragments are dropped again.
+    """
+    events = [
+        {"type": "response.output_item.added",
+         "item": {"type": "function_call", "call_id": "fc_1", "name": "read_file", "arguments": ""}},
+        {"type": "response.function_call_arguments.delta", "delta": '{"path"'},
+        {"type": "response.function_call_arguments.delta", "delta": ': "a.txt"}'},
+        {"type": "response.completed", "response": {"model": "gpt-5", "status": "completed"}},
+    ]
+    body = "".join(f"data: {json.dumps(event)}\n\n" for event in events)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+
+    with _mock(handler) as http:
+        turn = responses.stream(
+            RESPONSES_CONFIG, [{"role": "user", "content": "hi"}], client=http
+        )
+
+    assert turn.tool_calls[0]["function"]["arguments"] == '{"path": "a.txt"}'
+
+
 def test_responses_prompt_too_long_is_classified():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(400, json={"error": {"message": "context length exceeded"}})

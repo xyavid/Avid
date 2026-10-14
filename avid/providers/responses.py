@@ -313,6 +313,22 @@ def _blank_call() -> dict[str, Any]:
     return {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
 
 
+def _event_index(chunk: Mapping[str, Any], default: int) -> int:
+    """The event's ``output_index``, which counts every item in the output array, not the calls."""
+    index = chunk.get("output_index")
+    return index if isinstance(index, int) and index >= 0 else default
+
+
+def _slot(calls: list[dict[str, Any]], index: int) -> dict[str, Any]:
+    """The call slot at index, padded with blanks: an item's index is its place in ``output``, so
+    a reasoning or message item ahead of the calls leaves holes. The blanks carry no name and
+    ``to_turn`` drops them.
+    """
+    while len(calls) <= index:
+        calls.append(_blank_call())
+    return calls[index]
+
+
 def merge_stream_chunk(state: StreamState, chunk: Mapping[str, Any]) -> StreamState:
     """Fold one typed SSE event into the state, returning a new state."""
     kind = str(chunk.get("type") or "")
@@ -341,16 +357,18 @@ def merge_stream_chunk(state: StreamState, chunk: Mapping[str, Any]) -> StreamSt
         item = chunk.get("item") or {}
         if isinstance(item, Mapping) and item.get("type") == "function_call":
             calls = _copy_calls(state.tool_calls)
-            calls.append(
-                {
-                    "id": str(item.get("call_id") or ""),
-                    "type": "function",
-                    "function": {
-                        "name": str(item.get("name") or ""),
-                        "arguments": str(item.get("arguments") or ""),
-                    },
-                }
-            )
+            index = _event_index(chunk, default=len(calls))
+            # Fragments can arrive before their item, so the accumulated text wins over the item's
+            # own arguments (which streaming leaves empty).
+            streamed = str(_slot(calls, index)["function"].get("arguments") or "")
+            calls[index] = {
+                "id": str(item.get("call_id") or ""),
+                "type": "function",
+                "function": {
+                    "name": str(item.get("name") or ""),
+                    "arguments": streamed or str(item.get("arguments") or ""),
+                },
+            }
             return StreamState(
                 content=state.content,
                 reasoning=state.reasoning,
@@ -362,19 +380,21 @@ def merge_stream_chunk(state: StreamState, chunk: Mapping[str, Any]) -> StreamSt
 
     if kind == "response.function_call_arguments.delta":
         calls = _copy_calls(state.tool_calls)
-        index = chunk.get("output_index")
-        if isinstance(index, int) and 0 <= index < len(calls):
-            calls[index]["function"]["arguments"] = str(
-                calls[index]["function"].get("arguments", "")
-            ) + str(chunk.get("delta") or "")
-            return StreamState(
-                content=state.content,
-                reasoning=state.reasoning,
-                tool_calls=tuple(calls),
-                usage=state.usage,
-                model=state.model,
-                finish_reason=state.finish_reason,
-            )
+        # Without the field, the fragment belongs to the call added last, which is the only one
+        # the wire can be streaming.
+        index = _event_index(chunk, default=max(len(calls) - 1, 0))
+        slot = _slot(calls, index)
+        slot["function"]["arguments"] = str(slot["function"].get("arguments", "")) + str(
+            chunk.get("delta") or ""
+        )
+        return StreamState(
+            content=state.content,
+            reasoning=state.reasoning,
+            tool_calls=tuple(calls),
+            usage=state.usage,
+            model=state.model,
+            finish_reason=state.finish_reason,
+        )
 
     if kind in ("response.completed", "response.incomplete", "response.failed"):
         response = chunk.get("response") or {}
