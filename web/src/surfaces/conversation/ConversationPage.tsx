@@ -8,7 +8,7 @@
  * paged desc, latest 50, reversed locally.
  */
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 
 import {
@@ -49,12 +49,16 @@ import { IconButton } from '../../ui/IconButton'
 import { AvidMark } from '../../ui/Mark'
 import { Icon } from '../../ui/Icon'
 import { useConversationScroll } from '../../ui/useConversationScroll'
-import { SettingsModal } from '../../components/settings/SettingsModal'
 import { ProjectCard } from '../../components/session/ProjectCard'
 import type { SearchHit } from '../../api/types'
 import { SessionNav } from '../../components/session/SessionNav'
 import { SidebarFooter } from '../../components/session/SidebarFooter'
 import { AppShell } from '../../app/AppShell'
+
+/** Settings is opened on demand, so its chunk (model/web/session sections) stays off first paint. */
+const SettingsModal = lazy(() =>
+  import('../../components/settings/SettingsModal').then((m) => ({ default: m.SettingsModal })),
+)
 
 /** Session-action failure text: mostly the server's message, with a few codes replaced by a more
     actionable next step (e.g. `session_busy`). */
@@ -680,7 +684,11 @@ export function ConversationPage() {
         </div>
       }
       />
-      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && (
+        <Suspense fallback={null}>
+          <SettingsModal onClose={() => setSettingsOpen(false)} />
+        </Suspense>
+      )}
     </>
   )
 }
