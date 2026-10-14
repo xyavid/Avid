@@ -254,6 +254,10 @@ def main(argv: list[str] | None = None) -> int:
         logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(message)s")
         # Silence the HTTP client so only Avid's own trace lines reach stderr.
         logging.getLogger("httpx").setLevel(logging.WARNING)
+        if args.session or args.new_session:
+            # A session-backed run is assembled where the session is, since its state carries the
+            # stored plan and the checkpoint sink; both are unavailable before the session opens.
+            return _run_session(args, config)
         try:
             target = _resolve_workspace(args.workspace)
             state = RunState.for_run(
@@ -268,8 +272,6 @@ def main(argv: list[str] | None = None) -> int:
         _announce_security(state.security)
         _start_mcp(state)
         schemas, impls = build_toolset(state)
-        if args.session or args.new_session:
-            return _run_session(args, config, state)
         try:
             print(
                 Run(
@@ -322,9 +324,14 @@ def usage_suffix(usage: Usage, config: Config) -> str:
     return " " + " ".join(parts)
 
 
-def _run_session(args: argparse.Namespace, config, state: RunState | None = None) -> int:
+def _run_session(args: argparse.Namespace, config) -> int:
     """Resumes or creates a session and runs one loop, reading history and writing this round
-    back."""
+    back.
+
+    Assembled here, not in main(): the state needs the session's stored plan and its checkpoint
+    sink, and both only exist once the session is open. This is the same wiring the interactive
+    path uses, so a one-shot --session run sees the same tool table and the same snapshots.
+    """
     try:
         target = _resolve_workspace(args.workspace)
     except WorkspaceNotFound as exc:
@@ -336,6 +343,8 @@ def _run_session(args: argparse.Namespace, config, state: RunState | None = None
     )
     repo = JsonlSessionRepo(sessions_root(target), workspace=target.id)
     session = None
+    state = None
+    indexer = None
     created = False
     try:
         if args.new_session:
@@ -356,21 +365,29 @@ def _run_session(args: argparse.Namespace, config, state: RunState | None = None
         history = messages_for_branch(session, recorder.branch)
         recorder.ensure_branch()
         messages = [*history, {"role": "user", "content": args.prompt}]
+
+        state = RunState.for_run(
+            auto_approve=args.yes,
+            full=args.allow_full_access,
+            workspace_root=target.root,
+            question=_terminal_question(),
+            # The plan outlives the run that wrote it: load it, and publish through the session's
+            # single writer.
+            plan=stored_plan(session, recorder.branch),
+            on_plan=recorder.record_plan,
+        )
+        # Checkpoints belong to the session: snapshots land under the branch tip.
+        state.checkpoint = DirCheckpointSink(
+            root=Path(target.root), session_id=session.metadata.id, tip_seq=recorder.tip_seq
+        )
+        _announce_security(state.security)
+        _start_mcp(state)
+        schemas, impls = build_toolset(state)
         try:
             reply = Run(
                 messages,
-                RunSpec.resolve(config=config),
-                state=state
-                or RunState.for_run(
-                    auto_approve=args.yes,
-                    full=args.allow_full_access,
-                    workspace_root=target.root,
-                    question=_terminal_question(),
-                    # The plan outlives the run that wrote it: load it, and publish through the
-                    # session's single writer.
-                    plan=stored_plan(session, recorder.branch),
-                    on_plan=recorder.record_plan,
-                ),
+                RunSpec.resolve(config=config, tools=schemas, registry=impls),
+                state=state,
                 on_message=notifying(indexer, recorder.on_message, session.metadata.id),
                 on_compaction=recorder.record_compaction,
             ).run().text
@@ -545,6 +562,9 @@ def _compact_now(session, recorder: SessionRecorder, config, target, args) -> No
         full=args.allow_full_access,
         workspace_root=target.root,
         question=_terminal_question(),
+        # The same plan source a turn reads, so the per-round tail block renders identically.
+        plan=stored_plan(session, recorder.branch),
+        on_plan=recorder.record_plan,
     )
     # Same assembly as a turn, MCP included: a tool table that differs by one entry breaks the
     # prefix at its first byte.

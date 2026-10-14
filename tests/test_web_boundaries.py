@@ -1,6 +1,7 @@
-"""A1 - A14 architecture boundaries, held by grep and AST assertions without running anything.
+"""A1 - A15 architecture boundaries, held by grep and AST assertions without running anything.
 
 The gates match literals only: concatenated URLs and indirect imports stay outside their reach.
+Numbering has gaps (A7-A9 do not exist); the highest number is what the docs count up to.
 """
 
 from __future__ import annotations
@@ -343,3 +344,44 @@ def test_a14_the_index_only_depends_on_the_layers_under_it():
     """
     found = hits(files_under("index"), r"^\s*from\s+\.\.(agent|services|providers|web)\b")
     assert found == [], found
+
+
+# ---------------- A15: a run declares its own tool table ----------------
+
+
+def run_spec_resolves() -> list[tuple[str, set[str]]]:
+    """(file, keyword names) at every ``RunSpec.resolve(...)`` call under avid/.
+
+    AST rather than grep: the call spans lines, and what matters is the keyword set, not the text.
+    """
+    found: list[tuple[str, set[str]]] = []
+    for path in files_under():
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not (
+                isinstance(func, ast.Attribute)
+                and func.attr == "resolve"
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "RunSpec"
+            ):
+                continue
+            keywords = {kw.arg for kw in node.keywords if kw.arg is not None}
+            found.append(
+                (f"{path.relative_to(ROOT)}:{node.lineno}", keywords)
+            )
+    return found
+
+
+def test_a15_every_run_resolves_an_explicit_tool_table():
+    """A resolve without tools/registry silently falls back to the built-ins, and the caller that
+    already started MCP then runs without its tools: the --session one-shot path did exactly that.
+    Every entry point names both, so the tool table a run sees is the tool table its host built.
+    """
+    resolvers = run_spec_resolves()
+    assert resolvers, "avid/ 里没有 RunSpec.resolve 调用，门禁会空跑通过"
+    for name, keywords in resolvers:
+        missing = {"tools", "registry"} - keywords
+        assert not missing, f"{name} 的 RunSpec.resolve 漏了 {sorted(missing)}，将静默退回内置表"
