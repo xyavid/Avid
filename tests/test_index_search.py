@@ -6,8 +6,10 @@ from __future__ import annotations
 
 from index_cases import ALPHA, BETA, make_session, read_byte_range
 
+from avid.index import check as check_mod
 from avid.index import queries
-from avid.session import SessionRecorder
+from avid.session import JsonlSessionRepo, SessionRecorder
+from avid.session.values import branch_compaction
 
 
 def test_finds_a_chinese_phrase_and_hands_back_a_snippet(indexer, store):
@@ -351,6 +353,66 @@ def test_a_compaction_summary_is_searchable(indexer, store):
     assert hits[0].entry_type == "compaction"
     rows = queries.entries_of(indexer.conn, "s-compact")
     assert len([row for row in rows if row["type"] == "compaction"]) == 1
+
+
+def write_compaction(store, session_id: str, summary: str | None) -> None:
+    """Set (or, with None, delete) the compaction cursor through the real session layer."""
+    file = next((store / ALPHA).glob(f"*_{session_id}.jsonl"))
+    repo = JsonlSessionRepo(file.parent, workspace=ALPHA)
+    try:
+        session = repo.open(next(item for item in repo.list() if item.id == session_id))
+        if summary is None:
+            session.delete_value(branch_compaction("main"))
+        else:
+            session.set_value(
+                branch_compaction("main"),
+                {"through_seq": 1, "keep": 0, "summary": {"facts": [summary]}},
+            )
+    finally:
+        repo.close()
+
+
+def test_a_later_compaction_replaces_the_summary_row(indexer, store):
+    """A value address is one slot, so the row moves to the newer line instead of a second row
+    appearing: a superseded summary must not stay searchable.
+    """
+    make_session(store, session_id="s-recompact", messages=({"role": "user", "content": "起个头"},))
+    write_compaction(store, "s-recompact", "第一版要点：紫色犀牛")
+    indexer.index_all()
+
+    write_compaction(store, "s-recompact", "第二版要点：蓝色鲸鱼")
+    indexer.reconcile()
+
+    assert queries.search_entries(indexer.conn, "紫色犀牛") == []
+    hits = queries.search_entries(indexer.conn, "蓝色鲸鱼")
+    assert [hit.entry_type for hit in hits] == ["compaction"]
+    rows = queries.entries_of(indexer.conn, "s-recompact")
+    assert len([row for row in rows if row["type"] == "compaction"]) == 1
+    file = next((store / ALPHA).glob("*_s-recompact.jsonl"))
+    record = read_byte_range(file, hits[0].byte_offset, hits[0].byte_length)
+    assert record["value"]["summary"]["facts"] == ["第二版要点：蓝色鲸鱼"]
+    row = queries.get_session(indexer.conn, "s-recompact")
+    assert row.entry_count == len(rows)
+
+
+def test_a_deleted_compaction_summary_leaves_the_index(indexer, store):
+    """``/rewind`` drops the compaction cursor with a delete record; its row must go with it, or the
+    rolled-back summary keeps showing up in searches.
+    """
+    make_session(store, session_id="s-rewound", messages=({"role": "user", "content": "起个头"},))
+    write_compaction(store, "s-rewound", "回滚前要点：紫色犀牛")
+    indexer.index_all()
+    assert queries.search_entries(indexer.conn, "紫色犀牛")
+
+    write_compaction(store, "s-rewound", None)
+    indexer.reconcile()
+
+    assert queries.search_entries(indexer.conn, "紫色犀牛") == []
+    rows = queries.entries_of(indexer.conn, "s-rewound")
+    assert [row["type"] for row in rows] == ["message"]
+    row = queries.get_session(indexer.conn, "s-rewound")
+    assert row.entry_count == 1  # the count follows the rows, not the file's write total
+    assert check_mod.check_index(indexer, roots=[store]).findings == ()
 
 
 def test_an_image_message_is_searchable_by_its_marker_but_not_its_bytes(indexer, store):

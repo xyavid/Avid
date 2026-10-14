@@ -466,7 +466,6 @@ class SessionIndexer:
             updated_at=int(stat.st_mtime * 1000),
             file_size=stat.st_size,
             indexed_bytes=scan.next_offset,
-            entry_count=scan.entry_count,
             indexed_at=self._now(),
             index_status=INDEX_STATUS_OK,
             last_error=None,
@@ -545,7 +544,7 @@ def _previous_from(row: IndexedSession) -> ScanResult:
         first_user_text=row.first_user_text,
         next_seq=None,
         entries=(),
-        entry_count=row.entry_count,
+        deleted=(),
         next_offset=row.indexed_bytes,
         truncated_tail=False,
     )

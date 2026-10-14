@@ -15,6 +15,7 @@ from ..session.jsonl import parse_header, parse_transaction
 from ..session.types import (
     STORAGE_VERSION,
     CommittedEntry,
+    CommittedValueDelete,
     CommittedValueSet,
 )
 from ..session.values import COMPACTION_NS, SESSION_NAME_NS
@@ -45,8 +46,8 @@ def scan_file(
 ) -> ScanResult:
     """Scan from ``start_offset`` to the last complete line and report what it found.
 
-    ``entries`` holds only the rows this pass produced; ``entry_count`` is the file's running
-    total (previous count plus this pass), because that is the number a list page shows.
+    ``entries`` holds only the rows this pass produced; a value slot folded twice in one pass
+    appears once, as of its last write, and ``deleted`` names the slots this pass ended.
     """
     try:
         size = path.stat().st_size
@@ -59,7 +60,6 @@ def scan_file(
     title = previous.title if previous else None
     first_user = previous.first_user_text if previous else None
     next_seq = previous.next_seq if previous else None
-    entry_count = previous.entry_count if previous else 0
 
     if start_offset > size:
         # File shorter than the cursor: truncated or replaced; let the caller rebuild, do not guess.
@@ -78,6 +78,10 @@ def scan_file(
         tail = b"" if cut == -1 else tail[: cut + 1]
 
     entries: list[ScannedEntry] = []
+    # One value address is one slot, so its row is keyed by the address rather than by the write
+    # that filled it: a later set replaces the row and a delete takes it away.
+    slots: dict[str, ScannedEntry] = {}
+    deleted: set[str] = set()
     offset = start_offset
     for raw in tail.split(b"\n")[:-1]:
         line_length = len(raw) + 1  # +1 for the newline: ranges count against the original file
@@ -103,7 +107,7 @@ def scan_file(
                     first_user_text=first_user,
                     next_seq=next_seq,
                     entries=(),
-                    entry_count=entry_count,
+                    deleted=(),
                     next_offset=0,
                     truncated_tail=truncated_tail,
                     unsupported=f"storageVersion={header.storage_version}",
@@ -128,26 +132,32 @@ def scan_file(
                         search_text=search_text,
                     )
                 )
-                entry_count += 1
             elif isinstance(record, CommittedValueSet) and record.namespace == SESSION_NAME_NS:
                 title = one_line(record.value) or title
             elif isinstance(record, CommittedValueSet) and record.namespace == COMPACTION_NS:
                 # Summary lives only in a cursor value; a deterministic id keeps it searchable.
                 summary_text = compaction_text(record.value)
+                slot_id = compaction_entry_id(record.key)
                 if summary_text:
-                    entries.append(
-                        ScannedEntry(
-                            entry_id=compaction_entry_id(record.key, record.seq),
-                            seq=record.seq,
-                            entry_type=COMPACTION_TYPE,
-                            role=None,
-                            timestamp=None,
-                            byte_offset=line_offset,
-                            byte_length=line_length,
-                            search_text=summary_text,
-                        )
+                    slots[slot_id] = ScannedEntry(
+                        entry_id=slot_id,
+                        seq=record.seq,
+                        entry_type=COMPACTION_TYPE,
+                        role=None,
+                        timestamp=None,
+                        byte_offset=line_offset,
+                        byte_length=line_length,
+                        search_text=summary_text,
                     )
-                    entry_count += 1
+                    deleted.discard(slot_id)
+                else:
+                    # A summary that says nothing is no row; an older row for that slot must go.
+                    slots.pop(slot_id, None)
+                    deleted.add(slot_id)
+            elif isinstance(record, CommittedValueDelete) and record.namespace == COMPACTION_NS:
+                slot_id = compaction_entry_id(record.key)
+                slots.pop(slot_id, None)
+                deleted.add(slot_id)
 
     return ScanResult(
         session_id=session_id,
@@ -156,16 +166,20 @@ def scan_file(
         title=title,
         first_user_text=first_user,
         next_seq=next_seq,
-        entries=tuple(entries),
-        entry_count=entry_count,
+        entries=(*entries, *slots.values()),
+        deleted=tuple(sorted(deleted)),
         next_offset=offset,
         truncated_tail=truncated_tail,
     )
 
 
-def compaction_entry_id(key: str, seq: int) -> str:
-    """Deterministic id for a value row: rescanning the same line yields the same id."""
-    return f"value:{COMPACTION_NS}:{key}:{seq}"
+def compaction_entry_id(key: str) -> str:
+    """The id of the compaction slot's row: the address, so a write lands on the row already there.
+
+    The seq is deliberately not part of it: a delete record names only the address, so an id
+    carrying the seq could never be matched by the deletion that ends the slot.
+    """
+    return f"value:{COMPACTION_NS}:{key}"
 
 
 __all__ = ["COMPACTION_TYPE", "compaction_entry_id", "read_session_facts", "scan_file"]

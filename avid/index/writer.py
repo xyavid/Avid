@@ -1,7 +1,9 @@
-"""Write scan results into the database: rows, cursor and status in one transaction.
+"""Write scan results into the database: rows, deletions, cursor and status in one transaction.
 
 The cursor commits together with the rows of that batch, so a crash only redoes the batch and never
 leaves the cursor ahead of the rows; a failure lands in `last_error` and the indexer moves on.
+`sessions.entry_count` is written only here, as the count of the rows just written, because a scan
+cannot know it: it is what `index/check.py` compares against.
 """
 
 from __future__ import annotations
@@ -33,7 +35,6 @@ _SESSION_COLUMNS = (
     "updated_at",
     "file_size",
     "indexed_bytes",
-    "entry_count",
     "indexed_at",
     "index_status",
     "last_error",
@@ -56,7 +57,6 @@ def _write_session_row(conn: sqlite3.Connection, session: IndexedSession) -> Non
             updated_at = excluded.updated_at,
             file_size = excluded.file_size,
             indexed_bytes = excluded.indexed_bytes,
-            entry_count = excluded.entry_count,
             indexed_at = excluded.indexed_at,
             index_status = excluded.index_status,
             last_error = excluded.last_error
@@ -73,8 +73,17 @@ def _write_entries(conn: sqlite3.Connection, session: IndexedSession, scan: Scan
         INSERT INTO entries
             (session_id, entry_id, seq, type, role, timestamp, byte_offset, byte_length, search_text)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(session_id, entry_id) DO NOTHING
+        ON CONFLICT(session_id, entry_id) DO UPDATE SET
+            seq = excluded.seq,
+            type = excluded.type,
+            role = excluded.role,
+            timestamp = excluded.timestamp,
+            byte_offset = excluded.byte_offset,
+            byte_length = excluded.byte_length,
+            search_text = excluded.search_text
         """,
+        # Update, not ignore: a value row keeps its id while its line moves, so an old row left in
+        # place would point at superseded text.
         [
             (
                 session.session_id,
@@ -92,11 +101,34 @@ def _write_entries(conn: sqlite3.Connection, session: IndexedSession, scan: Scan
     )
 
 
+def _delete_entries(conn: sqlite3.Connection, session: IndexedSession, scan: ScanResult) -> None:
+    if not scan.deleted:
+        return
+    conn.executemany(
+        "DELETE FROM entries WHERE session_id = ? AND entry_id = ?",
+        [(session.session_id, entry_id) for entry_id in scan.deleted],
+    )
+
+
+def _recount_entries(conn: sqlite3.Connection, session_id: str) -> None:
+    """Set the recorded count to the rows the session has: the only place this column is written."""
+    conn.execute(
+        """
+        UPDATE sessions SET entry_count =
+            (SELECT COUNT(*) FROM entries WHERE session_id = ?)
+        WHERE session_id = ?
+        """,
+        (session_id, session_id),
+    )
+
+
 def apply_scan(conn: sqlite3.Connection, session: IndexedSession, scan: ScanResult) -> None:
-    """Write this pass's rows and move the cursor, in one transaction."""
+    """Write this pass's rows, its deletions and the cursor, in one transaction."""
     with transaction(conn):
         _write_session_row(conn, session)
         _write_entries(conn, session, scan)
+        _delete_entries(conn, session, scan)
+        _recount_entries(conn, session.session_id)
 
 
 def replace_scan(conn: sqlite3.Connection, session: IndexedSession, scan: ScanResult) -> None:
@@ -106,6 +138,7 @@ def replace_scan(conn: sqlite3.Connection, session: IndexedSession, scan: ScanRe
         conn.execute("DELETE FROM sessions WHERE session_id = ?", (session.session_id,))
         _write_session_row(conn, session)
         _write_entries(conn, session, scan)
+        _recount_entries(conn, session.session_id)
 
 
 def upsert_session(conn: sqlite3.Connection, session: IndexedSession) -> None:

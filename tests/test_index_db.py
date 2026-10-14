@@ -64,6 +64,38 @@ def test_migrations_apply_in_order(tmp_path):
     assert "entries" in table_names(conn)
 
 
+def test_an_older_index_gets_its_value_rows_re_derived_on_open(tmp_path):
+    """Value rows used to be identified by the write that filled them (``…:<key>:<seq>``), which no
+    delete can name; opening an index carrying that shape drops those rows and sends their sessions
+    back to byte zero, where the next pass re-derives them in the current one.
+    """
+    path = tmp_path / "sessions.sqlite"
+    older = index_db.open_db(path, migrations=index_db.MIGRATIONS[:-1])
+    older.execute(
+        "INSERT INTO sessions (session_id, file_path, indexed_bytes, index_status, entry_count) "
+        "VALUES ('s-old', '/tmp/s-old.jsonl', 4096, 'ok', 2)"
+    )
+    older.executemany(
+        "INSERT INTO entries (session_id, entry_id, seq, type, byte_offset, byte_length) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            ("s-old", "01924f3c-0000-7000-8000-000000000001", 1, "message", 0, 10),
+            ("s-old", "value:avid.compaction:main:2", 2, "compaction", 10, 20),
+        ],
+    )
+    older.close()
+
+    conn = index_db.open_db(path)
+    try:
+        assert index_db.schema_version(conn) == index_db.SCHEMA_VERSION
+        kept = [row["entry_id"] for row in conn.execute("SELECT entry_id FROM entries ORDER BY seq")]
+        assert kept == ["01924f3c-0000-7000-8000-000000000001"]
+        row = conn.execute("SELECT * FROM sessions WHERE session_id = 's-old'").fetchone()
+        assert row["indexed_bytes"] == 0 and row["index_status"] == "stale"
+    finally:
+        conn.close()
+
+
 def test_a_locked_database_gives_up_quickly_instead_of_hanging(tmp_path):
     """The index gives up on a lock instead of hanging: it must never stall a run thread."""
     path = tmp_path / "sessions.sqlite"

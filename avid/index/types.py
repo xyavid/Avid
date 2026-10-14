@@ -35,7 +35,11 @@ class ScannedEntry:
 
 @dataclass(frozen=True)
 class ScanResult:
-    """One pass over a session file from a byte offset, plus the session-level facts it carries."""
+    """One pass over a session file from a byte offset, plus the session-level facts it carries.
+
+    ``entries`` are the rows this pass produced and ``deleted`` the row ids it saw removed; the
+    session's row count is not a fact of a pass, so the writer reads it off the table.
+    """
 
     session_id: str | None
     created_at: int | None
@@ -44,7 +48,7 @@ class ScanResult:
     first_user_text: str | None
     next_seq: int | None
     entries: tuple[ScannedEntry, ...]
-    entry_count: int
+    deleted: tuple[str, ...]
     next_offset: int
     truncated_tail: bool
     unsupported: str | None = None

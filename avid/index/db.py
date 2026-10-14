@@ -108,6 +108,23 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         END;
         """,
     ),
+    (
+        4,
+        """
+        -- Value rows are addressed by their slot now (`value:<ns>:<key>`, no seq). Rows in the older
+        -- shape cannot be matched by a delete, so they go, and their sessions re-derive them from
+        -- byte zero on the next pass: the cursor is moved back so the re-derivation actually happens.
+        UPDATE sessions
+           SET indexed_bytes = 0,
+               index_status = 'stale',
+               last_error = '值行的标识改了：等下一遍重扫'
+         WHERE session_id IN (
+             SELECT DISTINCT session_id FROM entries WHERE entry_id LIKE 'value:%'
+         );
+
+        DELETE FROM entries WHERE entry_id LIKE 'value:%';
+        """,
+    ),
 )
 
 SCHEMA_VERSION = MIGRATIONS[-1][0]
