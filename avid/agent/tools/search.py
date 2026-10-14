@@ -175,7 +175,10 @@ def _search_with_rg(
     note = ""
     try:
         process = subprocess.Popen(
-            argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace"
+            # stderr to /dev/null, not a pipe: nobody reads it, and a full pipe would block rg
+            # mid-search while this loop waits on stdout, so the time budget never gets a look.
+            argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+            encoding="utf-8", errors="replace",
         )
     except OSError as exc:  # pragma: no cover - rg passed which; only permissions/races fail
         return [], False, f"rg 起不来（{exc}），请改用更小的 path 或用 bash 里的 grep"
@@ -212,8 +215,6 @@ def _search_with_rg(
             except subprocess.TimeoutExpired:  # pragma: no cover - shutdown backstop
                 process.kill()
         process.wait()
-        if process.stderr is not None:
-            process.stderr.close()
     return hits, truncated, note
 
 

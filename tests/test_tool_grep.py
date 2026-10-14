@@ -6,6 +6,9 @@ note when results are capped.
 
 from __future__ import annotations
 
+import json
+import os
+import threading
 from pathlib import Path
 
 import pytest
@@ -106,6 +109,44 @@ def test_searching_one_file_directly(project):
     out = run("handler", project, path="src/app.py")
 
     assert "src/app.py:1" in out
+
+
+def test_a_flood_of_stderr_does_not_hang_the_search(project, tmp_path, monkeypatch):
+    """Nothing ever reads rg's stderr, so a pipe there fills up (64 KiB) and blocks rg mid-search:
+    stdout goes quiet and the loop waits on it forever, the time budget included, because that
+    check only runs between lines. stderr must therefore not be a pipe at all.
+    """
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    match = json.dumps(
+        {
+            "type": "match",
+            "data": {
+                "path": {"text": str(project / "hits.txt")},
+                "line_number": 1,
+                "lines": {"text": "命中"},
+            },
+        },
+        ensure_ascii=False,
+    )
+    fake_rg = fake_bin / "rg"
+    fake_rg.write_text(
+        "#!/usr/bin/env bash\n"
+        'for index in $(seq 1 20000); do echo "rg: 警告 $index" >&2; done\n'
+        f"printf '%s\\n' '{match}'\n",
+        encoding="utf-8",
+    )
+    fake_rg.chmod(0o755)
+    (project / "hits.txt").write_text("命中\n", encoding="utf-8")
+    monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ['PATH']}")
+
+    out: list[str] = []
+    worker = threading.Thread(target=lambda: out.append(run("命中", project)), daemon=True)
+    worker.start()
+    worker.join(15)
+
+    assert not worker.is_alive(), "搜索卡在没人读的 stderr 管道上"
+    assert "hits.txt:1: 命中" in out[0]
 
 
 def test_the_python_fallback_gives_the_same_shape(project, monkeypatch):
