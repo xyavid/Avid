@@ -252,10 +252,23 @@ export interface CacheUsage {
   hit_ratio: number | null
 }
 
+export interface CompactionCall {
+  /** Route that produced the summary: 'reuse' = session-prefix request, 'engine' = fallback. */
+  path: string | null
+  /** Model calls that compaction made (1, or 2 when the reuse attempt fell back). */
+  attempts: number
+  prompt_tokens: number | null
+  completion_tokens: number | null
+  cache_read_tokens: number | null
+  cache_write_tokens: number | null
+  hit_ratio: number | null
+}
+
 export interface CompactionUsage {
   count: number
   last_compaction_tokens: number | null
   last_step: string | null
+  last_call: CompactionCall
 }
 
 export interface UsageReport {

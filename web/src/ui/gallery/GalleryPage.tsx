@@ -47,7 +47,20 @@ export function GalleryPage() {
       parts: { system: 900, tools: 1_100, messages: 13_200 },
     },
     cache: { read_tokens: 9_800, write_tokens: 1_200, hit_ratio: 0.808 },
-    compaction: { count: 0, last_compaction_tokens: null, last_step: null },
+    compaction: {
+      count: 0,
+      last_compaction_tokens: null,
+      last_step: null,
+      last_call: {
+        path: null,
+        attempts: 0,
+        prompt_tokens: null,
+        completion_tokens: null,
+        cache_read_tokens: null,
+        cache_write_tokens: null,
+        hit_ratio: null,
+      },
+    },
   }
 
   return (

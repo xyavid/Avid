@@ -59,6 +59,21 @@ def _split_context(
     }
 
 
+def _compaction_call(
+    usage: Usage | None, path: str | None, attempts: int
+) -> dict[str, Any]:
+    """The last compaction's own call reading; a None usage means nothing was attributed to it."""
+    return {
+        "path": path,
+        "attempts": attempts,
+        "prompt_tokens": None if usage is None else usage.prompt_tokens,
+        "completion_tokens": None if usage is None else usage.completion_tokens,
+        "cache_read_tokens": None if usage is None else usage.cache_read_tokens,
+        "cache_write_tokens": None if usage is None else usage.cache_write_tokens,
+        "hit_ratio": None if usage is None else hit_ratio(usage),
+    }
+
+
 @dataclass
 class RunState:
     """All mutable state of one run; built by the loop and passed explicitly to every stage."""
@@ -135,6 +150,11 @@ class RunState:
     last_compaction_tokens: int | None = None
     # Which compaction step produced the last report, shown in the detail view.
     last_compaction_step: str | None = None
+    # Usage of the last compaction's own model call(s), summed over attempts, with the route
+    # that produced the summary ("reuse" = session-prefix cache hit, "engine" = fallback).
+    last_compaction_usage: Usage | None = None
+    last_compaction_path: str | None = None
+    last_compaction_attempts: int = 0
     # Set by mark_compacted, consumed by record_usage: a post-compaction reading is pending.
     compact_pending: bool = False
     # Character counts (system, tools, messages) recorded before the request; they only split the
@@ -337,10 +357,20 @@ class RunState:
             self.child_tokens += child.tokens
             self.tokens += child.tokens
 
-    def mark_compacted(self, step: str) -> None:
+    def mark_compacted(
+        self,
+        step: str,
+        *,
+        usage: Usage | None = None,
+        path: str | None = None,
+        attempts: int = 0,
+    ) -> None:
         """Record one compaction and arm the pending flag that the next usage report consumes."""
         self.compactions += 1
         self.last_compaction_step = step
+        self.last_compaction_usage = usage
+        self.last_compaction_path = path
+        self.last_compaction_attempts = attempts
         self.compact_pending = True
 
     def record_prompt_parts(self, *, system: int, tools: int, messages: int) -> None:
@@ -373,6 +403,7 @@ class RunState:
                 "count": self.compactions,
                 "last_compaction_tokens": self.last_compaction_tokens,
                 "last_step": self.last_compaction_step,
+                "last_call": _compaction_call(self.last_compaction_usage, self.last_compaction_path, self.last_compaction_attempts),
             },
             "subagent": {"calls": self.child_calls, "tokens": self.child_tokens},
         }

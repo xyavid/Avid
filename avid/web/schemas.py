@@ -460,12 +460,26 @@ class CacheUsageOut(BaseModel):
     hit_ratio: float | None = None
 
 
+class CompactionCallOut(BaseModel):
+    """Usage of the last compaction's own model call(s); path names which route produced it.
+    reuse = the session-prefix request, engine = the standalone engine prompt."""
+
+    path: str | None = None
+    attempts: int = 0
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    hit_ratio: float | None = None
+
+
 class CompactionUsageOut(BaseModel):
     """Compaction count and the prompt size of the first round that followed the last compaction."""
 
     count: int = 0
     last_compaction_tokens: int | None = None
     last_step: str | None = None
+    last_call: CompactionCallOut = CompactionCallOut()
 
 
 class UsageOut(BaseModel):

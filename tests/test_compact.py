@@ -691,12 +691,11 @@ def test_summary_call_is_not_capped(spill_root):
                 finish_reason="stop",
             )
 
-    assert (
-        _summarize(
-            "素材文本", config=CONFIG, chat=LongChat(), system=COMPACTION_SYSTEM
-        )
-        == "这是摘要"
+    text, usage = _summarize(
+        "素材文本", config=CONFIG, chat=LongChat(), system=COMPACTION_SYSTEM
     )
+    assert text == "这是摘要"
+    assert usage == Usage(1, 1, 2)
 
 
 def test_summary_message_carries_the_recovery_path():

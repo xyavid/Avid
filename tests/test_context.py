@@ -241,11 +241,14 @@ def test_compaction_arms_the_next_real_reading():
     assert state.usage_report()["compaction"]["last_compaction_tokens"] is None
 
     state.record_usage(Usage(40_000, 1, 40_001))
-    assert state.usage_report()["compaction"] == {
-        "count": 1,
-        "last_compaction_tokens": 40_000,
-        "last_step": "compact_history",
-    }
+    report = state.usage_report()["compaction"]
+    assert report["count"] == 1
+    assert report["last_compaction_tokens"] == 40_000
+    assert report["last_step"] == "compact_history"
+    # The summary call's own usage is attributed here, not to the run's last_usage.
+    # This assembly carries no tool table, so only the engine path can run.
+    assert report["last_call"]["path"] == "engine"
+    assert report["last_call"]["prompt_tokens"] == 1
 
 
 def test_default_budget_references_the_compact_constants():

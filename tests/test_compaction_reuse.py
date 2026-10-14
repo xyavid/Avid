@@ -36,12 +36,12 @@ def spill_root(tmp_path, monkeypatch):
     return tmp_path
 
 
-def turn(text="摘要正文", calls=()):
+def turn(text="摘要正文", calls=(), usage=None):
     return Turn(
         message={"role": "assistant", "content": text, "tool_calls": list(calls)},
         text=text,
         tool_calls=list(calls),
-        usage=Usage(1, 1, 2),
+        usage=Usage(1, 1, 2) if usage is None else usage,
         model="m",
         finish_reason="stop",
     )
@@ -267,6 +267,47 @@ def test_a_failed_reuse_attempt_does_not_touch_the_transcript(spill_root):
     messages = transcript.as_messages()
     assert messages[0]["content"].startswith("[历史摘要]")
     assert len(messages) == 1 + 20  # one summary + the kept 10 rounds
+
+
+# ---- usage reading of the compaction call itself ----
+
+
+def test_compaction_call_usage_and_path_land_in_the_report(spill_root):
+    """The summary call's own tokens are observable, with the route that produced it."""
+    chat = ScriptedChat(turn("## Goal\n检查点", usage=Usage(1_000, 40, 1_040, cache_read_tokens=900)))
+    state = RunState()
+
+    compact(chat, state=state)
+
+    call = state.usage_report()["compaction"]["last_call"]
+    assert call["path"] == "reuse"
+    assert call["attempts"] == 1
+    assert call["prompt_tokens"] == 1_000
+    assert call["completion_tokens"] == 40
+    assert call["cache_read_tokens"] == 900
+    assert call["hit_ratio"] == pytest.approx(0.9)
+
+
+def test_a_failed_reuse_attempt_is_summed_into_the_engine_path_reading(spill_root):
+    """Both attempts were paid for: the reading is their sum, and the route names the one that won."""
+    call = {
+        "id": "c9",
+        "type": "function",
+        "function": {"name": "read_file", "arguments": "{}"},
+    }
+    chat = ScriptedChat(
+        turn("", [call], usage=Usage(1_000, 5, 1_005)),
+        turn("## Goal\n检查点", usage=Usage(200, 10, 210)),
+    )
+    state = RunState()
+
+    compact(chat, state=state)
+
+    call = state.usage_report()["compaction"]["last_call"]
+    assert call["path"] == "engine"
+    assert call["attempts"] == 2
+    assert call["prompt_tokens"] == 1_200
+    assert call["completion_tokens"] == 15
 
 
 # ---- no prefix, no reuse: the old path is the only one that runs ----

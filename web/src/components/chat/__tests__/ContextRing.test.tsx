@@ -16,8 +16,20 @@ function report(overrides: Partial<UsageReport> = {}): UsageReport {
       parts: { system: 1_100, tools: 2_000, messages: 52_600 },
     },
     cache: { read_tokens: 9_000, write_tokens: 1_000, hit_ratio: 0.976 },
-    compaction: { count: 0, last_compaction_tokens: null, last_step: null },
+    compaction: { count: 0, last_compaction_tokens: null, last_step: null, last_call: emptyCall() },
     ...overrides,
+  }
+}
+
+function emptyCall() {
+  return {
+    path: null,
+    attempts: 0,
+    prompt_tokens: null,
+    completion_tokens: null,
+    cache_read_tokens: null,
+    cache_write_tokens: null,
+    hit_ratio: null,
   }
 }
 
@@ -61,8 +73,42 @@ describe('上下文容量环', () => {
     expect(dialog.textContent).toContain('97.6%')
   })
 
-  it('分块没读数时那三行给「—」（不编数字）', () => {
-    render(<ContextRing usage={report({ context: { tokens: 1_000, window: 100_000, utilization: 0.01, parts: null } })} />)
+  it('有压缩记录时多一行：次数 + 走哪条路径 + 该次命中率', () => {
+    render(
+      <ContextRing
+        usage={report({
+          compaction: {
+            count: 2,
+            last_compaction_tokens: 42_000,
+            last_step: 'compact_history',
+            last_call: {
+              path: 'reuse',
+              attempts: 1,
+              prompt_tokens: 80_000,
+              completion_tokens: 900,
+              cache_read_tokens: 76_000,
+              cache_write_tokens: null,
+              hit_ratio: 0.95,
+            },
+          },
+        })}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: '上下文容量 55.7%' }))
+
+    const dialog = screen.getByRole('dialog', { name: '上下文容量' })
+    expect(dialog.textContent).toContain('压缩 2 次')
+    expect(dialog.textContent).toContain('复用前缀')
+    expect(dialog.textContent).toContain('95.0%')
+  })
+
+  it('没有压缩记录时那一行不出现', () => {
+    render(<ContextRing usage={report()} />)
+    fireEvent.click(screen.getByRole('button', { name: '上下文容量 55.7%' }))
+    expect(screen.getByRole('dialog').textContent).not.toContain('压缩')
+  })
+
+  it('分块没读数时那三行给「—」（不编数字）', () => {    render(<ContextRing usage={report({ context: { tokens: 1_000, window: 100_000, utilization: 0.01, parts: null } })} />)
     fireEvent.click(screen.getByRole('button', { name: '上下文容量 1.0%' }))
 
     expect(screen.getByRole('dialog').textContent).toContain('—')

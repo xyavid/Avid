@@ -72,6 +72,13 @@ function pct(ratio: number | null | undefined): string {
   return ratio === null || ratio === undefined ? '—' : `${(ratio * 100).toFixed(1)}%`
 }
 
+/** Which route the last compaction took: the session-prefix request or the engine fallback. */
+function routeLabel(path: string | null | undefined): string {
+  if (path === 'reuse') return '复用前缀'
+  if (path === 'engine') return '引擎提示词'
+  return '—'
+}
+
 export type ContextRingProps = {
   usage: UsageReport | null
 }
@@ -81,6 +88,7 @@ export function ContextRing({ usage }: ContextRingProps) {
   const ratio = ratioOf(usage)
   const hot = ratio !== null && ratio >= DANGER_AT
   const context = usage?.context ?? null
+  const compaction = usage?.compaction ?? null
   const parts = context?.parts ?? null
   // Parts describe the current prompt, so shares are of used tokens, not the window.
   const share = (value: number): string =>
@@ -135,6 +143,17 @@ export function ContextRing({ usage }: ContextRingProps) {
             <span className="font-ui text-ui text-ink">平均缓存命中率</span>
             <span className="font-ui text-ui text-ink">{pct(usage?.cache.hit_ratio)}</span>
           </div>
+
+          {compaction !== null && compaction.count > 0 && (
+            <div className="mt-a8 flex items-baseline justify-between gap-a8">
+              <span className="font-ui text-ui text-ink">压缩 {compaction.count} 次</span>
+              <span className="font-ui text-ui text-ink">
+                {routeLabel(compaction.last_call.path)}
+                {compaction.last_call.attempts > 1 ? '（含回退）' : ''} · 命中{' '}
+                {pct(compaction.last_call.hit_ratio)}
+              </span>
+            </div>
+          )}
         </div>
       )}
     </div>

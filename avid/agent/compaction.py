@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..providers.client import LLMError
+from ..providers.client import LLMError, Usage
 from ..providers.config import Config
 from . import events, prompt
 from .transcript import Transcript, text_of
@@ -31,6 +31,10 @@ logger = logging.getLogger("avid.agent.compaction")
 CONTEXT_CHAR_LIMIT = 400_000
 RESERVE_TOKENS = 16_384
 KEEP_RECENT_TURNS = 10
+
+# Which route produced the summary, recorded with its usage: reuse = session-prefix cache hit.
+PATH_REUSE = "reuse"
+PATH_ENGINE = "engine"
 
 # Spilled files must stay inside the workspace, since the read tool only reads there.
 SPILL_DIR = ".avid/context"
@@ -395,7 +399,9 @@ def repo_state(root: str | None) -> str | None:
     return "\n\n".join(blocks)[:REPO_STATE_MAX_CHARS]
 
 
-def _summarize(body: str, *, config: Config, chat: Any, system: str) -> str | None:
+def _summarize(
+    body: str, *, config: Config, chat: Any, system: str
+) -> tuple[str | None, Usage | None]:
     request = [{"role": "user", "content": body}]
     try:
         # No max_tokens is sent: reasoning tokens share that budget and a hard cap yields an empty
@@ -405,10 +411,10 @@ def _summarize(body: str, *, config: Config, chat: Any, system: str) -> str | No
         # A failed summary degrades to keeping the old history, but programming errors must not be
         # swallowed or the bug hides inside the compaction path.
         logger.warning("compact: 摘要调用失败：%s", exc)
-        return None
+        return None, None
 
     text = str(turn.text).strip()
-    return text or None
+    return (text or None), turn.usage
 
 
 def _summarize_reuse(
@@ -418,7 +424,7 @@ def _summarize_reuse(
     chat: Any,
     system: str,
     tools: list[dict[str, Any]],
-) -> str | None:
+) -> tuple[str | None, Usage | None]:
     """One engine call over the caller's own prompt prefix; None means a tool call, an empty answer
     or a failure, which sends the caller back to the standalone engine prompt.
 
@@ -429,13 +435,35 @@ def _summarize_reuse(
         turn = chat(config, messages, system=system, tools=tools)
     except (LLMError, OSError, ValueError) as exc:
         logger.warning("compact: 复用前缀的摘要调用失败：%s", exc)
-        return None
+        return None, None
 
     if turn.tool_calls:
         logger.warning("compact: 复用前缀的摘要调用发起了工具调用，改用引擎提示词路径")
-        return None
+        return None, turn.usage
     text = str(turn.text).strip()
-    return text or None
+    return (text or None), turn.usage
+
+
+def _sum_usage(total: Usage | None, spent: Usage | None) -> Usage | None:
+    """Add one attempt's usage to the running total; None cache counts stay None (not reported)."""
+    if total is None:
+        return spent
+    if spent is None:
+        return total
+
+    def add(left: int | None, right: int | None) -> int | None:
+        if left is None and right is None:
+            return None
+        return (left or 0) + (right or 0)
+
+    return Usage(
+        prompt_tokens=total.prompt_tokens + spent.prompt_tokens,
+        completion_tokens=total.completion_tokens + spent.completion_tokens,
+        total_tokens=total.total_tokens + spent.total_tokens,
+        cache_read_tokens=add(total.cache_read_tokens, spent.cache_read_tokens),
+        cache_write_tokens=add(total.cache_write_tokens, spent.cache_write_tokens),
+        reasoning_tokens=add(total.reasoning_tokens, spent.reasoning_tokens),
+    )
 
 
 def _summary_message(summary: str, transcript: str) -> str:
@@ -495,13 +523,20 @@ def effective_trigger(limits: ContextBudget, state: Any) -> tuple[ContextBudget,
     return limits, trigger
 
 
-def announce(report: "CompactReport | None", state: Any) -> None:
+def announce(
+    report: "CompactReport | None",
+    state: Any,
+    *,
+    usage: Usage | None = None,
+    path: str | None = None,
+    attempts: int = 0,
+) -> None:
     """Record a compaction in one place: one log line, one ledger entry and one event."""
     if report is None:
         return
     logger.info("compact: %s", report.describe())
     # How much a compaction saved is answered by the next model call, not estimated here.
-    state.mark_compacted(report.step)
+    state.mark_compacted(report.step, usage=usage, path=path, attempts=attempts)
     state.emit(
         events.CONTEXT_COMPACTED,
         step=report.step,
@@ -577,17 +612,25 @@ def run_compaction(
     # it and nothing is fed twice; repo_state is probed only here, never on a first pass.
     repo = repo_state(state.workspace_root) if update else None
     summary = None
+    usage: Usage | None = None
+    route: str | None = None
+    attempts = 0
     if system and tools:
         # The caller's own prefix, cut at the same boundary the summary replaces: every message
         # before the cut is byte-identical to the previous round's request. The instruction is
         # marked as injected, so the reasoning replay plan stays the one that request used.
-        summary = _summarize_reuse(
+        attempts += 1
+        text, spent = _summarize_reuse(
             [*earlier, {"role": "user", "content": _reuse_instruction(update=update, repo=repo), "tail": True}],
             config=config,
             chat=chat,
             system=system,
             tools=tools,
         )
+        usage = _sum_usage(usage, spent)
+        if text is not None:
+            summary = text
+            route = PATH_REUSE
     if summary is None:
         if checkpoint is None:
             body = _create_message(_original_request(earlier), render_conversation(earlier))
@@ -595,7 +638,12 @@ def run_compaction(
             body = _update_message(checkpoint, render_conversation(earlier[1:]), repo)
         # One engine prompt only: the task block says create or update, so the system prompt never
         # follows the mode.
-        summary = _summarize(body, config=config, chat=chat, system=COMPACTION_SYSTEM)
+        attempts += 1
+        text, spent = _summarize(body, config=config, chat=chat, system=COMPACTION_SYSTEM)
+        usage = _sum_usage(usage, spent)
+        if text is not None:
+            summary = text
+            route = PATH_ENGINE
     if summary is None:
         logger.warning("compact: 检查点生成失败，保留原历史")
         return None
@@ -612,7 +660,7 @@ def run_compaction(
         len(messages),
         len(transcript),
     )
-    announce(report, state)
+    announce(report, state, usage=usage, path=route, attempts=attempts)
     if on_compaction is not None:
         on_compaction(transcript.as_messages()[0], len(tail))
     return report

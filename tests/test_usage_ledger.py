@@ -26,7 +26,20 @@ def test_report_is_all_none_before_the_first_model_call():
     assert report == {
         "context": {"tokens": None, "window": None, "utilization": None, "parts": None},
         "cache": {"read_tokens": None, "write_tokens": None, "hit_ratio": None},
-        "compaction": {"count": 0, "last_compaction_tokens": None, "last_step": None},
+        "compaction": {
+            "count": 0,
+            "last_compaction_tokens": None,
+            "last_step": None,
+            "last_call": {
+                "path": None,
+                "attempts": 0,
+                "prompt_tokens": None,
+                "completion_tokens": None,
+                "cache_read_tokens": None,
+                "cache_write_tokens": None,
+                "hit_ratio": None,
+            },
+        },
         "subagent": {"calls": 0, "tokens": 0},
     }
 
@@ -69,6 +82,15 @@ def test_last_compaction_tokens_comes_from_the_next_real_call():
         "count": 1,
         "last_compaction_tokens": None,  # no next round yet — do not guess
         "last_step": "micro_compact",
+        "last_call": {
+            "path": None,  # announce() got no usage: nothing to attribute
+            "attempts": 0,
+            "prompt_tokens": None,
+            "completion_tokens": None,
+            "cache_read_tokens": None,
+            "cache_write_tokens": None,
+            "hit_ratio": None,
+        },
     }
 
     state.record_usage(Usage(42_000, 10, 42_010))
@@ -85,6 +107,24 @@ def test_compaction_counter_counts_only_real_reports():
     announce(CompactReport("compact_history", "摘要", 9, 3), state)
     assert state.compactions == 2
     assert state.usage_report()["compaction"]["last_step"] == "compact_history"
+
+
+def test_usage_schema_carries_the_compaction_call():
+    """The REST model must keep the new reading; pydantic would otherwise drop the extra key."""
+    from avid.web.schemas import UsageOut
+
+    state = RunState()
+    state.mark_compacted(
+        "compact_history",
+        usage=Usage(1_000, 40, 1_040, cache_read_tokens=900),
+        path="reuse",
+        attempts=1,
+    )
+    out = UsageOut.model_validate(state.usage_report())
+    assert out.compaction.last_call.path == "reuse"
+    assert out.compaction.last_call.attempts == 1
+    assert out.compaction.last_call.prompt_tokens == 1_000
+    assert out.compaction.last_call.hit_ratio == pytest.approx(0.9)
 
 
 def test_event_carries_the_snapshot_every_round():
