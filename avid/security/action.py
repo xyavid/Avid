@@ -23,7 +23,10 @@ _CMD_START = (
 # remain the only hard denial.
 DENY_PATTERNS: tuple[tuple[str, str], ...] = (
     (
-        _CMD_START + r"rm\b[^|;&]*\s(?:/\*?|~/?\*?|\$HOME/?\*?)(?:\s|;|&|$)",
+        # Quotes and braces are spelling, not shape: `rm -rf "$HOME"` and `rm -rf ${HOME}/` are the
+        # same command as `rm -rf ~`, so they must reach the same verdict.
+        _CMD_START
+        + r"""rm\b[^|;&]*\s["']?(?:/\*?|~/?\*?|\$\{?HOME\}?/?\*?)["']?(?:\s|;|&|$)""",
         "删除根目录或家目录",
     ),
     (

@@ -168,6 +168,27 @@ def test_nested_shell_cannot_hide_hard_denials(command):
     assert brokerize("bash", {"command": command}).damage
 
 
+@pytest.mark.parametrize("command", [
+    "rm -rf $HOME",
+    "rm -rf ${HOME}",
+    "rm -rf ${HOME}/",
+    'rm -rf "$HOME"',
+    "rm -rf '${HOME}'",
+    'rm -rf "$HOME"/*',
+])
+def test_a_quoted_or_braced_home_is_the_same_hard_denial(command):
+    assert brokerize("bash", {"command": command}).damage
+
+
+@pytest.mark.parametrize("command", [
+    "rm -rf $HOME_DIR/x",
+    "rm -rf $HOME/.cache/thumb",  # a subdirectory of home: recursive-force, not root deletion
+    'grep -rn "\\$HOME" .',
+])
+def test_naming_home_without_deleting_it_is_not_a_hard_denial(command):
+    assert brokerize("bash", {"command": command}).damage is None
+
+
 @pytest.mark.parametrize("command, capability", [
     ("find . -name '*.ts'", "filesystem_read"),
     ("find . -exec touch x \\;", "shell_execute"),
