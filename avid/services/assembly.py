@@ -131,16 +131,14 @@ def assemble(
             "tools 与 registry 必须一起给或一起不给：半个工具表只会让每次调用回「未知工具」"
         )
 
-    if tools is None:
-        # Nothing injected: the table is the built-ins plus this run's MCP servers.
-        manager = McpManager(workspace_root)
-        state.mcp = manager
-        report = warn or logger.warning
-        for warning in manager.start_all():
-            report(warning)
-
     try:
         if tools is None:
+            # Nothing injected: the table is the built-ins plus this run's MCP servers.
+            manager = McpManager(workspace_root)
+            state.mcp = manager
+            report = warn or logger.warning
+            for warning in manager.start_all():
+                report(warning)
             schemas, impls = build_toolset(state)
         else:
             assert registry is not None  # the pair guard above
