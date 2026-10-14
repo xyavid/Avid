@@ -6,6 +6,9 @@ CLI 与 Web 是**两个平级接线点**，内核不知道有几个调用方（`
 CLI  avid --agent / --session ─┐
 Web  POST /api/sessions/{id}/runs ─┴─► services/runs.RunRegistry（线程 + 事件重放缓冲）
                                        ▼
+                         services/assembly.assemble() —— 建 state + 起 MCP + 组工具表 + resolve spec
+                           （唯一构造 Run 的地方；注入工具表时不起 MCP，传了 recorder 才接计划与压缩游标）
+                                       ▼
                          agent/run.Run —— 只表达调度顺序（subagent 递归用）
                            ├ ContextManager.compose()  装配 SYSTEM / tail 块，编排压缩
                            ├ ContextManager.call() → Turn   正文 + tool_calls；报超限则压缩后重发一次
@@ -37,6 +40,7 @@ Web  POST /api/sessions/{id}/runs ─┴─► services/runs.RunRegistry（线�
 ## 运行输入与状态
 
 - `agent/spec.py` 收口一轮由什么组成（模型配置、chat、工具表与 schema、各项上限）；`agent/state.py` 的 `RunState` 是权限、沙箱、工作区、钩子与全部可变状态的唯一权威。一份事实只有一个所有者：spec 不重复持有任何 state 字段。
+- 宿主把这两样建成一体的地方是 `services/assembly.py`：`assemble()` 是「起一个 run」的单点，五步顺序固定，产出的 `RunAssembly.run()` 是全仓唯一构造 `Run` 的地方——所以没有哪条宿主路能悄悄换掉工具表或漏掉计划槽。
 - 每步产出一个 `Turn`（正文 + tool_calls）；`agent/stop.py` 的 `StopReason` 是唯一终止路径，连续拒绝停机（`denial_halt`）也在那里产出。
 - **跨 run 的意图存会话值，不在 RunState 里**：usage、压缩游标与任务计划（`avid.plan/<分支>`）都是值，宿主起 run 时读进 RunState、用回写回调交回 recorder；计划全部 completed（或清空）时删值，`/rewind` 跟着删。判断一份状态该存哪：Transcript 拥有说过/做过，会话值拥有跨 run 的意图，RunState 拥有本轮派生量。
 

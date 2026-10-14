@@ -88,6 +88,7 @@
 | 新增会话内命令 | `avid/agent/commands.py` 的 `COMMANDS` |
 | 新增模型协议 | `avid/providers/` 加实现 + `__init__.py` 的 `PROVIDERS` |
 | 新增一类上下文 | `avid/agent/context.py` 的 `register_source` |
+| 改一个 run 怎么装配（权限槽 / 工具表 / 计划与检查点接线） | `avid/services/assembly.py` 的 `assemble` |
 | 加一个事件 | `avid/agent/events.py` + `web/src/events/types.ts` 的 `EVENTS` |
 | 加一个界面 | `web/src/surfaces/` + `web/src/app/App.tsx` 路由 |
 | 加一个右列面板 | `web/src/components/dock/Dock.tsx` 的 `PANELS` + `web/src/state/dock.ts` |
