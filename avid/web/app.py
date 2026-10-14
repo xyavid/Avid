@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import uuid
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -141,6 +142,23 @@ def _envelope(code: str, message: str, detail: dict[str, Any] | None = None) -> 
     return {"error": {"code": code, "message": message, "detail": detail or {}}}
 
 
+# The three fields that say where a body went wrong; pydantic also fills "input" with the offending
+# value and "ctx" with the validator's own objects.
+_SCHEMA_ERROR_FIELDS = ("type", "loc", "msg")
+
+
+def _schema_errors(errors: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Return each validation error by location and reason only.
+
+    The value under "input" is the request body field, so echoing it hands a rejected secret
+    (the settings endpoints take an api_key) back to the caller; "ctx" can hold objects that
+    are not JSON at all.
+    """
+    return [
+        {name: error[name] for name in _SCHEMA_ERROR_FIELDS if name in error} for error in errors
+    ]
+
+
 def create_app(
     *,
     services: Services | None = None,
@@ -175,7 +193,9 @@ def create_app(
     async def _schema_error(_: Request, exc: RequestValidationError) -> JSONResponse:
         return JSONResponse(
             status_code=422,
-            content=_envelope("invalid_schema", "请求体不符合 schema", {"errors": exc.errors()}),
+            content=_envelope(
+                "invalid_schema", "请求体不符合 schema", {"errors": _schema_errors(exc.errors())}
+            ),
         )
 
     @app.exception_handler(StarletteHTTPException)

@@ -346,6 +346,34 @@ def test_unknown_api_is_json_404(bundle):
     assert root.json()["error"]["code"] == "static_missing"
 
 
+def test_a_schema_error_does_not_echo_the_value_it_rejected(bundle):
+    """Regression: the 422 body carried pydantic's ``input``/``ctx`` verbatim, so a rejected
+    api_key came back in the error response."""
+    client, _ = bundle()
+    secret = "sk-" + "x" * (4096 + 3)  # over the schema's max_length, so validation really fires
+    response = client.put(
+        "/api/settings/byok",
+        json={
+            "providers": [
+                {
+                    "id": "demo",
+                    "label": "Demo",
+                    "protocol": "anthropic",
+                    "base_url": "https://api.example/v1",
+                    "api_key": secret,
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 422
+    assert secret not in response.text
+    errors = response.json()["error"]["detail"]["errors"]
+    assert errors
+    assert set(errors[0]) <= {"type", "loc", "msg"}
+    assert errors[0]["loc"][-1] == "api_key"  # the caller still learns which field was wrong
+
+
 # ---------------- B11 ----------------
 
 
