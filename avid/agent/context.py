@@ -10,6 +10,7 @@ under it.
 
 from __future__ import annotations
 
+import json
 import logging
 import platform
 from collections.abc import Callable, Iterable
@@ -18,6 +19,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from ..providers.client import PromptTooLongError, Turn
 from ..providers.config import Config
 from . import compaction as compact
 from . import prompt
@@ -107,6 +109,8 @@ class ContextManager:
         tool_schemas: list[dict[str, Any]] | None = None,
         budget: ContextBudget | None = None,
         summarize: Any = None,
+        chat: Callable[..., Turn] | None = None,
+        max_tokens: int | None = None,
         on_compaction: Callable[[dict[str, Any], int], None] | None = None,
     ) -> None:
         self.transcript = transcript
@@ -122,6 +126,9 @@ class ContextManager:
         self.tool_schemas = list(tool_schemas or [])
         self.budget = budget or ContextBudget()
         self.summarize = summarize
+        # The round's own call, as opposed to summarize: call() sends with these two.
+        self.chat = chat
+        self.max_tokens = max_tokens
         # Callback after the history is replaced (summary message, kept tail size); without it the
         # compaction stays in memory only.
         self.on_compaction = on_compaction
@@ -153,6 +160,8 @@ class ContextManager:
             tool_schemas=spec.tools,
             budget=spec.budget,
             summarize=spec.summarize or spec.chat,
+            chat=spec.chat,
+            max_tokens=spec.max_tokens,
             on_compaction=on_compaction,
         )
 
@@ -371,6 +380,50 @@ class ContextManager:
         """Force one compaction for /compact, skipping the trigger line and the once-per-run
         guard; None means there was no earlier history or the summary failed."""
         return self._run_compaction(force=True)
+
+    # ---- the round's own model call: the overflow fallback lives beside compaction ----
+
+    def call(self, request: ComposedRequest) -> Turn:
+        """Send one composed request and return the turn; the caller asks for a Turn, not a retry.
+
+        A PromptTooLongError compacts once and resends the re-rendered request, which is the same
+        compaction the trigger and /compact use — only reached from the provider's own refusal.
+        """
+        self._note_prompt_parts(request)
+        try:
+            return self._send(request)
+        except PromptTooLongError:
+            if self.state.retried:
+                raise
+            self.state.retried = True
+            logger.warning("compact: 模型报上下文超限，兜底压缩后重试一次")
+            self.compact_now()
+            request = self.render()
+            self._note_prompt_parts(request)
+            return self._send(request)
+
+    def _send(self, request: ComposedRequest) -> Turn:
+        if self.chat is None:  # pragma: no cover - only Run calls this, always via from_spec
+            raise RuntimeError("ContextManager 没有 chat，无法发起模型调用")
+        return self.chat(
+            self.config,
+            request.messages,
+            system=request.system,
+            tools=self.tool_schemas,
+            max_tokens=self.max_tokens,
+        )
+
+    def _note_prompt_parts(self, request: ComposedRequest) -> None:
+        """Record the three prompt parts; the assembler is what knows the system and tools shares."""
+        self.state.record_prompt_parts(
+            system=request.system_chars,
+            tools=(
+                len(json.dumps(self.tool_schemas, ensure_ascii=False))
+                if self.tool_schemas
+                else 0
+            ),
+            messages=request.messages_chars,
+        )
 
 
 #: Declaration order is render order and the cache discipline: stable blocks first, the per-round

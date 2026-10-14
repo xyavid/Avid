@@ -374,7 +374,7 @@ class RunState:
         self.compact_pending = True
 
     def record_prompt_parts(self, *, system: int, tools: int, messages: int) -> None:
-        """Record per-part character counts; only the loop knows the system and tools parts."""
+        """Record per-part character counts; the assembler is what knows the system/tools shares."""
         self.prompt_parts = (max(0, system), max(0, tools), max(0, messages))
 
     def usage_report(self) -> dict[str, Any]:

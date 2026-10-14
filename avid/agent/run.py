@@ -1,18 +1,19 @@
-"""One run's lifecycle (prepare → round loop → termination) with a single exit.
+"""One run's scheduling: the round loop, its cancellation checkpoints and its single exit.
 
-Behaviour is pinned by the sequence-consistency cases in tests/test_run.py.
+Everything else sits with its own subject — assembly and the model call (context), tool batches
+(execution), termination (stop). Behaviour is pinned by the sequence-consistency cases in
+tests/test_run.py.
 """
 
 from __future__ import annotations
 
 import itertools
-import json
 import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from ..providers.client import PromptTooLongError, Turn
-from .context import ComposedRequest, ContextManager
+from ..providers.client import Turn
+from .context import ContextManager
 from .events import RUN_STATUS, RunObserver
 from .execution import execute_batch
 from .hooks import BLOCK
@@ -121,8 +122,7 @@ class Run:
             state.emit(RUN_STATUS, round=round_index, tokens=state.tokens, activity="model")
 
             request = ctx.compose(injected=injected)
-            self._note_prompt_parts(state, request)
-            turn = self._call_model(state, ctx, request)
+            turn = ctx.call(request)
 
             state.record_usage(turn.usage)
             transcript.append(turn.message)
@@ -179,34 +179,6 @@ class Run:
                 return denial_halt(state, transcript, emitted=self._emit)
         raise AssertionError("轮次循环没有正常出口")  # pragma: no cover
 
-    def _call_model(
-        self, state: RunState, ctx: ContextManager, request: ComposedRequest
-    ) -> Turn:
-        spec = self.spec
-        try:
-            return spec.chat(
-                spec.config,
-                request.messages,
-                system=request.system,
-                tools=spec.tools,
-                max_tokens=spec.max_tokens,
-            )
-        except PromptTooLongError:
-            if state.retried:
-                raise
-            state.retried = True
-            logger.warning("compact: 模型报上下文超限，兜底压缩后重试一次")
-            ctx.compact_now()
-            request = ctx.render()
-            self._note_prompt_parts(state, request)
-            return spec.chat(
-                spec.config,
-                request.messages,
-                system=request.system,
-                tools=spec.tools,
-                max_tokens=spec.max_tokens,
-            )
-
     def _finish(self, state: RunState, transcript: Transcript, turn: Turn) -> RunOutcome | None:
         """Termination is delegated to the stop module; None means a nudge was sent, so continue."""
         return decide(
@@ -227,12 +199,3 @@ class Run:
         if probe is None:
             return []
         return [dict(message) for message in probe()]
-
-    def _note_prompt_parts(self, state: RunState, request: ComposedRequest) -> None:
-        state.record_prompt_parts(
-            system=request.system_chars,
-            tools=len(json.dumps(self.spec.tools, ensure_ascii=False))
-            if self.spec.tools
-            else 0,
-            messages=request.messages_chars,
-        )
