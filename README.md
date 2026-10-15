@@ -5,13 +5,46 @@
   </picture>
 </p>
 
-# Avid
+<h3 align="center">An extensible agent runtime</h3>
+<p align="center">You own the model calls, the loop <span style="color:#537D96">and the permissions</span>.</p>
 
-> An extensible agent runtime: you own the model calls, tool execution, the multi-step loop,
-> context, memory and permissions — swappable and debuggable. The CLI and the local web server
-> share one kernel.
+<p align="center">
+  English · <a href="README.zh-CN.md">中文</a>
+</p>
 
-English · [中文](README.zh-CN.md)
+<p align="center">
+  <a href="https://github.com/xyavid/Avid/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/xyavid/Avid/ci.yml?branch=main&label=CI" alt="CI"></a>
+  <a href="https://github.com/xyavid/Avid/blob/main/LICENSE"><img src="https://img.shields.io/github/license/xyavid/Avid" alt="MIT"></a>
+  <img src="https://img.shields.io/badge/python-%E2%89%A53.12-blue" alt="Python 3.12 or newer">
+  <a href="https://github.com/xyavid/Avid/stargazers"><img src="https://img.shields.io/github/stars/xyavid/Avid" alt="stars"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/xyavid/Avid/issues">Issues</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a> ·
+  <a href="LICENSE">License</a>
+</p>
+
+## Contents
+
+[Interface](#interface) · [What it does](#what-it-does) · [Requirements](#requirements) ·
+[Quick Start](#quick-start) · [Concepts](#concepts) · [Configuration](#configuration) ·
+[Development](#development) · [License](#license)
+
+## Interface
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="web/src/assets/ui-dark.png">
+    <img src="web/src/assets/ui-light.png" alt="The Avid browser UI: projects and sessions on the left, one run's timeline in the middle, the workspace's files on the right" width="1080">
+  </picture>
+</p>
+
+One run, end to end. The left column holds the projects and the sessions inside them; the middle is
+that run's timeline — tool calls, a diff and two parallel subagents fold into a single collapsed line
+once it settles, and clicking that line lays the process back out; the right column previews the
+workspace's files. `avid ui` serves this locally, `avid web` answers the same API without the page,
+and the kernel behind both is the one taking `avid --agent "…"` in a terminal.
 
 ## What it does
 

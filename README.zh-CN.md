@@ -5,12 +5,41 @@
   </picture>
 </p>
 
-# Avid
+<h3 align="center">可扩展的 agent 运行时</h3>
+<p align="center">模型调用、多步循环与工具执行都是你的，<span style="color:#537D96">权限也是</span>。</p>
 
-> 可扩展的 agent 运行时：模型调用、工具执行、多步循环、上下文与记忆、权限各层都自己掌控，
-> 可替换、可调试。CLI 与本地 Web 服务共用同一个内核。
+<p align="center">
+  中文 · <a href="README.md">English</a>
+</p>
 
-中文 · [English](README.md)
+<p align="center">
+  <a href="https://github.com/xyavid/Avid/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/xyavid/Avid/ci.yml?branch=main&label=CI" alt="CI"></a>
+  <a href="https://github.com/xyavid/Avid/blob/main/LICENSE"><img src="https://img.shields.io/github/license/xyavid/Avid" alt="MIT"></a>
+  <img src="https://img.shields.io/badge/python-%E2%89%A53.12-blue" alt="Python 3.12 或更高">
+  <a href="https://github.com/xyavid/Avid/stargazers"><img src="https://img.shields.io/github/stars/xyavid/Avid" alt="stars"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/xyavid/Avid/issues">议题</a> ·
+  <a href="CONTRIBUTING.zh-CN.md">贡献</a> ·
+  <a href="LICENSE">许可</a>
+</p>
+
+## 目录
+
+[界面](#界面) · [功能](#功能) · [环境要求](#环境要求) · [快速开始](#快速开始) ·
+[概念](#概念) · [配置](#配置) · [开发](#开发) · [许可](#许可)
+
+## 界面
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="web/src/assets/ui-dark.png">
+    <img src="web/src/assets/ui-light.png" alt="Avid 的浏览器界面：左列是项目与会话，中间是一次运行的对话时间线，右列是工作区文件" width="1080">
+  </picture>
+</p>
+
+一次运行的全貌。左列是项目与各项目下的会话；中间是这次运行的时间线——工具调用、差异视图与两个并行子任务在收尾后折成一行，点开又把过程铺回来；右列预览工作区里的文件。`avid ui` 在本机把这套端出来，`avid web` 是不带页面的同一个 API，两者背后就是终端里 `avid --agent "…"` 用的那个内核。
 
 ## 功能
 
