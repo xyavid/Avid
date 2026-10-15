@@ -246,6 +246,69 @@ describe('useRunStream（发送 → 订阅 → 段落归并 → 终态收尾）'
     expect(result.current.attachedSession).toBe('s2')
   })
 
+  it('换会话：上一条会话的流断掉，它的终态也不再收尾当前会话', async () => {
+    // Each run gets its own stream object, so an abandoned one is identifiable.
+    const streams: { abort: ReturnType<typeof vi.fn>; send: (type: string, data: Record<string, unknown>) => void; runId: string }[] = []
+    subscribe.mockImplementation(async (runId: string, _after: number, handlers: { onEvent: (e: Frame) => void }) => {
+      const abort = vi.fn()
+      streams.push({ abort, runId, send: (type, data) => handlers.onEvent({ type, ts: 0, seq: 0, data }) })
+      return { cursor: () => 0, abort }
+    })
+    startRun
+      .mockResolvedValueOnce({ run_id: 'r1', session_id: 's1', status: 'running' })
+      .mockResolvedValueOnce({ run_id: 'r2', session_id: 's2', status: 'running' })
+    const { result, rerender } = renderHook(({ id }) => useRunStream(id, () => {}), {
+      initialProps: { id: 's1' },
+    })
+    await act(async () => {
+      await result.current.send('旧会话的问题', false)
+    })
+
+    rerender({ id: 's2' })
+    await act(async () => {
+      await result.current.send('新会话的问题', false)
+    })
+
+    expect(streams.map((s) => s.runId)).toEqual(['r1', 'r2'])
+    expect(streams[0]!.abort).toHaveBeenCalled()
+
+    // The abandoned run finishes while another session is on screen: it must not settle this one.
+    act(() => {
+      streams[0]!.send('run_finished', { text: '旧的完成了' })
+      streams[0]!.send('approval_requested', { approval_id: 'a1', tool: 'bash', reason: '旧的' })
+    })
+
+    expect(streams[1]!.abort).not.toHaveBeenCalled()
+    expect(result.current.approvals).toEqual([])
+    expect(result.current.phase).toBe('running')
+    expect(texts(result.current.items, 'assistant')).toEqual([])
+  })
+
+  it('切到一个正在跑的会话：自动接上那个 run；本会话自己的流不被重复订阅', async () => {
+    const opened: string[] = []
+    subscribe.mockImplementation(async (runId: string) => {
+      opened.push(runId)
+      return { cursor: () => 0, abort: vi.fn() }
+    })
+    const { result, rerender } = renderHook(
+      ({ id, active }) => useRunStream(id, () => {}, active),
+      { initialProps: { id: 's1', active: null as string | null } },
+    )
+    await act(async () => {
+      await result.current.send('先来', false)
+    })
+    expect(opened).toEqual(['r1']) // startRun's r1
+
+    // The same run is reported as active by the session list: no second subscription.
+    rerender({ id: 's1', active: 'r1' })
+    expect(opened).toEqual(['r1'])
+
+    // Switching to another session with a run in flight picks that one up.
+    rerender({ id: 's2', active: 'r9' })
+    expect(opened).toEqual(['r1', 'r9'])
+    expect(result.current.attachedSession).toBe('s2')
+  })
+
   it('运行失败的原因留到下一次运行：收尾不清它（界面靠它说"为什么停了"）', async () => {
     const onSettled = vi.fn()
     const { result } = renderHook(() => useRunStream('s1', onSettled))

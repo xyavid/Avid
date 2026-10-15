@@ -60,7 +60,16 @@ type EventFrame = { type: string; ts: number; data?: Record<string, unknown> }
 
 export type RunStream = ReturnType<typeof useRunStream>
 
-export function useRunStream(sessionId: string | null, onSettled: () => void) {
+/**
+ * @param activeRunId the selected session's run as the session list reports it, or null: the hook
+ * follows it, so switching to a session with a run in flight picks that run up and leaving one
+ * stops reading it (the run itself keeps going on the server).
+ */
+export function useRunStream(
+  sessionId: string | null,
+  onSettled: () => void,
+  activeRunId: string | null = null,
+) {
   const [phase, setPhase] = useState<RunPhase>('idle')
   const [runId, setRunId] = useState<string | null>(null)
   const [items, setItems] = useState<TimelineItem[]>([])
@@ -77,6 +86,9 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
   const runIdRef = useRef<string | null>(null)
   const sessionRef = useRef<string | null>(null)
   sessionRef.current = attachedSession
+  // The follow effect reacts to the selection, not to the state it changes, so it reads this ref.
+  const attachedRef = useRef<string | null>(null)
+  attachedRef.current = attachedSession
   const subRef = useRef<{ abort: () => void } | null>(null)
   const settlingRef = useRef(false)
   // Deltas buffer in a ref and flush at most once per animation frame, collapsing markdown
@@ -281,7 +293,22 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
 
   const subscribe = useCallback(
     (id: string) => {
-      void subscribeRun(id, 0, { onEvent: handleEvent, onError: onStreamError }).then((sub) => {
+      // One run is followed at a time, and the stream is closed by an abort that lands a moment
+      // later: frames already parsed still arrive, and a slow open can resolve after the switch.
+      // Both are checked against the run being followed, so an abandoned run cannot move this
+      // page's state or leave a second subscription behind.
+      void subscribeRun(id, 0, {
+        onEvent: (event) => {
+          if (runIdRef.current === id) handleEvent(event)
+        },
+        onError: (err) => {
+          if (runIdRef.current === id) onStreamError(err)
+        },
+      }).then((sub) => {
+        if (runIdRef.current !== id) {
+          sub.abort()
+          return
+        }
         subRef.current = sub
       })
     },
@@ -298,6 +325,10 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
       images: DraftImage[] = [],
     ) => {
       if (!sessionId) return
+      // A previous run's stream must not stay open beside this one: the server ends it after the
+      // terminal event, and that can land after this send (a fast second question).
+      subRef.current?.abort()
+      subRef.current = null
       setPhase('starting')
       setError(null)
       discardPendingDeltas()
@@ -356,6 +387,18 @@ export function useRunStream(sessionId: string | null, onSettled: () => void) {
     },
     [sessionId, settle, subscribe],
   )
+
+  // The page follows one run at a time: the selected session's. Leaving a session stops reading
+  // its run (the run keeps going on the server, and the session list keeps its running mark) and
+  // keeps its items for a switch back; the newly selected session's live run is picked up where
+  // it stands. Both checks read refs, so the effect fires on the selection, not on the state it
+  // changes.
+  useEffect(() => {
+    if (sessionId === null) return
+    if (attachedRef.current !== null && attachedRef.current !== sessionId) settle()
+    if (activeRunId !== null && runIdRef.current !== activeRunId) attach(activeRunId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reacts to the selection only
+  }, [sessionId, activeRunId])
 
   /** After a terminal state, start the next queued input's run; the server never starts one on its own. */
   const drainNextTurn = useCallback(async () => {

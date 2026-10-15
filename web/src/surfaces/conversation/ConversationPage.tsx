@@ -141,11 +141,16 @@ export function ConversationPage() {
   selectedIdRef.current = selectedId
   const branchRef = useRef('main')
   branchRef.current = branch
-  const attachedRunRef = useRef<string | null>(null)
+  const selected = sessions?.find((s) => s.id === selectedId) ?? null
   const settledRef = useRef<() => Promise<void>>(async () => {})
-  const live = useRunStream(selectedId, () => {
-    void settledRef.current()
-  })
+  // The session's live run comes from the list, and the stream follows it: see useRunStream.
+  const live = useRunStream(
+    selectedId,
+    () => {
+      void settledRef.current()
+    },
+    selected?.active_run_id ?? null,
+  )
   settledRef.current = async () => {
     const id = selectedIdRef.current
     if (id) {
@@ -277,8 +282,6 @@ export function ConversationPage() {
      // jump is a dep: a hit click changes it and this pass starts paging from that anchor
   }, [selectedId, branch, jump])
 
-  const selected = sessions?.find((s) => s.id === selectedId) ?? null
-
   // Switching sessions returns to main: a branch belongs inside one session.
   useEffect(() => {
     setBranch('main')
@@ -357,15 +360,6 @@ export function ConversationPage() {
     setSelectedId(inProject[0]?.id ?? null)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- react to project switches / refreshes
   }, [activeWorkspaceId, sessions])
-
-  // A selected session with a live run (refresh / switch back): attach and replay its stream.
-  useEffect(() => {
-    const active = selected?.active_run_id ?? null
-    if (!active || live.phase !== 'idle' || attachedRunRef.current === active) return
-    attachedRunRef.current = active
-    live.attach(active)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- attach on active-run changes only
-  }, [selected?.active_run_id, live.phase])
 
   const refreshWorkspaces = async (): Promise<WorkspaceSummary[]> => {
     const w = await listWorkspaces()
