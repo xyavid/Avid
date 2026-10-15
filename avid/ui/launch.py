@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -61,12 +62,29 @@ def missing_dist_message() -> str:
 
 
 def api_is_up(port: int) -> bool:
-    """Whether something already answers the API's health check on that port."""
+    """Whether something already answers the API's health check on that port.
+
+    The environment's proxy settings are ignored, and that is the whole point of the client below:
+    on a machine with `http_proxy` set, a proxied loopback probe hangs until it times out, which
+    reads exactly like "no backend there" — so the launch would start a second one and collide with
+    the first. Model calls elsewhere in the kernel want that proxy; a loopback check never does.
+    """
     try:
-        response = httpx.get(f"http://127.0.0.1:{port}/api/health", timeout=1.0)
+        with httpx.Client(trust_env=False, timeout=1.0) as client:
+            response = client.get(f"http://127.0.0.1:{port}/api/health")
     except (httpx.HTTPError, OSError):
         return False
     return response.status_code == 200
+
+
+def port_is_free(port: int) -> bool:
+    """Whether this process could bind the port, asked before spawning a child that could not."""
+    try:
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", port))
+    except OSError:
+        return False
+    return True
 
 
 def start_api(port: int, ui_origin: str) -> subprocess.Popen[bytes]:
@@ -91,7 +109,7 @@ def wait_for_api(
     while time.monotonic() < deadline:
         if child.poll() is not None:
             raise UiLaunchError(
-                f"后端进程退出了（code={child.returncode}）。先单独跑一次 `avid web` 看它报什么。"
+                f"后端进程退出了（code={child.returncode}）；它自己的报错就在上面。"
             )
         if api_is_up(port):
             return
@@ -132,6 +150,13 @@ def launch_ui(
     try:
         if api_is_up(api_port):
             print(f"后端已在 127.0.0.1:{api_port} 应答，直接用它", file=sys.stderr)
+        elif not port_is_free(api_port):
+            # Answering nothing yet the port is taken: starting a child here only moves the failure
+            # one process further away, and its EADDRINUSE reads like a backend problem.
+            raise UiLaunchError(
+                f"端口 {api_port} 被占用，但那里没有 Avid 后端在应答"
+                "（可能是别的程序，也可能是 Windows 侧占着的端口）；用 --port 换一个。"
+            )
         else:
             child = start_api(api_port, f"http://127.0.0.1:{ui_port}")
             wait_for_api(api_port, child)

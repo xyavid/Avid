@@ -7,6 +7,7 @@ and the origin the child is told to trust.
 
 from __future__ import annotations
 
+import http.server
 import signal
 import socket
 import subprocess
@@ -180,6 +181,38 @@ def test_a_port_without_a_backend_is_not_up():
     assert launch.api_is_up(port) is False
 
 
+class _Health(http.server.BaseHTTPRequestHandler):
+    """Answers anything with 200, so a probe of this port can only be judged by how it got there."""
+
+    def do_GET(self) -> None:  # noqa: N802 - the base class names the methods
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, *args: object) -> None:
+        pass
+
+
+def test_a_running_backend_is_found_even_with_a_proxy_in_the_environment(monkeypatch):
+    """The bug this pins: a proxied loopback probe times out, which reads as "nothing is there".
+
+    The launch would then start a second backend and collide with the first — on the machine this
+    was written on, that is exactly what happened, and the fix is to ignore `trust_env` here.
+    """
+    fake = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Health)
+    threading.Thread(target=fake.serve_forever, daemon=True).start()
+    with socket.socket() as dead:
+        dead.bind(("127.0.0.1", 0))
+        # A proxy that answers nothing: only a probe that goes through it can fail.
+        monkeypatch.setenv("http_proxy", f"http://127.0.0.1:{dead.getsockname()[1]}")
+        monkeypatch.setenv("no_proxy", "")
+        try:
+            assert launch.api_is_up(int(fake.server_address[1])) is True
+        finally:
+            fake.shutdown()
+            fake.server_close()
+
+
 # ---------------- 启动与收尾 ----------------
 
 
@@ -203,6 +236,33 @@ def test_a_taken_ui_port_says_which_flag_to_reach_for(
         holder.listen(1)
         assert launch.launch_ui(ui_port=holder.getsockname()[1], open_window=False) == 1
     assert "--ui-port" in capsys.readouterr().err
+
+
+def test_a_port_held_by_something_else_is_named_before_a_child_is_spawned(
+    dist: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """Spawning a child into a taken port only moves the failure; the flag to reach for is the answer.
+
+    This is how the machine this was written on behaved: 8765 was held on the Windows side of WSL,
+    invisible to `/proc/net/tcp` and to a plain connect, but `bind` still refused.
+    """
+    started: list[int] = []
+    monkeypatch.setenv(launch.DIST_ENV, str(dist))
+    monkeypatch.setattr(launch, "api_is_up", lambda port: False)
+    monkeypatch.setattr(launch, "start_api", lambda port, origin: started.append(port))
+    with socket.socket() as holder:
+        holder.bind(("127.0.0.1", 0))
+        holder.listen(1)
+        assert launch.launch_ui(api_port=holder.getsockname()[1], open_window=False) == 1
+    assert started == [], "端口已被占，不该再去起子进程"
+    assert "--port" in capsys.readouterr().err
+
+
+def test_a_free_port_says_so():
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    assert launch.port_is_free(port) is True
 
 
 def test_a_child_that_outlives_the_command_would_hold_the_port():
@@ -232,6 +292,9 @@ def test_reaching_the_exit_path_takes_that_child_down(
     stopped: list[int] = []
     monkeypatch.setenv(launch.DIST_ENV, str(dist))
     monkeypatch.setattr(launch, "api_is_up", lambda port: False)
+    # The port question is a different test's business, and leaving it real would make this one
+    # depend on what happens to be running on the machine.
+    monkeypatch.setattr(launch, "port_is_free", lambda port: True)
     monkeypatch.setattr(launch, "start_api", lambda port, origin: child)
     monkeypatch.setattr(launch, "wait_for_api", lambda port, proc, timeout=0.0: None)
     monkeypatch.setattr(launch, "_stop_child", lambda proc: stopped.append(proc.pid))

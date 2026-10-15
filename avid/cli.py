@@ -1104,6 +1104,7 @@ def _run_ui(argv: list[str]) -> int:
     from .ui import launch_ui
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     return launch_ui(
         dist=args.dist,
         api_port=args.port,
