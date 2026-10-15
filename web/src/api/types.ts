@@ -111,6 +111,36 @@ export interface SessionDetail extends SessionSummary {
   branch: string
 }
 
+/** One changed path in a session's tree; `status` is git's two-column porcelain code. */
+export interface WorktreeFile {
+  path: string
+  status: string
+}
+
+/** One commit this session made on its branch; `committed_at` is unix milliseconds. */
+export interface WorktreeCommit {
+  sha: string
+  subject: string
+  committed_at: number
+}
+
+/**
+ * Where a session's runs work (`GET /api/sessions/{id}/worktree`): its own tree, or the workspace
+ * root with the reason why. `worktree` false means the change lists are empty by design — they
+ * describe a tree, and the workspace's own changes are not this session's work.
+ */
+export interface WorktreeFacts {
+  worktree: boolean
+  path: string
+  branch: string | null
+  base: string | null
+  reason: string | null
+  dirty: WorktreeFile[]
+  commits: WorktreeCommit[]
+  ahead: number | null
+  note: string | null
+}
+
 /**
  * Scratch session (`POST /api/sessions/{id}/scratch`): context copied from the source session,
  * read-only, destroyed when the panel closes; `copied_messages` says how many messages were copied.

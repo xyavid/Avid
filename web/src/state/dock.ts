@@ -7,10 +7,10 @@
 import { useCallback, useEffect, useState } from 'react'
 
 /** Panel ids; a stored value not in `PANEL_IDS` falls back to the default panel. */
-export type DockPanelId = 'files' | 'subagents' | 'scratch' | 'terminal'
+export type DockPanelId = 'files' | 'subagents' | 'scratch' | 'terminal' | 'worktree'
 
 const STORAGE_KEY = 'avid.dock.column'
-const PANEL_IDS: DockPanelId[] = ['files', 'subagents', 'scratch', 'terminal']
+const PANEL_IDS: DockPanelId[] = ['files', 'subagents', 'scratch', 'terminal', 'worktree']
 
 type StoredDock = { open: boolean; active: DockPanelId }
 

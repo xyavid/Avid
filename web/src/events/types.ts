@@ -4,7 +4,7 @@
  * asserts set equality with the kernel's EVENT_TYPES, so an event must be added on both sides.
  */
 
-import type { SandboxState, UsageReport } from '../api/types'
+import type { SandboxState, UsageReport, WorktreeFacts } from '../api/types'
 
 /**
  * Permission mode reported by run_started: `normal` prompts once for destructive commands;
@@ -130,6 +130,8 @@ export interface EventData {
   // `permission` only says "full access?"; the actual sandbox form is in the sandbox_* fields.
   workspace?: string
   workspace_root?: string
+  /** The root this run works on (`workspace_root`) and the tree it is, when it has one. */
+  worktree?: Pick<WorktreeFacts, 'path' | 'branch' | 'base' | 'reason'> | null
   permission?: RunPermission
   sandbox_state?: SandboxState
   sandbox_notes?: string[]

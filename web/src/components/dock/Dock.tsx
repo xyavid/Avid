@@ -8,6 +8,7 @@
 
 import { lazy, Suspense, useEffect } from 'react'
 
+import type { WorktreeFacts } from '../../api/types'
 import type { SubagentRunView } from '../../state/timeline'
 import type { DockPanelId } from '../../state/dock'
 import { IconButton } from '../../ui/IconButton'
@@ -17,6 +18,7 @@ import { useAutoHideScroll } from '../../ui/useAutoHideScroll'
 import { FilesPanel } from './FilesPanel'
 import { ScratchPanel } from './ScratchPanel'
 import { SubagentPanel } from './SubagentPanel'
+import { WorktreePanel } from './WorktreePanel'
 
 // Heavy panels load on demand: xterm stays isolated in its own async chunk.
 const TerminalPanel = lazy(() => import('./TerminalPanel'))
@@ -26,7 +28,8 @@ const PANELS: { id: DockPanelId; label: string; hint: string; icon: IconName }[]
   { id: 'files', label: '工作区文件', hint: '浏览会话工作区的文件', icon: 'folder' },
   { id: 'subagents', label: '子智能体', hint: '看每个子任务自己干了什么', icon: 'bot' },
   { id: 'scratch', label: '临时对话', hint: '带主对话上下文的一次性只读支线', icon: 'message-square' },
-  { id: 'terminal', label: '终端', hint: '在会话工作区运行命令', icon: 'terminal' },
+  { id: 'terminal', label: '终端', hint: '在会话的工作根上运行命令', icon: 'terminal' },
+  { id: 'worktree', label: '工作树', hint: '会话自己的检出：改了什么、提交了什么', icon: 'git-branch' },
 ]
 
 export type DockProps = {
@@ -39,6 +42,12 @@ export type DockProps = {
   /** Working directory (terminal) / browsed workspace (files panel): the selected session's. */
   workspaceRoot: string | null
   workspaceId: string | null
+  /** Where the selected session's runs work: its own tree, or the workspace root (see the panel). */
+  runRoot: string | null
+  /** The session's work root reading, handed down so no panel fetches on its own. */
+  worktree: WorktreeFacts | null
+  worktreeLoading: boolean
+  worktreeError: string | null
   /** Subagent runs flattened from the whole timeline (including history with only a task list). */
   subagentRuns: SubagentRunView[]
   /** The current turn is still running: panels use it for the running mark. */
@@ -58,6 +67,10 @@ export function Dock({
   onClose,
   workspaceRoot,
   workspaceId,
+  runRoot,
+  worktree,
+  worktreeLoading,
+  worktreeError,
   subagentRuns,
   live,
   sourceSessionId,
@@ -142,9 +155,17 @@ export function Dock({
         {active === 'terminal' && (
           <div className="h-full p-a12">
             <Suspense fallback={<p className="font-ui text-hint text-ink-muted">加载终端组件…</p>}>
-              <TerminalPanel root={workspaceRoot} />
+              <TerminalPanel root={runRoot} />
             </Suspense>
           </div>
+        )}
+        {active === 'worktree' && (
+          <WorktreePanel
+            facts={worktree}
+            loading={worktreeLoading}
+            error={worktreeError}
+            workspaceRoot={workspaceRoot}
+          />
         )}
       </div>
       )}

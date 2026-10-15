@@ -61,6 +61,9 @@ from avid.web.schemas import (
     WebTestOut,
     WorkspaceOut,
     WorkspaceRef,
+    WorktreeCommitOut,
+    WorktreeFactsOut,
+    WorktreeFileOut,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -71,6 +74,9 @@ PAIRS: list[tuple[type, str]] = [
     # sessions
     (SessionSummary, "SessionSummary"),
     (SessionDetail, "SessionDetail"),
+    (WorktreeFactsOut, "WorktreeFacts"),
+    (WorktreeFileOut, "WorktreeFile"),
+    (WorktreeCommitOut, "WorktreeCommit"),
     (EntryOut, "Entry"),
     (EntryPageOut, "EntryPage"),
     (BranchOut, "Branch"),

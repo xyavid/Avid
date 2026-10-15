@@ -32,6 +32,7 @@ import type {
   WebTestInput,
   WebTestResult,
   WorkspaceSummary,
+  WorktreeFacts,
 } from './types'
 
 export class ApiError extends Error {
@@ -151,6 +152,14 @@ export function listEntries(sessionId: string, opts: ListEntriesOptions = {}): P
 /** Branch list; each branch carries its persisted usage snapshot (the context card's reading). */
 export function listBranches(sessionId: string): Promise<BranchList> {
   return request(`/api/sessions/${encodeURIComponent(sessionId)}/branches`)
+}
+
+/**
+ * Where this session's runs work and what its tree holds. One read for the session line and the
+ * worktree panel, so the two can never describe different roots.
+ */
+export function getSessionWorktree(sessionId: string): Promise<WorktreeFacts> {
+  return request(`/api/sessions/${encodeURIComponent(sessionId)}/worktree`)
 }
 
 /**

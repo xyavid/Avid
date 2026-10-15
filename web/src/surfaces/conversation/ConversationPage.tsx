@@ -20,6 +20,7 @@ import {
   deleteSession,
   deleteWorkspace,
   getMeta,
+  getSessionWorktree,
   listBranches,
   listEntries,
   listInputs,
@@ -28,7 +29,7 @@ import {
   pickFolder,
   renameSession,
 } from '../../api/client'
-import type { Meta, SessionSummary, UsageReport, WorkspaceSummary } from '../../api/types'
+import type { Meta, SessionSummary, UsageReport, WorkspaceSummary, WorktreeFacts } from '../../api/types'
 import { ApprovalBar } from '../../components/chat/ApprovalBar'
 import { Composer } from '../../components/chat/Composer'
 import { Timeline } from '../../components/chat/Timeline'
@@ -53,6 +54,7 @@ import { ProjectCard } from '../../components/session/ProjectCard'
 import type { SearchHit } from '../../api/types'
 import { SessionNav } from '../../components/session/SessionNav'
 import { SidebarFooter } from '../../components/session/SidebarFooter'
+import { WorktreeStrip } from '../../components/session/WorktreeStrip'
 import { AppShell } from '../../app/AppShell'
 
 /** Settings is opened on demand, so its chunk (model/web/session sections) stays off first paint. */
@@ -143,6 +145,11 @@ export function ConversationPage() {
   branchRef.current = branch
   const selected = sessions?.find((s) => s.id === selectedId) ?? null
   const settledRef = useRef<() => Promise<void>>(async () => {})
+  // Where this session's runs work: one reading for the line under the composer and the panel.
+  const [worktree, setWorktree] = useState<WorktreeFacts | null>(null)
+  const [worktreeError, setWorktreeError] = useState<string | null>(null)
+  const [worktreeLoading, setWorktreeLoading] = useState(false)
+  const [worktreeTick, setWorktreeTick] = useState(0)
   // The session's live run comes from the list, and the stream follows it: see useRunStream.
   const live = useRunStream(
     selectedId,
@@ -170,8 +177,37 @@ export function ConversationPage() {
     } catch {
       // A failed list refresh must not block settling.
     }
+    // The run may have created this session's tree, or added to it: re-read where it works.
+    setWorktreeTick((n) => n + 1)
     live.settle()
   }
+
+  useEffect(() => {
+    if (!selectedId) {
+      setWorktree(null)
+      return
+    }
+    let alive = true
+    setWorktreeLoading(true)
+    getSessionWorktree(selectedId)
+      .then((facts) => {
+        if (!alive) return
+        setWorktree(facts)
+        setWorktreeError(null)
+      })
+      .catch((e: unknown) => {
+        if (!alive) return
+        // A reading that failed is not a tree that is absent: say so instead of showing neither.
+        setWorktree(null)
+        setWorktreeError(e instanceof ApiError ? e.message : '读不到这个会话的工作树')
+      })
+      .finally(() => {
+        if (alive) setWorktreeLoading(false)
+      })
+    return () => {
+      alive = false
+    }
+  }, [selectedId, worktreeTick])
 
   // Timeline = history + this run's segments; run segments only show in their own session.
   const runHere = live.attachedSession === selectedId
@@ -563,6 +599,10 @@ export function ConversationPage() {
             onClose={dock.close}
             workspaceRoot={selected?.workspace?.root ?? null}
             workspaceId={selected?.workspace?.id ?? null}
+            runRoot={worktree?.path ?? selected?.workspace?.root ?? null}
+            worktree={worktree}
+            worktreeLoading={worktreeLoading}
+            worktreeError={worktreeError}
             subagentRuns={subagents}
             live={liveHere}
             sourceSessionId={selectedId}
@@ -649,6 +689,7 @@ export function ConversationPage() {
               )}
             </div>
           )}
+          <WorktreeStrip facts={worktree} />
           {live.approvals.length > 0 && runHere && (
             <div className="px-a16 pb-a8">
               <ApprovalBar
