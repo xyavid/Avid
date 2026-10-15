@@ -127,7 +127,10 @@ def test_every_symbol_reference_resolves():
                 "要么代码改名了，要么文档在指一个从未存在过的东西。"
             )
             checked += 1
-    assert checked > 0, "一条符号引用都没匹配到：要么文档没有引用，要么正则失效"
+    if REF.is_dir():
+        #: On a bare clone only the tracked docs exist, and those cite paths rather than
+        #: symbols; the guard against a broken regex only means something with the local half.
+        assert checked > 0, "一条符号引用都没匹配到：要么文档没有引用，要么正则失效"
 
 
 def test_every_backticked_repo_path_exists():
