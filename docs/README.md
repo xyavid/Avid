@@ -11,13 +11,12 @@
 
 现状问代码，不问文档：模块职责与不变量在 docstring，跨包边界在 `tests/test_web_boundaries.py`，前端契约在 `test_wire_contract.py` / `test_event_contract.py`。
 
-## 六份
+## 五份
 
 - [kernel.md](kernel.md) — 数据流、运行生命周期、上下文与压缩、跨包分层门禁（A1–A15）
 - [modules.md](modules.md) — 子系统清单、入口点清单
 - [extending.md](extending.md) — 改动落点全表
 - [web.md](web.md) — 前端单点声明、端点面、SSE 与静态资源交付
-- [commands.md](commands.md) — 常用命令、测试门禁、E2E 举证要求
 - [design.md](design.md) — 架构推导判据（十二组检查点；唯一一份非现状）
 
-更高层的规则与指引见根目录 [AGENTS.md](../AGENTS.md)（它同时是每个运行的 bootstrap 块，体积受门禁约束）；安装、配置项与 CLI 全量参数见 `README.md` 与 `README.zh-CN.md`。
+环境、门禁命令与提交 / 注释 / 测试约定见根目录 [CONTRIBUTING.md](../CONTRIBUTING.md)；安装、配置项与 CLI 全量参数见 `README.md` 与 `README.zh-CN.md`。

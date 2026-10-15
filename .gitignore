@@ -27,9 +27,9 @@ web/test-results/
 /avid/web/static/*
 !/avid/web/static/.gitkeep
 
-# ---- 文档入库规则：正式文档进 docs/，过程文档留 dev/ ----
+# ---- 文档入库规则：给贡献者的进仓库，本地开发用的与过程文档留本机 ----
 
-# docs/ 白名单：默认全部忽略，只放行索引与写到的六份主题文档。
+# docs/ 白名单：默认全部忽略，只放行索引与写到的五份主题文档。
 # 新文件落在 docs/ 根目录或未知子目录时自动被忽略，不会误提交。
 /docs/*
 !/docs/README.md
@@ -37,9 +37,12 @@ web/test-results/
 !/docs/modules.md
 !/docs/extending.md
 !/docs/web.md
-!/docs/commands.md
 !/docs/design.md
 # 不建 docs/status/：现状是代码与模块注释，快照式现状文档必然滞后。
+
+# AGENTS.md 是本地开发约定（改动流程与文档纪律），个人工作流，不入库；
+# 给贡献者的约定在 CONTRIBUTING.md（已跟踪）。注意它仍在历史里，ignore 只挡将来的提交。
+/AGENTS.md
 
 # dev/ 过程文档：开发计划、需求草稿、进度跟踪、笔记、会议记录、阶段出图。
 # 只保留在本地，不参与版本管理。

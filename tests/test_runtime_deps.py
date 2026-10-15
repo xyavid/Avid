@@ -75,7 +75,7 @@ def test_modules_import_nothing_beyond_the_standard_library_and_httpx():
 
     assert not offenders, (
         f"内核在模块层出现了标准库与 httpx 之外的依赖：{offenders}。"
-        "要去掉，或在 pyproject、AGENTS.md 与本门禁里显式承认这次扩权。"
+        "要去掉，或在 pyproject、CONTRIBUTING.md 与本门禁里显式承认这次扩权。"
     )
 
 

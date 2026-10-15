@@ -49,7 +49,7 @@ Web  POST /api/sessions/{id}/runs ─┴─► services/runs.RunRegistry（线�
 - 装配在 `agent/context.py`：`CONTEXT_MAP` 声明表一行一个块（kind / 标题 / 段落 / 稳定性 / 上限 / 取值），顺序即渲染顺序即缓存纪律——五个稳定块在前，每轮块（注入文本 / 计划 / 运行状态）在后，拼成末端那条不进 transcript 的注记；计划块的**源数据**是会话值，注记只是它这一轮的视图。
 - 压缩通路在 `agent/compaction.py`：保留最近 N 轮 + 一段结构化检查点（已验证事实与假设分开放）；阈值触发、`/compact`（`ContextManager.compact_now`）与溢出兜底（`ContextManager.call` 捕获 `PromptTooLongError` 后压缩重发一次）共用一个入口，预算字段集中在 `ContextBudget`。压缩那次调用由 `ContextManager._run_compaction` 交出冻结的 system 与工具表，请求于是与上一轮同前缀（求的是一次缓存命中），请求里唯一的增量是末尾那条指令；模型若发起工具调用、答空或报错，回退到 `COMPACTION_SYSTEM` + 拍平文本的独立引擎提示词路径，两条都不成才保留原历史。
 - 循环的四个点各有两段：本体那段在 `agent/guards.py`（Pre 的权限闸门、Post 的输出预算与重复提醒、Stop 的运行汇总，普通函数，执行路径直接调用），额外配置那段是 `agent/hooks.py` 按用户级 `~/.avid/hooks.json` 装配的用户脚本（位置由 `agent/state.py` 经 `security/userdirs.hooks_config_path()` 解析；默认无声明＝无钩子，声明在工作区外所以运行写不到自己的闸门）；两段都不改工具调用与结果的形状，脚本只能判定与注入。
-- **本文件自身也是上下文**：workspace 根目录的 `AGENTS.md` 进 `BOOTSTRAP` 块（标题「工作区约定」），字符上限是 `prompt.AGENTS_MD_MAX_CHARS`（16000）——这是它必须保持精简的原因，体积由 `tests/test_docs_contract.py` 守住（预算 6000）。
+- **工作区约定也是上下文**：工作区根目录的 `AGENTS.md` 进 `BOOTSTRAP` 块（标题「工作区约定」），字符上限是 `prompt.AGENTS_MD_MAX_CHARS`（16000）——它是常驻内容，所以要精简。
 
 ## 跨包分层门禁
 
@@ -57,7 +57,7 @@ Web  POST /api/sessions/{id}/runs ─┴─► services/runs.RunRegistry（线�
 
 - **A13**：循环与工具协议对策略层零运行时依赖——调度不 import `security/`，裁决只经 `agent/execution.py` 的边界。
 - **A14**：会话索引对会话层单向只读——`session/` 不得 import `index/`；`index/` 不得依赖 `services/`、`web/`、`agent/`、`providers/`。
-- 内核包（`agent` / `providers` / `security` / `session` / `services`）在模块层只许 `httpx` 一个第三方依赖，由 `tests/test_runtime_deps.py` 拦；扩权要在 `pyproject.toml`、`AGENTS.md` 与该门禁里显式承认。
+- 内核包（`agent` / `providers` / `security` / `session` / `services`）在模块层只许 `httpx` 一个第三方依赖，由 `tests/test_runtime_deps.py` 拦；扩权要在 `pyproject.toml`、`CONTRIBUTING.md` 与该门禁里显式承认。
 
 ## 运行期依赖
 

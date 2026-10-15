@@ -1,6 +1,6 @@
 """Index check and repair: every way the index can rot, and what check plus --fix do about it.
 
-Failure list (AGENTS.md §5), each with the finding kind and its fix:
+Failure list (CONTRIBUTING.md §4), each with the finding kind and its fix:
   - session file deleted -> missing_file / forget
   - file truncated -> cursor_beyond_eof / rebuild
   - file appended without a notification -> behind / reindex

@@ -119,7 +119,7 @@ uv run ruff check avid tests && uv run mypy   # 静态检查
 pnpm -C web run verify                       # 前端：类型检查 + 测试 + 构建 + 体积门禁
 ```
 
-协作约定（提交格式、测试与注释纪律）见 [AGENTS.md](AGENTS.md)。
+贡献约定（环境与门禁、提交格式、测试与注释纪律）见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 许可
 

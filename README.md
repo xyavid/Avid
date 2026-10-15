@@ -123,8 +123,8 @@ uv run ruff check avid tests && uv run mypy   # static checks
 pnpm -C web run verify                       # frontend: types + tests + build + size budget
 ```
 
-Development conventions (commit format, testing and comment discipline) live in
-[AGENTS.md](AGENTS.md) (Chinese).
+Contributing conventions (setup, gates, commit format, testing and comment discipline) live in
+[CONTRIBUTING.md](CONTRIBUTING.md) (Chinese).
 
 ## License
 
