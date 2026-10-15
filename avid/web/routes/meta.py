@@ -14,11 +14,8 @@ router = APIRouter()
 
 @router.get("/meta", response_model=MetaOut)
 def get_meta(request: Request) -> dict:
-    """Returns service metadata with the build stamp attached, which belongs to this layer."""
-    services = current_services(request)
-    meta = services.meta()
-    meta["build"] = request.app.state.build
-    return meta
+    """Returns service metadata: capabilities, feature flags and the stream's timing constants."""
+    return current_services(request).meta()
 
 
 @router.get("/health", response_model=HealthOut)

@@ -22,7 +22,6 @@ from avid.web.schemas import (
     ApprovalOut,
     BranchListOut,
     BranchOut,
-    BuildInfo,
     ByokModel,
     ByokProviderIn,
     ByokProviderOut,
@@ -126,7 +125,6 @@ PAIRS: list[tuple[type, str]] = [
     (StreamInfo, "StreamInfo"),
     (HealthOut, "Health"),
     (SkillOut, "Skill"),
-    (BuildInfo, "BuildInfo"),
     (ErrorOut, "ErrorEnvelope"),
 ]
 
@@ -172,7 +170,7 @@ def client(sandbox):
     try:
         yield (
             TestClient(
-                create_app(services=services, static_dir=sandbox / "unbuilt"),
+                create_app(services=services),
                 base_url="http://127.0.0.1:8765",
             ),
             services,

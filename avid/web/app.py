@@ -1,10 +1,8 @@
-"""Assembles the FastAPI application: routers, error envelope, static assets and the SPA
-fallback."""
+"""Assembles the FastAPI application: the trust boundary, the error envelope and the routers."""
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import uuid
@@ -16,7 +14,7 @@ from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -39,15 +37,21 @@ from .schemas import ErrorBody, ErrorOut
 
 logger = logging.getLogger("avid.web.app")
 
-STATIC_DIR = Path(__file__).parent / "static"
-
 # A trust boundary rather than authentication: it stops DNS rebinding through the Host header and
-# cross-site form posts through the Origin header, while command line clients send neither.
+# cross-site requests through the Origin header, while command line clients send neither.
 LOOPBACK_HOSTS: frozenset[str] = frozenset({"127.0.0.1", "localhost", "::1"})
-# Escape hatch for non-loopback deployments, read as a comma-separated list of extra hostnames.
+# Escape hatches for non-loopback deployments, read as a comma-separated list of hostnames.
 ALLOWED_HOSTS_ENV = "AVID_ALLOWED_HOSTS"
+ALLOWED_ORIGINS_ENV = "AVID_ALLOWED_ORIGINS"
 
-# Inline styles: Radix injects scroll-lock styles at runtime; data: images are favicons.
+# What a browser preflight is told it may send: Content-Type is the only non-safelisted header the
+# client sets, and a longer list would grant callers that do not exist.
+CORS_ALLOW_METHODS = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+CORS_ALLOW_HEADERS = "Content-Type"
+CORS_MAX_AGE_SECONDS = 600
+
+# No document is served from here, so these guard the API's own responses (nosniff above all); the
+# UI's document carries whatever policy its host sets. Inline styles: Radix injects them at runtime.
 SECURITY_HEADERS: dict[str, str] = {
     "Content-Security-Policy": (
         "default-src 'self'; "
@@ -56,7 +60,7 @@ SECURITY_HEADERS: dict[str, str] = {
         "img-src 'self' data:; "
         "font-src 'self'; "
         "connect-src 'self'; "
-        # No frame-src: this page embeds nothing; frame-ancestors 'none' guards the other direction.
+        # Nothing here embeds anything; frame-ancestors 'none' guards the other direction.
         "object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
     ),
     "Referrer-Policy": "no-referrer",
@@ -78,23 +82,66 @@ def _hostname_of(value: str) -> str:
     return text.rsplit(":", 1)[0].lower()
 
 
-def trusted_hosts(extra: frozenset[str] | None = None) -> frozenset[str]:
-    """Collects allowed hostnames: loopback, the environment variable, and any explicit extras."""
-    allowed = set(LOOPBACK_HOSTS)
-    for item in os.environ.get(ALLOWED_HOSTS_ENV, "").split(","):
-        if item.strip():
-            allowed.add(_hostname_of(item.strip()))
+def _collect(
+    env_names: tuple[str, ...], extra: frozenset[str] | None, *, loopback: bool
+) -> frozenset[str]:
+    """Collects hostnames from the named environment variables, loopback, and any explicit extras."""
+    allowed = set(LOOPBACK_HOSTS) if loopback else set()
+    for name in env_names:
+        for item in os.environ.get(name, "").split(","):
+            if item.strip():
+                allowed.add(_hostname_of(item.strip()))
     if extra:
         allowed.update(extra)
     return frozenset(allowed)
 
 
-class TrustBoundaryMiddleware(BaseHTTPMiddleware):
-    """Rejects requests whose Host or Origin is not allowed, then attaches the security headers."""
+def trusted_hosts(extra: frozenset[str] | None = None) -> frozenset[str]:
+    """Hostnames this process answers to: the Host header, loopback always included."""
+    return _collect((ALLOWED_HOSTS_ENV,), extra, loopback=True)
 
-    def __init__(self, app: Any, allowed_hosts: frozenset[str]) -> None:
+
+def trusted_origins(extra: frozenset[str] | None = None) -> frozenset[str]:
+    """Hostnames whose pages may call the API: the Origin header, widened rather than narrowed.
+
+    A name this process answers to is also a name whose pages may call it, and AVID_ALLOWED_ORIGINS
+    covers the page hosted where this process is never addressed — the normal case now.
+    """
+    return _collect((ALLOWED_HOSTS_ENV, ALLOWED_ORIGINS_ENV), extra, loopback=True)
+
+
+def declared_origins(extra: frozenset[str] | None = None) -> frozenset[str]:
+    """Hostnames whose pages may open a terminal: declared only, and never the loopback default.
+
+    A PTY is a shell as this user, so it does not inherit the convenience that lets any loopback
+    page read sessions — same comparison, one tier stricter, and the refusal names itself.
+    """
+    return _collect((ALLOWED_HOSTS_ENV, ALLOWED_ORIGINS_ENV), extra, loopback=False)
+
+
+def cors_headers(origin: str, *, preflight: bool) -> dict[str, str]:
+    """Grants one browser origin. No cookies exist, so credentials are never allowed."""
+    headers = {"Access-Control-Allow-Origin": origin}
+    if preflight:
+        headers["Access-Control-Allow-Methods"] = CORS_ALLOW_METHODS
+        headers["Access-Control-Allow-Headers"] = CORS_ALLOW_HEADERS
+        headers["Access-Control-Max-Age"] = str(CORS_MAX_AGE_SECONDS)
+    return headers
+
+
+class TrustBoundaryMiddleware(BaseHTTPMiddleware):
+    """Refuses a Host or Origin outside its allowlists, and grants the origins that are inside.
+
+    Refusal and grant are two halves of one decision — a page is either allowed to read the answer
+    or it is not — so they share this class instead of splitting the allowlist in two.
+    """
+
+    def __init__(
+        self, app: Any, allowed_hosts: frozenset[str], allowed_origins: frozenset[str]
+    ) -> None:
         super().__init__(app)
         self.allowed_hosts = allowed_hosts
+        self.allowed_origins = allowed_origins
 
     async def dispatch(self, request: Request, call_next: Any) -> Any:
         host = _hostname_of(request.headers.get("host", ""))
@@ -107,37 +154,32 @@ class TrustBoundaryMiddleware(BaseHTTPMiddleware):
                 ),
             )
         origin = request.headers.get("origin")
-        if origin and _hostname_of(origin) not in self.allowed_hosts:
+        if origin and _hostname_of(origin) not in self.allowed_origins:
             logger.warning("拒绝跨站来源：%s", origin)
             return JSONResponse(
                 status_code=status.HTTP_403_FORBIDDEN,
                 content=_envelope("origin_rejected", f"Origin 不在允许列表内：{origin}"),
             )
+        headers = dict(SECURITY_HEADERS)
+        # Set whether or not an Origin was sent: a cache must not reuse a granted answer ungranted.
+        headers["Vary"] = "Origin"
+        if origin:
+            # Validated just above, so echoing the value back is the grant, not reflected input.
+            headers.update(cors_headers(origin, preflight=request.method == "OPTIONS"))
+            if request.method == "OPTIONS":
+                # A preflight asks about the request that follows: no route declares OPTIONS.
+                return Response(status_code=status.HTTP_204_NO_CONTENT, headers=headers)
+
         response = await call_next(request)
-        for name, value in SECURITY_HEADERS.items():
+        for name, value in headers.items():
             response.headers.setdefault(name, value)
         return response
 
-# Fallback JSON 404 for unknown API paths, which must never fall back to the SPA shell.
+# Fallback JSON 404 for unknown API paths: this process serves no page, so no request falls back to
+# one and every method gets JSON.
 UNKNOWN_API = ErrorOut(
     error=ErrorBody(code="not_found", message="未知的 API 路径")
 ).model_dump()
-
-
-def load_build_info(static_dir: Path) -> dict[str, Any]:
-    """Reads the build stamp that says whether the bundle was packaged or served from a checkout."""
-    stamp = static_dir / ".build.json"
-    if stamp.is_file():
-        try:
-            data = json.loads(stamp.read_text(encoding="utf-8"))
-            return {
-                "git_sha": data.get("git_sha"),
-                "built_at": data.get("built_at"),
-                "source": "bundled",
-            }
-        except (OSError, ValueError):
-            logger.warning("构建戳读不了：%s", stamp)
-    return {"git_sha": None, "built_at": None, "source": "dev"}
 
 
 def _envelope(code: str, message: str, detail: dict[str, Any] | None = None) -> dict:
@@ -164,11 +206,11 @@ def _schema_errors(errors: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
 def create_app(
     *,
     services: Services | None = None,
-    static_dir: str | Path | None = None,
     workspace_root: str | Path | None = None,
     allowed_hosts: frozenset[str] | None = None,
+    allowed_origins: frozenset[str] | None = None,
 ) -> FastAPI:
-    """Builds the application: trust middleware, error handlers, routers and the static fallback."""
+    """Builds the application: trust middleware, error handlers and the routers."""
     assembled = services or Services(workspace_root=workspace_root)
 
     @asynccontextmanager
@@ -186,15 +228,18 @@ def create_app(
         description="自建 agent 运行时（harness）的 Web API 与事件流",
         lifespan=lifespan,
     )
-    # On app.state so WebSocket endpoints (the terminal bridge) reuse the same allowlist.
+    # All three lists go on app.state: the terminal's WebSocket handshake never reaches this
+    # middleware, so that endpoint reads the strictest one itself.
     app.state.allowed_hosts = trusted_hosts(allowed_hosts)
+    app.state.allowed_origins = trusted_origins(allowed_origins)
+    app.state.declared_origins = declared_origins(allowed_origins)
     app.add_middleware(
-        TrustBoundaryMiddleware, allowed_hosts=app.state.allowed_hosts
+        TrustBoundaryMiddleware,
+        allowed_hosts=app.state.allowed_hosts,
+        allowed_origins=app.state.allowed_origins,
     )
     # A workspace root is only meaningful for self-assembly: given, the process is single-workspace.
     app.state.services = assembled
-    app.state.static_dir = Path(static_dir) if static_dir is not None else STATIC_DIR
-    app.state.build = load_build_info(app.state.static_dir)
 
     @app.exception_handler(ServiceError)
     async def _service_error(_: Request, exc: ServiceError) -> JSONResponse:
@@ -256,30 +301,13 @@ def create_app(
     async def unknown_api(rest: str) -> JSONResponse:
         return JSONResponse(status_code=404, content=UNKNOWN_API)
 
-    @app.get("/{path:path}", include_in_schema=False)
-    async def spa(path: str) -> Any:
-        root: Path = app.state.static_dir
-        if root.is_dir():
-            target = (root / path).resolve()
-            # Resolving first keeps a traversal path from escaping the static directory.
-            if target.is_file() and root.resolve() in target.parents:
-                return FileResponse(target)
-            # A missing file with an extension is a missing asset, not a route: the fallback would
-            # make the browser parse HTML as script, so it gets an explicit 404 instead.
-            if "." in path.rsplit("/", 1)[-1]:
-                return JSONResponse(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    content=_envelope("asset_not_found", f"静态资源不存在：{path}"),
-                )
-            index = root / "index.html"
-            if index.is_file():
-                return FileResponse(index)
+    @app.get("/", include_in_schema=False)
+    async def root() -> JSONResponse:
+        """Opening the port in a browser is now the likeliest wrong turn, so name it in the answer."""
         return JSONResponse(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            status_code=status.HTTP_404_NOT_FOUND,
             content=_envelope(
-                "static_missing",
-                "前端产物不存在：前端尚未重建，没有可服务的静态资源。",
-                {"static_dir": str(root)},
+                "api_only", "这个进程只提供 /api：界面由你托管的那份前端提供，这里没有页面可开。"
             ),
         )
 
@@ -288,11 +316,16 @@ def create_app(
 
 __all__ = [
     "ALLOWED_HOSTS_ENV",
-    "SECURITY_HEADERS",
+    "ALLOWED_ORIGINS_ENV",
+    "CORS_ALLOW_HEADERS",
+    "CORS_ALLOW_METHODS",
+    "CORS_MAX_AGE_SECONDS",
     "LOOPBACK_HOSTS",
-    "STATIC_DIR",
+    "SECURITY_HEADERS",
     "TrustBoundaryMiddleware",
+    "cors_headers",
     "create_app",
-    "load_build_info",
+    "declared_origins",
     "trusted_hosts",
+    "trusted_origins",
 ]

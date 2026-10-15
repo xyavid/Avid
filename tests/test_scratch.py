@@ -26,7 +26,7 @@ def rig(sandbox):
     chat = ScriptedChat(make_turn("回答"), make_turn("回答"), make_turn("回答"))
     services = Services(root=sandbox / ".avid" / "sessions", chat=chat, workspace_root=None)
     client = TestClient(
-        create_app(services=services, static_dir=sandbox / "static-not-built"),
+        create_app(services=services),
         base_url="http://127.0.0.1:8765",
     )
     yield client, chat, services

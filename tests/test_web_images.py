@@ -47,7 +47,7 @@ def bundle(sandbox):
         )
         services.append(instance)
         return TestClient(
-            create_app(services=instance, static_dir=sandbox / "static-not-built"),
+            create_app(services=instance),
             base_url="http://127.0.0.1:8765",
         ), instance
 

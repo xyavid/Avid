@@ -28,7 +28,7 @@ from avid.web import create_app
 def client(sandbox):
     services = Services(root=sandbox / ".avid" / "sessions")
     # a missing static dir keeps assertions independent of a local build
-    app = create_app(services=services, static_dir=sandbox / "static-not-built")
+    app = create_app(services=services)
     with TestClient(app, base_url="http://127.0.0.1:8765") as test_client:
         yield test_client
     services.close()

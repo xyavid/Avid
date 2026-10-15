@@ -211,7 +211,7 @@ def test_a_web_run_lands_in_the_index(tmp_path):
     services = Services(workspace_root=tmp_path, chat=ScriptedChat(make_turn("答一句")))
     try:
         client = TestClient(
-            create_app(services=services, static_dir=tmp_path / "unbuilt"),
+            create_app(services=services),
             base_url="http://127.0.0.1:8765",
         )
         session_id = create_session(client).json()["id"]
@@ -260,7 +260,7 @@ def test_a_corrupt_index_database_does_not_break_runs(tmp_path, monkeypatch):
     try:
         assert services.indexer is not None, "挪走坏库之后应当能重建"
         client = TestClient(
-            create_app(services=services, static_dir=tmp_path / "unbuilt"),
+            create_app(services=services),
             base_url="http://127.0.0.1:8765",
         )
         session_id = create_session(client).json()["id"]
@@ -299,7 +299,7 @@ def test_an_unusable_index_directory_disables_the_index_only(tmp_path, monkeypat
         try:
             assert services.indexer is None, "建不出库时索引整体停用"
             client = TestClient(
-                create_app(services=services, static_dir=tmp_path / "unbuilt"),
+                create_app(services=services),
                 base_url="http://127.0.0.1:8765",
             )
             session_id = create_session(client).json()["id"]

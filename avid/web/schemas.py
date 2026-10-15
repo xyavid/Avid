@@ -37,12 +37,6 @@ class SkillOut(BaseModel):
     description: str
 
 
-class BuildInfo(BaseModel):
-    git_sha: str | None = None
-    built_at: str | None = None
-    source: str = "dev"
-
-
 class ModelCandidate(BaseModel):
     """A BYOK candidate for a per-run model override: ``ref`` is providerId/modelId, and empty
     ``reasoning_efforts`` means the request carries no effort parameter.
@@ -78,7 +72,6 @@ class MetaOut(BaseModel):
     event_types: list[str]
     capabilities: Capabilities
     stream: StreamInfo
-    build: BuildInfo
 
 
 class HealthOut(BaseModel):
@@ -756,7 +749,6 @@ __all__ = [
     "AnswerApprovalOut",
     "ApprovalListOut",
     "ApprovalOut",
-    "BuildInfo",
     "CacheUsageOut",
     "CancelOut",
     "Capabilities",

@@ -36,7 +36,7 @@ def client(multi, sandbox):
 
     services, registry = multi
     return TestClient(
-        create_app(services=services, static_dir=sandbox / "unbuilt"),
+        create_app(services=services),
         base_url="http://127.0.0.1:8765",
     )
 
@@ -56,7 +56,7 @@ def test_direct_sessions_root_still_binds_one_workplace(tmp_path):
     services = Services(root=root, registry=WorkspaceRegistry(tmp_path / "registry.json"))
     try:
         single = TestClient(
-            create_app(services=services, static_dir="/tmp/unbuilt"),
+            create_app(services=services),
             base_url="http://127.0.0.1:8765",
         )
         listed = single.get("/api/workspaces").json()["workspaces"]

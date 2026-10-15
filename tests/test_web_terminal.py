@@ -20,7 +20,7 @@ from avid.web import create_app
 def client(sandbox: Path):
     instance = Services(root=sandbox / ".avid" / "sessions")
     client = TestClient(
-        create_app(services=instance, static_dir=sandbox / "static-not-built"),
+        create_app(services=instance),
         base_url="http://127.0.0.1:8765",
     )
     yield client
@@ -73,6 +73,36 @@ def test_terminal_refuses_an_unregistered_root(client: TestClient):
         frame = json.loads(ws.receive_text())
         assert frame["type"] == "error"
         assert "已登记工作区" in frame["message"]
+
+
+def test_terminal_refuses_an_origin_that_was_never_declared(sandbox: Path):
+    """A loopback page may read sessions, but a PTY is a shell and has to be named explicitly."""
+    services = Services(root=sandbox / ".avid" / "sessions")
+    client = TestClient(create_app(services=services), base_url="http://127.0.0.1:8765")
+    try:
+        with pytest.raises(WebSocketDisconnect):
+            with client.websocket_connect(
+                "/api/ws/terminal", headers={"origin": "http://localhost:5173"}
+            ):
+                pass
+    finally:
+        services.close()
+
+
+def test_terminal_accepts_a_declared_origin(sandbox: Path, monkeypatch: pytest.MonkeyPatch):
+    """Declaring the page is all it takes: the handshake then reaches the workspace check."""
+    monkeypatch.setenv("AVID_ALLOWED_ORIGINS", "localhost")
+    services = Services(root=sandbox / ".avid" / "sessions")
+    client = TestClient(create_app(services=services), base_url="http://127.0.0.1:8765")
+    try:
+        with client.websocket_connect(
+            "/api/ws/terminal?root=/tmp/not-registered", headers={"origin": "http://localhost:5173"}
+        ) as ws:
+            frame = json.loads(ws.receive_text())
+        assert frame["type"] == "error"
+        assert "已登记工作区" in frame["message"]
+    finally:
+        services.close()
 
 
 def test_terminal_rejects_a_foreign_origin(client: TestClient, sandbox: Path):

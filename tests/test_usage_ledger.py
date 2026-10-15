@@ -205,7 +205,7 @@ def test_run_persists_usage_and_exposes_it_over_http(sandbox):
     services = Services(root=sandbox / ".avid" / "sessions", chat=chat)
     try:
         client = TestClient(
-            create_app(services=services, static_dir=sandbox / "unbuilt"),
+            create_app(services=services),
             base_url="http://127.0.0.1:8765",
         )
         created = create_session(client).json()

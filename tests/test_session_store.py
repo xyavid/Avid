@@ -105,7 +105,7 @@ def client(tmp_path):
     services = Services(workspace_root=tmp_path)
     try:
         yield TestClient(
-            create_app(services=services, static_dir=tmp_path / "unbuilt"),
+            create_app(services=services),
             base_url="http://127.0.0.1:8765",
         )
     finally:
@@ -204,7 +204,7 @@ def test_changing_the_store_is_refused_while_a_run_is_live(tmp_path):
     services = Services(workspace_root=tmp_path, chat=blocking_chat)
     try:
         client = TestClient(
-            create_app(services=services, static_dir=tmp_path / "unbuilt"),
+            create_app(services=services),
             base_url="http://127.0.0.1:8765",
         )
         session_id = create_session(client).json()["id"]

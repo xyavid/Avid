@@ -56,10 +56,7 @@ from .session import (
     messages_for_branch,
     session_scratch,
 )
-from .web.app import (
-    LOOPBACK_HOSTS,
-    trusted_hosts,
-)
+from .web.app import LOOPBACK_HOSTS
 
 # Derived from the tool registry so the help text cannot drift from the shipped toolset.
 AGENT_TOOL_HELP = "（" + " / ".join(item["function"]["name"] for item in TOOLS) + "）"
@@ -998,7 +995,14 @@ def _run_index(argv: list[str]) -> int:
 def build_web_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="avid web",
-        description="起本地 Web 服务：REST + SSE 事件流 + 已构建的静态资源",
+        description="起本地 Web 服务：REST + SSE 事件流（只提供 /api，不含页面）",
+        epilog=(
+            "界面由你自己托管的静态产物提供。允许哪些页面调这个服务：\n"
+            "  AVID_ALLOWED_ORIGINS  逗号分隔的主机名；localhost 默认允许（Origin 头）\n"
+            "  AVID_ALLOWED_HOSTS    逗号分隔的主机名；服务愿意应答的名字（Host 头）\n"
+            "终端面板（PTY）比其余接口严一档：它要求显式列出页面来源，不吃 localhost 默认。"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--host", default="127.0.0.1", help="监听地址（默认回环）")
     parser.add_argument(
@@ -1033,7 +1037,7 @@ def _run_web(argv: list[str]) -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    allowed_hosts = _allowed_hosts(args.host)
+    extras = _bind_extras(args.host)
     print(
         f"Avid Web 正在监听 http://{args.host}:{args.port}",
         file=sys.stderr,
@@ -1045,25 +1049,38 @@ def _run_web(argv: list[str]) -> int:
                 "要绑定工作区请去掉 --reload。",
                 file=sys.stderr,
             )
+        if extras:
+            print(
+                "注意：--reload 走模块工厂，从 --host 推导出的地址进不了白名单，"
+                "请求会被挡成 host_rejected；请改用 AVID_ALLOWED_HOSTS / "
+                "AVID_ALLOWED_ORIGINS 显式声明。",
+                file=sys.stderr,
+            )
         uvicorn.run(
             "avid.web:create_app", factory=True, host=args.host, port=args.port, reload=True
         )
     else:
         uvicorn.run(
-            create_app(workspace_root=args.workspace, allowed_hosts=allowed_hosts),
+            create_app(
+                workspace_root=args.workspace,
+                allowed_hosts=extras,
+                allowed_origins=extras,
+            ),
             host=args.host,
             port=args.port,
         )
     return 0
 
 
-def _allowed_hosts(host: str) -> frozenset[str]:
-    """Builds the Host and Origin allow-list for this bind address, warning when not loopback."""
+def _bind_extras(host: str) -> frozenset[str] | None:
+    """Hostnames this bind address implies, returned rather than applied so every allowlist gets the
+    same set and the reload path can say out loud that it cannot take them at all."""
     if host in LOOPBACK_HOSTS:
-        return trusted_hosts()
+        return None
     print(
         f"⚠ 正在监听非回环地址 {host}：本机其它用户与局域网都能访问这个进程。"
-        "\n  Host/Origin 白名单已加入本机地址；需要额外域名请设 AVID_ALLOWED_HOSTS。",
+        "\n  Host/Origin 白名单已加入本机地址；需要额外域名请设"
+        " AVID_ALLOWED_HOSTS / AVID_ALLOWED_ORIGINS。",
         file=sys.stderr,
     )
     extra = {_host_of(host)}
@@ -1072,7 +1089,7 @@ def _allowed_hosts(host: str) -> frozenset[str]:
         extra.update(addresses)
     except OSError:  # pragma: no cover - trust only the explicitly given hosts if lookup fails
         pass
-    return trusted_hosts(frozenset(item for item in extra if item))
+    return frozenset(item for item in extra if item)
 
 
 def _host_of(value: str) -> str:

@@ -22,7 +22,7 @@ afterEach(() => {
 
 describe('api/client（网络出口唯一层）', () => {
   it('getMeta 解析 meta DTO', async () => {
-    const meta = { api_version: 1, features: {}, event_types: [], capabilities: {}, stream: {}, build: {} }
+    const meta = { api_version: 1, features: {}, event_types: [], capabilities: {}, stream: {} }
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, meta))
     vi.stubGlobal('fetch', fetchMock)
 

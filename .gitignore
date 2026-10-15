@@ -15,8 +15,8 @@ dist/
 
 # ---- 前端 ----
 
-# 依赖与产物不入库：`pnpm -C web build && pnpm -C web run copy:dist` 会把 dist/
-# 复制进 avid/web/static/（随 wheel 分发）。构建戳也在产物里。
+# 依赖与产物不入库：`pnpm -C web build` 产出 web/dist，由使用者自己托管；
+# 后端只提供 /api，不再持有也不复制前端产物。
 web/node_modules/
 web/dist/
 # tsc -b 的增量缓存：构建产物，不入库（否则每次构建都产生无意义 diff）
@@ -24,8 +24,6 @@ web/tsconfig.tsbuildinfo
 *.tsbuildinfo
 web/playwright-report/
 web/test-results/
-/avid/web/static/*
-!/avid/web/static/.gitkeep
 
 # ---- 入库的是项目本身；开发辅助只在本机 ----
 

@@ -254,7 +254,7 @@ def test_rest_search_returns_hits_and_the_backlog(tmp_path):
     services = Services(workspace_root=tmp_path)
     try:
         client = TestClient(
-            create_app(services=services, static_dir=tmp_path / "unbuilt"),
+            create_app(services=services),
             base_url="http://127.0.0.1:8765",
         )
         workspace = bound_workspace(services)
@@ -293,7 +293,7 @@ def test_rest_search_rejects_an_empty_query(tmp_path):
     services = Services(workspace_root=tmp_path)
     try:
         client = TestClient(
-            create_app(services=services, static_dir=tmp_path / "unbuilt"),
+            create_app(services=services),
             base_url="http://127.0.0.1:8765",
         )
         assert client.get("/api/search", params={"q": ""}).status_code == 422

@@ -43,10 +43,8 @@ def bundle(sandbox):
             **kwargs,
         )
         services.append(instance)
-        # static_dir points at a nonexistent path: a real build in the default directory would
-        # make the 503 assertions environment-dependent.
         return TestClient(
-            create_app(services=instance, static_dir=sandbox / "static-not-built"),
+            create_app(services=instance),
             base_url="http://127.0.0.1:8765",
         ), instance
 
@@ -144,7 +142,7 @@ def test_internal_errors_only_expose_a_correlation_id(bundle):
     # The bundle client re-raises (test mode); this case wants what a real deployment returns,
     # so build one with raise_server_exceptions=False.
     client = TestClient(
-        create_app(services=services, static_dir="/tmp/unbuilt"),
+        create_app(services=services),
         base_url="http://127.0.0.1:8765",
         raise_server_exceptions=False,
     )
@@ -341,10 +339,10 @@ def test_unknown_api_is_json_404(bundle):
     assert response.headers["content-type"].startswith("application/json")
     assert response.json()["error"]["code"] == "not_found"
 
-    # with no static build the root answers 503 static_missing, not 500
+    # This process serves no page: opening it in a browser has to say so instead of looking broken.
     root = client.get("/")
-    assert root.status_code == 503
-    assert root.json()["error"]["code"] == "static_missing"
+    assert root.status_code == 404
+    assert root.json()["error"]["code"] == "api_only"
 
 
 def test_a_schema_error_does_not_echo_the_value_it_rejected(bundle):
@@ -923,38 +921,6 @@ def test_child_tool_result_rides_the_wire_truncated():
     assert "content" not in event_payload(parent, "s1")["data"]
 
 
-# ---------------- static files and SPA fallback ----------------
-
-
-def test_spa_fallback_serves_index_but_missing_assets_are_404(sandbox):
-    static = sandbox / "static"
-    (static / "assets").mkdir(parents=True)
-    (static / "index.html").write_text("<html><body>SPA</body></html>", encoding="utf-8")
-    (static / "assets" / "app-abc123.js").write_text("export const x = 1\n", encoding="utf-8")
-
-    services = Services(root=sandbox / ".avid" / "sessions")
-    client = TestClient(
-        create_app(services=services, static_dir=static),
-        base_url="http://127.0.0.1:8765",
-    )
-    try:
-        # deep links fall back to the SPA shell (frontend routing takes over)
-        deep = client.get("/settings")
-        assert deep.status_code == 200 and "SPA" in deep.text
-
-        # real static files come back with their own content type
-        asset = client.get("/assets/app-abc123.js")
-        assert asset.status_code == 200
-        assert "javascript" in asset.headers["content-type"]
-
-        # a missing asset with an extension is an explicit 404 (a browser must not get HTML)
-        missing = client.get("/assets/stale-000.js")
-        assert missing.status_code == 404
-        assert missing.json()["error"]["code"] == "asset_not_found"
-    finally:
-        services.close()
-
-
 # ---------------- usage snapshots ----------------
 
 def test_branch_list_carries_persisted_usage(bundle):
@@ -1033,7 +999,7 @@ def test_the_worktree_endpoint_says_where_a_session_works(tmp_path):
         tool_registry={"write_file": write_probe},
     )
     client = TestClient(
-        create_app(services=services, static_dir=tmp_path / "unbuilt"),
+        create_app(services=services),
         base_url="http://127.0.0.1:8765",
     )
     try:

@@ -12,7 +12,6 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "copy:dist": "node scripts/copy-dist.mjs",
     "typecheck": "tsc -b --noEmit",
     "test": "vitest run",
     "gate:size": "node scripts/gate-size.mjs",

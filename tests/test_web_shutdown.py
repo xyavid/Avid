@@ -16,8 +16,6 @@ from support import ScriptedChat, create_session, make_turn, new_session, tool_c
 from avid.services import Services
 from avid.web import create_app
 
-#: Points nowhere, so no local frontend build can make an assertion environment-dependent.
-NO_STATIC = "static-not-built"
 BASE_URL = "http://127.0.0.1:8765"
 
 
@@ -41,7 +39,7 @@ def test_shutdown_cancels_the_run_in_flight_and_waits_for_it(sandbox):
         chat=ScriptedChat(make_turn("", [tool_call("read_file")]), make_turn("完")),
         tool_registry={"read_file": gated},
     )
-    app = create_app(services=services, static_dir=sandbox / NO_STATIC)
+    app = create_app(services=services)
 
     with TestClient(app, base_url=BASE_URL) as client:
         session = create_session(client).json()
@@ -94,7 +92,7 @@ def test_teardown_runs_twice_without_complaint(sandbox):
     """The layers under close() are all safe to end twice, so a caller that closed the services
     itself still survives the lifespan's own pass."""
     services = _services(sandbox)
-    app = create_app(services=services, static_dir=sandbox / NO_STATIC)
+    app = create_app(services=services)
 
     services.close()
     with TestClient(app, base_url=BASE_URL) as client:

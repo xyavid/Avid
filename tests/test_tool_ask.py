@@ -219,7 +219,7 @@ def test_a_run_suspends_on_ask_user_and_continues_with_the_answer(tmp_path):
     services = Services(workspace_root=tmp_path, chat=chat)
     try:
         client = TestClient(
-            create_app(services=services, static_dir=tmp_path / "unbuilt"),
+            create_app(services=services),
             base_url="http://127.0.0.1:8765",
         )
         session_id = create_session(client).json()["id"]

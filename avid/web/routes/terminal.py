@@ -45,18 +45,14 @@ def _clamp(value: object, default: int) -> int:
 @router.websocket("/ws/terminal")
 async def terminal_socket(websocket: WebSocket, root: str = "", cols: int = 80, rows: int = 24) -> None:
     """One PTY per connection; the socket is the shell's whole lifecycle."""
-    # BaseHTTPMiddleware never sees the WS handshake, so Origin is checked here on the allowlist.
-    allowed_hosts = websocket.app.state.allowed_hosts
+    # BaseHTTPMiddleware never sees the WS handshake, so Origin is checked here: a PTY is a shell,
+    # so it takes the declared list rather than the loopback default.
+    declared = websocket.app.state.declared_origins
     origin = websocket.headers.get("origin")
-    if origin:
-        parts = urlsplit(origin)
-        if (
-            parts.hostname not in allowed_hosts
-            or parts.netloc.lower() != websocket.headers.get("host", "").lower()
-        ):
-            logger.warning("拒绝终端连接的 Origin 不在信任边界内：%s", origin)
-            await websocket.close(code=1008)
-            return
+    if origin and urlsplit(origin).hostname not in declared:
+        logger.warning("拒绝终端连接的 Origin 未声明：%s", origin)
+        await websocket.close(code=1008)
+        return
 
     services = current_services(websocket)
     roots = {item["root"] for item in services.workspaces.list()}

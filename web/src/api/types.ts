@@ -4,12 +4,6 @@ export interface ErrorEnvelope {
   error: { code: string; message: string; detail: Record<string, unknown> }
 }
 
-export interface BuildInfo {
-  git_sha: string | null
-  built_at: string | null
-  source: string
-}
-
 export interface Skill {
   name: string
   description: string
@@ -85,7 +79,6 @@ export interface Meta {
   event_types: string[]
   capabilities: Capabilities
   stream: StreamInfo
-  build: BuildInfo
 }
 
 export interface Health {
