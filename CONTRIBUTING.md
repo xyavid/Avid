@@ -26,6 +26,12 @@ uv run avid web --port 8765          # the API
 pnpm -C web dev                      # the UI on :5173, pointed at :8765 by web/.env.development
 ```
 
+To look at a built bundle the way a user would — same command, same origins, same cleanup:
+
+```bash
+pnpm -C web build && uv run avid ui --no-open
+```
+
 All of these must be green before you open a pull request.
 
 ## 2. Commit conventions

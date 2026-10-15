@@ -41,6 +41,14 @@ describe('api/base（后端地址单点）', () => {
     expect(socketUrl('/api/ws/terminal')).toBe('wss://avid.example/api/ws/terminal')
   })
 
+  it('运行期注入压过构建期变量：avid ui 起的后端说了算', async () => {
+    vi.stubEnv('VITE_API_BASE', 'http://127.0.0.1:9999')
+    vi.stubGlobal('__AVID_API_BASE__', 'http://127.0.0.1:8765')
+    const { API_BASE, backendUrl } = await load()
+    expect(API_BASE).toBe('http://127.0.0.1:8765')
+    expect(backendUrl('/api/meta')).toBe('http://127.0.0.1:8765/api/meta')
+  })
+
   it('图片附件地址也走 base：它会被交给浏览器当 <img src>', async () => {
     vi.stubEnv('VITE_API_BASE', 'http://127.0.0.1:8765')
     const { attachmentUrl } = await import('../client')

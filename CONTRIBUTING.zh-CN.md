@@ -23,6 +23,12 @@ uv run avid web --port 8765          # API
 pnpm -C web dev                      # 界面在 :5173，经 web/.env.development 指向 :8765
 ```
 
+要看一份构建好的产物在用户手里是什么样——同一条命令、同样的来源、同样的收尾：
+
+```bash
+pnpm -C web build && uv run avid ui --no-open
+```
+
 提 PR 前这几条要全绿。
 
 ## 2. 提交规范

@@ -57,25 +57,31 @@ uv run avid --agent "Read pyproject.toml and tell me the project name."
 
 ```bash
 uv run avid                    # interactive session: /compact, /rewind, /<skill-name>
-uv run avid web --port 8765    # the API → http://127.0.0.1:8765/api
+uv run avid ui                 # open the UI: starts the API, serves the build, opens a window
+uv run avid web --port 8765    # the API only (host the UI yourself, or drive it from elsewhere)
 uv run avid session search "something you discussed"   # content search over past sessions
 uv run avid index check --fix  # verify the search index; repair or rebuild it
 ```
 
-`avid web` is an API server: it answers `/api` and holds no page. The browser UI is a separate
-artifact you build and host yourself — the backend only has to allow its origin, which any
-`localhost` page already is:
+Build the UI once and one command is then enough (`avid ui` runs in the foreground; Ctrl-C takes
+the API it started down with it):
 
 ```bash
 pnpm -C web install && pnpm -C web build      # → web/dist
+uv run avid ui
+```
+
+The browser UI is a separate artifact: `avid web` answers `/api` and holds no page. So hosting it
+yourself works too — the backend only has to allow that origin, which any `localhost` page already
+is:
+
+```bash
+uv run avid web --port 8765
 pnpm -C web run preview --port 4173           # serve it, then open http://localhost:4173
 ```
 
-Hosting it elsewhere works the same way; name that origin in `AVID_ALLOWED_ORIGINS` (see
-`avid web --help` and the Configuration section).
-
 To have `avid` on your PATH anywhere: `uv tool install --editable ".[web]"`.
-All flags: `avid --help`, `avid web --help`, `avid workspace --help`, `avid session --help`.
+All flags: `avid --help`, `avid ui --help`, `avid web --help`, `avid workspace --help`, `avid session --help`.
 
 ## Concepts
 
@@ -106,8 +112,11 @@ All flags: `avid --help`, `avid web --help`, `avid workspace --help`, `avid sess
   proxy) and `AVID_WEB_TIMEOUT_SECONDS` the per-call timeout (default 30).
 - **Approvals**: `--yes` answers the destructive-command prompt in non-interactive runs;
   `--allow-full-access` skips the prompt and the sandbox (credential refusal still applies).
-- **Serving the UI**: `avid web` answers `/api` only, so the page that calls it comes from an origin
-  the process never sees in the Host header. Name that origin in `AVID_ALLOWED_ORIGINS` — a
+- **Opening the UI**: `avid ui` starts the API, serves `web/dist`, opens a window and declares its
+  own origin — so for the local case nothing below needs configuring. Build the UI once first
+  (`pnpm -C web build`); `--dist` or `AVID_UI_DIST` point at a build somewhere else.
+- **Cross-origin access**: `avid web` answers `/api` only, so a page that calls it comes from an
+  origin the process never sees in the Host header. Name that origin in `AVID_ALLOWED_ORIGINS` — a
   `localhost` page is allowed already, anything else is refused with `origin_rejected` until it is
   listed. `AVID_ALLOWED_HOSTS` is the other half: the names the server will answer to at all, which
   matters when you bind to a non-loopback address. The terminal panel sits one tier stricter, since

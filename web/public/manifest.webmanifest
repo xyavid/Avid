@@ -1,0 +1,10 @@
+{
+  "name": "Avid",
+  "short_name": "Avid",
+  "description": "自建 agent 运行时的本地界面",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#F8F4ED",
+  "theme_color": "#F8F4ED"
+}

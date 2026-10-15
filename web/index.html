@@ -7,6 +7,11 @@
          指纹，图标地址随内容变——否则浏览器会一直用缓存里的旧图标（换过一轮才发现的坑：
          地址不变时它不重新取），而 favicon 又没法靠硬刷新可靠地清掉。 -->
     <link rel="icon" type="image/svg+xml" href="./src/assets/favicon.svg" />
+    <!-- 颜色与 tokens.css 的 --bg 同值：清单是静态文件，取不到 CSS 变量，只能抄一次。 -->
+    <meta name="theme-color" content="#F8F4ED" />
+    <!-- 清单在 public/：它必须待在一个固定地址上（浏览器按 <link> 里的地址取它，且装成图标
+         之后还会回来取）。图标留白见 dev/ref/web.md 的单点表。 -->
+    <link rel="manifest" href="/manifest.webmanifest" />
     <title>Avid</title>
   </head>
   <body>

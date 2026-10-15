@@ -234,6 +234,8 @@ def main(argv: list[str] | None = None) -> int:
     # Subcommands are split off before ordinary parsing, leaving the plain question form unchanged.
     if argv and argv[0] == "web":
         return _run_web(argv[1:])
+    if argv and argv[0] == "ui":
+        return _run_ui(argv[1:])
     if argv and argv[0] == "workspace":
         return _run_workspace(argv[1:])
     if argv and argv[0] == "session":
@@ -1070,6 +1072,44 @@ def _run_web(argv: list[str]) -> int:
             port=args.port,
         )
     return 0
+
+
+def build_ui_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="avid ui",
+        description="一条命令打开界面：起后端、托管已构建的前端、开一个应用窗口",
+        epilog=(
+            "界面是独立产物，先构建一次：pnpm -C web install && pnpm -C web build\n"
+            "已有后端在跑时会直接用它，不再起第二个；Ctrl-C 只停本命令自己起的那个。"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--dist", help="前端产物目录（缺省找检出目录旁的 web/dist，或 AVID_UI_DIST）")
+    parser.add_argument(
+        "--port", type=int, default=8765, help="后端端口（默认 8765）"
+    )
+    parser.add_argument(
+        "--ui-port",
+        type=int,
+        default=4173,
+        help="界面端口（默认 4173）。它是 PWA 的身份，装成图标之后再改就指向空了",
+    )
+    parser.add_argument("--no-open", action="store_true", help="只起服务，不开窗口")
+    return parser
+
+
+def _run_ui(argv: list[str]) -> int:
+    """Launches the UI host; imported here so a CLI-only install never pays for it."""
+    args = build_ui_parser().parse_args(argv)
+    from .ui import launch_ui
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    return launch_ui(
+        dist=args.dist,
+        api_port=args.port,
+        ui_port=args.ui_port,
+        open_window=not args.no_open,
+    )
 
 
 def _bind_extras(host: str) -> frozenset[str] | None:

@@ -48,23 +48,29 @@ uv run avid --agent "读 pyproject.toml，告诉我项目名"
 
 ```bash
 uv run avid                    # 交互会话：/compact 压缩、/rewind 回滚、/<技能名> 载入技能
-uv run avid web --port 8765    # 只提供 API → http://127.0.0.1:8765/api
+uv run avid ui                 # 打开界面：起后端 + 托管已构建的前端 + 开一个应用窗口
+uv run avid web --port 8765    # 只起 API（自己托管前端、或给别的客户端用）
 uv run avid session search "聊过的某个词"    # 按内容检索历史会话
 uv run avid index check --fix               # 校验检索索引；补/修/重建
 ```
 
-`avid web` 是纯 API 服务：只答 `/api`，自己不持有页面。浏览器界面是独立产物，由你自己构建与托管；
-后端只需要允许它的来源，而任何 `localhost` 页面本来就在允许列表里：
+界面构建一次，之后一条命令就够（`avid ui` 前台跑，Ctrl-C 会把它起的后端一并停掉）：
 
 ```bash
 pnpm -C web install && pnpm -C web build      # → web/dist
+uv run avid ui
+```
+
+浏览器界面是独立产物：`avid web` 只答 `/api`，自己不持有页面。所以也可以自己托管，把那个来源写进
+`AVID_ALLOWED_ORIGINS`（任何 `localhost` 页面本来就在允许列表里）：
+
+```bash
+uv run avid web --port 8765
 pnpm -C web run preview --port 4173           # 托管它，然后开 http://localhost:4173
 ```
 
-放到别处托管也一样，把那个来源写进 `AVID_ALLOWED_ORIGINS` 即可（见 `avid web --help` 与「配置」一节）。
-
 想在任何目录直接敲 `avid`，把它装成命令：`uv tool install --editable ".[web]"`。
-全部参数见 `avid --help`、`avid web --help`、`avid workspace --help`、`avid session --help`。
+全部参数见 `avid --help`、`avid ui --help`、`avid web --help`、`avid workspace --help`、`avid session --help`。
 
 ## 概念
 
@@ -87,7 +93,10 @@ pnpm -C web run preview --port 4173           # 托管它，然后开 http://loc
   网页内容；确实要取内网站点时设 `AVID_WEB_ALLOW_PRIVATE_HOSTS=1`（另外两个开关见下表）。
 - **确认与授权**：非交互场景用 `--yes` 代答毁灭级确认；`--allow-full-access` 跳过确认并关沙箱
   （凭据拒读仍然生效）。
-- **界面托管**：`avid web` 只答 `/api`，所以调用它的页面来自一个后端在 Host 头里永远看不到的来源。
+- **打开界面**：`avid ui` 一条命令把后端、静态宿主与应用窗口都办了，并且会声明自己那个页面来源——
+  本机场景下，下面那条不用配。产物先构建一次（`pnpm -C web build`）；产物在别处时用 `--dist` 或
+  `AVID_UI_DIST` 指过去。
+- **跨源访问**：`avid web` 只答 `/api`，所以调用它的页面来自一个后端在 Host 头里永远看不到的来源。
   把那个来源写进 `AVID_ALLOWED_ORIGINS`——`localhost` 的页面本来就被允许，其余的没列出来就会拿到
   `origin_rejected`。另一半是 `AVID_ALLOWED_HOSTS`：服务愿意应答哪些名字（绑非回环地址时才需要）。
   **终端面板比其余接口严一档**：PTY 等于一个 shell，必须显式点名它的页面，所以即便是只在内网可达的
@@ -113,6 +122,8 @@ pnpm -C web run preview --port 4173           # 托管它，然后开 http://loc
 | `AVID_SANDBOX_BIN` | 换一个 bwrap 可执行文件（诊断 / 打包） |
 | `AVID_ALLOWED_HOSTS` | Web 服务额外信任的域名（Host 头；局域网部署） |
 | `AVID_ALLOWED_ORIGINS` | 允许调这个 API 的页面来源（Origin 头；主机名比较，`localhost` 默认允许） |
+| `AVID_UI_DIST` | `avid ui` 去哪找前端产物（默认找检出目录旁的 `web/dist`） |
+| `AVID_BROWSER_CMD` | `avid ui` 用哪个浏览器开窗口（默认按平台探测 Chromium 系，找不到就退回系统默认浏览器） |
 | `AVID_BYOK_CONFIG` | 换一份 `models.json`（默认 `~/.avid/models.json`） |
 | `AVID_BYOK_SECRETS` | 换一份 `secrets.json`（默认 `~/.avid/secrets.json`） |
 | `AVID_WEB_SEARCH_URL` | 换检索接口根地址（默认 `https://api.tavily.com`；自建或代理用） |
