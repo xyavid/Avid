@@ -670,3 +670,42 @@ def test_interactive_compact_reuses_the_round_prefix(sandbox, model, monkeypatch
     assert request["tools"]  # the tool table travels with the prefix
     instruction = request["messages"][-1]
     assert instruction["tail"] is True and "material to compact" in instruction["content"]
+
+
+# ---- the session's own work root ----
+
+
+def recorded_worktree(path: Path) -> dict | None:
+    """The work root a session recorded, read straight off its file."""
+    for line in path.read_text(encoding="utf-8").splitlines()[1:]:
+        payload = json.loads(line)
+        for record in payload if isinstance(payload, list) else [payload]:
+            if record.get("kind") == "value" and record.get("namespace") == "avid.worktree":
+                return record["value"]
+    return None
+
+
+def test_the_second_session_of_a_repo_works_in_its_own_tree(sandbox, model, capsys):
+    """Two sessions on one repo: the CLI decides the way the web does, says where the run works,
+    and records it in the session."""
+    from support import init_repo
+
+    from avid.security import userdirs
+
+    init_repo(sandbox)
+    model.answer("第一次", "第二次")
+
+    assert cli.main(["--agent", "--new-session", "先来"]) == 0
+    first = session_id(capsys.readouterr().err)
+    assert cli.main(["--agent", "--new-session", "再来"]) == 0
+    err = capsys.readouterr().err
+    second = session_id(err)
+
+    files = {path.name.split("_", 1)[1].removesuffix(".jsonl"): path for path in session_files(sandbox)}
+    owned = recorded_worktree(files[first])
+    trees = recorded_worktree(files[second])
+
+    assert owned["branch"] is None and Path(owned["path"]) == sandbox.resolve()
+    assert trees["branch"] == f"avid/session-{second}"
+    assert userdirs.worktrees_dir() in Path(trees["path"]).parents
+    assert f"{trees['path']}（分支 {trees['branch']}）" in err

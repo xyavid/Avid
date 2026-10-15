@@ -6,13 +6,37 @@ can ``from support import ...``.
 
 from __future__ import annotations
 
+import subprocess
 import time
 from collections.abc import Callable, Iterable
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from avid.providers.client import Turn, Usage
+
+
+def git(path: str | Path, *args: str) -> str:
+    """Run one git command in path; the identity is passed per call, never taken from the box."""
+    done = subprocess.run(
+        ["git", "-C", str(path), "-c", "user.email=t@example.com", "-c", "user.name=t", *args],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return done.stdout.rstrip("\n")
+
+
+def init_repo(root: str | Path) -> Path:
+    """Make a directory a real repo with one commit: the shape a session worktree is cut from."""
+    path = Path(root)
+    path.mkdir(parents=True, exist_ok=True)
+    git(path, "init", "-q", "-b", "main")
+    (path / "a.txt").write_text("a\n", encoding="utf-8")
+    git(path, "add", "-A")
+    git(path, "commit", "-qm", "first")
+    return path
 
 
 def make_turn(

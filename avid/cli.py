@@ -42,6 +42,8 @@ from .services.workspace_registry import (
     sessions_root,
 )
 from .services.workspaces import WorkspaceInvalid, bound_workspace
+from .services.worktrees import Worktree, WorktreeError
+from .services.worktrees import resolve as resolve_worktree
 from .session import (
     BranchScan,
     JsonlSessionMetadata,
@@ -52,6 +54,7 @@ from .session import (
     branch_plan,
     branch_tip,
     messages_for_branch,
+    session_scratch,
 )
 from .web.app import (
     LOOPBACK_HOSTS,
@@ -126,6 +129,27 @@ def _resolve_workspace(selection: str | None) -> Workspace:
     root = Path(workspace.WORKSPACE_ROOT)
     found = registry.find(str(root))
     return found if found is not None else bound_workspace(root)
+
+
+def _work_root(session, target: Workspace) -> Worktree:
+    """The root this session's runs work on: the same decision the web host reaches, one layer down.
+
+    A session that cannot use its recorded tree fails here rather than running somewhere else: the
+    session's checkpoints and its rollback hang off that path, so a silent move would split them.
+    """
+    scratch = session.get_value(session_scratch()) is not None
+    try:
+        return resolve_worktree(session, target, scratch=scratch)
+    except WorktreeError as exc:
+        raise SessionError(str(exc)) from exc
+
+
+def _work_root_note(worktree: Worktree) -> str:
+    """One line saying where a session's runs work, printed when it opens."""
+    if worktree.branch is None:
+        reason = f"（{worktree.reason}）" if worktree.reason else ""
+        return f"会话直接在工作区上跑：{worktree.path}{reason}"
+    return f"会话在自己的工作树上：{worktree.path}（分支 {worktree.branch}）"
 
 
 def _mcp_warning(message: str) -> None:
@@ -353,18 +377,20 @@ def _run_session(args: argparse.Namespace, config) -> int:
         history = messages_for_branch(session, recorder.branch)
         recorder.ensure_branch()
         messages = [*history, {"role": "user", "content": args.prompt}]
+        worktree = _work_root(session, target)
+        print(_work_root_note(worktree), file=sys.stderr)
 
         assembly = assemble(
             config=config,
             messages=messages,
-            workspace_root=target.root,
+            workspace_root=worktree.path,
             recorder=recorder,
             auto_approve=args.yes,
             full=args.allow_full_access,
             question=_terminal_question(),
             # Checkpoints belong to the session: snapshots land under the branch tip.
             checkpoint=DirCheckpointSink(
-                root=Path(target.root), session_id=session.metadata.id, tip_seq=recorder.tip_seq
+                root=Path(worktree.path), session_id=session.metadata.id, tip_seq=recorder.tip_seq
             ),
             on_message=notifying(indexer, recorder.on_message, session.metadata.id),
             warn=_mcp_warning,
@@ -438,10 +464,11 @@ def _interactive(args: argparse.Namespace, config) -> int:
         recorder = SessionRecorder(session)
         indexer = _session_indexer()
         recorder.ensure_branch()
+        worktree = _work_root(session, target)
         # Checkpoints belong to the session: files snapshots old content under the branch tip.
         # One sink serves the whole loop, since seq is monotonic and directory names cannot clash.
         checkpoint = DirCheckpointSink(
-            root=Path(target.root), session_id=session.metadata.id, tip_seq=recorder.tip_seq
+            root=Path(worktree.path), session_id=session.metadata.id, tip_seq=recorder.tip_seq
         )
     except SessionError as exc:
         print(f"会话错误：{exc}", file=sys.stderr)
@@ -453,6 +480,7 @@ def _interactive(args: argparse.Namespace, config) -> int:
     print(
         f"工作区 {target.id}（{target.root}）\n"
         f"会话 {session.metadata.id}{'（新建）' if created else '（续接）'}；"
+        f"{_work_root_note(worktree)}\n"
         "输入问题回车发送，/compact 压缩，/rewind 回滚上一轮，/<技能名> 载入技能，Ctrl-D 退出",
         file=sys.stderr,
     )
@@ -475,9 +503,9 @@ def _interactive(args: argparse.Namespace, config) -> int:
                 )
             if match is not None and match.kind == commands_module.KIND_COMMAND:
                 if match.name == "rewind":
-                    _rewind_now(session, recorder, Path(target.root))
+                    _rewind_now(session, recorder, Path(worktree.path))
                 else:
-                    _compact_now(session, recorder, config, target, args)
+                    _compact_now(session, recorder, config, worktree, args)
                 continue
             if match is not None and match.kind == commands_module.KIND_SKILL:
                 body = commands_module.skill_text(match.name, workspace_root=target.root)
@@ -495,7 +523,7 @@ def _interactive(args: argparse.Namespace, config) -> int:
                 print(commands_module.help_text(workspace_root=target.root), file=sys.stderr)
                 continue
 
-            # Plain input: a fresh assembly per turn keeps the flags and workspace; MCP follows it.
+            # Plain input: a fresh assembly per turn keeps the flags and the work root; MCP follows.
             messages = [
                 *messages_for_branch(session, recorder.branch),
                 {"role": "user", "content": text},
@@ -503,7 +531,7 @@ def _interactive(args: argparse.Namespace, config) -> int:
             assembly = assemble(
                 config=config,
                 messages=messages,
-                workspace_root=target.root,
+                workspace_root=worktree.path,
                 recorder=recorder,
                 auto_approve=args.yes,
                 full=args.allow_full_access,
@@ -530,15 +558,15 @@ def _interactive(args: argparse.Namespace, config) -> int:
     return 0
 
 
-def _compact_now(session, recorder: SessionRecorder, config, target, args) -> None:
+def _compact_now(session, recorder: SessionRecorder, config, worktree: Worktree, args) -> None:
     """/compact body: one forced compaction assembled exactly like a round, since the request only
     reuses the cache when its prefix is the prefix that round sent."""
     # The same assembly a turn gets, MCP and plan included: a tool table that differs by one entry
-    # breaks the prefix at its first byte.
+    # breaks the prefix at its first byte, and the work root is part of that prefix too.
     assembly = assemble(
         config=config,
         messages=messages_for_branch(session, recorder.branch),
-        workspace_root=target.root,
+        workspace_root=worktree.path,
         recorder=recorder,
         auto_approve=args.yes,
         full=args.allow_full_access,
