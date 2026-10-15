@@ -116,15 +116,8 @@ All flags: `avid --help`, `avid web --help`, `avid workspace --help`, `avid sess
 
 ## Development
 
-```bash
-uv sync --extra web                          # dependencies
-uv run pytest                                # tests
-uv run ruff check avid tests && uv run mypy   # static checks
-pnpm -C web run verify                       # frontend: types + tests + build + size budget
-```
-
-Contributing conventions (setup, gates, commit format, testing and comment discipline) live in
-[CONTRIBUTING.md](CONTRIBUTING.md) (Chinese).
+Setup, gates and conventions (commit format, comment and testing discipline) live in
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

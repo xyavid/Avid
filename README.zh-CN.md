@@ -112,14 +112,7 @@ pnpm -C web install && pnpm -C web run copy:dist
 
 ## 开发
 
-```bash
-uv sync --extra web                          # 依赖
-uv run pytest                                # 测试
-uv run ruff check avid tests && uv run mypy   # 静态检查
-pnpm -C web run verify                       # 前端：类型检查 + 测试 + 构建 + 体积门禁
-```
-
-贡献约定（环境与门禁、提交格式、测试与注释纪律）见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+环境、门禁与协作约定（提交格式、注释与测试纪律）见 [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md)。
 
 ## 许可
 

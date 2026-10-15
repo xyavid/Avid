@@ -1,8 +1,9 @@
 """G1 - G4 documentation gates: size budgets, reference resolution, section pointers and
 index completeness -- held without running anything.
 
-`AGENTS.md` is a local-only file (gitignored): CI clones do not have it, so every check
-that touches it skips when it is absent. `CONTRIBUTING.md` is the tracked counterpart.
+Two surfaces, both partly local: `CONTRIBUTING.md` (+ its Chinese twin) and the READMEs are
+tracked; `AGENTS.md` and `dev/ref/*.md` are gitignored, so CI clones do not have them and
+every check against them skips when the file is absent.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-DOCS = ROOT / "docs"
+REF = ROOT / "dev" / "ref"
 
 #: The resident layer enters the bootstrap block of every run, so its budget is a prompt
 #: cap, not a style preference. `avid/agent/prompt.py` truncates the block at
@@ -21,8 +22,11 @@ DOCS = ROOT / "docs"
 #: whole instead of handing the model a truncated contract.
 AGENTS_MAX_CHARS = 6_000
 
-#: Files read once per relevant task; a bigger cap only bounds drift.
-DOCS_MAX_CHARS = 9_000
+#: Reference docs are read once per relevant task; a bigger cap only bounds drift.
+REF_MAX_CHARS = 9_000
+
+#: Paths that only exist on this machine; a tracked file linking one dangles for everyone else.
+LOCAL_ONLY = ("AGENTS.md", "dev/")
 
 
 def _agents() -> Path:
@@ -33,13 +37,21 @@ def _contributing() -> Path:
     return ROOT / "CONTRIBUTING.md"
 
 
-def _docs_files() -> list[Path]:
-    return sorted(p for p in DOCS.rglob("*.md") if p.is_file())
+def _readmes() -> list[Path]:
+    return [ROOT / "README.md", ROOT / "README.zh-CN.md"]
+
+
+def _tracked_docs() -> list[Path]:
+    return [_contributing(), ROOT / "CONTRIBUTING.zh-CN.md", *_readmes()]
+
+
+def _ref_docs() -> list[Path]:
+    return sorted(p for p in REF.glob("*.md") if p.is_file())
 
 
 def _contract_files() -> list[Path]:
-    #: Only what exists: the local-only AGENTS.md is absent on a fresh clone.
-    return [p for p in (_agents(), _contributing(), *_docs_files()) if p.is_file()]
+    #: Only what exists: the local half is absent on a fresh clone.
+    return [p for p in (_agents(), *_tracked_docs(), *_ref_docs()) if p.is_file()]
 
 
 def _py_files() -> list[Path]:
@@ -58,15 +70,15 @@ def test_agents_md_stays_within_the_resident_budget():
     actual = len(_text(_agents()))
     assert actual <= AGENTS_MAX_CHARS, (
         f"AGENTS.md 有 {actual} 字符，超过常驻预算 {AGENTS_MAX_CHARS}。"
-        "它是每个运行的 bootstrap 块：把描述性内容下沉到 docs/，别在这里展开。"
+        "它是每个运行的 bootstrap 块：把描述性内容下沉到 dev/ref/，别在这里展开。"
     )
 
 
-def test_on_demand_docs_stay_readable_in_one_sitting():
-    for path in [_contributing(), *_docs_files()]:
+def test_reference_docs_stay_readable_in_one_sitting():
+    for path in [ROOT / "CONTRIBUTING.md", ROOT / "CONTRIBUTING.zh-CN.md", *_ref_docs()]:
         actual = len(_text(path))
-        assert actual <= DOCS_MAX_CHARS, (
-            f"{path.relative_to(ROOT)} 有 {actual} 字符，超过 {DOCS_MAX_CHARS}；"
+        assert actual <= REF_MAX_CHARS, (
+            f"{path.relative_to(ROOT)} 有 {actual} 字符，超过 {REF_MAX_CHARS}；"
             "一份文档装一个主题，超出说明它该拆。"
         )
 
@@ -98,7 +110,7 @@ def _markdown_targets(text: str) -> list[str]:
     return re.findall(r"\]\(([^)#]+?)(?:#[^)]*)?\)", text)
 
 
-def test_every_symbol_reference_in_markdown_resolves():
+def test_every_symbol_reference_resolves():
     checked = 0
     for path in _contract_files():
         text = _text(path)
@@ -144,18 +156,19 @@ def test_every_markdown_link_target_exists():
             )
 
 
-def test_no_tracked_file_links_to_the_local_only_agents_md():
-    #: AGENTS.md is gitignored, so a tracked file linking it dangles for everyone else.
-    #: Mentioning it as a concept is fine -- it is also the product's workspace bootstrap
-    #: feature; only the link form is a bug, and it would otherwise surface only in CI.
+def test_tracked_docs_never_link_a_local_only_path():
+    #: AGENTS.md and dev/ are gitignored: a tracked file linking them dangles for everyone
+    #: else. This would otherwise surface only in CI, where the local file is missing.
     offenders: list[str] = []
-    for path in [_contributing(), *_docs_files()]:
+    for path in _tracked_docs():
         for href in _markdown_targets(_text(path)):
-            if href.split("#", 1)[0].endswith("AGENTS.md"):
+            anchor = href.split("#", 1)[0]
+            if anchor.startswith("http") or not anchor:
+                continue
+            if anchor.endswith("AGENTS.md") or anchor.lstrip("./").startswith("dev/"):
                 offenders.append(f"{path.relative_to(ROOT)} -> {href}")
     assert not offenders, (
-        f"入库文件链接了本地文件 AGENTS.md：{offenders}。它只在本机存在（.gitignore 里），"
-        "链过去是死链；要给人看的内容放 CONTRIBUTING.md。"
+        f"入库文件链接了只在本机的路径：{offenders}。本机的东西（AGENTS.md、dev/）链过去是死链。"
     )
 
 
@@ -187,12 +200,15 @@ def test_section_pointers_in_code_resolve_to_a_real_heading():
 
 # ---------------- G4: the index has no orphans ----------------
 
-def test_every_docs_file_is_reachable_from_the_index():
-    index = _text(DOCS / "README.md")
-    for path in _docs_files():
+def test_every_ref_doc_is_reachable_from_the_index():
+    index = REF / "README.md"
+    if not index.is_file():
+        pytest.skip("dev/ref/ 是本机目录，CI 上不存在")
+    text = _text(index)
+    for path in _ref_docs():
         if path.name == "README.md":
             continue
-        assert f"]({path.name})" in index, (
-            f"docs/{path.name} 没有出现在 docs/README.md 的索引里；"
+        assert f"]({path.name})" in text, (
+            f"dev/ref/{path.name} 没有出现在 dev/ref/README.md 的索引里；"
             "没被索引的文档靠搜索才会被发现，等于不存在。"
         )

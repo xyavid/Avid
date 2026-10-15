@@ -27,23 +27,17 @@ web/test-results/
 /avid/web/static/*
 !/avid/web/static/.gitkeep
 
-# ---- 文档入库规则：给贡献者的进仓库，本地开发用的与过程文档留本机 ----
+# ---- 入库的是项目本身；开发辅助只在本机 ----
 
-# docs/ 白名单：默认全部忽略，只放行索引与写到的五份主题文档。
-# 新文件落在 docs/ 根目录或未知子目录时自动被忽略，不会误提交。
-/docs/*
-!/docs/README.md
-!/docs/kernel.md
-!/docs/modules.md
-!/docs/extending.md
-!/docs/web.md
-!/docs/design.md
-# 不建 docs/status/：现状是代码与模块注释，快照式现状文档必然滞后。
+# 判据：使用与贡献**必需**、且**无法从仓库重建**的东西才入库（代码 / 测试 / 配置 /
+# README / CONTRIBUTING / LICENSE）。代码的镜像、个人工作流、过程记录一律排除。
 
-# AGENTS.md 是本地开发约定（改动流程与文档纪律），个人工作流，不入库；
-# 给贡献者的约定在 CONTRIBUTING.md（已跟踪）。注意它仍在历史里，ignore 只挡将来的提交。
+# AGENTS.md 是本地开发约定（改动流程与文档纪律），个人工作流。
+# 注意：它仍在 Git 历史里，ignore 只挡将来的提交。
 /AGENTS.md
 
-# dev/ 过程文档：开发计划、需求草稿、进度跟踪、笔记、会议记录、阶段出图。
-# 只保留在本地，不参与版本管理。
+# skills/ 是这个工作区自己的技能（产品会从工作区根读它），我干活时随身带，不是产品样本。
+/skills/
+
+# dev/ 只在本机：开发参考（代码的镜像）、进度账、举证产物、出图、过程文档、参考副本。
 /dev/
