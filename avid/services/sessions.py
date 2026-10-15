@@ -33,6 +33,10 @@ from .errors import (
 )
 from .runs import RunRegistry
 from .workspaces import Workspace, WorkspaceService
+from .worktrees import Worktree
+from .worktrees import facts as worktree_facts
+from .worktrees import recorded as recorded_worktree
+from .worktrees import release as release_worktree
 
 logger = logging.getLogger("avid.services.sessions")
 
@@ -238,6 +242,12 @@ class SessionService:
             if found is None:
                 raise SessionNotFound(f"没有这个会话：{session_id}")
             workspace, metadata = found
+            # Read the work root before the file goes: the session is the only place that records
+            # it, and its tree (or its claim on the workspace root) has to go with the session.
+            with self._session(session_id, meta=metadata, workspace=workspace) as session:
+                note = release_worktree(session, workspace)
+            if note:
+                logger.warning("会话 %s 删了，%s", session_id, note)
             try:
                 self.workspaces.repo_for(workspace).delete(metadata)
             except SessionError as exc:
@@ -245,6 +255,20 @@ class SessionService:
             self.workspaces.forget_session(session_id)
         # The index row must go too: the indexer itself detects the vanished file by discovery.
         self.runs.notify_index(session_id)
+
+    def worktree(self, session_id: str) -> dict[str, Any]:
+        """Where this session's runs work and what its tree holds: one read for the strip and the
+        panel, so the two can never disagree about which root they are describing.
+        """
+        with self._session(session_id) as session:
+            known = recorded_worktree(session)
+        if known is None:
+            owner = self.workspaces.find_session(session_id)
+            known = Worktree(
+                path=owner[0].root if owner is not None else "",
+                reason="还没有运行过：第一次运行会决定工作根",
+            )
+        return worktree_facts(known)
 
     # Branches.
 

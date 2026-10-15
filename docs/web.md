@@ -22,3 +22,4 @@
 | 改输入区工具栏的排列 / 宽度适应 | `components/chat/Composer.tsx` 的 `data-testid="composer-toolbar"` 一行分三区（附件+权限 / 容量环+模型 / 推理强度+动作），`useCompact` 按行宽（阈值 `COMPACT_BELOW`）决定胶囊收不收文字 |
 | 改 markdown 支持的写法 / 危险协议名单 | `web/src/markdown/parse.ts` 是「标准解析器（@lezer/markdown，CommonMark+GFM）→ 渲染模型」的翻译层与协议闸门，`Markdown.tsx` 只负责画（全程 React 元素，不注入 HTML）；软换行成断行、外链图降级成链接是有意偏离，写在模块注释里 |
 | 改图片附件的同口径数字 | `web/src/state/imagePrep.ts`（内核侧单点是 `avid/attachments.py`） |
+| 改「这次运行在哪棵树上」的取数与显示 | 取数只有一处：`GET /api/sessions/{id}/worktree`（会话那一行与右列「工作树」面板共用同一份读数，`api/client.getSessionWorktree`）；订阅与阶段状态单点在 `web/src/state/useRunStream.ts`——一个页面同一时刻只有一条 run 订阅，换会话即换订阅，非当前 run 的事件按 `run_id` 丢弃 |

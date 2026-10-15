@@ -15,6 +15,7 @@ from ..schemas import (
     ScratchOut,
     SessionDetail,
     SessionListOut,
+    WorktreeFactsOut,
 )
 from . import current_services
 
@@ -63,6 +64,12 @@ def delete_session(request: Request, session_id: str) -> Response:
 def list_branches(request: Request, session_id: str) -> dict:
     """Lists branches, where main is reported as the implicit default of a fresh session."""
     return current_services(request).sessions.list_branches(session_id)
+
+
+@router.get("/sessions/{session_id}/worktree", response_model=WorktreeFactsOut)
+def session_worktree(request: Request, session_id: str) -> dict:
+    """Where this session's runs work: its own tree, or the workspace root and the reason why."""
+    return current_services(request).sessions.worktree(session_id)
 
 
 @router.post(

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import threading
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -1010,3 +1011,62 @@ def test_usage_is_per_branch_not_per_session(bundle):
     assert set(branches) == {"main", fork["name"]}
     assert branches["main"]["usage"]["context"]["tokens"] == 1
     assert branches[fork["name"]]["usage"] is None
+
+
+def test_the_worktree_endpoint_says_where_a_session_works(tmp_path):
+    """The one source the session's strip and the right-hand panel read: undecided before the first
+    run, the workspace root for the session that owns it, a branch and dirty files for the second.
+    """
+    from support import init_repo
+
+    root = init_repo(tmp_path / "proj")
+
+    def write_probe(arguments, **kwargs) -> str:
+        Path(kwargs["state"].workspace_root, "b.txt").write_text("b\n", encoding="utf-8")
+        return "写好了"
+
+    services = Services(
+        workspace_root=str(root),
+        # The second session writes one file, so its tree has something to report.
+        chat=ScriptedChat(make_turn("完成"), make_turn("", [tool_call("write_file")]), make_turn("完成")),
+        tool_registry={"write_file": write_probe},
+    )
+    client = TestClient(
+        create_app(services=services, static_dir=tmp_path / "unbuilt"),
+        base_url="http://127.0.0.1:8765",
+    )
+    try:
+        first = create_session(client).json()["id"]
+        untouched = client.get(f"/api/sessions/{first}/worktree").json()
+        assert untouched["worktree"] is False
+        assert "还没有运行过" in untouched["reason"]
+        assert Path(untouched["path"]) == root.resolve()
+
+        second = create_session(client).json()["id"]
+        for session_id, prompt in ((first, "先来"), (second, "再来")):
+            created = client.post(
+                f"/api/sessions/{session_id}/runs", json={"prompt": prompt, "auto_approve": True}
+            ).json()
+            assert wait_for(
+                lambda rid=created["run_id"]: client.get(f"/api/runs/{rid}").json()["status"]
+                == "finished"
+            )
+
+        owning = client.get(f"/api/sessions/{first}/worktree").json()
+        working = client.get(f"/api/sessions/{second}/worktree").json()
+
+        assert owning["worktree"] is False and owning["branch"] is None
+        assert Path(owning["path"]) == root.resolve()
+        assert working["worktree"] is True
+        assert working["branch"].startswith("avid/session-")
+        assert [item["path"] for item in working["dirty"]] == ["b.txt"]
+        assert working["commits"] == [] and working["ahead"] == 0
+    finally:
+        services.close()
+
+
+def test_an_unknown_session_worktree_is_the_usual_404(bundle):
+    client, _ = bundle()
+    response = client.get("/api/sessions/没有这个会话/worktree")
+    assert response.status_code == 404
+    assert response.json()["error"]["code"]

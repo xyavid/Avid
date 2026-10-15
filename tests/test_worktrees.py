@@ -16,7 +16,17 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from support import ScriptedChat, collect, make_turn, new_session, tool_call, wait_terminal
+from support import (
+    ScriptedChat,
+    collect,
+    git,
+    init_repo,
+    make_turn,
+    new_session,
+    tool_call,
+    wait_handle_released,
+    wait_terminal,
+)
 
 from avid.agent.events import RUN_STARTED
 from avid.security import userdirs
@@ -32,25 +42,9 @@ from avid.services.worktrees import (
 from avid.session import JsonlSessionRepo
 
 
-def git(path: Path, *args: str) -> str:
-    """Run one git command; the identity is passed per call so tests never depend on the box."""
-    done = subprocess.run(
-        ["git", "-C", str(path), "-c", "user.email=t@example.com", "-c", "user.name=t", *args],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return done.stdout.strip()
-
-
 def make_repo(tmp_path: Path, name: str = "proj") -> Path:
-    root = tmp_path / name
-    root.mkdir()
-    git(root, "init", "-q", "-b", "main")
-    (root / "a.txt").write_text("a\n", encoding="utf-8")
-    git(root, "add", "-A")
-    git(root, "commit", "-qm", "first")
-    return root
+    """A repo with one commit, in its own directory under tmp_path."""
+    return init_repo(tmp_path / name)
 
 
 def take_root(open_session, workspace, session_id: str = "s-owner"):
@@ -413,3 +407,35 @@ def test_a_run_of_the_second_session_writes_inside_its_own_tree(tmp_path):
     assert seen == [str(root.resolve()), tree["path"]]
     assert (Path(tree["path"]) / "probe.txt").exists()
     assert git(root, "status", "--porcelain").strip() == "?? probe.txt"
+
+
+def test_deleting_a_session_gives_its_tree_and_the_root_back(tmp_path):
+    """Deleting the sessions releases both: the tree goes with its empty branch, and the workspace
+    root becomes free, so the next session works on it instead of opening a third tree.
+    """
+    root = make_repo(tmp_path)
+    services = Services(
+        workspace_root=str(root),
+        chat=ScriptedChat(*[make_turn("完成")] * 3),
+        tool_registry={},
+    )
+    try:
+        first = new_session(services)
+        second = new_session(services)
+        for session_id, prompt in ((first, "先来"), (second, "再来")):
+            assert wait_terminal(services.runs.start(session_id, prompt))
+            wait_handle_released(services, session_id)
+        tree = Path(services.sessions.worktree(second)["path"])
+        assert tree.is_dir()
+
+        services.sessions.delete(second)
+        services.sessions.delete(first)
+
+        assert not tree.exists()
+        third = new_session(services)
+        assert wait_terminal(services.runs.start(third, "三来"))
+        reading = services.sessions.worktree(third)
+        assert Path(reading["path"]) == root.resolve()
+        assert reading["branch"] is None
+    finally:
+        services.close()

@@ -379,6 +379,39 @@ class SessionListOut(BaseModel):
     sessions: list[SessionSummary]
 
 
+class WorktreeFileOut(BaseModel):
+    """One changed path in a session's tree; ``status`` is git's two-column porcelain code."""
+
+    path: str
+    status: str
+
+
+class WorktreeCommitOut(BaseModel):
+    """One commit this session made on its branch; ``committed_at`` is unix milliseconds."""
+
+    sha: str
+    subject: str
+    committed_at: int
+
+
+class WorktreeFactsOut(BaseModel):
+    """Where a session's runs work: its own tree, or the workspace root with the reason why.
+
+    ``worktree`` false means the session works on the workspace root, so the change lists are empty
+    — they describe a tree, and the workspace's own changes are not this session's work.
+    """
+
+    worktree: bool
+    path: str
+    branch: str | None = None
+    base: str | None = None
+    reason: str | None = None
+    dirty: list[WorktreeFileOut] = Field(default_factory=list)
+    commits: list[WorktreeCommitOut] = Field(default_factory=list)
+    ahead: int | None = None
+    note: str | None = None
+
+
 class CreateSessionIn(BaseModel):
     """Creation payload; an unknown field is rejected rather than silently dropped by pydantic."""
 

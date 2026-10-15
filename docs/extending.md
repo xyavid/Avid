@@ -29,6 +29,7 @@
 | 改会话存哪 / 目录布局 | 解析单点 `security/userdirs.sessions_dir()`（环境变量 → 设置文件 → 默认）；布局在 `services/workspace_registry.sessions_root()`（`<会话目录>/<工作区 id>`）；界面在 `web/src/components/settings/SessionsSection.tsx` |
 | 改索引哪些文本 / 怎么检索 | `avid/index/extract.py` 是「哪段文本进 search_text」的唯一规则处；查询语法与作用域在 `avid/index/queries.py`（用户输入当字面量，少于 3 字回落 LIKE）；schema 变更走 `avid/index/db.py` 的 `MIGRATIONS` 追加一条 |
 | 改会话标题 / 自动命名 | 规则在 `services/runs.py`：`session_title(content)`（首条消息取一行、24 字截断、纯图给「（图片）」）与 `_name_from_first_message`（只在**本会话还没有名字**且这是历史里第一条用户消息时写，写者仍是 run 自己的 recorder）；名字是会话值（`avid.session.name`），改名入口在 `services/sessions.rename` |
+| 改会话的工作根（谁占工作区根 / 树建在哪 / 分支名 / 什么时候退回工作区根） | `avid/services/worktrees.py` 是单点：判定、git 调用、占用登记表（`roots/<工作区 id>` 的独占创建当锁）与界面读数都在那里；决定在会话第一次运行时做出并写进会话值 `avid.worktree`（`session/values.session_worktree()`），web 的 `runs._run` 与 cli 的 `_work_root` 读同一个函数，删会话时由 `sessions.delete` 释放 |
 | 改一个 run 怎么装配（权限槽 / 工具表 / 计划与检查点接线 / 回调） | `services/assembly.py` 的 `assemble()` 是单点——它按固定顺序建 `RunState`、起 MCP、组工具表、`RunSpec.resolve`，`RunAssembly.run()` 是全仓唯一构造 `Run` 的地方（`Run(` 只许再出现在 `agent/tools/subagent.py`，A3 门禁钉住）；`tools=` 一旦注入就不起 MCP（测试与 benchmark 的口径），传了 `recorder` 才接计划与压缩游标。session / recorder / repo / indexer 的开关仍归各宿主 |
 | 改补充输入 / 排队语义 | `avid/services/inbox.py`（表与三条不变量）+ `agent/run.py` 的唯一交付点；端点面在 `web/routes/inputs.py`，界面在 `Composer.tsx`（忙时两动作）与 `Timeline.tsx`（待办标记） |
 | 改进程退出收尾 | 单点是 `web/app.py` 里 `create_app` 的 lifespan：它调 `Services.close()`（`services/__init__.py`）——先 `runs.drain()` 取消并等运行落定，再停索引、关会话仓库；顺序是契约，反了就是丢最后一次写 |
@@ -54,5 +55,5 @@
 |---|---|
 | 调毁灭级名单 | `security/action.py` 的 `DENY_PATTERNS` |
 | 改权限阈值 / 询问文案 | `security/engine.py`（默认直接跑；毁灭级问一次；凭据硬拒；full 模式跳过询问） |
-| 改沙箱掩蔽 / 组装 | `security/sandbox.py`（会话目录在掩蔽名单里） |
+| 改沙箱掩蔽 / 组装 | `security/sandbox.py`（会话目录在掩蔽名单里；掩蔽包住运行根时**照挂**、用 `--dir` 把根这一条路径在其下重建再挂回 —— 会话工作树就住在 `~/.avid` 里，跳过掩蔽会连 secrets.json 一起露出来） |
 | 改装配面 | `security/permission.py` 是唯一装配点 |
