@@ -30,19 +30,18 @@ export function SessionsSection() {
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    let alive = true
-    getSessionsDir()
+    const controller = new AbortController()
+    getSessionsDir(controller.signal)
       .then((state) => {
-        if (!alive) return
         setCurrent(state)
         setDraft(state.dir)
       })
       .catch((e: unknown) => {
-        if (alive) setStatus({ kind: 'error', text: e instanceof Error ? e.message : String(e) })
+        if (!controller.signal.aborted) {
+          setStatus({ kind: 'error', text: e instanceof Error ? e.message : String(e) })
+        }
       })
-    return () => {
-      alive = false
-    }
+    return () => controller.abort()
   }, [])
 
   const save = async (next: string) => {

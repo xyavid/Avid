@@ -187,26 +187,23 @@ export function ConversationPage() {
       setWorktree(null)
       return
     }
-    let alive = true
+    const controller = new AbortController()
     setWorktreeLoading(true)
-    getSessionWorktree(selectedId)
+    getSessionWorktree(selectedId, controller.signal)
       .then((facts) => {
-        if (!alive) return
         setWorktree(facts)
         setWorktreeError(null)
       })
       .catch((e: unknown) => {
-        if (!alive) return
+        if (controller.signal.aborted) return
         // A reading that failed is not a tree that is absent: say so instead of showing neither.
         setWorktree(null)
         setWorktreeError(e instanceof ApiError ? e.message : '读不到这个会话的工作树')
       })
       .finally(() => {
-        if (alive) setWorktreeLoading(false)
+        if (!controller.signal.aborted) setWorktreeLoading(false)
       })
-    return () => {
-      alive = false
-    }
+    return () => controller.abort()
   }, [selectedId, worktreeTick])
 
   // Timeline = history + this run's segments; run segments only show in their own session.
@@ -222,27 +219,22 @@ export function ConversationPage() {
   )
 
   useEffect(() => {
-    let alive = true
-    Promise.all([getMeta(), listSessions()])
+    const controller = new AbortController()
+    Promise.all([getMeta(controller.signal), listSessions(controller.signal)])
       .then(([m, s]) => {
-        if (!alive) return
         setMeta(m)
         setSessions(s.sessions)
         if (s.sessions.length > 0) setSelectedId((cur) => cur ?? s.sessions[0]!.id)
       })
       .catch((e: unknown) => {
-        if (alive) setError(e instanceof ApiError ? e.message : String(e))
+        if (!controller.signal.aborted) setError(e instanceof ApiError ? e.message : String(e))
       })
-    listWorkspaces()
-      .then((w) => {
-        if (alive) setWorkspaces(w.workspaces)
-      })
+    listWorkspaces(controller.signal)
+      .then((w) => setWorkspaces(w.workspaces))
       .catch(() => {
-        if (alive) setWorkspaces([])
+        if (!controller.signal.aborted) setWorkspaces([])
       })
-    return () => {
-      alive = false
-    }
+    return () => controller.abort()
   }, [])
 
   useEffect(() => {
@@ -253,68 +245,62 @@ export function ConversationPage() {
       setSearchNotice(null)
       return
     }
-    let alive = true
+    const controller = new AbortController()
     setSearchingContent(true)
     const timer = window.setTimeout(() => {
-      searchEntries(needle, { workspace: activeWorkspaceId, limit: 8 })
+      searchEntries(needle, { workspace: activeWorkspaceId, limit: 8 }, controller.signal)
         .then((result) => {
-          if (!alive) return
           setContentHits(result.hits)
           setSearchNotice(result.behind > 0 ? `索引还落后 ${result.behind} 个会话` : null)
         })
         .catch((e: unknown) => {
-          if (!alive) return
+          if (controller.signal.aborted) return
           setContentHits([])
           setSearchNotice(e instanceof ApiError ? e.message : '内容检索暂时用不了')
         })
         .finally(() => {
-          if (alive) setSearchingContent(false)
+          if (!controller.signal.aborted) setSearchingContent(false)
         })
     }, 250)
     return () => {
-      alive = false
+      controller.abort()
       window.clearTimeout(timer)
     }
   }, [navQuery, activeWorkspaceId])
 
   useEffect(() => {
     if (!selectedId) return
-    let alive = true
+    const controller = new AbortController()
     setHistory(null)
     // Jump from a hit: cursor is exclusive, so seq + 1 starts paging at that entry.
     const anchor = jump?.sessionId === selectedId ? jump.seq + 1 : undefined
-    listEntries(selectedId, { branch, limit: 50, cursorSeq: anchor })
+    listEntries(selectedId, { branch, limit: 50, cursorSeq: anchor }, controller.signal)
       .then(async (page) => {
-        if (!alive) return
         const items = itemsFromEntries([...page.entries].reverse())
         setHistory(items)
         setEarlier({ hasMore: page.has_more, cursor: page.next_cursor })
         setError(null)  // this read succeeded, so clear the previous error screen
         // Pending inputs: the queue lives server-side, so queued items survive a reload.
-        const queued = await listInputs(selectedId).catch(() => [])
-        if (alive && queued.length > 0) {
+        const queued = await listInputs(selectedId, controller.signal).catch(() => [])
+        if (!controller.signal.aborted && queued.length > 0) {
           setHistory((cur) => mergePendingInputs(cur ?? items, queued))
         }
       })
       .catch((e: unknown) => {
-        if (alive) {
-          setHistory([])
-          setError(e instanceof ApiError ? e.message : String(e))
-        }
+        if (controller.signal.aborted) return
+        setHistory([])
+        setError(e instanceof ApiError ? e.message : String(e))
       })
     // Usage and entries are two endpoints; a failed usage snapshot must not break the conversation.
-    listBranches(selectedId)
+    listBranches(selectedId, controller.signal)
       .then((bl) => {
-        if (!alive) return
         const hit = bl.branches.find((b) => b.name === branch) ?? bl.branches.find((b) => b.is_default)
         setUsage(hit?.usage ?? null)
       })
       .catch(() => {
-        if (alive) setUsage(null)
+        if (!controller.signal.aborted) setUsage(null)
       })
-    return () => {
-      alive = false
-    }
+    return () => controller.abort()
      // jump is a dep: a hit click changes it and this pass starts paging from that anchor
   }, [selectedId, branch, jump])
 

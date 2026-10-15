@@ -83,17 +83,15 @@ export function ScratchPanel({ sourceSessionId, workspaceRoot, model, effort }: 
 
   useEffect(() => {
     if (sessionId === null) return
-    let alive = true
-    listEntries(sessionId, { branch: 'main', limit: 50 })
+    const controller = new AbortController()
+    listEntries(sessionId, { branch: 'main', limit: 50 }, controller.signal)
       .then((page) => {
-        if (alive) setHistory(itemsFromEntries([...page.entries].reverse()))
+        if (!controller.signal.aborted) setHistory(itemsFromEntries([...page.entries].reverse()))
       })
       .catch(() => {
-        if (alive) setHistory([])
+        if (!controller.signal.aborted) setHistory([])
       })
-    return () => {
-      alive = false
-    }
+    return () => controller.abort()
   }, [sessionId])
 
   const send = useCallback(() => {

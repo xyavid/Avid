@@ -45,17 +45,13 @@ export function WebSection() {
   const fail = (e: unknown) => setStatus({ kind: 'error', text: e instanceof Error ? e.message : String(e) })
 
   useEffect(() => {
-    let alive = true
-    getWebSettings()
-      .then((state) => {
-        if (alive) apply(state)
-      })
+    const controller = new AbortController()
+    getWebSettings(controller.signal)
+      .then(apply)
       .catch((e: unknown) => {
-        if (alive) fail(e)
+        if (!controller.signal.aborted) fail(e)
       })
-    return () => {
-      alive = false
-    }
+    return () => controller.abort()
   }, [])
 
   const urlLocked = current?.search_url_source === 'env'

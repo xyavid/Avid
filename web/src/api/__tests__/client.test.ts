@@ -19,7 +19,20 @@ function jsonResponse(status: number, body: unknown): Response {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  vi.useRealTimers()
 })
+
+/** A fetch that never answers on its own and rejects the moment its signal is aborted. */
+function hangingFetch() {
+  return vi.fn(
+    (_url: string, init: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () =>
+          reject(new DOMException('aborted', 'AbortError')),
+        )
+      }),
+  )
+}
 
 describe('api/client（网络出口唯一层）', () => {
   it('getMeta 解析 meta DTO', async () => {
@@ -28,7 +41,10 @@ describe('api/client（网络出口唯一层）', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     await expect(getMeta()).resolves.toEqual(meta)
-    expect(fetchMock).toHaveBeenCalledWith('/api/meta', undefined)
+    const [url, init] = fetchMock.mock.calls[0] ?? []
+    expect(url).toBe('/api/meta')
+    // Every request goes out with a deadline, so the signal is always ours, not the caller's.
+    expect((init as RequestInit).signal).toBeInstanceOf(AbortSignal)
   })
 
   it('listSessions 命中 /api/sessions', async () => {
@@ -140,5 +156,65 @@ describe('api/client（网络出口唯一层）', () => {
   it('attachmentUrl 也走后端地址：它会被放进 <img src>，相对路径会问到页面自己的源', () => {
     // Unset base: same shape as before, so a reverse-proxy deployment keeps working unchanged.
     expect(attachmentUrl('s 1', 'e/2', 0)).toBe('/api/sessions/s%201/entries/e%2F2/attachments/0')
+  })
+})
+
+describe('api/client（截止时间与取消）', () => {
+  it('卡住的普通读在 15 秒被判超时，且不冒充连接失败', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('fetch', hangingFetch())
+
+    const pending = getMeta()
+    const outcome = expect(pending).rejects.toMatchObject({ code: 'timeout' })
+    await vi.advanceTimersByTimeAsync(15_000)
+    await outcome
+  })
+
+  it('调用方取消抛 aborted：视图先走了，不是失败', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('fetch', hangingFetch())
+
+    const controller = new AbortController()
+    const pending = getMeta(controller.signal)
+    const outcome = expect(pending).rejects.toMatchObject({ code: 'aborted' })
+    controller.abort()
+    await outcome
+  })
+
+  it('取消与截止时间谁先到谁说话', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('fetch', hangingFetch())
+
+    // Deadline first: the request already failed for that reason, and a later abort cannot relabel
+    // it. The component that aborted checks `signal.aborted` before touching state either way.
+    const late = new AbortController()
+    const firstOutcome = expect(getMeta(late.signal)).rejects.toMatchObject({ code: 'timeout' })
+    await vi.advanceTimersByTimeAsync(15_000)
+    late.abort()
+    await firstOutcome
+
+    // Caller first: nothing had failed yet, so the cancellation is what happened.
+    const early = new AbortController()
+    const secondOutcome = expect(getMeta(early.signal)).rejects.toMatchObject({ code: 'aborted' })
+    early.abort()
+    await vi.advanceTimersByTimeAsync(15_000)
+    await secondOutcome
+  })
+
+  it('等外部的那类调用不吃本地截止时间：15 秒后仍活着，300 秒才收', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('fetch', hangingFetch())
+
+    // pickFolder waits on a person in a native dialog; the local deadline would cut it short.
+    const pending = pickFolder()
+    let settled = false
+    void pending.catch(() => {
+      settled = true
+    })
+    const outcome = expect(pending).rejects.toMatchObject({ code: 'timeout' })
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(settled).toBe(false)
+    await vi.advanceTimersByTimeAsync(285_000)
+    await outcome
   })
 })

@@ -51,14 +51,54 @@ export class ApiError extends Error {
   }
 }
 
-/** Fetch through the configured base; a path always starts with `/api/`. */
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+/**
+ * A local read answers in milliseconds, so this is a stuck-socket deadline rather than a latency
+ * budget: something that does not come back in this long is not coming back.
+ */
+const DEFAULT_TIMEOUT_MS = 15_000
+
+/**
+ * For calls that wait on the far side — a model endpoint, a search service, or a human in the
+ * folder picker. The far side owns the deadline; this only catches a process that never returns.
+ */
+const EXTERNAL_TIMEOUT_MS = 300_000
+
+/**
+ * Fetch through the configured base; a path always starts with `/api/`. The deadline and the
+ * caller's own cancellation are combined into one controller, because a fetch can only take one
+ * signal and the caller has to be able to tell the three outcomes apart.
+ */
+async function request<T>(path: string, init?: RequestInit, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<T> {
+  const controller = new AbortController()
+  const caller = init?.signal ?? null
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeoutMs)
+  const forwardAbort = () => controller.abort()
+  caller?.addEventListener('abort', forwardAbort)
+
   let res: Response
   try {
-    res = await fetch(`${API_BASE}${path}`, init)
+    res = await fetch(`${API_BASE}${path}`, { ...init, signal: controller.signal })
   } catch {
+    // Cancelled by the caller, not failed: the view that asked has already gone away.
+    if (caller?.aborted) throw new ApiError('aborted', '请求已取消', 0, null)
+    if (timedOut) {
+      throw new ApiError(
+        'timeout',
+        `请求超时（${Math.round(timeoutMs / 1000)} 秒）：后端可能卡住了或已停止响应。`,
+        0,
+        null,
+      )
+    }
     throw new ApiError('network', '连不上本地服务：请确认 `avid web` 已启动、端口与访问地址一致。', 0, null)
+  } finally {
+    clearTimeout(timer)
+    caller?.removeEventListener('abort', forwardAbort)
   }
+
   if (res.ok) {
     return (res.status === 204 ? undefined : await res.json()) as T
   }
@@ -90,12 +130,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   throw new ApiError('network', '连不上本地服务：请确认 `avid web` 已启动、端口与访问地址一致。', 0, null)
 }
 
-export function getMeta(): Promise<Meta> {
-  return request('/api/meta')
+/** Reads take a signal and writes do not: a cancelled read discards an unread answer, while a cancelled write may have already landed. */
+function cancelable(signal?: AbortSignal): RequestInit | undefined {
+  return signal ? { signal } : undefined
 }
 
-export function listSessions(): Promise<{ sessions: SessionSummary[] }> {
-  return request('/api/sessions')
+export function getMeta(signal?: AbortSignal): Promise<Meta> {
+  return request('/api/meta', cancelable(signal))
+}
+
+export function listSessions(signal?: AbortSignal): Promise<{ sessions: SessionSummary[] }> {
+  return request('/api/sessions', cancelable(signal))
 }
 
 export type CreateSessionInput = { workspace: string; name?: string | null }
@@ -144,24 +189,28 @@ export function deleteSession(sessionId: string): Promise<SessionDeleted> {
 
 export type ListEntriesOptions = { branch?: string; limit?: number; cursorSeq?: number }
 
-export function listEntries(sessionId: string, opts: ListEntriesOptions = {}): Promise<EntryPage> {
+export function listEntries(
+  sessionId: string,
+  opts: ListEntriesOptions = {},
+  signal?: AbortSignal,
+): Promise<EntryPage> {
   const params = new URLSearchParams({ branch: opts.branch ?? 'main', order: 'desc' })
   if (opts.limit !== undefined) params.set('limit', String(opts.limit))
   if (opts.cursorSeq !== undefined) params.set('cursor_seq', String(opts.cursorSeq))
-  return request(`/api/sessions/${encodeURIComponent(sessionId)}/entries?${params.toString()}`)
+  return request(`/api/sessions/${encodeURIComponent(sessionId)}/entries?${params.toString()}`, cancelable(signal))
 }
 
 /** Branch list; each branch carries its persisted usage snapshot (the context card's reading). */
-export function listBranches(sessionId: string): Promise<BranchList> {
-  return request(`/api/sessions/${encodeURIComponent(sessionId)}/branches`)
+export function listBranches(sessionId: string, signal?: AbortSignal): Promise<BranchList> {
+  return request(`/api/sessions/${encodeURIComponent(sessionId)}/branches`, cancelable(signal))
 }
 
 /**
  * Where this session's runs work and what its tree holds. One read for the session line and the
  * worktree panel, so the two can never describe different roots.
  */
-export function getSessionWorktree(sessionId: string): Promise<WorktreeFacts> {
-  return request(`/api/sessions/${encodeURIComponent(sessionId)}/worktree`)
+export function getSessionWorktree(sessionId: string, signal?: AbortSignal): Promise<WorktreeFacts> {
+  return request(`/api/sessions/${encodeURIComponent(sessionId)}/worktree`, cancelable(signal))
 }
 
 /**
@@ -179,8 +228,8 @@ export function createBranch(
   })
 }
 
-export function listWorkspaces(): Promise<{ workspaces: WorkspaceSummary[] }> {
-  return request('/api/workspaces')
+export function listWorkspaces(signal?: AbortSignal): Promise<{ workspaces: WorkspaceSummary[] }> {
+  return request('/api/workspaces', cancelable(signal))
 }
 
 /** List one directory level (read-only); the server refuses out-of-root and credential paths. */
@@ -195,9 +244,12 @@ export function readFile(workspaceId: string, path: string): Promise<FileContent
   return request(`/api/workspaces/${encodeURIComponent(workspaceId)}/file?${params.toString()}`)
 }
 
-/** Host folder picker (server-side AVID_PICKER_CMD); null = user cancelled, not an error. */
+/**
+ * Host folder picker (server-side AVID_PICKER_CMD); null = user cancelled, not an error.
+ * It waits on a person, so it takes the far-side deadline rather than the local one.
+ */
 export function pickFolder(): Promise<{ path: string | null }> {
-  return request('/api/workspaces/pick', { method: 'POST' })
+  return request('/api/workspaces/pick', { method: 'POST' }, EXTERNAL_TIMEOUT_MS)
 }
 
 export type CreateWorkspaceInput = { path: string; name?: string }
@@ -284,9 +336,10 @@ export function submitInput(sessionId: string, input: InputRequest): Promise<Inp
 }
 
 /** Inputs of this session not yet taken into model context. */
-export function listInputs(sessionId: string): Promise<PendingInput[]> {
+export function listInputs(sessionId: string, signal?: AbortSignal): Promise<PendingInput[]> {
   return request<{ inputs: PendingInput[] }>(
     `/api/sessions/${encodeURIComponent(sessionId)}/inputs`,
+    cancelable(signal),
   ).then((body) => body.inputs)
 }
 
@@ -298,8 +351,8 @@ export function dropInput(sessionId: string, inputId: string): Promise<void> {
   )
 }
 
-export function getRun(runId: string): Promise<Run> {
-  return request(`/api/runs/${encodeURIComponent(runId)}`)
+export function getRun(runId: string, signal?: AbortSignal): Promise<Run> {
+  return request(`/api/runs/${encodeURIComponent(runId)}`, cancelable(signal))
 }
 
 /** Request cancel (202); cooperative — the terminal state arrives via run_cancelled or getRun. */
@@ -328,8 +381,8 @@ export function decideApproval(runId: string, approvalId: string, decision: 'all
 /** BYOK model settings. Keys are write-only: PUT carries `api_key`, GET only reports `key_set`. */
 
 /** Read the whole BYOK config (providers + chat binding). */
-export function getByokSettings(): Promise<ByokSettings> {
-  return request('/api/settings/byok')
+export function getByokSettings(signal?: AbortSignal): Promise<ByokSettings> {
+  return request('/api/settings/byok', cancelable(signal))
 }
 
 /** Save the full config (providers + chat binding); a failed server-side validation returns 400. */
@@ -348,17 +401,23 @@ export function saveByokSettings(input: ByokSettingsInput): Promise<ByokSettings
 export function testByokModel(
   provider: ByokSettingsInput['providers'][number],
   modelId: string,
+  signal?: AbortSignal,
 ): Promise<ByokTestResult> {
-  return request('/api/settings/byok/test', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ provider, model_id: modelId }),
-  })
+  return request(
+    '/api/settings/byok/test',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider, model_id: modelId }),
+      ...(signal ? { signal } : {}),
+    },
+    EXTERNAL_TIMEOUT_MS,
+  )
 }
 
 /** The config file itself: path + raw JSON, for the panel's 配置文件 block. */
-export function getByokFile(): Promise<ByokFileInfo> {
-  return request('/api/settings/byok/file')
+export function getByokFile(signal?: AbortSignal): Promise<ByokFileInfo> {
+  return request('/api/settings/byok/file', cancelable(signal))
 }
 
 /**
@@ -368,12 +427,18 @@ export function getByokFile(): Promise<ByokFileInfo> {
  */
 export function fetchByokModels(
   provider: ByokSettingsInput['providers'][number],
+  signal?: AbortSignal,
 ): Promise<ByokModelsResult> {
-  return request('/api/settings/byok/models', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ provider }),
-  })
+  return request(
+    '/api/settings/byok/models',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider }),
+      ...(signal ? { signal } : {}),
+    },
+    EXTERNAL_TIMEOUT_MS,
+  )
 }
 
 /** Delete the config and key files; runs report "no model configured" until saved again. */
@@ -387,8 +452,8 @@ export function resetByokSettings(): Promise<void> {
  */
 
 /** Read the session dir and its source (the UI is read-only when the source is an env var). */
-export function getSessionsDir(): Promise<SessionsDir> {
-  return request('/api/settings/sessions')
+export function getSessionsDir(signal?: AbortSignal): Promise<SessionsDir> {
+  return request('/api/settings/sessions', cancelable(signal))
 }
 
 /** Save the session dir; empty restores the default; a dir the server cannot create is 400. */
@@ -404,8 +469,8 @@ export function setSessionsDir(dir: string): Promise<SessionsDir> {
  * Web (search + fetch) settings: the same resolution the tools use, so what this section shows is
  * what a run would do. The key goes in write-only and never rides back in a response.
  */
-export function getWebSettings(): Promise<WebSettings> {
-  return request('/api/settings/web')
+export function getWebSettings(signal?: AbortSignal): Promise<WebSettings> {
+  return request('/api/settings/web', cancelable(signal))
 }
 
 /** Save the endpoint, the timeout and (optionally) the key; a rejected field comes back as 400. */
@@ -418,12 +483,17 @@ export function saveWebSettings(input: WebSettingsInput): Promise<WebSettings> {
 }
 
 /** Run one real search through the tool's own core, against the payload or the stored values. */
-export function testWebSearch(input: WebTestInput): Promise<WebTestResult> {
-  return request('/api/settings/web/test', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(input),
-  })
+export function testWebSearch(input: WebTestInput, signal?: AbortSignal): Promise<WebTestResult> {
+  return request(
+    '/api/settings/web/test',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+      ...(signal ? { signal } : {}),
+    },
+    EXTERNAL_TIMEOUT_MS,
+  )
 }
 
 /**
@@ -433,10 +503,11 @@ export function testWebSearch(input: WebTestInput): Promise<WebTestResult> {
 export function searchEntries(
   query: string,
   opts: { workspace?: string | null; session?: string | null; limit?: number } = {},
+  signal?: AbortSignal,
 ): Promise<SearchResult> {
   const params = new URLSearchParams({ q: query })
   if (opts.workspace) params.set('workspace', opts.workspace)
   if (opts.session) params.set('session', opts.session)
   if (opts.limit !== undefined) params.set('limit', String(opts.limit))
-  return request(`/api/search?${params.toString()}`)
+  return request(`/api/search?${params.toString()}`, cancelable(signal))
 }

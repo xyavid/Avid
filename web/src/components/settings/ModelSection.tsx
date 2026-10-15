@@ -129,13 +129,14 @@ export function ModelSection() {
   const [fileError, setFileError] = useState(false)
   const [pathCopied, setPathCopied] = useState(false)
 
-  const loadFile = () =>
-    getByokFile()
+  const loadFile = (signal?: AbortSignal) =>
+    getByokFile(signal)
       .then((next) => {
         setFile(next)
         setFileError(false)
       })
       .catch(() => {
+        if (signal?.aborted) return
         setFile(null)
         setFileError(true)
       })
@@ -159,21 +160,20 @@ export function ModelSection() {
   }
 
   useEffect(() => {
-    let alive = true
-    void loadFile()
-    getByokSettings()
+    const controller = new AbortController()
+    void loadFile(controller.signal)
+    getByokSettings(controller.signal)
       .then((s) => {
-        if (!alive) return
         setSettings(s)
         setProviders(s.providers.map(entryToInput))
         setChatBinding(s.bindings.chat ?? '')
       })
       .catch((e: unknown) => {
-        if (alive) setStatus({ kind: 'error', text: e instanceof Error ? e.message : String(e) })
+        if (!controller.signal.aborted) {
+          setStatus({ kind: 'error', text: e instanceof Error ? e.message : String(e) })
+        }
       })
-    return () => {
-      alive = false
-    }
+    return () => controller.abort()
   }, [])
 
   const commit = async (nextProviders: ProviderInput[], nextBinding: string) => {
