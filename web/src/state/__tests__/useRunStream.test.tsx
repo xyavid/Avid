@@ -483,19 +483,89 @@ describe('useRunStream（发送 → 订阅 → 段落归并 → 终态收尾）'
     expect(cancelRun).toHaveBeenCalledWith('r1')
   })
 
-  it('流断开：轮询 getRun 到终态后回拉（终端兜底）', async () => {
+  it('流断开：先从游标续订，不立刻放弃', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const onSettled = vi.fn()
+    const { result } = renderHook(() => useRunStream('s1', onSettled))
+    await act(async () => {
+      await result.current.send('你好', false)
+    })
+    const first = subscribe.mock.calls.at(-1)?.[2] as {
+      onEvent: (e: Frame) => void
+      onError: (e: Error) => void
+    }
+    act(() => {
+      // Only durable frames carry a seq; a delta never replays, so it must not move the cursor.
+      first.onEvent({ type: 'assistant_delta', ts: 1, seq: null, data: { text: '半句' } })
+      first.onEvent({ type: 'tool_call_started', ts: 2, seq: 7, data: { tool: 'bash' } })
+    })
+
+    await act(async () => {
+      first.onError(new Error('断线'))
+      await vi.advanceTimersByTimeAsync(500)
+    })
+
+    expect(subscribe).toHaveBeenCalledTimes(2)
+    expect(subscribe.mock.calls.at(-1)?.[1]).toBe(7)
+    expect(onSettled).not.toHaveBeenCalled()
+    expect(result.current.phase).toBe('running')
+    expect(result.current.error).toBeNull()
+  })
+
+  it('续订有界：三次用尽才退回轮询，轮询到终态即回拉', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     getRun.mockResolvedValue({ status: 'finished' })
     const onSettled = vi.fn()
     const { result } = renderHook(() => useRunStream('s1', onSettled))
     await act(async () => {
       await result.current.send('你好', false)
     })
-    const handlers = subscribe.mock.calls.at(-1)?.[2] as { onError: (e: Error) => void }
 
+    // Each attempt opens and drops again, spending the budget at 500 / 1000 / 2000 ms.
+    for (const delay of [500, 1000, 2000]) {
+      const handlers = subscribe.mock.calls.at(-1)?.[2] as { onError: (e: Error) => void }
+      await act(async () => {
+        handlers.onError(new Error('断线'))
+        await vi.advanceTimersByTimeAsync(delay)
+      })
+    }
+    expect(subscribe).toHaveBeenCalledTimes(4)
+    expect(onSettled).not.toHaveBeenCalled()
+
+    const spent = subscribe.mock.calls.at(-1)?.[2] as { onError: (e: Error) => void }
     await act(async () => {
-      handlers.onError(new Error('断线'))
+      spent.onError(new Error('还是断'))
+      await Promise.resolve()
     })
-    await waitFor(() => expect(onSettled).toHaveBeenCalled())
+    expect(subscribe).toHaveBeenCalledTimes(4) // no fifth attempt
+    expect(onSettled).toHaveBeenCalled()
     expect(result.current.phase).toBe('settling')
+  })
+
+  it('三个服务端终态都收尾到 settling，只有 run_failed 另留错误文字', async () => {
+    // The two vocabularies meet here: RunStatus decides when a run is over, RunPhase describes
+    // where this page is in following it. Every terminal status lands on the same settling→idle
+    // path; only a failure additionally leaves something for the page to show.
+    const cases: Array<[string, string | null]> = [
+      ['run_finished', null],
+      ['run_cancelled', null],
+      ['run_failed', '模型那边出错了'],
+    ]
+    for (const [type, message] of cases) {
+      const onSettled = vi.fn()
+      const { result, unmount } = renderHook(() => useRunStream('s1', onSettled))
+      await act(async () => {
+        await result.current.send('你好', false)
+      })
+
+      act(() => {
+        emitter().send(type, message === null ? {} : { message })
+      })
+
+      expect(result.current.phase).toBe('settling')
+      expect(onSettled).toHaveBeenCalled()
+      expect(result.current.error).toBe(message)
+      unmount()
+    }
   })
 })

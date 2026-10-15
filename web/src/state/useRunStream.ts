@@ -1,9 +1,9 @@
 /**
  * Lifecycle of one run: send → subscribe → merge items → settle. Phases: idle → starting (POST run)
  * → running (SSE subscribed) → settling (terminal event received; the page refetches durable and
- * calls settle) → idle; `error` = send or subscribe failure. Holds only this run's items — settle
- * keeps them and the page merges them into history via `timeline.mergeItems`; a broken stream polls
- * getRun to a terminal state instead of reconnecting forever.
+ * calls settle) → idle; `error` = send or subscribe failure. Holds only this run's items and the
+ * page merges them into history via `timeline.mergeItems`; a broken stream resumes from its cursor
+ * a bounded number of times before falling back to polling getRun.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -19,6 +19,7 @@ import {
   submitInput,
 } from '../api/client'
 import { subscribeRun } from '../api/events'
+import type { RunEventMessage } from '../api/events'
 import type { UsageReport } from '../api/types'
 import type { RunPermission } from '../events/types'
 import type { TimelineEvent, TimelineItem } from './timeline'
@@ -29,6 +30,10 @@ export type RunPhase = 'idle' | 'starting' | 'running' | 'settling' | 'error'
 
 /** Frame-buffer key of the parent run; a sub-run's key is `{task}\u0000{index}`. */
 const PARENT_KEY = ''
+
+/** Reattach attempts before falling back to polling: the cursor makes each one cheap, not free. */
+const MAX_REATTACH = 3
+const REATTACH_BASE_MS = 500
 
 /** One pending streaming delta: text, first-piece arrival time, origin (null = parent run). */
 type PendingDelta = { text: string; ts: number; tag: { task: string; index: number } | null }
@@ -91,6 +96,17 @@ export function useRunStream(
   attachedRef.current = attachedSession
   const subRef = useRef<{ abort: () => void } | null>(null)
   const settlingRef = useRef(false)
+  // Where the stream last got to (durable frames only) and how many reattaches this run has spent.
+  const cursorRef = useRef(0)
+  const reattachRef = useRef(0)
+  const reattachTimerRef = useRef<number | null>(null)
+  /** Drop a pending reattach: nothing about this run should bring the stream back. */
+  const clearReattach = useCallback(() => {
+    if (reattachTimerRef.current !== null) {
+      window.clearTimeout(reattachTimerRef.current)
+      reattachTimerRef.current = null
+    }
+  }, [])
   // Deltas buffer in a ref and flush at most once per animation frame, collapsing markdown
   // re-parsing with them. Background tabs get a 1s fallback timer (no frames there), so delta text
   // lands within a second: never lost, never unbounded. Buffering is per origin — the parent and
@@ -157,7 +173,13 @@ export function useRunStream(
   const discardParentDeltas = useCallback(() => {
     pendingRef.current.delete(PARENT_KEY)
   }, [])
-  useEffect(() => () => discardPendingDeltas(), [discardPendingDeltas])
+  useEffect(
+    () => () => {
+      discardPendingDeltas()
+      clearReattach()
+    },
+    [clearReattach, discardPendingDeltas],
+  )
 
   /**
    * Settle: drop subscription and run state but keep `items` (the timeline must not jump).
@@ -167,13 +189,21 @@ export function useRunStream(
   const settle = useCallback(() => {
     subRef.current?.abort()
     subRef.current = null
+    clearReattach()
     runIdRef.current = null
     settlingRef.current = false
     discardPendingDeltas()
     setRunId(null)
     setApprovals([])
     setPhase('idle')
-  }, [discardPendingDeltas])
+  }, [clearReattach, discardPendingDeltas])
+
+  /** A run being followed for the first time starts its own cursor and reattach budget. */
+  const beginStream = useCallback(() => {
+    clearReattach()
+    cursorRef.current = 0
+    reattachRef.current = 0
+  }, [clearReattach])
 
   /** Usage snapshot carried by an event (shape guaranteed by the kernel); a subagent-tagged one
    *  belongs to a sub-run and must not replace the parent's reading. */
@@ -281,30 +311,35 @@ export function useRunStream(
     [onSettled],
   )
 
-  const onStreamError = useCallback(
-    (err: Error) => {
-      const id = runIdRef.current
-      if (!id || settlingRef.current) return
-      setError(err.message)
-      void pollUntilTerminal(id)
-    },
-    [pollUntilTerminal],
-  )
-
   const subscribe = useCallback(
-    (id: string) => {
+    (id: string, after = 0) => {
       // One run is followed at a time, and the stream is closed by an abort that lands a moment
       // later: frames already parsed still arrive, and a slow open can resolve after the switch.
       // Both are checked against the run being followed, so an abandoned run cannot move this
       // page's state or leave a second subscription behind.
-      void subscribeRun(id, 0, {
-        onEvent: (event) => {
-          if (runIdRef.current === id) handleEvent(event)
-        },
-        onError: (err) => {
-          if (runIdRef.current === id) onStreamError(err)
-        },
-      }).then((sub) => {
+      const onEvent = (event: RunEventMessage) => {
+        // Only durable frames carry a seq, and only those replay: the cursor is where to resume.
+        if (event.seq !== null) cursorRef.current = event.seq
+        if (runIdRef.current === id) handleEvent(event)
+      }
+      const onError = (err: Error) => {
+        if (runIdRef.current !== id || settlingRef.current) return
+        // A dropped stream is an interruption, not an ending: the run continues server-side and
+        // the cursor makes resuming cheap. Bounded, because a backend that is really gone should
+        // not be hammered by a page left open — the poll below is the honest fallback.
+        if (reattachRef.current < MAX_REATTACH) {
+          const delay = REATTACH_BASE_MS * 2 ** reattachRef.current
+          reattachRef.current += 1
+          reattachTimerRef.current = window.setTimeout(() => {
+            reattachTimerRef.current = null
+            if (runIdRef.current === id && !settlingRef.current) subscribe(id, cursorRef.current)
+          }, delay)
+          return
+        }
+        setError(err.message)
+        void pollUntilTerminal(id)
+      }
+      void subscribeRun(id, after, { onEvent, onError }).then((sub) => {
         if (runIdRef.current !== id) {
           sub.abort()
           return
@@ -312,7 +347,7 @@ export function useRunStream(
         subRef.current = sub
       })
     },
-    [handleEvent, onStreamError],
+    [handleEvent, pollUntilTerminal],
   )
 
   const send = useCallback(
@@ -329,6 +364,7 @@ export function useRunStream(
       // terminal event, and that can land after this send (a fast second question).
       subRef.current?.abort()
       subRef.current = null
+      beginStream()
       setPhase('starting')
       setError(null)
       discardPendingDeltas()
@@ -377,6 +413,7 @@ export function useRunStream(
   const attach = useCallback(
     (id: string) => {
       settle()
+      beginStream()
       setError(null) // a new stream: the previous one's failure no longer applies
       setItems([])
       setAttachedSession(sessionId)
@@ -385,7 +422,7 @@ export function useRunStream(
       setPhase('running')
       subscribe(id)
     },
-    [sessionId, settle, subscribe],
+    [beginStream, sessionId, settle, subscribe],
   )
 
   // The page follows one run at a time: the selected session's. Leaving a session stops reading
