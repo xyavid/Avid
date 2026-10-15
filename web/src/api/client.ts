@@ -5,6 +5,7 @@
  * and a fetch throw means the service is down.
  */
 
+import { API_BASE, backendUrl } from './base'
 import type {
   Branch,
   BranchList,
@@ -50,11 +51,11 @@ export class ApiError extends Error {
   }
 }
 
-/** Same-origin fetch; in dev, vite proxies /api to port 8765. */
+/** Fetch through the configured base; a path always starts with `/api/`. */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response
   try {
-    res = await fetch(path, init)
+    res = await fetch(`${API_BASE}${path}`, init)
   } catch {
     throw new ApiError('network', '连不上本地服务：请确认 `avid web` 已启动、端口与访问地址一致。', 0, null)
   }
@@ -79,7 +80,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   try {
-    if ((await fetch('/api/health')).ok) {
+    if ((await fetch(`${API_BASE}/api/health`)).ok) {
       // Backend alive but answering outside the envelope: it broke, not a connection failure.
       throw new ApiError('bad_gateway', `后端返回了无法解析的响应（HTTP ${res.status}），详情见服务端日志。`, res.status, null)
     }
@@ -253,9 +254,15 @@ export type StartRunInput = {
   from_input?: string
 }
 
-/** Byte URL of a stored image: the read endpoint addresses it by (session, entry, block index). */
+/**
+ * Byte URL of a stored image: the read endpoint addresses it by (session, entry, block index).
+ * Goes through the base because it ends up in an `<img src>`: a relative path would ask the page's
+ * host for it, which is no longer the backend.
+ */
 export function attachmentUrl(sessionId: string, entryId: string, index: number): string {
-  return `/api/sessions/${encodeURIComponent(sessionId)}/entries/${encodeURIComponent(entryId)}/attachments/${index}`
+  return backendUrl(
+    `/api/sessions/${encodeURIComponent(sessionId)}/entries/${encodeURIComponent(entryId)}/attachments/${index}`,
+  )
 }
 
 /** Start a run (201 → RunCreated). */

@@ -5,6 +5,7 @@
  * subscribing with an `after` cursor resumes durable events, and `run_finished` covers live text.
  */
 
+import { backendUrl } from './base'
 import type { UsageReport } from './types'
 
 export type RunEventFrame = {
@@ -93,7 +94,8 @@ export async function subscribeRun(
 
   void (async () => {
     try {
-      const res = await fetch(`/api/runs/${encodeURIComponent(runId)}/events?after=${cursor}&deltas=1`, {
+      const path = `/api/runs/${encodeURIComponent(runId)}/events?after=${cursor}&deltas=1`
+      const res = await fetch(backendUrl(path), {
         signal: controller.signal,
         headers: { Accept: 'text/event-stream' },
       })

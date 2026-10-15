@@ -16,6 +16,13 @@ uv run ruff check avid tests && uv run mypy        # 静态检查（与 CI 同�
 pnpm -C web run verify               # 前端：typecheck + vitest + build + 体积门禁
 ```
 
+改界面时两个进程并排跑——`avid web` 只提供 API、不持有页面，两者因此处在不同的源上，与部署形态一致：
+
+```bash
+uv run avid web --port 8765          # API
+pnpm -C web dev                      # 界面在 :5173，经 web/.env.development 指向 :8765
+```
+
 提 PR 前这几条要全绿。
 
 ## 2. 提交规范

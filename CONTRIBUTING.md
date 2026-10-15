@@ -18,6 +18,14 @@ uv run ruff check avid tests && uv run mypy        # static checks, the same set
 pnpm -C web run verify               # frontend: typecheck + vitest + build + size budget
 ```
 
+To work on the UI, run the two processes side by side — `avid web` is an API server and holds no
+page, so they stay on different origins exactly as a deployment does:
+
+```bash
+uv run avid web --port 8765          # the API
+pnpm -C web dev                      # the UI on :5173, pointed at :8765 by web/.env.development
+```
+
 All of these must be green before you open a pull request.
 
 ## 2. Commit conventions

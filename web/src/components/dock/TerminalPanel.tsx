@@ -9,6 +9,8 @@
 
 import { useEffect, useRef, useState } from 'react'
 
+import { socketUrl } from '../../api/base'
+
 type WsFrame = { type: 'out' | 'exit' | 'error'; data?: string; code?: number; message?: string }
 
 type TerminalStatus = 'idle' | 'connecting' | 'connected' | 'closed' | 'error'
@@ -57,9 +59,10 @@ export default function TerminalPanel({ root }: { root: string | null }) {
         term.open(holderEl)
         fit.fit()
 
-        const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
         const ws = new WebSocket(
-          `${proto}://${window.location.host}/api/ws/terminal?root=${encodeURIComponent(root)}&cols=${term.cols}&rows=${term.rows}`,
+          socketUrl(
+            `/api/ws/terminal?root=${encodeURIComponent(root)}&cols=${term.cols}&rows=${term.rows}`,
+          ),
         )
         term.onData((data) => {
           if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'in', data }))

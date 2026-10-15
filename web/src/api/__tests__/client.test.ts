@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   ApiError,
+  attachmentUrl,
   createSession,
   createWorkspace,
   deleteSession,
@@ -134,5 +135,10 @@ describe('api/client（网络出口唯一层）', () => {
     await expect(deleteSession('s 1')).resolves.toBeUndefined()
     expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/sessions/s%201')
     expect((fetchMock.mock.calls[0]?.[1] as RequestInit).method).toBe('DELETE')
+  })
+
+  it('attachmentUrl 也走后端地址：它会被放进 <img src>，相对路径会问到页面自己的源', () => {
+    // Unset base: same shape as before, so a reverse-proxy deployment keeps working unchanged.
+    expect(attachmentUrl('s 1', 'e/2', 0)).toBe('/api/sessions/s%201/entries/e%2F2/attachments/0')
   })
 })
