@@ -233,7 +233,8 @@ class SessionService:
         self.runs.notify_index(session_id)
         return self.get(session_id)
 
-    def delete(self, session_id: str) -> None:
+    def delete(self, session_id: str) -> str | None:
+        """Destroy the session; returns a note when something of it was kept back on disk."""
         # Deletion takes the session handle lock first, because destroying it needs the file closed.
         with self.runs.session_lock(session_id):
             if self.runs.active_run_id(session_id) is not None:
@@ -255,6 +256,8 @@ class SessionService:
             self.workspaces.forget_session(session_id)
         # The index row must go too: the indexer itself detects the vanished file by discovery.
         self.runs.notify_index(session_id)
+        # The caller reports it: a tree left behind with uncommitted changes is the user's to see.
+        return note
 
     def worktree(self, session_id: str) -> dict[str, Any]:
         """Where this session's runs work and what its tree holds: one read for the strip and the

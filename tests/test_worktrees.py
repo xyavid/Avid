@@ -428,7 +428,8 @@ def test_deleting_a_session_gives_its_tree_and_the_root_back(tmp_path):
         tree = Path(services.sessions.worktree(second)["path"])
         assert tree.is_dir()
 
-        services.sessions.delete(second)
+        note = services.sessions.delete(second)
+        assert note is None
         services.sessions.delete(first)
 
         assert not tree.exists()

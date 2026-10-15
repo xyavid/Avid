@@ -13,6 +13,7 @@ from ..schemas import (
     RenameSessionIn,
     ScratchIn,
     ScratchOut,
+    SessionDeletedOut,
     SessionDetail,
     SessionListOut,
     WorktreeFactsOut,
@@ -54,10 +55,10 @@ def rename_session(request: Request, session_id: str, body: RenameSessionIn) -> 
     return current_services(request).sessions.rename(session_id, body.name)
 
 
-@router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_session(request: Request, session_id: str) -> Response:
-    current_services(request).sessions.delete(session_id)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/sessions/{session_id}", response_model=SessionDeletedOut)
+def delete_session(request: Request, session_id: str) -> dict:
+    """Destroy the session; ``note`` says what of it stayed on disk (a tree with uncommitted work)."""
+    return {"note": current_services(request).sessions.delete(session_id)}
 
 
 @router.get("/sessions/{session_id}/branches", response_model=BranchListOut)

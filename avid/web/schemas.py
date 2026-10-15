@@ -379,6 +379,13 @@ class SessionListOut(BaseModel):
     sessions: list[SessionSummary]
 
 
+class SessionDeletedOut(BaseModel):
+    """What the deletion left behind, if anything: a session's tree with uncommitted work stays on
+    disk, and the caller has to be able to say where it is."""
+
+    note: str | None = None
+
+
 class WorktreeFileOut(BaseModel):
     """One changed path in a session's tree; ``status`` is git's two-column porcelain code."""
 

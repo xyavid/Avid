@@ -111,6 +111,14 @@ export interface SessionDetail extends SessionSummary {
   branch: string
 }
 
+/**
+ * What deleting a session left behind: its tree stays on disk when it holds uncommitted work, and
+ * `note` says where that tree is.
+ */
+export interface SessionDeleted {
+  note: string | null
+}
+
 /** One changed path in a session's tree; `status` is git's two-column porcelain code. */
 export interface WorktreeFile {
   path: string

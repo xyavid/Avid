@@ -501,7 +501,7 @@ export function ConversationPage() {
     setSessionsBusy(true)
     setSessionsHint(null)
     try {
-      await deleteSession(id)
+      const deleted = await deleteSession(id)
       // Drop its hits now: the index clears them on the next notify/scan and stale clicks 404.
       setContentHits((current) => current.filter((hit) => hit.session_id !== id))
       const list = await refreshSessions()
@@ -509,7 +509,8 @@ export function ConversationPage() {
         const inProject = list.filter((s) => s.workspace?.id === activeWorkspaceId)
         setSelectedId(inProject[0]?.id ?? null)
       }
-      setSessionsHint('会话已删除（磁盘上的记录文件一并销毁）')
+      // A tree with uncommitted work stays behind: say so instead of claiming a clean sweep.
+      setSessionsHint(deleted.note ?? '会话已删除（磁盘上的记录文件一并销毁）')
     } catch (e) {
       setSessionsHint(sessionErrorText(e))
     } finally {

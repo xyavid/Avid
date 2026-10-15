@@ -89,7 +89,7 @@ def test_scratch_session_can_be_deleted(client):
     source = make_session(client)
     scratch = client.post(f"/api/sessions/{source}/scratch", json={}).json()
 
-    assert client.delete(f"/api/sessions/{scratch['id']}").status_code == 204
+    assert client.delete(f"/api/sessions/{scratch['id']}").json()["note"] is None
     ids = [item["id"] for item in client.get("/api/sessions").json()["sessions"]]
     assert scratch["id"] not in ids and source in ids
 

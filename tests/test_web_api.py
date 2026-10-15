@@ -432,7 +432,8 @@ def test_session_lifecycle(bundle):
     detail = client.get(f"/api/sessions/{session_id}").json()
     assert detail["message_count"] == 0 and detail["active_run_id"] is None
 
-    assert client.delete(f"/api/sessions/{session_id}").status_code == 204
+    deleted = client.delete(f"/api/sessions/{session_id}")
+    assert deleted.status_code == 200 and deleted.json()["note"] is None
     assert client.get(f"/api/sessions/{session_id}").status_code == 404
 
 

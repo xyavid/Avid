@@ -24,6 +24,7 @@ import type {
   RunCreated,
   ScratchSession,
   SearchResult,
+  SessionDeleted,
   SessionDetail,
   SessionSummary,
   SessionsDir,
@@ -136,7 +137,7 @@ export function renameSession(sessionId: string, name: string): Promise<SessionD
  * unlike removing a workspace, which only drops the registry entry. 409 session_busy while a run
  * is active. Sessions live under `<AVID_HOME>/sessions/<workspace id>/` (see the settings page).
  */
-export function deleteSession(sessionId: string): Promise<void> {
+export function deleteSession(sessionId: string): Promise<SessionDeleted> {
   return request(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
 }
 

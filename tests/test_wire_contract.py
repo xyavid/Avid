@@ -47,6 +47,7 @@ from avid.web.schemas import (
     RunOut,
     SearchHitOut,
     SearchResultOut,
+    SessionDeletedOut,
     SessionDetail,
     SessionsDirIn,
     SessionsDirOut,
@@ -74,6 +75,7 @@ PAIRS: list[tuple[type, str]] = [
     # sessions
     (SessionSummary, "SessionSummary"),
     (SessionDetail, "SessionDetail"),
+    (SessionDeletedOut, "SessionDeleted"),
     (WorktreeFactsOut, "WorktreeFacts"),
     (WorktreeFileOut, "WorktreeFile"),
     (WorktreeCommitOut, "WorktreeCommit"),
