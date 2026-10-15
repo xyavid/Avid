@@ -82,4 +82,6 @@ explicitly** in `pyproject.toml`, in this file, and in that gate.
 - Install, configuration and the full CLI reference: `README.md` / `README.zh-CN.md`.
 - The project's own architecture lives in the code: module docstrings state what each module owns,
   `tests/test_web_boundaries.py` pins the cross-package dependency directions, and
-  `tests/test_wire_contract.py` / `test_event_contract.py` pin the frontend contracts.
+  `tests/test_wire_contract.py` (REST field names) / `test_event_contract.py` (event names and
+  tiers) / `test_event_payload_contract.py` (event payload field names, checked against real
+  events) pin the frontend contracts.

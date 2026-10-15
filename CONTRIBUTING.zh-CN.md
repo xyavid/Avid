@@ -64,4 +64,6 @@ pnpm -C web dev                      # 界面在 :5173，经 web/.env.developmen
 ## 现状与约定在哪
 
 - 安装、配置项与 CLI 全量参数见 `README.md` / `README.zh-CN.md`。
-- 项目自身的架构就在代码里：模块 docstring 说清每个模块拥有什么，`tests/test_web_boundaries.py` 钉住跨包依赖方向，`tests/test_wire_contract.py` / `test_event_contract.py` 钉住前端契约。
+- 项目自身的架构就在代码里：模块 docstring 说清每个模块拥有什么，`tests/test_web_boundaries.py` 钉住跨包依赖方向，
+  `tests/test_wire_contract.py`（REST 字段名）/ `test_event_contract.py`（事件名单与分档）/ `test_event_payload_contract.py`
+  （事件 payload 字段名，对真事件比对）钉住前端契约。

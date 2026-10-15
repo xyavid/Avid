@@ -70,6 +70,37 @@ export const TERMINAL_EVENT_TYPES: readonly AvidEventType[] = [
   'run_cancelled',
 ]
 
+/**
+ * Payload fields the frontend reads, per event type — the event half of the contract whose REST half
+ * is `tests/test_wire_contract.py`. `tests/test_event_payload_contract.py` runs a scripted session
+ * and fails when the kernel stops sending a field declared here, so a rename cannot degrade the UI
+ * silently. A field the frontend reads only defensively (falling back when it is absent) is
+ * deliberately not declared, because its absence is not a defect.
+ */
+// EVENT_FIELDS:BEGIN
+export interface EventPayloadFields {
+  run_started: 'permission'
+  user_message: 'entry_id' | 'message'
+  assistant_message: 'entry_id' | 'message'
+  tool_result_message: 'entry_id' | 'message'
+  tool_call_started: 'tool_call_id'
+  tool_call_finished: 'tool_call_id'
+  tool_call_denied: 'tool_call_id'
+  /** The tool-approval variant; a question carries `kind` and `options` on top. */
+  approval_requested: 'approval_id'
+  approval_resolved: 'approval_id'
+  context_compacted: never
+  stop_nudge: never
+  run_finished: 'usage'
+  run_failed: 'text' | 'message' | 'entry_id' | 'usage'
+  run_cancelled: 'usage'
+  resync: never
+  run_status: 'usage'
+  assistant_delta: 'text'
+  reasoning_delta: 'text'
+}
+// EVENT_FIELDS:END
+
 export interface MessagePayload {
   role: 'user' | 'assistant' | 'tool'
   content?: string | null
