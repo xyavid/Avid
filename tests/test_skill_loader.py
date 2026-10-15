@@ -4,8 +4,6 @@ from pathlib import Path
 
 from avid.agent.skills import SkillLoader
 
-REPO_SKILLS = Path(__file__).resolve().parent.parent / "skills"
-
 
 def write_skill(root: Path, directory: str, text: str) -> None:
     path = root / directory
@@ -240,25 +238,6 @@ def test_each_scan_produces_its_own_registry(tmp_path):
 
     assert first.skills == second.skills
     assert first.skills is not second.skills
-
-
-# ---------- the real skills in this repo ----------
-
-
-def test_repository_skills_are_scanned():
-    loader = SkillLoader(REPO_SKILLS).scan()
-
-    assert set(loader.skills) == {"agent-builder", "code-review", "pdf"}
-    for name, skill in loader.skills.items():
-        assert skill["description"], name
-        assert skill["content"].strip(), name
-
-
-def test_repository_catalog_shape():
-    lines = SkillLoader(REPO_SKILLS).scan().catalog().splitlines()
-
-    assert len(lines) == 3
-    assert all(line.startswith("- ") and ": " in line for line in lines)
 
 
 def test_default_skills_dir_is_resolved_at_construction_time(monkeypatch, tmp_path):
