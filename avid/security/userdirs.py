@@ -30,6 +30,9 @@ SETTINGS_VERSION = 1
 SESSIONS_DIR_KEY = "sessions_dir"
 # Relative to the Avid home, so AVID_HOME relocates the default store with everything else.
 DEFAULT_SESSIONS_DIRNAME = "sessions"
+# Session worktrees: a second checkout per session that needs one. User-level for the same reason the
+# store is, and it must stay inside the masked Avid dir so a run cannot reach a sibling session's tree.
+DEFAULT_WORKTREES_DIRNAME = "worktrees"
 # The derived index lives beside the settings, inside the same masked directory.
 DEFAULT_INDEX_DIRNAME = "index"
 INDEX_DB_FILENAME = "sessions.sqlite"
@@ -139,6 +142,11 @@ def index_path() -> Path:
     return index_dir() / INDEX_DB_FILENAME
 
 
+def worktrees_dir() -> Path:
+    """Where session worktrees live: user-level, so no run can reach a sibling session's tree."""
+    return avid_home() / DEFAULT_WORKTREES_DIRNAME
+
+
 def hooks_config_path() -> Path:
     """The hook declaration: user-level, so every workspace shares one and a run cannot write it."""
     return avid_home() / HOOKS_FILENAME
@@ -171,5 +179,6 @@ __all__ = [
     "sessions_dir",
     "sessions_dir_source",
     "settings_path",
+    "worktrees_dir",
     "write_settings",
 ]

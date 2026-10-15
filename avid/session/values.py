@@ -21,6 +21,9 @@ PLAN_NS = "avid.plan"
 # one, so its runs stay read-only. It sits on the **session** rather than on a run, because the constraint
 # belongs to what the session is: whoever starts a run here gets the same tool table and the same sandbox.
 SCRATCH_NS = "avid.session.scratch"
+# The work root, one address per session: where this session's runs write, decided at the first run
+# and never moved (the checkpoints and the rollback hang off that same path).
+WORKTREE_NS = "avid.worktree"
 
 # The implicit default branch; a session with no branch value yet is read as if it were on main.
 DEFAULT_BRANCH = "main"
@@ -75,6 +78,13 @@ def branch_plan(branch: str) -> ValueAddress:
 def session_scratch() -> ValueAddress:
     """The scratch marker: its value carries the source session id, so provenance survives."""
     return ValueAddress(SCRATCH_NS, "")
+
+
+def session_worktree() -> ValueAddress:
+    """The work root: session-scoped, not per branch, because a run's tools, sandbox and checkpoints
+    all hang off one path and a branch switch must not move them.
+    """
+    return ValueAddress(WORKTREE_NS, "")
 
 
 def set_value(address: ValueAddress, next_value: Any) -> ValueSetWrite:
