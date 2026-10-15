@@ -6,8 +6,10 @@ that a flag is present, and only a real run proves the flags together enforce an
 
 from __future__ import annotations
 
+import shutil
 import socket
 import subprocess
+import tempfile
 import threading
 from pathlib import Path
 
@@ -215,11 +217,17 @@ def test_masks_use_the_resolved_path_so_symlinks_do_not_break(tmp_path, home):
     assert str(home / ".aws") not in spec.mask_dirs
 
 
-def test_masks_are_skipped_when_the_workspace_lives_inside_them(tmp_path, home):
+def test_a_mask_covering_the_workspace_keeps_masking_it(tmp_path, home):
+    """A workspace inside a masked directory (a session worktree lives under the user-level Avid
+    dir) keeps its mask and says the root is mounted back: dropping the mask would expose the
+    credentials and session records beside that root.
+    """
     inside = home / ".avid" / "ws"
     inside.mkdir(parents=True)
     spec = build_spec(policy="workspace", root=str(inside), home=home, probe=WORKING)
-    assert any("跳过该掩蔽" in note for note in spec.notes)
+
+    assert str((home / ".avid").resolve()) in spec.mask_dirs
+    assert any("掩蔽照挂" in note for note in spec.notes)
 
 
 def test_sessions_store_is_masked_wherever_it_is_configured(tmp_path, home, monkeypatch):
@@ -342,6 +350,48 @@ def test_grants_are_ignored_when_not_enforced(tmp_path, home):
     assert argv(spec, ["bash", "-c", "ls"], grants=[(str(outside), "rw")]) == ["bash", "-c", "ls"]
 
 
+def test_a_run_root_inside_a_masked_dir_is_masked_around(tmp_path, home, monkeypatch):
+    """A session worktree lives inside the user-level Avid dir, which is masked because it holds
+    the credentials and the session records. The mask must be mounted anyway, with the run root put
+    back below it: skipping the mask would hand the agent the keys sitting beside its own tree.
+    """
+    avid = home / ".avid"
+    tree = avid / "worktrees" / "w-1" / "s-1"
+    tree.mkdir(parents=True)
+    monkeypatch.setenv("AVID_HOME", str(avid))
+    spec = build_spec(policy="workspace", root=str(tree), home=home, probe=WORKING)
+    built = argv(spec, ["bash", "-c", "ls"])
+
+    def placed(flag: str, value: str) -> int:
+        return next(
+            (index for index in range(len(built) - 1) if built[index] == flag and built[index + 1] == value),
+            -1,
+        )
+
+    mask, root = str(avid.resolve()), str(tree.resolve())
+    assert placed("--tmpfs", mask) >= 0, built
+    # Each level down to the root needs a mountpoint, or the bind below has nowhere to land.
+    assert placed("--dir", str(avid.resolve() / "worktrees")) > placed("--tmpfs", mask)
+    assert placed("--dir", root) > placed("--tmpfs", mask)
+    assert placed("--bind", root) > placed("--tmpfs", mask)
+    assert any("掩蔽" in note for note in spec.notes)
+
+
+def test_a_workspace_inside_a_masked_dir_keeps_its_own_root_masked(tmp_path, home):
+    """The same rule for a plain workspace that happens to sit inside a masked directory: the mask
+    is the outer boundary, the root is a hole in it, not the other way round.
+    """
+    avid = home / ".avid"
+    root = avid / "notes"
+    root.mkdir(parents=True)
+    (root / "a.txt").write_text("a", encoding="utf-8")
+    spec = build_spec(policy="workspace", root=str(root), home=home, probe=WORKING)
+    built = argv(spec, ["bash", "-c", "ls"])
+
+    assert str(avid.resolve()) in built
+    assert sum(1 for index in range(len(built) - 1) if built[index] == "--bind" and built[index + 1] == str(root.resolve())) == 1
+
+
 # ---- environment ----
 
 
@@ -434,6 +484,42 @@ def test_real_run_cannot_read_the_masked_credentials(real_spec, home):
     done = _run(real_spec, f"cat {home}/.ssh/id_rsa 2>&1; ls -A {home}/.ssh | wc -l")
     assert "PRIVATE" not in done.stdout
     assert done.stdout.strip().endswith("0")
+
+
+def test_real_run_inside_the_masked_dir_keeps_only_its_own_tree(home, monkeypatch):
+    """A real run on a session worktree: it writes in its own root while the credentials beside it
+    and the sibling session's tree stay out of reach. /var/tmp, not /tmp: the sandbox mounts an
+    empty tmpfs there, and a root under it would be hidden for that reason instead of by the mask.
+    """
+    found = probe_backend()
+    if not found.available:
+        pytest.skip(f"这台机器上没有可用的 bwrap：{found.reason}")
+    base = Path(tempfile.mkdtemp(prefix="avid-worktree-", dir="/var/tmp"))
+    try:
+        avid = base / "avid-home"
+        tree = avid / "worktrees" / "w-1" / "s-1"
+        tree.mkdir(parents=True)
+        (tree / "inside.txt").write_text("自己的树\n", encoding="utf-8")
+        sibling = avid / "worktrees" / "w-1" / "s-2"
+        sibling.mkdir()
+        (sibling / "other.txt").write_text("另一个会话的树\n", encoding="utf-8")
+        (avid / "secrets.json").write_text("sk-live\n", encoding="utf-8")
+        monkeypatch.setenv("AVID_HOME", str(avid))
+        spec = build_spec(policy="workspace", root=str(tree), home=home, probe=found)
+
+        done = _run(
+            spec,
+            f"cat inside.txt; echo 写入 > made.txt; cat {sibling}/other.txt 2>&1; "
+            f"cat {avid}/secrets.json 2>&1; echo 同级：$(ls {avid}/worktrees/w-1)",
+        )
+
+        assert "自己的树" in done.stdout
+        assert (tree / "made.txt").read_text(encoding="utf-8") == "写入\n"
+        assert "另一个会话的树" not in done.stdout
+        assert "sk-live" not in done.stdout
+        assert "同级：s-1" in done.stdout
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
 
 
 def test_real_run_cannot_read_the_session_store(tmp_path, home, monkeypatch):

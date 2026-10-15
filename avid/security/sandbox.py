@@ -329,8 +329,14 @@ class SandboxSpec:
         deferred: list[str] = []
 
         for directory in self.mask_dirs:
-            # A workspace inside the masked directory wins, so this mask is skipped.
+            # A run root inside the masked directory (a session worktree lives under the user-level
+            # Avid dir) is a hole in the mask, not a reason to drop it: mount the mask and put the
+            # root back below it, so everything beside the root stays hidden.
             if workdir and _contains(directory, workdir):
+                if Path(directory).is_dir():
+                    argv += ["--tmpfs", directory]
+                    for step in _path_chain(directory, workdir):
+                        argv += ["--dir", step]
                 continue
             # A mask inside the workspace is deferred: the workspace bind below would cover it.
             if workdir and _contains(workdir, directory):
@@ -413,6 +419,18 @@ class SandboxSpec:
             return True
         watched = (self.home, self.root, *self.mask_dirs, *self.mask_files)
         return any(item and _contains(text, str(Path(item).expanduser())) for item in watched)
+
+
+def _path_chain(base: str, target: str) -> list[str]:
+    """Every path from just below base down to target, each needing a mountpoint for the bind
+    below it: the sandbox recreates the run root's own path inside the mask, nothing beside it.
+    """
+    try:
+        parts = Path(target).resolve().relative_to(Path(base).resolve()).parts
+    except ValueError:  # pragma: no cover - the caller asks only when base contains target
+        return []
+    root = Path(base)
+    return [str(root.joinpath(*parts[: index + 1])) for index in range(len(parts))]
 
 
 def _contains(base: str | Path, path: str | Path) -> bool:
@@ -530,30 +548,31 @@ def build_spec(
 def _masks(
     root: str | None, home: Path, notes: list[str]
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """Resolve the final mask lists, skipping any mask that contains the workspace root."""
+    """Resolve the final mask lists; a mask containing the workspace root keeps its mask and notes
+    that the root is mounted back inside it, because the root can legitimately live there (session
+    worktrees do) and dropping the mask would expose exactly what it hides.
+    """
     dirs: list[str] = []
     files: list[str] = []
     # Masked paths are resolved: bwrap cannot mount a tmpfs over a symlink, and the target is stricter.
     for item in DEFAULT_MASK_DIRS:
-        expanded = _expand_home(item, home)
+        expanded = str(Path(_expand_home(item, home)).resolve())
         if root and _contains(expanded, root):
-            notes.append(f"工作区位于 {item} 内，跳过该掩蔽")
-            continue
-        dirs.append(str(Path(expanded).resolve()))
+            notes.append(f"工作区位于 {item} 内：掩蔽照挂，运行根在其下挂回")
+        dirs.append(expanded)
     for item in DEFAULT_MASK_FILES:
         expanded = _expand_home(item, home)
         if root and _contains(expanded, root):
-            notes.append(f"工作区位于 {item} 内，跳过该掩蔽")
-            continue
+            notes.append(f"工作区位于 {item} 内：掩蔽照挂，运行根在其下挂回")
         files.append(str(Path(expanded).resolve()))
 
     # Mask the user-level Avid dir too: AVID_HOME can move secrets/audit off the hardcoded ~/.avid.
     home_dir_text = str(avid_home().expanduser().resolve())
-    if root and _contains(home_dir_text, root):
-        notes.append(f"工作区位于用户级 Avid 目录内（{home_dir_text}），跳过该掩蔽")
-    elif any(_contains(item, home_dir_text) for item in dirs):
+    if any(_contains(item, home_dir_text) for item in dirs):
         pass
     else:
+        if root and _contains(home_dir_text, root):
+            notes.append(f"工作区位于用户级 Avid 目录内（{home_dir_text}）：掩蔽照挂，运行根在其下挂回")
         dirs.append(home_dir_text)
 
     # Session files are the conversation history itself: the agent must not read its own record.
