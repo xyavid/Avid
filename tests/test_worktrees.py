@@ -6,7 +6,8 @@ root belongs to one session at a time, so the second session of that workspace g
 a session's tree is decided once, so a later run lands on the same path and branch; a tree deleted
 outside Avid is rebuilt from the record, while one whose branch is gone too stops the run instead of
 silently moving the session elsewhere; a session id that is not a legal path or branch name is
-sanitized; a tree with work in it is never thrown away.
+sanitized; a tree with work in it is never thrown away; a run's tools, sandbox and checkpoints all
+follow the root the session was given.
 """
 
 from __future__ import annotations
@@ -15,8 +16,11 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from support import ScriptedChat, collect, make_turn, new_session, tool_call, wait_terminal
 
+from avid.agent.events import RUN_STARTED
 from avid.security import userdirs
+from avid.services import Services
 from avid.services.workspaces import bound_workspace
 from avid.services.worktrees import (
     WorktreeError,
@@ -359,3 +363,53 @@ def test_facts_on_a_workspace_root_say_so(tmp_path, open_session):
     assert reading["worktree"] is False
     assert Path(reading["path"]) == plain.resolve()
     assert "不是 git 仓库" in reading["reason"]
+
+
+# ---------------- one run, two sessions ----------------
+
+
+def test_a_run_of_the_second_session_writes_inside_its_own_tree(tmp_path):
+    """Two sessions on one repo: the run reports where it works and the tools really work there.
+    The first session stays on the checkout, so its own writes land where they always did.
+    """
+    root = make_repo(tmp_path)
+    seen: list[str] = []
+
+    def write_probe(arguments, **kwargs):
+        where = kwargs["state"].workspace_root
+        seen.append(where)
+        (Path(where) / "probe.txt").write_text("x", encoding="utf-8")
+        return "写好了"
+
+    turn = make_turn("", [tool_call("write_file")])
+    services = Services(
+        workspace_root=str(root),
+        chat=ScriptedChat(turn, make_turn("完成"), turn, make_turn("完成")),
+        tool_registry={"write_file": write_probe},
+    )
+    try:
+        first = services.runs.start(new_session(services), "先来")
+        assert wait_terminal(first), first.status
+        second = services.runs.start(new_session(services), "再来")
+        assert wait_terminal(second), second.status
+
+        opened = {
+            record.session_id: next(
+                event.data
+                for event in collect(services, record.run_id)
+                if event.type == RUN_STARTED
+            )
+            for record in (first, second)
+        }
+    finally:
+        services.close()
+
+    assert Path(opened[first.session_id]["worktree"]["path"]) == root.resolve()
+    assert opened[first.session_id]["worktree"]["branch"] is None
+    tree = opened[second.session_id]["worktree"]
+    assert tree["branch"].startswith("avid/session-")
+    assert userdirs.worktrees_dir() in Path(tree["path"]).parents
+    # Both runs' tools used the root their own session was given.
+    assert seen == [str(root.resolve()), tree["path"]]
+    assert (Path(tree["path"]) / "probe.txt").exists()
+    assert git(root, "status", "--porcelain").strip() == "?? probe.txt"

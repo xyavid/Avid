@@ -71,6 +71,8 @@ from .errors import (
 )
 from .inbox import MODE_AFTER, MODE_NOW, MODES, SessionInbox
 from .workspaces import WorkspaceService
+from .worktrees import WorktreeError
+from .worktrees import resolve as resolve_worktree
 
 logger = logging.getLogger("avid.services.runs")
 
@@ -354,6 +356,9 @@ class RunRegistry:
         # into user input (an ordinary run), while /compact and unknown commands take the command
         # branch in _run (no model call, one text reply).
         # A message with images is never a command, even when it starts with "/".
+        # Skills and command names read the workspace root, not the run's root: they are what the
+        # workspace declares, while the run root is where this run works (tools, sandbox,
+        # checkpoints, rollback) and is not decided until the run thread starts.
         command: str | None = None
         if prompt.startswith("/") and not images:
             match = commands_module.match_command(
@@ -956,39 +961,44 @@ class RunRegistry:
         # The prompt event field is text: image messages render to text plus markers, never base64.
         text = attachments.render_content_text(content)
         scratched = session.get_value(session_scratch()) is not None
-        safety = build_run_security(
-            full=full_ack,
-            root=workspace.root,
-            run_tag=record.run_id,
-            run_id=record.run_id,
-            # Scratch conversations: the workspace is read-only in the sandbox; writer tools are
-            # also removed from the tool table, and neither measure replaces the other.
-            read_only=scratched,
-        )
-        state_spec = safety.summary()
-        self.emit(
-            record,
-            RUN_STARTED,
-            session_id=record.session_id,
-            prompt=text,
-            images=attachments.image_count(content),
-            auto_approve=auto_approve,
-            workspace=workspace.id,
-            workspace_root=workspace.root,
-            permission=safety.permission_mode,
-            sandbox_state=safety.sandbox.summary(),
-            sandbox_notes=state_spec["notes"],
-        )
-        safety.audit_write(
-            "run_start",
-            session=record.session_id,
-            workspace=workspace.id,
-            prompt_chars=len(text),
-            images=attachments.image_count(content),
-        )
-        # The recorder is built inside the try: if resolve_chat fails it never exists, and
-        # _finish then has no usage to persist because record.recorder stays None.
+        # This run's root, resolved before anything reads a path and reported in run_started: the
+        # tools, the sandbox, the checkpoints and the rollback all hang off this one path, so
+        # resolving it here is what keeps them from disagreeing about where the run is working.
         try:
+            worktree = resolve_worktree(session, workspace, scratch=scratched)
+            safety = build_run_security(
+                full=full_ack,
+                root=worktree.path,
+                run_tag=record.run_id,
+                run_id=record.run_id,
+                # Scratch conversations: the workspace is read-only in the sandbox; writer tools are
+                # also removed from the tool table, and neither measure replaces the other.
+                read_only=scratched,
+            )
+            state_spec = safety.summary()
+            self.emit(
+                record,
+                RUN_STARTED,
+                session_id=record.session_id,
+                prompt=text,
+                images=attachments.image_count(content),
+                auto_approve=auto_approve,
+                workspace=workspace.id,
+                workspace_root=worktree.path,
+                worktree=worktree.to_dict(),
+                permission=safety.permission_mode,
+                sandbox_state=safety.sandbox.summary(),
+                sandbox_notes=state_spec["notes"],
+            )
+            safety.audit_write(
+                "run_start",
+                session=record.session_id,
+                workspace=workspace.id,
+                prompt_chars=len(text),
+                images=attachments.image_count(content),
+            )
+            # The recorder is built inside the try: if resolve_chat fails it never exists, and
+            # _finish then has no usage to persist because record.recorder stays None.
             config = resolve_chat(model=record.model, effort=record.effort)
             recorder = SessionRecorder(session, branch)
             # Hand it to the record so _finish can persist usage before announcing the end.
@@ -1020,7 +1030,7 @@ class RunRegistry:
                     # The plan belongs to the chain being rolled back, so it goes with it.
                     session.delete_value(branch_plan(recorder.branch))
                     lines = restore(
-                        root=Path(workspace.root),
+                        root=Path(worktree.path),
                         session_id=session.metadata.id,
                         through_seq=target.through_seq,
                     )
@@ -1052,7 +1062,7 @@ class RunRegistry:
             # in this session's checkpoint directory. Subagents share this same sink, and the
             # parent session stays open while they run.
             checkpoint = DirCheckpointSink(
-                root=Path(workspace.root),
+                root=Path(worktree.path),
                 session_id=session.metadata.id,
                 tip_seq=recorder.tip_seq,
             )
@@ -1061,7 +1071,7 @@ class RunRegistry:
             assembly = assemble(
                 config=config,
                 messages=messages,
-                workspace_root=workspace.root,
+                workspace_root=worktree.path,
                 recorder=recorder,
                 auto_approve=auto_approve,
                 ask=record.approvals.request if record.approvals is not None else None,
@@ -1123,6 +1133,8 @@ class RunRegistry:
         except RunCancelled as exc:
             record.cancel_reason = str(exc) or "cancelled"
             self._finish(record, RUN_CANCELLED, reason=record.cancel_reason)
+        except WorktreeError as exc:
+            self._fail(record, "session_error", str(exc))
         except LLMError as exc:
             self._fail(record, "llm_error", str(exc))
         except ConfigError as exc:
