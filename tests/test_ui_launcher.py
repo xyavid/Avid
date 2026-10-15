@@ -326,11 +326,23 @@ def test_an_unknown_browser_command_resolves_to_nothing(monkeypatch):
     assert browser.resolve_command() is None
 
 
-def test_windows_browsers_are_candidates_for_wsl(monkeypatch):
-    """On WSL the browser is a Windows executable, and `--app=` crosses the interop layer fine."""
+def test_windows_install_paths_are_candidates_for_wsl(monkeypatch):
+    """WSL can run the Windows browser but does not have it on PATH: `which` alone finds nothing."""
     monkeypatch.delenv(browser.BROWSER_ENV, raising=False)
     monkeypatch.setattr(
-        browser, "_find", lambda candidate: candidate if candidate.endswith(".exe") else None
+        browser,
+        "_find",
+        lambda candidate: candidate if candidate.endswith("msedge.exe") else None,
+    )
+    resolved = browser.resolve_command()
+    assert resolved is not None and resolved[0].endswith("msedge.exe")
+
+
+def test_bare_windows_names_are_candidates_for_wsl(monkeypatch):
+    """The browser may also be on PATH as `chrome.exe`, which interop makes executable from WSL."""
+    monkeypatch.delenv(browser.BROWSER_ENV, raising=False)
+    monkeypatch.setattr(
+        browser, "_find", lambda candidate: candidate if candidate == "chrome.exe" else None
     )
     assert browser.resolve_command() == ["chrome.exe"]
 

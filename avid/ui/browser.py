@@ -33,6 +33,15 @@ _MACOS_APPS = (
     "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
 )
 
+#: The Windows install locations, probed by absolute path for the same reason as the macOS ones:
+#: WSL can execute them and they are not on PATH, so `which` alone would find nothing.
+_WINDOWS_APPS = (
+    "/mnt/c/Program Files/Google/Chrome/Application/chrome.exe",
+    "/mnt/c/Program Files (x86)/Google/Chrome/Application/chrome.exe",
+    "/mnt/c/Program Files/Microsoft/Edge/Application/msedge.exe",
+    "/mnt/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+)
+
 
 def _find(candidate: str) -> str | None:
     if candidate.startswith("/"):
@@ -47,7 +56,7 @@ def resolve_command(spec: str | None = None) -> list[str] | None:
         parts = shlex.split(raw)
         resolved = _find(parts[0]) if parts else None
         return [resolved, *parts[1:]] if resolved else None
-    for candidate in (*_MACOS_APPS, *_CHROMIUM):
+    for candidate in (*_MACOS_APPS, *_WINDOWS_APPS, *_CHROMIUM):
         found = _find(candidate)
         if found:
             return [found]
