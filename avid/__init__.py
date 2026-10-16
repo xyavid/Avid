@@ -1,3 +1,3 @@
-"""Avid: a self-built agent runtime (harness)."""
+"""Avid: a local AI coding agent."""
 
 __version__ = "0.0.1"

@@ -1,7 +1,7 @@
 [project]
 name = "avid"
 version = "0.0.1"
-description = "自建 agent 运行时（harness）：先做通用内核，场景后接"
+description = "本地 AI 编程 agent：文件、shell、工具、会话在同一内核里；模型调用、上下文与权限全部由你作主"
 requires-python = ">=3.12"
 readme = "README.md"
 license = "MIT"

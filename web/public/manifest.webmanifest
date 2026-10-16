@@ -1,7 +1,7 @@
 {
   "name": "Avid",
   "short_name": "Avid",
-  "description": "自建 agent 运行时的本地界面",
+  "description": "Avid 本地编程 agent 的界面",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

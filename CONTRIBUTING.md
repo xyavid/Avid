@@ -1,7 +1,7 @@
 # Contributing
 
-For anyone changing this repository. Avid is a self-built agent runtime: a Python 3.12 kernel
-(`uv` for dependencies, `httpx` as its only runtime dependency) with a browser UI under `web/`
+For anyone changing this repository. Avid is a local AI coding agent whose kernel — a Python 3.12 process with
+`uv` for dependencies and `httpx` as its only runtime dependency — carries a browser UI under `web/`
 (React 18 + Vite + pnpm).
 
 English · [中文](CONTRIBUTING.zh-CN.md)

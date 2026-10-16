@@ -5,8 +5,8 @@
   </picture>
 </p>
 
-<h3 align="center">可扩展的 agent 运行时</h3>
-<p align="center">模型调用、多步循环与工具执行都是你的，<span style="color:#537D96">权限也是</span>。</p>
+<h3 align="center">本地 AI 编程 agent</h3>
+<p align="center">读文件、跑命令、带沙箱；模型调用、上下文与 <span style="color:#537D96">权限</span> 都由你作主。</p>
 
 <p align="center">
   中文 · <a href="README.md">English</a>

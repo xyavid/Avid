@@ -1,6 +1,6 @@
 # 贡献指南
 
-给要改这个仓库的人。Avid 是自建的 agent 运行时：内核 Python 3.12（`uv` 管理，运行期只依赖 `httpx`），前端 `web/`（React 18 + Vite + pnpm）。
+给要改这个仓库的人。Avid 是个本地 AI 编程 agent：内核 Python 3.12（`uv` 管理，运行期只依赖 `httpx`），前端 `web/`（React 18 + Vite + pnpm）。
 
 [English](CONTRIBUTING.md) · 中文
 

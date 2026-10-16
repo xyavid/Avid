@@ -5,8 +5,8 @@
   </picture>
 </p>
 
-<h3 align="center">An extensible agent runtime</h3>
-<p align="center">You own the model calls, the loop <span style="color:#537D96">and the permissions</span>.</p>
+<h3 align="center">A local AI coding agent</h3>
+<p align="center">Files, shell, tools, sessions — and you own the model calls, context <span style="color:#537D96">and the permissions</span>.</p>
 
 <p align="center">
   English · <a href="README.zh-CN.md">中文</a>

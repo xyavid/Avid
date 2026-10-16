@@ -225,7 +225,7 @@ def create_app(
     app = FastAPI(
         title="Avid",
         version=f"api-v{API_VERSION}",
-        description="自建 agent 运行时（harness）的 Web API 与事件流",
+        description="Avid 本地编程 agent 的 Web API 与事件流",
         lifespan=lifespan,
     )
     # All three lists go on app.state: the terminal's WebSocket handshake never reaches this
